@@ -12,8 +12,9 @@ automation-data domain, private repository integration, or workflow-owned databa
 schema state does not require a `homelab-talos` change. n8n creates domain databases,
 roles, grants, and credentials dynamically through one private provisioning workflow.
 
-The platform is active, and the attended full-chain restore drill passed on 2026-09-05.
-See [Implementation status](#implementation-status) for the delivery and acceptance record.
+The platform is active, and the most recent attended full-chain restore drill passed on
+2026-09-06. See [Implementation status](#implementation-status) for the delivery and
+acceptance record.
 
 ## Existing platform context
 
@@ -46,6 +47,8 @@ target.
   memberships, and role password verifiers in validated logical backup bundles.
 - Prove that restored n8n credentials can authenticate to a separately restored
   automation-data instance without plaintext domain-password escrow.
+- Continuously prove that n8n can use a stable scoped automation-data runtime identity
+  through an authenticated webhook and a bounded read-only SQL query.
 - Reuse the established n8n PostgreSQL deployment, storage, backup, monitoring, policy,
   and testing patterns where the multi-database platform does not require a difference.
 - Keep merge-gating validation fast, cluster-independent, non-duplicated, and
@@ -64,6 +67,7 @@ target.
   synchronized snapshots across independent domain databases.
 - Running PostgreSQL, n8n, containerized integration environments, logical dumps, or
   restore drills in merge-gating CI.
+- Direct Gatus access to PostgreSQL or a PostgreSQL Homepage entry.
 
 ## Governing invariants
 
@@ -113,6 +117,18 @@ acceptance unless later evidence shows that they are necessary as merge gates.
 The decisive issue-317 proof is the attended full-chain restore drill. `mise exec -- just
 ci` proves that the candidate repository is safe and internally coherent enough to
 deploy; it does not reproduce the restore drill.
+
+## Decision summary
+
+| Decision | Selected model |
+| --- | --- |
+| Topology | One private automation-data PostgreSQL StatefulSet, separate from n8n's database |
+| Provisioning | One private n8n workflow creates and reconciles runtime-owned domains |
+| Roles | Per-domain `NOLOGIN` owner, DDL migrator, and CRUD runtime roles |
+| Credentials | PostgreSQL verifiers plus n8n-encrypted migrator and runtime credentials; no plaintext escrow |
+| Backup | Daily validated logical bundle containing globals, the control database, and every discovered database |
+| Recovery | Isolated paired n8n and automation-data restore, authenticated by the shared stable canary |
+| Destructive operations | No self-service database or role deletion; decommissioning remains attended |
 
 ## Selected architecture
 
@@ -307,8 +323,8 @@ accept arbitrary platform SQL. Provisioning follows an idempotent state machine:
 
 Generated passwords necessarily exist transiently in workflow memory while PostgreSQL
 and n8n receive them. The workflow disables saved manual, successful, and failed
-execution data and execution progress. Both the provisioning template and recovery
-canary use execution order `v1`, `saveDataErrorExecution: none`,
+execution data and execution progress. Both the provisioning template and Automation
+Data Canary use execution order `v1`, `saveDataErrorExecution: none`,
 `saveDataSuccessExecution: none`, `saveManualExecutions: false`, and
 `saveExecutionProgress: false`. Secret-bearing intermediate values do not appear in
 final outputs or logs.
@@ -433,6 +449,36 @@ manifest records the run capture time, generation, and database set, not a share
 transaction boundary. This is acceptable because domains do not share transactions and
 the off-cluster recovery-point objective is 24 hours.
 
+## Continuous end-to-end canary
+
+The private **Automation Data Canary** workflow is the shared production and recovery
+probe. It replaces the recovery-only workflow rather than adding a second near-duplicate
+n8n workflow. Its authenticated `POST /webhook/automation-data-canary` path uses the
+existing **Platform Canary Header** credential.
+
+The platform provisioner owns a stable `automation_data_canary` domain. The workflow
+binds only its `automation-data/automation_data_canary/runtime` credential. The domain
+remains otherwise empty, and the workflow exposes no caller-controlled SQL. Its Postgres
+node executes only:
+
+```sql
+SELECT current_database() AS database, current_user AS role;
+```
+
+The following code node requires database `automation_data_canary` and role
+`automation_data_canary_runtime`. It returns only `status: ok`, `database`, `role`, and a
+non-empty `executionId`. The workflow keeps execution order `v1` and disables saved
+successful, failed, manual, and progress execution data as defined for the provisioning
+workflow.
+
+Gatus calls the private n8n HTTPS route every five minutes as
+`Automation / automation-data-e2e`. It sends the existing canary authentication header,
+requires HTTP 200, validates every bounded response field, and hides response errors in
+the UI. Gatus has no direct PostgreSQL route, credential, or network-policy permission.
+This probe answers only whether n8n can currently use automation-data; detailed database
+health, backups, storage, resource use, and platform state remain Prometheus and Grafana
+responsibilities.
+
 ## Recovery
 
 The recovery runbook distinguishes routine pod rescheduling, Longhorn volume recovery,
@@ -455,10 +501,10 @@ The attended full-chain restore drill:
    `N8N_ENCRYPTION_KEY`.
 7. Redirects only that temporary n8n instance's automation-data hostname to the isolated
    restored PostgreSQL Service.
-8. Calls the restored authenticated
-   `POST /webhook/automation-data-recovery-canary`. Its single Postgres node uses the
-   restored `automation-data/issue317_acceptance/runtime` credential and returns only
-   `status`, `database`, `role`, and `executionId`.
+8. Calls the restored authenticated `POST /webhook/automation-data-canary`. The same
+   **Automation Data Canary** workflow used by Gatus uses the restored
+   `automation-data/automation_data_canary/runtime` credential and returns only `status`,
+   `database`, `role`, and `executionId`.
 9. Proves that the runtime credential authenticates without revealing its password and
    separately validates restored migrator/runtime permission separation for every ready
    domain.
@@ -508,12 +554,14 @@ n8n PostgreSQL exporter pattern. This login uses `INHERIT` so the predefined rol
 `pg_database_size()` report dynamically created databases after public `CONNECT` is
 revoked. The exporter does not receive domain-role membership or domain table grants.
 
-The `automation-data-postgresql` Prometheus rule group contains 12 alerts for unavailable
+The `automation-data-postgresql` Prometheus rule group contains alerts for unavailable
 scrape and StatefulSet targets, repeated restarts and OOM kills, stale or absent logical
 backups, failed or overdue backup Jobs, the two platform-health signals, and the
-established PVC warning and critical thresholds. The initial implementation does not add
-speculative connection-pressure alerts or redundant domain-count and bundle-count
-metrics.
+established PVC warning and critical thresholds. It also alerts when
+`Automation / automation-data-e2e` fails continuously for five minutes or its success
+series is absent for 15 minutes, matching the existing n8n webhook E2E alert pattern. The
+implementation does not add speculative connection-pressure alerts or redundant
+domain-count and bundle-count metrics.
 
 Read-only verification requires the active PostgreSQL data volume to be attached and
 healthy. The retained backup volume may be attached and healthy while a backup Job uses
@@ -573,6 +621,9 @@ contracts that those checks do not cover:
 - deterministic role and grant templates;
 - the provisioning workflow's fixed operation surface and absence of destructive
   database or role operations;
+- the stable Automation Data Canary's exact identity query, bounded response, disabled
+  execution-data persistence, and absence of embedded credential data;
+- the exact authenticated Gatus endpoint and absence of direct PostgreSQL probing;
 - ordinary reconciliation's prohibition on password or n8n credential changes;
 - runtime backup discovery rather than a Git-managed database list;
 - recoverable backup publication when a stable incomplete or error record exists;
@@ -617,8 +668,9 @@ Registered attended workflows prove:
 10. A logical backup publishes one complete globals-plus-databases bundle and advances
    freshness only after final validation.
 11. The isolated full-chain drill restores n8n with its encryption key, restores
-   automation-data globals and databases, and proves restored n8n credentials authenticate
-   against restored role password verifiers.
+   automation-data globals and databases, and uses the same stable canary workflow to
+   prove that restored n8n credentials authenticate against restored role password
+   verifiers.
 12. The restored instance creates and validates a fresh post-recovery backup.
 13. All temporary resources are removed and their absence is verified.
 
@@ -667,12 +719,25 @@ service or container-based database testing to CI.
 
 After the operator reported completing the control migration, the private workflow's
 PostgreSQL bindings were corrected to use the platform provisioner credential. The
-operator-reported run `20260905T182837Z-eeeb571af05c-operator-af3d1b16` passed provisioning,
+published workflow also retains the specification's disabled execution-data settings.
+The operator-reported run `20260905T182837Z-eeeb571af05c-operator-af3d1b16` passed provisioning,
 unchanged reconciliation, permissions, runtime rotation, and complete backup creation.
-Read-only run `20260905T180611Z-eeeb571af05c-operator-454910b9` independently passed
-deployment, storage, monitoring, and registry verification. The initial full-chain
-recovery evidence above predates these corrections; recovery acceptance using the new
-credential version remains outstanding.
+The operator-reported full-chain run
+`20260906T103531Z-bfd6c1b6793c-operator-1efda0f5` then passed with the updated credential
+version, restoring `n8n-postgresql-20260906T010011Z.dump` and
+`automation-data-20260906T003011Z` and creating post-recovery bundle
+`automation-data-20260906T103600Z`. This completes recovery acceptance after the control
+and workflow corrections. Independent inspection found no resources remaining from that
+drill. Final read-only run `20260906T142539Z-bfd6c1b6793c-operator-de1dd37b` passed
+deployment, storage, monitoring, and registry verification with canonical result
+validation.
+
+### Stable canary extension status
+
+The `bfd6c1b` recovery acceptance predates the stable-canary extension. Its source
+design and validation are implemented, but private workflow conversion, live Gatus
+observation, and a compatible-pair restore acceptance through **Automation Data Canary**
+remain pending.
 
 At the operator's request, this specification moved from identifier 025 to 026 to resolve
 the collision with node lifecycle. The [operations guide](../guides/automation-data-operations.md)
@@ -686,32 +751,50 @@ procedures; implementation sequencing and test mechanics belong in the transient
 A private broker could keep generated passwords outside n8n workflow memory and perform
 both PostgreSQL and n8n API calls. It would add a custom security-critical API,
 authentication protocol, workload, monitoring surface, release lifecycle, and recovery
-dependency. The direct dedicated n8n workflow is smaller and meets the accepted trust
-model.
+dependency without reducing the current recovery roots. The direct n8n workflow wins on
+the current scale because it preserves the smallest authority and recovery surface.
+
+### External credential broker
+
+Vault, OpenBao, or another credential broker could own password generation, storage, and
+rotation. This remains deferred because it adds another security-critical platform,
+recovery dependency, and integration contract without a demonstrated need. The current
+SOPS and n8n recovery-root model already satisfies the credential lifecycle.
 
 ### PostgreSQL operator and custom resources
 
 An operator could model databases and roles as Kubernetes resources. It adds another
 controller and tends to make consumer creation a Kubernetes or Git control-plane action.
-That conflicts with the required self-service data-plane boundary and is not justified by
-the current scale.
+It loses against the no-per-domain-infrastructure-change invariant and is not justified
+by the current scale.
 
 ### Per-domain Git and SOPS resources
 
 Git-managed domain databases, passwords, or NetworkPolicies would give Flux a declarative
 record but would require an infrastructure change for every consumer. That directly
-violates the primary platform invariant.
+violates the no-per-domain-infrastructure-change invariant.
+
+### Dedicated bootstrap canary login
+
+A Git-bootstrap canary role could have only the permissions needed for the identity
+query. It would add a separate password, encrypted Secret, rotation path, n8n credential
+bootstrap, and recovery rule outside the platform provisioner. A stable empty managed
+domain uses the existing scoped runtime identity and inherits the platform's provisioning,
+backup, rotation, validation, and restore lifecycle. The fixed workflow query provides no
+caller-controlled database operation, so the dedicated login loses on lifecycle cost
+without a demonstrated reduction in practical authority.
 
 ### One shared runtime login
 
 One login across domains would simplify credential management but permit broader database
-access and make independent rotation impossible. Separate domain credentials are required.
+access and make independent rotation impossible. It violates per-domain authority
+separation, so separate domain credentials are required.
 
 ### Self-service database and role deletion
 
 Adding drop operations to the ordinary provisioning workflow would turn input mistakes
 or workflow misuse into destructive cluster-wide actions. Decommissioning remains a
-separate attended administrative boundary.
+separate attended administrative boundary under the destructive-operation invariant.
 
 ## Review triggers
 

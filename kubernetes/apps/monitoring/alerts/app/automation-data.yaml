@@ -289,3 +289,36 @@ spec:
             description: >-
               The oldest active automation-data provisioning or rotation operation has
               exceeded 30 minutes.
+        - alert: AutomationDataE2EDown
+          expr: >-
+            (
+              gatus_results_endpoint_success{
+                group="Automation",
+                name="automation-data-e2e"
+              } == 0
+            )
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: automation-data authenticated webhook E2E check is down
+            description: >-
+              The Automation/automation-data-e2e check has failed for more than five minutes.
+        - alert: AutomationDataE2EProbeMissing
+          expr: >-
+            (
+              absent(
+                gatus_results_endpoint_success{
+                  group="Automation",
+                  name="automation-data-e2e"
+                }
+              )
+            )
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: automation-data authenticated webhook E2E metric is missing
+            description: >-
+              The Automation/automation-data-e2e success series has been absent for more
+              than 15 minutes.

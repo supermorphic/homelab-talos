@@ -1645,3 +1645,63 @@ tests:
       - eval_time: 23m
         alertname: AutomationDataPostgresqlProvisioningStuck
         exp_alerts: []
+
+  - name: automation-data E2E failure fires after five minutes and recovers without missing-series cross-fire
+    interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Automation",name="automation-data-e2e"}'
+        values: '1x3 0x18 1x8'
+      - series: 'gatus_results_endpoint_success{group="Other",name="automation-data-e2e"}'
+        values: '0x31'
+      - series: 'gatus_results_endpoint_success{group="Automation",name="unrelated"}'
+        values: '0x31'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: AutomationDataE2EDown
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: AutomationDataE2EDown
+        exp_alerts:
+          - exp_labels: {severity: critical, group: Automation, name: automation-data-e2e}
+            exp_annotations:
+              summary: automation-data authenticated webhook E2E check is down
+              description: The Automation/automation-data-e2e check has failed for more than five minutes.
+      - eval_time: 24m
+        alertname: AutomationDataE2EDown
+        exp_alerts: []
+      - eval_time: 24m
+        alertname: AutomationDataE2EProbeMissing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: AutomationDataE2EProbeMissing
+        exp_alerts: []
+
+  - name: absent automation-data E2E series fires after fifteen minutes despite unrelated healthy series and recovers
+    interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Automation",name="automation-data-e2e"}'
+        values: '_x18 1x6'
+      - series: 'gatus_results_endpoint_success{group="Other",name="automation-data-e2e"}'
+        values: '1x24'
+      - series: 'gatus_results_endpoint_success{group="Automation",name="unrelated"}'
+        values: '1x24'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: AutomationDataE2EProbeMissing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: AutomationDataE2EProbeMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Automation, name: automation-data-e2e}
+            exp_annotations:
+              summary: automation-data authenticated webhook E2E metric is missing
+              description: The Automation/automation-data-e2e success series has been absent for more than 15 minutes.
+      - eval_time: 16m
+        alertname: AutomationDataE2EDown
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: AutomationDataE2EProbeMissing
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: AutomationDataE2EDown
+        exp_alerts: []

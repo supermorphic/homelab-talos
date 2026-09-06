@@ -106,9 +106,13 @@ AUTOMATION_DATA_RESTORE_CONFIRM='restore:automation-data:full-chain' \
   mise exec -- just kube automation-data-restore-drill
 ```
 
-By default, the drill selects the newest valid automation-data bundle and n8n dump
-independently. Their schedules are separate. After a credential rotation, wait for both
-backups to include the change before using this default.
+The drill requires a compatible n8n dump and automation-data bundle. The n8n dump must
+contain the published **Automation Data Canary** workflow and its encrypted
+`automation-data/automation_data_canary/runtime` credential. The automation-data bundle
+must contain the matching `automation_data_canary` role password verifier. By default,
+the drill selects the newest valid artifacts independently. Their schedules are separate.
+After a credential rotation or canary publication, wait for both backups to include the
+change before using this default.
 
 To recover a known matching older pair, supply both exact artifact names. Replace these
 synthetic example names with the retained pair selected for recovery:
@@ -122,15 +126,17 @@ AUTOMATION_DATA_RESTORE_BUNDLE='automation-data-20260827T003000Z' \
 
 The command requires both selectors or neither. Each selected artifact must pass the
 same checksum and archive validation as the default selection. An absent or invalid
-explicit selection fails without substituting another backup. The restored credential
-authentication remains the proof that the selected pair matches.
+explicit selection fails without substituting another backup. Select a pair that includes
+the stable canary workflow, its runtime credential, and its matching role verifier. The
+restored credential authentication remains the proof that the selected pair matches.
 
 The drill also restores n8n into a second isolated PostgreSQL instance and starts a
 temporary n8n Deployment with `N8N_ENCRYPTION_KEY` supplied by Secret reference. Only
 that pod resolves the production automation-data hostname to the restored database. The
-restored **Automation Data Recovery Canary** must use the restored
-`automation-data/issue317_acceptance/runtime` credential successfully. The drill never
-reads or prints its password.
+restored **Automation Data Canary** must successfully call
+`POST /webhook/automation-data-canary` with the restored
+`automation-data/automation_data_canary/runtime` credential. The drill never reads or
+prints its password.
 
 The last required step is a fresh post-recovery backup created with the restored backup
 role verifier. Require a new exact, complete, checksum-valid bundle. The drill then
@@ -152,8 +158,9 @@ automation-data recovery unit together:
 2. Restore the selected n8n dump with the retained `N8N_ENCRYPTION_KEY`.
 3. Restore automation-data globals before its individual database dumps.
 4. Restore the captured registry and validate the complete database and permission set.
-5. Start n8n privately and prove the restored runtime credential authenticates against
-   the restored PostgreSQL verifier.
+5. Start n8n privately and use the restored **Automation Data Canary** workflow to prove
+   that the restored `automation-data/automation_data_canary/runtime` credential
+   authenticates against the restored PostgreSQL verifier.
 6. Create and validate a fresh post-recovery backup.
 7. Run both read-only verifiers and application-specific acceptance before restoring any
    public route or normal workflow traffic.

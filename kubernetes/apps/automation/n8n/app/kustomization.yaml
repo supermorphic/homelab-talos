@@ -18,7 +18,7 @@ configMapGenerator:
   - name: n8n-workflow-templates
     files:
       - automation-data-provisioner.json=workflows/automation-data-provisioner.json
-      - automation-data-recovery-canary.json=workflows/automation-data-recovery-canary.json
+      - automation-data-canary.json=workflows/automation-data-canary.json
       - platform-canary.json=workflows/platform-canary.json
 generatorOptions:
   disableNameSuffixHash: true

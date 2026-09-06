@@ -1276,7 +1276,7 @@ for resource in ciliumnetworkpolicy.yaml helmrelease.yaml httproute.yaml ocirepo
     exit 1
   }
 done
-expected_n8n_configmaps='[{"files":["values.yaml=values.yaml"],"name":"n8n-values"},{"files":["automation-data-provisioner.json=workflows/automation-data-provisioner.json","automation-data-recovery-canary.json=workflows/automation-data-recovery-canary.json","platform-canary.json=workflows/platform-canary.json"],"name":"n8n-workflow-templates"}]'
+expected_n8n_configmaps='[{"files":["values.yaml=values.yaml"],"name":"n8n-values"},{"files":["automation-data-provisioner.json=workflows/automation-data-provisioner.json","automation-data-canary.json=workflows/automation-data-canary.json","platform-canary.json=workflows/platform-canary.json"],"name":"n8n-workflow-templates"}]'
 actual_n8n_configmaps="$(yq -o=json -I=0 '
   [.configMapGenerator[] | {"files": .files, "name": .name}] | sort_by(.name)
 ' "$n8n_kustomization")"
