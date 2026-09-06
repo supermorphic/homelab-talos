@@ -250,8 +250,8 @@ if rg -q 'chainsaw-test\.ya?ml' "$yq_log"; then
 	echo 'Chainsaw test documents were reparsed with yq.' >&2
 	exit 1
 fi
-[[ "$(wc -l <"$shell_case_log" | tr -d ' ')" -eq 60 ]]
-rg -Fx 'Harness shell cases passed: cases=60 parallel_jobs=4.' "$passing_output" || {
+[[ "$(wc -l <"$shell_case_log" | tr -d ' ')" -eq 62 ]]
+rg -Fx 'Harness shell cases passed: cases=62 parallel_jobs=4.' "$passing_output" || {
 	cat "$passing_output" >&2
 	exit 1
 }
@@ -260,7 +260,9 @@ mapfile -t logging_groups < <(sed -n 's/^logging-group://p' "$passing_output")
 for expected_case in \
 	scripts/test/lib/chainsaw-inputs-test.sh \
 	scripts/test/lib/harness-shell-runner-test.sh \
-	scripts/test/run-native-junit-validator-test.sh; do
+	scripts/test/run-native-junit-validator-test.sh \
+	scripts/test/flux-exporter-parity-test.sh \
+	scripts/test/flux-exporter-parity-verify-test.sh; do
 	invocation_count=0
 	while IFS= read -r invoked_case; do
 		[[ "$invoked_case" == "$expected_case" ]] && invocation_count=$((invocation_count + 1))
