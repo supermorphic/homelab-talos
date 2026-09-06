@@ -490,6 +490,42 @@ const uniqueOperator = execute('Discover Operator Source', {
 if (uniqueOperator.sourceId !== 'source-operator' || uniqueOperator.selectedIntegrationId !== 'integration-1') {
   throw new Error('unique operator source did not carry its selected current integration');
 }
+for (const [kind, prepareNode, readNode, discoverNode, alias, schema, readonly] of [
+  ['Reader', 'Start Reader', 'Read Reader State', 'Discover Reader Source', 'Read Model', 'read_model', true],
+  ['Operator', 'Prepare Operator', 'Read Operator State', 'Discover Operator Source', 'Operator', 'operator', false],
+]) {
+  const sourceId = `source-${kind.toLowerCase()}`;
+  const lookup = {
+    [prepareNode]: { ...sourceContext, baseId: 'base-1' },
+    [readNode]: { result: { baseId: null } },
+    [discoverNode]: { sourceId, selectedIntegrationId: 'integration-1' },
+  };
+  const validated = execute(`Validate ${kind} Source`, {
+    id: sourceId,
+    base_id: 'base-1',
+    fk_integration_id: 'integration-1',
+    alias,
+    config: { searchPath: [schema] },
+    is_data_readonly: readonly,
+    is_schema_readonly: true,
+  }, lookup)[0].json;
+  if (validated.baseId !== 'base-1') {
+    throw new Error(`Validate ${kind} Source erased the discovered base with a null stored base`);
+  }
+  lookup[readNode] = { result: { baseId: 'stored-base' } };
+  const retained = execute(`Validate ${kind} Source`, {
+    id: sourceId,
+    base_id: 'base-1',
+    fk_integration_id: 'integration-1',
+    alias,
+    config: { searchPath: [schema] },
+    is_data_readonly: readonly,
+    is_schema_readonly: true,
+  }, lookup)[0].json;
+  if (retained.baseId !== 'stored-base') {
+    throw new Error(`Validate ${kind} Source did not retain a non-null stored base for identity validation`);
+  }
+}
 let duplicateRejected = false;
 try {
   execute('Discover Reader Source', {
