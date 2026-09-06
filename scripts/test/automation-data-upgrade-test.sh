@@ -760,6 +760,80 @@ psql_query "$fresh_container" automation_data_control "$extension_catalog_query"
 cmp -s "$integration_root/upgraded-catalog" "$integration_root/fresh-catalog" ||
 	fail 'fresh and upgraded extension catalogs differ'
 
+# Execute both branches of the generated least-privilege authority SQL. Text-only
+# assertions do not catch malformed SQL inside format() calls executed over dblink.
+psql_query "$fresh_container" automation_data_control "
+SELECT platform_operations.provision_domain(
+  'authority_fixture', repeat('m', 48), repeat('r', 48)
+);
+SELECT platform_operations.record_domain_credentials(
+  'authority_fixture', 'migrator-authority-fixture', 'runtime-authority-fixture',
+  clock_timestamp(), clock_timestamp()
+);
+" >/dev/null
+# The disposable server includes PostgreSQL's bootstrap maintenance database. Normalize
+# its default PUBLIC CONNECT so the source-role oracle can exercise the production
+# contract without changing a shared or live database.
+psql_query "$fresh_container" automation_data_control \
+	'REVOKE CONNECT ON DATABASE postgres FROM PUBLIC; REVOKE CONNECT ON DATABASE template1 FROM PUBLIC;' >/dev/null
+psql_query "$fresh_container" authority_fixture "
+SET ROLE authority_fixture_owner;
+CREATE SCHEMA read_model AUTHORIZATION authority_fixture_owner;
+CREATE SCHEMA operator AUTHORIZATION authority_fixture_owner;
+CREATE TABLE read_model.facts (id bigint PRIMARY KEY, fact text NOT NULL);
+CREATE TABLE operator.decisions (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  decision text NOT NULL,
+  protected_created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+RESET ROLE;
+" >/dev/null
+authority_plan_before="$(psql_query "$fresh_container" automation_data_control \
+	"SELECT platform_operations.prepare_nocodb_access('authority_fixture')::text;")"
+jq -e '
+  .domain == "authority_fixture" and .readerEligible == true and
+  .operatorRequested == true and .operatorEligible == false
+' <<<"$authority_plan_before" >/dev/null ||
+	fail 'real reader authority preparation did not preserve the operator grant phase'
+[[ "$(psql_query "$fresh_container" automation_data_control \
+	"SELECT NOT has_database_privilege('authority_fixture_reader', 'postgres', 'CONNECT') AND NOT has_database_privilege('authority_fixture_reader', 'template1', 'CONNECT');")" == t ]] ||
+	fail 'disposable bootstrap databases retained PUBLIC CONNECT for the reader role'
+reader_authority="$(psql_query "$fresh_container" automation_data_control \
+	"SELECT platform_internal.validate_nocodb_access_authority('authority_fixture', 'reader', 'authority_fixture_reader', false)::text;")"
+jq -e '
+  .valid == true and .loginValid == false and
+  .schemaPrivilegesValid == true and .objectPrivilegesValid == true and
+  .defaultPrivilegesValid == true and .outsideSchemaDenied == true and
+  .databaseIsolationValid == true and .forbiddenAttributesDenied == true and
+  .forbiddenMembershipsDenied == true and .ddlDenied == true and
+  .controlledDmlPresent == false
+' <<<"$reader_authority" >/dev/null ||
+	fail 'real reader authority booleans did not satisfy the least-privilege contract'
+psql_query "$fresh_container" authority_fixture "
+SET ROLE authority_fixture_owner;
+GRANT USAGE ON SCHEMA operator TO authority_fixture_operator;
+GRANT SELECT, INSERT, DELETE ON TABLE operator.decisions TO authority_fixture_operator;
+GRANT UPDATE (decision) ON TABLE operator.decisions TO authority_fixture_operator;
+GRANT USAGE ON SEQUENCE operator.decisions_id_seq TO authority_fixture_operator;
+RESET ROLE;
+" >/dev/null
+authority_plan_after="$(psql_query "$fresh_container" automation_data_control \
+	"SELECT platform_operations.prepare_nocodb_access('authority_fixture')::text;")"
+jq -e '.readerEligible == true and .operatorEligible == true' \
+	<<<"$authority_plan_after" >/dev/null ||
+	fail 'real operator authority preparation rejected the reviewed grants'
+operator_authority="$(psql_query "$fresh_container" automation_data_control \
+	"SELECT platform_internal.validate_nocodb_access_authority('authority_fixture', 'operator', 'authority_fixture_operator', false)::text;")"
+jq -e '
+  .valid == true and .loginValid == false and
+  .schemaPrivilegesValid == true and .objectPrivilegesValid == true and
+  .defaultPrivilegesValid == true and .outsideSchemaDenied == true and
+  .databaseIsolationValid == true and .forbiddenAttributesDenied == true and
+  .forbiddenMembershipsDenied == true and .ddlDenied == true and
+  .controlledDmlPresent == true
+' <<<"$operator_authority" >/dev/null ||
+	fail 'real operator authority booleans did not satisfy the least-privilege contract'
+
 # Upgraded backup classification must execute the revision oracle. A concrete missing
 # required function therefore makes both the oracle and backup publication fail.
 psql_query "$fresh_container" automation_data_control \
@@ -830,5 +904,6 @@ printf '%s\n' \
 	'password_verifiers_equal=true' \
 	'old_bundle_restore_valid=true' \
 	'upgraded_bundle_restore_valid=true' \
-	'fresh_upgrade_catalog_equal=true'
+	'fresh_upgrade_catalog_equal=true' \
+	'reader_operator_authority_sql_valid=true'
 echo 'automation-data populated-platform upgrade integration passed.'
