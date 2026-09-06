@@ -206,16 +206,25 @@ replacement, or bulk data deletion.
 exist, unchanged reconciliation preserves their credentials, explicit rotation changes
 only the selected login credential, and the resulting backup is complete.
 
-### 6. Bind the recovery canary
+### 6. Provision and bind the stable canary
 
-After the acceptance domain exists, import
-`kubernetes/apps/automation/n8n/app/workflows/automation-data-recovery-canary.json`.
-Bind the existing **Platform Canary Header** credential to **Recovery Webhook**. Bind
-`automation-data/issue317_acceptance/runtime` to **Test Restored Runtime Credential**.
-Publish **Automation Data Recovery Canary**.
+After the provisioning acceptance completes, use the private provisioning workflow to
+create the stable empty canary domain with
+`{"domain":"automation_data_canary","operation":"provision"}`. This creates the
+`automation-data/automation_data_canary/runtime` credential. Do not use the acceptance
+domain credential for the canary.
 
-Wait for a later complete n8n dump and automation-data bundle that contain these
-published bindings. Then run the attended full-chain drill:
+Import `kubernetes/apps/automation/n8n/app/workflows/automation-data-canary.json`. Bind
+the existing **Platform Canary Header** credential to **Canary Webhook** and
+`automation-data/automation_data_canary/runtime` to **Test Stable Runtime Credential**.
+Publish **Automation Data Canary**. Keep its execution-data settings unchanged and do
+not add credential IDs or values to the template in Git.
+
+Gatus calls this published workflow every five minutes. Wait for a complete n8n dump and
+automation-data bundle that form a compatible pair: the n8n dump must contain the
+published workflow and its encrypted stable runtime credential, and the automation-data
+bundle must contain the matching `automation_data_canary` role verifier. Then run the
+attended full-chain drill:
 
 ```bash
 AUTOMATION_DATA_RESTORE_CONFIRM='restore:automation-data:full-chain' \
@@ -223,9 +232,10 @@ AUTOMATION_DATA_RESTORE_CONFIRM='restore:automation-data:full-chain' \
 ```
 
 Do not claim recoverability until this command passes. It restores n8n and
-automation-data into isolated run-owned storage, proves the restored encrypted runtime
-credential authenticates against the restored verifier, creates a fresh post-recovery
-backup, and removes its temporary resources.
+automation-data into isolated run-owned storage, calls the same authenticated
+`POST /webhook/automation-data-canary` workflow used by Gatus, proves that its restored
+encrypted runtime credential authenticates against the restored verifier, creates a
+fresh post-recovery backup, and removes its temporary resources.
 
 **Expected result:** The full-chain drill passes, the restored n8n credential
 authenticates to the isolated restored database, a fresh post-recovery backup exists,
