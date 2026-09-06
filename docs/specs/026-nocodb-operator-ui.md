@@ -418,6 +418,8 @@ The upgrade must:
 - serialize execution and apply its transactional schema/function changes atomically;
 - install the source registry and exact function grants without recreating domains or
   changing existing owner, migrator, runtime, provisioner, exporter, or backup logins;
+- revoke inherited `PUBLIC CONNECT` on the `postgres` and `template1` maintenance
+  databases while preserving existing domain/object grants and password verifiers;
 - record the installed revision and make an unchanged rerun a validated no-op;
 - reject an unknown revision or incompatible partial state instead of overwriting it;
 - preserve the platform-generation mechanism used by backup consistency checks; and
@@ -442,13 +444,21 @@ kube automation-data-upgrade`. The catalog-only install preserves the platform
 generation and existing domain rows. Because `capture_backup_state()` gains the
 revision and source array in the same transaction, its before/after value still changes
 across the install and prevents publication of a backup that spans the schema change.
+The same shared SQL applies the two fixed maintenance-database restrictions for fresh
+initialization and guarded upgrade. The revision oracle rejects later drift that restores
+either `PUBLIC CONNECT` grant. Source isolation checks include every connectable database,
+including a connectable template, and allow only the source's exact domain database.
 
 Deploy backup compatibility before applying the upgrade. The updated backup path must
 support both the exact accepted pre-extension schema and the upgraded schema while
 NocoDB is staged. An absent optional registry is valid only for the recognized old
 revision; malformed state or a missing registry in the upgraded revision is an error.
 Old logical bundles remain restorable. An upgraded backup captures the source registry
-and optional roles without changing ordinary domain readiness. NocoDB bootstrap refuses
+and optional roles without changing ordinary domain readiness. For an oracle-validated
+`026-nocodb-v1` capture only, `globals.sql` also records the two fixed maintenance
+database `REVOKE` statements because `pg_dumpall --globals-only` and the non-creating
+`postgres` restore do not preserve them. Baseline `025` bundle bytes and semantics remain
+unchanged. NocoDB bootstrap refuses
 to proceed until the extension revision and a post-upgrade backup have been validated.
 
 Test the upgrade against a populated instance initialized from the accepted pre-extension

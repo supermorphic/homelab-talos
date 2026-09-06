@@ -102,7 +102,12 @@ case "$tool" in
         state_marker='revision-changed'
       fi
       encoded_state="$(printf '%s' "${STATE_SCHEMA:-new}:$generation:$state_marker" | base64 | tr -d '\n')"
-      printf '%s|%s|%s\n' "$generation" "$encoded_state" "$encoded_registry"
+      case "${STATE_SCHEMA:-new}" in
+        old) captured_revision='025-baseline' ;;
+        new) captured_revision='026-nocodb-v1' ;;
+        *) captured_revision='invalid' ;;
+      esac
+      printf '%s|%s|%s|%s\n' "$generation" "$encoded_state" "$encoded_registry" "$captured_revision"
       printf 'capture-state\t%s\n' "$generation" >>"$FAKE_LOG"
     elif [[ "$command_text" == *pg_database* ]]; then
       count=0
@@ -222,6 +227,9 @@ old_schema_case="$(new_case old-schema)"
 run_backup "$old_schema_case" '' '' old
 [[ -s "$old_schema_case/backups/automation-data-20260827T003000Z/COMPLETE" ]] ||
   fail 'recognized pre-extension schema did not produce a complete backup'
+! rg -Fq 'Fixed revision-026 maintenance database restrictions.' \
+  "$old_schema_case/backups/automation-data-20260827T003000Z/globals.sql" ||
+  fail 'recognized pre-extension backup changed maintenance database ACL semantics'
 
 for invalid_schema in unknown partial; do
   invalid_case="$(new_case "$invalid_schema-schema")"
@@ -240,6 +248,10 @@ final_bundle="$success_case/backups/automation-data-20260827T003000Z"
 for artifact in globals.sql registry.tsv manifest.tsv SHA256SUMS COMPLETE; do
   [[ -s "$final_bundle/$artifact" ]] || fail "complete bundle is missing $artifact"
 done
+rg -Fq 'REVOKE CONNECT ON DATABASE postgres FROM PUBLIC;' "$final_bundle/globals.sql" ||
+  fail 'upgraded backup globals omit the postgres maintenance restriction'
+rg -Fq 'REVOKE CONNECT ON DATABASE template1 FROM PUBLIC;' "$final_bundle/globals.sql" ||
+  fail 'upgraded backup globals omit the template1 maintenance restriction'
 assert_count "$final_bundle/databases" '*.dump' 4
 (cd "$final_bundle" && "$real_sha256sum" -c SHA256SUMS >/dev/null &&
   "$real_sha256sum" -c COMPLETE >/dev/null) || fail 'published checksums do not validate'

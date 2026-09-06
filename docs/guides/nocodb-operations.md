@@ -61,6 +61,11 @@ to source facts. Preserve source facts and record corrections in `operator`. Use
 the domain migrator for schema changes, backfills, bulk changes, and changes across many
 records. PostgreSQL grants remain authoritative even if a NocoDB UI flag is wrong.
 
+The reviewed revision also revokes inherited `PUBLIC CONNECT` on the `postgres` and
+`template1` maintenance databases. Reader and operator validation covers all connectable
+databases, including connectable templates, and accepts `CONNECT` only to the selected
+domain database. Do not restore either public grant as a source-connectivity workaround.
+
 NocoDB uses one application pod, no worker, and no Redis. It mounts a retained 10 GiB
 Longhorn `ReadWriteOnce` claim with two storage replicas. The Deployment uses `Recreate`.
 The replicas protect one volume; they are not two NocoDB instances or a backup.

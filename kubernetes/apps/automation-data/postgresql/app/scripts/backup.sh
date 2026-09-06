@@ -158,7 +158,8 @@ registry_text AS (
 SELECT
   captured.state->>'generation',
   replace(encode(convert_to(captured.state::text, 'UTF8'), 'base64'), E'\\n', ''),
-  replace(encode(convert_to(registry_text.body, 'UTF8'), 'base64'), E'\\n', '')
+  replace(encode(convert_to(registry_text.body, 'UTF8'), 'base64'), E'\\n', ''),
+  platform_shape.revision
 FROM captured
 CROSS JOIN registry_text
 CROSS JOIN platform_shape
@@ -177,14 +178,20 @@ EOSQL
   captured_generation="${capture_line%%|*}"
   captured_remainder="${capture_line#*|}"
   encoded_state="${captured_remainder%%|*}"
-  encoded_registry="${captured_remainder#*|}"
+  registry_and_revision="${captured_remainder#*|}"
+  encoded_registry="${registry_and_revision%%|*}"
+  captured_revision="${registry_and_revision#*|}"
   case "$captured_generation" in
     '' | *[!0-9]*) return 1 ;;
   esac
   [ -n "$encoded_state" ] && [ -n "$encoded_registry" ] || return 1
+  case "$captured_revision" in
+    025-baseline | 026-nocodb-v1) ;;
+    *) return 1 ;;
+  esac
   printf '%s' "$encoded_registry" | base64 -d >"$output_registry"
   [ -s "$output_registry" ] || return 1
-  printf '%s|%s\n' "$captured_generation" "$encoded_state"
+  printf '%s|%s|%s\n' "$captured_generation" "$encoded_state" "$captured_revision"
 }
 
 capture_databases() {
@@ -267,6 +274,14 @@ while [ "$attempt" -le "$max_attempts" ]; do
 
   pg_dumpall --globals-only --file="$temporary_bundle/globals.sql"
   [ -s "$temporary_bundle/globals.sql" ]
+  start_revision="${start_platform_state##*|}"
+  if [ "$start_revision" = '026-nocodb-v1' ]; then
+    {
+      printf '\n-- Fixed revision-026 maintenance database restrictions.\n'
+      printf 'REVOKE CONNECT ON DATABASE postgres FROM PUBLIC;\n'
+      printf 'REVOKE CONNECT ON DATABASE template1 FROM PUBLIC;\n'
+    } >>"$temporary_bundle/globals.sql"
+  fi
 
   while IFS= read -r database_base64; do
     [ -n "$database_base64" ] || continue

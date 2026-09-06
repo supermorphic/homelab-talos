@@ -2,6 +2,11 @@
 -- The caller must have created the accepted specification-025 platform schema.
 SET ROLE postgres;
 
+-- NocoDB source roles must not inherit access to bootstrap maintenance databases.
+-- This shared file runs inside the guarded upgrade transaction and during fresh init.
+REVOKE CONNECT ON DATABASE postgres FROM PUBLIC;
+REVOKE CONNECT ON DATABASE template1 FROM PUBLIC;
+
 CREATE TABLE platform_operations.platform_schema_revision (
   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
   revision text NOT NULL CHECK (revision ~ '^[0-9]{3}-[a-z0-9-]+$'),
@@ -669,7 +674,7 @@ BEGIN
     ELSE NOT has_database_privilege(source.role_name, database.datname, 'CONNECT') END), false)
   INTO database_isolation_valid
   FROM pg_database AS database
-  WHERE database.datallowconn AND NOT database.datistemplate;
+  WHERE database.datallowconn;
   SELECT NOT role.rolsuper AND NOT role.rolcreatedb AND NOT role.rolcreaterole AND
     NOT role.rolreplication AND NOT role.rolbypassrls AND NOT role.rolinherit
   INTO forbidden_attributes_denied FROM pg_roles AS role WHERE role.rolname = source.role_name;
@@ -805,6 +810,16 @@ BEGIN
          'automation_data_provisioner|EXECUTE|false'
        ]::text[] OR
     has_table_privilege('public', 'platform_operations.managed_nocodb_sources', 'SELECT') OR
+    EXISTS (
+      SELECT 1
+      FROM pg_database AS database
+      CROSS JOIN LATERAL aclexplode(
+        COALESCE(database.datacl, acldefault('d', database.datdba))
+      ) AS privilege
+      WHERE database.datname IN ('postgres', 'template1')
+        AND privilege.grantee = 0
+        AND privilege.privilege_type = 'CONNECT'
+    ) OR
     EXISTS (
       SELECT 1 FROM pg_tables
       WHERE schemaname = 'platform_operations'

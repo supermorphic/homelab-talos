@@ -92,6 +92,12 @@ rg -Fq '\ir nocodb-extension.sql' "$control_sql" ||
 	fail 'fresh initialization does not load the shared NocoDB definitions'
 rg -Fq '\ir nocodb-extension.sql' "$upgrade_sql" ||
 	fail 'the upgrade does not load the shared NocoDB definitions'
+rg -Fq 'REVOKE CONNECT ON DATABASE postgres FROM PUBLIC;' "$extension_sql" ||
+	fail 'shared extension does not restrict PUBLIC access to postgres'
+rg -Fq 'REVOKE CONNECT ON DATABASE template1 FROM PUBLIC;' "$extension_sql" ||
+	fail 'shared extension does not restrict PUBLIC access to template1'
+rg -Fq 'WHERE database.datallowconn;' "$extension_sql" ||
+	fail 'NocoDB database-isolation oracle does not include connectable templates'
 ! rg -n -- '--set=(revision|database|role|sql)=|--command=' "$upgrade_command" >/dev/null ||
 	fail 'upgrade command exposes mutable SQL, revision, database, or role input'
 ! rg -n 'get secret|secrets[[:space:]]|jsonpath=.*data\.' "$upgrade_command" >/dev/null ||
@@ -492,6 +498,9 @@ ORDER BY grantee, table_name, privilege_type;
 	chmod 600 "$integration_root/private/verifiers-$suffix"
 }
 capture_preservation_state before
+[[ "$(psql_query "$old_container" automation_data_control \
+	"SELECT has_database_privilege('upgrade_fixture_runtime', 'postgres', 'CONNECT') AND has_database_privilege('upgrade_fixture_runtime', 'template1', 'CONNECT');")" == t ]] ||
+	fail 'baseline fixture did not expose the approved maintenance PUBLIC CONNECT correction'
 
 run_backup_in_container() { # <container> <host-output-directory>
 	local container="$1" output="$2" container_output
@@ -591,6 +600,8 @@ old_bundle="$(find "$integration_root/backups/old" -mindepth 1 -maxdepth 1 \
 	-type d -name 'automation-data-*' -print -quit)"
 [[ -n "$old_bundle" && -s "$old_bundle/COMPLETE" ]] ||
 	fail 'candidate backup did not publish a bundle for the old schema'
+! rg -Fq 'Fixed revision-026 maintenance database restrictions.' "$old_bundle/globals.sql" ||
+	fail 'legacy backup unexpectedly changed maintenance database ACL semantics'
 
 # Partial extension artifacts, an unknown recorded revision, and a held advisory lock
 # must each fail before persistent upgrade mutation.
@@ -656,6 +667,9 @@ rg -Fxq 'installed_revision=026-nocodb-v1' "$upgrade_output" ||
 	fail 'real upgrade did not read back its installed revision'
 rg -Fxq 'extension_contract_valid=true' "$upgrade_output" ||
 	fail 'real upgrade did not validate its extension contract'
+[[ "$(psql_query "$old_container" automation_data_control \
+	"SELECT NOT has_database_privilege('upgrade_fixture_runtime', 'postgres', 'CONNECT') AND NOT has_database_privilege('upgrade_fixture_runtime', 'template1', 'CONNECT');")" == t ]] ||
+	fail 'real upgrade did not restrict PUBLIC access to both maintenance databases'
 capture_preservation_state after
 
 cmp -s "$integration_root/role-oids-before" "$integration_root/role-oids-after" ||
@@ -721,6 +735,10 @@ expect_oracle_grant_failure \
 	'GRANT EXECUTE ON FUNCTION platform_operations.read_platform_revision() TO automation_data_backup WITH GRANT OPTION;' \
 	'REVOKE GRANT OPTION FOR EXECUTE ON FUNCTION platform_operations.read_platform_revision() FROM automation_data_backup;' \
 	'backup execute grant option'
+expect_oracle_grant_failure \
+	'GRANT CONNECT ON DATABASE template1 TO PUBLIC;' \
+	'REVOKE CONNECT ON DATABASE template1 FROM PUBLIC;' \
+	'template1 PUBLIC CONNECT grant'
 [[ "$(psql_query "$old_container" automation_data_control \
 	'SELECT platform_operations.read_platform_revision();')" == 026-nocodb-v1 ]] ||
 	fail 'revision oracle did not recover after restoring exact grants'
@@ -731,6 +749,9 @@ new_bundle="$(find "$integration_root/backups/new" -mindepth 1 -maxdepth 1 \
 	-type d -name 'automation-data-*' -print -quit)"
 [[ -n "$new_bundle" && -s "$new_bundle/COMPLETE" ]] ||
 	fail 'candidate backup did not publish a bundle for the upgraded schema'
+[[ "$(rg -c -F 'REVOKE CONNECT ON DATABASE postgres FROM PUBLIC;' "$new_bundle/globals.sql")" == 1 &&
+	"$(rg -c -F 'REVOKE CONNECT ON DATABASE template1 FROM PUBLIC;' "$new_bundle/globals.sql")" == 1 ]] ||
+	fail 'upgraded backup did not carry the exact maintenance database restrictions'
 
 extension_catalog_query="
 SELECT 'table|' || table_name || '|' || column_name || '|' || data_type || '|' || is_nullable
@@ -755,6 +776,9 @@ start_database "$fresh_container" candidate
 [[ "$(psql_query "$fresh_container" automation_data_control \
 	'SELECT platform_operations.read_platform_revision();')" == 026-nocodb-v1 ]] ||
 	fail 'fresh initialization did not install the fixed revision'
+[[ "$(psql_query "$fresh_container" automation_data_control \
+	"SELECT NOT has_database_privilege('automation_data_exporter', 'postgres', 'CONNECT') AND NOT has_database_privilege('automation_data_exporter', 'template1', 'CONNECT');")" == t ]] ||
+	fail 'fresh initialization did not restrict PUBLIC access to both maintenance databases'
 psql_query "$fresh_container" automation_data_control "$extension_catalog_query" \
 	>"$integration_root/fresh-catalog"
 cmp -s "$integration_root/upgraded-catalog" "$integration_root/fresh-catalog" ||
@@ -771,11 +795,6 @@ SELECT platform_operations.record_domain_credentials(
   clock_timestamp(), clock_timestamp()
 );
 " >/dev/null
-# The disposable server includes PostgreSQL's bootstrap maintenance database. Normalize
-# its default PUBLIC CONNECT so the source-role oracle can exercise the production
-# contract without changing a shared or live database.
-psql_query "$fresh_container" automation_data_control \
-	'REVOKE CONNECT ON DATABASE postgres FROM PUBLIC; REVOKE CONNECT ON DATABASE template1 FROM PUBLIC;' >/dev/null
 psql_query "$fresh_container" authority_fixture "
 SET ROLE authority_fixture_owner;
 CREATE SCHEMA read_model AUTHORIZATION authority_fixture_owner;

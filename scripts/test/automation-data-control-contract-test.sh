@@ -355,7 +355,7 @@ rg -Fq 'true' <<<"$validate_nocodb_access_function" ||
   fail 'ready NocoDB access validation does not require LOGIN'
 rg -Fq 'FROM pg_database AS database' <<<"$authority_validation_function" ||
   fail 'NocoDB access validation does not inspect every catalog database'
-rg -Fq 'database.datallowconn AND NOT database.datistemplate' <<<"$authority_validation_function" ||
+rg -Fq 'WHERE database.datallowconn;' <<<"$authority_validation_function" ||
   fail 'NocoDB access validation does not include every connectable database'
 rg -Fq 'relation_attribute.attacl' <<<"$authority_validation_function" ||
   fail 'NocoDB access validation ignores column-level operator grants'
