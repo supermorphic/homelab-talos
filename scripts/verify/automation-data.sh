@@ -122,7 +122,7 @@ rules_response="$(
   flux_alerts_prometheus_get "$prometheus_base_url" "$prometheus_resolve" \
     '/api/v1/rules?type=alert'
 )"
-expected_rules=$'AutomationDataPostgresqlBackupJobFailed\nAutomationDataPostgresqlBackupJobOverdue\nAutomationDataPostgresqlBackupStale\nAutomationDataPostgresqlContainerOomKilled\nAutomationDataPostgresqlContainerRestarting\nAutomationDataPostgresqlPersistentVolumeClaimNotBound\nAutomationDataPostgresqlPersistentVolumeUsageCritical\nAutomationDataPostgresqlPersistentVolumeUsageWarning\nAutomationDataPostgresqlProvisioningStuck\nAutomationDataPostgresqlRegistryCatalogInconsistent\nAutomationDataPostgresqlUnavailable\nAutomationDataPostgresqlWorkloadUnavailable'
+expected_rules=$'AutomationDataE2EDown\nAutomationDataE2EProbeMissing\nAutomationDataPostgresqlBackupJobFailed\nAutomationDataPostgresqlBackupJobOverdue\nAutomationDataPostgresqlBackupStale\nAutomationDataPostgresqlContainerOomKilled\nAutomationDataPostgresqlContainerRestarting\nAutomationDataPostgresqlPersistentVolumeClaimNotBound\nAutomationDataPostgresqlPersistentVolumeUsageCritical\nAutomationDataPostgresqlPersistentVolumeUsageWarning\nAutomationDataPostgresqlProvisioningStuck\nAutomationDataPostgresqlRegistryCatalogInconsistent\nAutomationDataPostgresqlUnavailable\nAutomationDataPostgresqlWorkloadUnavailable'
 actual_rules="$(yq -r '
   [.data.groups[]? | select(.name == "automation-data-postgresql") | .rules[]?.name] |
   sort | .[]
@@ -133,7 +133,7 @@ rule_health="$(yq -r '
 ' - <<<"$rules_response")"
 [[ "$(yq -r '.status // ""' - <<<"$rules_response")" == 'success' && \
   "$actual_rules" == "$expected_rules" && "$rule_health" == 'ok|' ]] || {
-  echo 'The loaded automation-data alert group differs from the exact healthy 12-rule contract.' >&2
+  echo 'The loaded automation-data alert group differs from the exact healthy 14-rule contract.' >&2
   exit 1
 }
 
@@ -157,6 +157,21 @@ query_single_value() {
     select(.status == "success" and (.data.result | length) == 1) |
     .data.result[0].value[1]
   ' - <<<"$response"
+}
+
+require_gatus_canary_success() {
+  local response
+  response="$(
+    flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" \
+      'gatus_results_endpoint_success{group="Automation",name="automation-data-e2e"}'
+  )" || return 1
+  n8n_gatus_result_matches_contract Automation automation-data-e2e \
+    <(printf '%s\n' "$response")
+}
+
+require_gatus_canary_success || {
+  echo 'The Automation/automation-data-e2e Gatus series is absent, duplicated, or not green.' >&2
+  exit 1
 }
 
 backup_timestamp="$(query_single_value \
@@ -205,4 +220,4 @@ while IFS=$'\t' read -r claim volume; do
   }
 done < <(yq -r '.items[] | [.metadata.name, .spec.volumeName] | @tsv' - <<<"$pvc_json")
 
-echo 'automation-data read-only acceptance passed: Flux and the current StatefulSet are Ready; both retained claims and Longhorn volumes are healthy; the private Service, scrape target, 12 alert rules, dashboard, backup freshness, registry consistency, and incomplete-operation age match their contracts.'
+echo 'automation-data read-only acceptance passed: Flux and the current StatefulSet are Ready; both retained claims and Longhorn volumes are healthy; the private Service, scrape target, 14 alert rules, dashboard, Gatus canary success, backup freshness, registry consistency, and incomplete-operation age match their contracts.'

@@ -97,6 +97,11 @@ done
   kubernetes/apps/monitoring/alerts/app/kustomization.yaml)" == 1 ]] ||
   fail 'the automation-data PrometheusRule must be selected exactly once'
 
+expected_alerts='AutomationDataE2EDown,AutomationDataE2EProbeMissing,AutomationDataPostgresqlBackupJobFailed,AutomationDataPostgresqlBackupJobOverdue,AutomationDataPostgresqlBackupStale,AutomationDataPostgresqlContainerOomKilled,AutomationDataPostgresqlContainerRestarting,AutomationDataPostgresqlPersistentVolumeClaimNotBound,AutomationDataPostgresqlPersistentVolumeUsageCritical,AutomationDataPostgresqlPersistentVolumeUsageWarning,AutomationDataPostgresqlProvisioningStuck,AutomationDataPostgresqlRegistryCatalogInconsistent,AutomationDataPostgresqlUnavailable,AutomationDataPostgresqlWorkloadUnavailable'
+[[ "$(yq -r '[.spec.groups[] | select(.name == "automation-data-postgresql") | .rules[].alert] | sort | join(",")' \
+  kubernetes/apps/monitoring/alerts/app/automation-data.yaml)" == "$expected_alerts" ]] ||
+  fail 'the automation-data rule group must contain exactly the 14 approved alerts'
+
 just --dry-run kube automation-data-verify >/dev/null 2>&1 ||
   fail 'the read-only automation-data verification recipe is missing'
 just --dry-run kube automation-data-provisioning-test >/dev/null 2>&1 ||
@@ -209,6 +214,40 @@ done
 
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/automation-data-validate.XXXXXX")"
 trap 'rm -rf -- "$temp_dir"' EXIT
+# Exercise the verifier's observation boundary with synthetic Prometheus responses.
+sed -n '/^require_gatus_canary_success()/,/^}/p' "$verifier" >"$temp_dir/gatus-observation.sh"
+(
+  source scripts/lib/n8n-verification.sh
+  # shellcheck disable=SC1091 # extracted bounded production function.
+  source "$temp_dir/gatus-observation.sh"
+  declare -F require_gatus_canary_success >/dev/null ||
+    fail 'the verifier omits the Gatus canary observation'
+  prometheus_base_url='https://prometheus.example.invalid'
+  prometheus_resolve='prometheus.example.invalid:443:192.0.2.1'
+  # shellcheck disable=SC2329 # called by the extracted verifier function.
+  flux_alerts_prometheus_query() {
+    [[ "$#" == 3 && "$1" == "$prometheus_base_url" && "$2" == "$prometheus_resolve" &&
+      "$3" == 'gatus_results_endpoint_success{group="Automation",name="automation-data-e2e"}' ]] || return 1
+    [[ "$observation_case" != transport-error ]] || return 1
+    printf '%s\n' "$observation_response"
+  }
+  for observation_case in healthy failed absent duplicate wrong-group wrong-name api-error transport-error; do
+    observation_response='{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"gatus_results_endpoint_success","group":"Automation","name":"automation-data-e2e"},"value":[1234567890,"1"]}]}}'
+    case "$observation_case" in
+      failed) observation_response="$(jq '.data.result[0].value[1] = "0"' <<<"$observation_response")" ;;
+      absent) observation_response="$(jq '.data.result = []' <<<"$observation_response")" ;;
+      duplicate) observation_response="$(jq '.data.result += .data.result' <<<"$observation_response")" ;;
+      wrong-group) observation_response="$(jq '.data.result[0].metric.group = "Other"' <<<"$observation_response")" ;;
+      wrong-name) observation_response="$(jq '.data.result[0].metric.name = "unrelated"' <<<"$observation_response")" ;;
+      api-error) observation_response='{"status":"error","errorType":"execution","error":"fixture"}' ;;
+    esac
+    if require_gatus_canary_success >/dev/null 2>&1; then
+      [[ "$observation_case" == healthy ]] || fail "Gatus observation accepted $observation_case"
+    else
+      [[ "$observation_case" != healthy ]] || fail 'Gatus observation rejected one healthy exact series'
+    fi
+  done
+)
 sed -n '/^platform_manifests()/,/^}/p; /^policy_manifests()/,/^}/p; /^restore_job_manifest()/,/^}/p; /^n8n_application_manifests()/,/^}/p; /^request_job_manifest()/,/^}/p' \
   "$restore_scenario" >"$temp_dir/restore-functions.sh"
 # shellcheck source=scripts/test/lib/n8n-restore-command.sh

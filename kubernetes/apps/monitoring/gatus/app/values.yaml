@@ -288,3 +288,20 @@ config:
         - "len([BODY].executionId) > 0"
       ui:
         hide-errors: true
+    - name: automation-data-e2e
+      group: Automation
+      url: "https://n8n.lab.supermorphic.com/webhook/automation-data-canary"
+      method: POST
+      interval: 5m
+      headers:
+        Content-Type: application/json
+        X-Platform-Canary: "${GATUS_N8N_CANARY_TOKEN}"
+      body: '{}'
+      conditions:
+        - "[STATUS] == 200"
+        - "[BODY].status == ok"
+        - "[BODY].database == automation_data_canary"
+        - "[BODY].role == automation_data_canary_runtime"
+        - "len([BODY].executionId) > 0"
+      ui:
+        hide-errors: true

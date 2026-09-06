@@ -256,7 +256,8 @@ require_equal 'Media Integration endpoint methods and bodies' \
 legacy_endpoint_names='alertmanager,echo,flaresolverr,grafana,letsencrypt-acme,lidarr,longhorn-ui,ntfy,plex,portainer,prometheus,prowlarr,qbittorrent-vpn,radarr,seerr,sonarr,tautulli,test-reports'
 require_equal 'Existing Level 1 endpoint names' \
   "$(yq -r '[.config.endpoints[] | select(.group != "Media Integration" and
-    .name != "n8n-readiness" and .name != "n8n-webhook-e2e") | .name] | sort | join(",")' "$values")" \
+    .name != "n8n-readiness" and .name != "n8n-webhook-e2e" and
+    .name != "automation-data-e2e") | .name] | sort | join(",")' "$values")" \
   "$legacy_endpoint_names"
 while IFS='|' read -r name group url interval conditions; do
   require_equal "Existing Level 1 endpoint $name group" \
@@ -293,6 +294,29 @@ readiness_endpoint="$(yq -o=json -I=0 \
   "$values")"
 require_equal 'Gatus n8n readiness endpoint contract' "$readiness_endpoint" \
   '{"name":"n8n-readiness","group":"Automation","url":"https://n8n.lab.supermorphic.com/healthz/readiness","method":"GET","interval":"1m","conditions":["[STATUS] == 200","[BODY].status == ok"]}'
+
+require_equal 'Gatus automation-data E2E endpoint count' \
+  "$(yq -r '[.config.endpoints[] | select(.name == "automation-data-e2e")] | length' "$values")" '1'
+automation_data_endpoint="$(yq -o=json -I=0 \
+  '.config.endpoints[] | select(.name == "automation-data-e2e")' "$values")"
+require_equal 'Gatus automation-data E2E private request contract' \
+  "$(yq -r '[.group,.url,.method,.interval,.body] | join("|")' - <<<"$automation_data_endpoint")" \
+  'Automation|https://n8n.lab.supermorphic.com/webhook/automation-data-canary|POST|5m|{}'
+# shellcheck disable=SC2016 # The expected value is a literal Gatus environment placeholder.
+require_equal 'Gatus automation-data E2E authentication headers' \
+  "$(yq -o=json -I=0 '.headers | sort_keys(.)' - <<<"$automation_data_endpoint")" \
+  '{"Content-Type":"application/json","X-Platform-Canary":"${GATUS_N8N_CANARY_TOKEN}"}'
+require_equal 'Gatus automation-data E2E response conditions' \
+  "$(yq -r '.conditions | join("|")' - <<<"$automation_data_endpoint")" \
+  '[STATUS] == 200|[BODY].status == ok|[BODY].database == automation_data_canary|[BODY].role == automation_data_canary_runtime|len([BODY].executionId) > 0'
+require_equal 'Gatus automation-data E2E hides errors' \
+  "$(yq -r '.ui."hide-errors"' - <<<"$automation_data_endpoint")" 'true'
+require_equal 'Gatus automation-data E2E verifies TLS' \
+  "$(yq -r '.client.insecure // false' - <<<"$automation_data_endpoint")" 'false'
+require_equal 'Gatus has no direct automation-data PostgreSQL probe' \
+  "$(yq -r '[.config.endpoints[] | select(.url | test("automation-data-postgresql|^postgres(ql)?://|:5432(/|$)"))] | length' "$values")" '0'
+require_equal 'Gatus automation-data E2E reuses the active canary environment' \
+  "$active_canary_env_count" '1'
 
 canary_endpoint="$(yq -o=json -I=0 \
   '.config.endpoints[] | select(.group == "Automation" and .name == "n8n-webhook-e2e")' \
@@ -375,4 +399,4 @@ fi
 require_equal 'Rendered Gatus container envFrom Secret references' \
   "$(yq ea -r '[select(.kind == "Deployment" and .metadata.name == "gatus") | .spec.template.spec.containers[] | select(.name == "gatus") | .envFrom[]? | select(has("secretRef"))] | length' "$rendered")" '0'
 
-echo 'Gatus source, n8n readiness and staged webhook E2E contracts, encrypted media API-key Secret, exact silent media-integration probes, active Level 1 probes, wiring, namespace label, values, HTTPRoute, echo DNS/Gateway/production-TLS source linkage, and pinned chart render passed validation.'
+echo 'Gatus source, n8n readiness and staged webhook E2E contracts, permanent automation-data E2E probe, encrypted media API-key Secret, exact silent media-integration probes, active Level 1 probes, wiring, namespace label, values, HTTPRoute, echo DNS/Gateway/production-TLS source linkage, and pinned chart render passed validation.'
