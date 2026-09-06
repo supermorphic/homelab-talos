@@ -683,26 +683,22 @@ repository contracts already proved by CI.
 
 ### Initial deployment
 
-The initial implementation delivered PostgreSQL, the encrypted platform Secret, private
-n8n credential bindings, monitoring, recovery, and the operational interfaces defined
-here. Permanent Flux reconciliation was activated after attended provisioning and
-recovery acceptance on 2026-09-05.
+The implemented platform includes the private PostgreSQL service, encrypted platform
+Secret, dynamic n8n provisioning interface, scoped domain roles and credentials,
+monitoring, validated logical backups, isolated full-chain recovery, and the permanent
+Automation Data Canary. Flux keeps the platform active with `spec.suspend: false`.
 
-The attended provisioning run
-`20260904T022844Z-df8824b737bd-operator-1f4ca77c` passed domain creation, unchanged
-reconciliation, permission separation, explicit runtime credential rotation, and a
-complete dynamically discovered backup despite an incomplete registry record.
-
-The full-chain restore run
-`20260905T143411Z-699116bc4844-operator-dc1ee8f0` then restored
-`n8n-postgresql-20260905T010011Z.dump` and
-`automation-data-20260905T003011Z`, proved that the restored encrypted n8n runtime
-credential authenticated against the restored PostgreSQL password verifier, and created
-the fresh post-recovery bundle `automation-data-20260905T143440Z`. Canonical result
-validation and cleanup both passed. This proves the recovery capability defined by this
-specification without operator escrow of domain plaintext passwords. Following that
-acceptance, the repository keeps the `automation-data-postgresql` Flux Kustomization
-active with `spec.suspend: false`.
+Attended acceptance validated domain creation and unchanged reconciliation, migration
+and runtime permission separation, explicit credential rotation, complete dynamic backup
+discovery, and recovery without operator escrow of domain plaintext passwords. The final
+full-chain run `20260906T184542Z-eda219254fdd-operator-9938526c` restored compatible
+`n8n-postgresql-20260906T184458Z.dump` and `automation-data-20260906T184443Z` artifacts,
+proved the restored Automation Data Canary credential against the restored PostgreSQL
+verifier, created post-recovery bundle `automation-data-20260906T184618Z`, and removed its
+run-owned resources. Read-only run
+`20260906T164707Z-eda219254fdd-operator-3446583d` independently confirmed the reconciled
+workloads, storage, monitoring, 14 alert rules, and healthy `automation-data-e2e` Gatus
+series.
 
 ### Initiative debrief
 
@@ -717,32 +713,18 @@ coverage. Recovery supports an explicitly selected compatible backup pair. These
 preserve the original self-service and recovery boundaries without adding a provisioning
 service or container-based database testing to CI.
 
-After the operator reported completing the control migration, the private workflow's
-PostgreSQL bindings were corrected to use the platform provisioner credential. The
-published workflow also retains the specification's disabled execution-data settings.
-The operator-reported run `20260905T182837Z-eeeb571af05c-operator-af3d1b16` passed provisioning,
-unchanged reconciliation, permissions, runtime rotation, and complete backup creation.
-The operator-reported full-chain run
-`20260906T103531Z-bfd6c1b6793c-operator-1efda0f5` then passed with the updated credential
-version, restoring `n8n-postgresql-20260906T010011Z.dump` and
-`automation-data-20260906T003011Z` and creating post-recovery bundle
-`automation-data-20260906T103600Z`. This completes recovery acceptance after the control
-and workflow corrections. Independent inspection found no resources remaining from that
-drill. Final read-only run `20260906T142539Z-bfd6c1b6793c-operator-de1dd37b` passed
-deployment, storage, monitoring, and registry verification with canonical result
-validation.
+The private provisioning workflow must use the platform provisioner credential for every
+PostgreSQL operation. The reusable canary keeps a stable least-privileged runtime identity,
+a fixed read-only query, a bounded response, and disabled execution-data persistence.
+Gatus reaches only its authenticated n8n webhook; Prometheus and Grafana retain detailed
+PostgreSQL health and capacity coverage.
 
-### Stable canary extension status
-
-The `bfd6c1b` recovery acceptance predates the stable-canary extension. Its source
-design and validation are implemented, but private workflow conversion, live Gatus
-observation, and a compatible-pair restore acceptance through **Automation Data Canary**
-remain pending.
-
-At the operator's request, this specification moved from identifier 025 to 026 to resolve
-the collision with node lifecycle. The [operations guide](../guides/automation-data-operations.md)
-and [recovery runbook](../runbooks/automation-data-recovery.md) retain the operational
-procedures; implementation sequencing and test mechanics belong in the transient plan.
+Credential or workflow changes require new compatible n8n and automation-data backups
+before recovery acceptance. Reusing the production canary during isolated recovery proves
+the credential ciphertext and PostgreSQL password verifier as one recoverable contract.
+The [operations guide](../guides/automation-data-operations.md) and
+[recovery runbook](../runbooks/automation-data-recovery.md) retain procedures and test
+mechanics outside this durable design record.
 
 ## Rejected alternatives
 
