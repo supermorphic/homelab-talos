@@ -1435,8 +1435,8 @@ for (const [label, node, source, lookup, pattern] of [
   if (!rejected) throw new Error(`${label} was accepted`);
 }
 const exactTables = [
-  { id: 'table-facts', title: 'acceptance_facts', table_name: 'acceptance_facts', source_id: 'source-reader', schema: 'read_model' },
-  { id: 'table-decisions', title: 'acceptance_decision', table_name: 'acceptance_decision', source_id: 'source-operator', schema: 'operator' },
+  { id: 'table-facts', title: 'acceptance_facts', table_name: 'acceptance_facts', source_id: 'source-reader', schema: null },
+  { id: 'table-decisions', title: 'acceptance_decision', table_name: 'acceptance_decision', source_id: 'source-operator', schema: null },
 ];
 const completePage = { totalRows: 2, page: 1, pageSize: 25, isFirstPage: true, isLastPage: true };
 const resolved = execute('Resolve Acceptance Tables', { ...reflectedContext, tables: exactTables, pageInfo: completePage })[0].json;
@@ -1444,7 +1444,8 @@ if (
   resolved.factsTableId !== 'table-facts'
   || resolved.decisionTableId !== 'table-decisions'
   || JSON.stringify(resolved.reflectedSchemas) !== JSON.stringify(['operator', 'read_model'])
-  || resolved.reflectedTables.some((table) => table.schema !== exactTables.find((candidate) => candidate.id === table.id).schema)
+  || resolved.reflectedTables.find((table) => table.id === 'table-facts')?.schema !== 'read_model'
+  || resolved.reflectedTables.find((table) => table.id === 'table-decisions')?.schema !== 'operator'
 ) throw new Error('exact reflected schemas and tables were not derived');
 const canaryContext = {
   ...resolved,
@@ -1718,6 +1719,9 @@ if (!untrustedSchemaRejected) throw new Error('Resolve Acceptance Tables reporte
 for (const [label, mutate] of [
   ['public table schema', (input) => { input.tables[0].schema = 'public'; }],
   ['missing table schema', (input) => { delete input.tables[0].schema; }],
+  ['cross-source table identity', (input) => {
+    [input.tables[0].source_id, input.tables[1].source_id] = [input.tables[1].source_id, input.tables[0].source_id];
+  }],
   ['unreturned later-page table', (input) => { input.pageInfo.totalRows = 3; }],
   ['nonterminal table page', (input) => { input.pageInfo.isLastPage = false; }],
 ]) {
