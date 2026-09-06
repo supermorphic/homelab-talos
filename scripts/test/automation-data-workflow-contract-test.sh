@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 workflow="$repo_root/kubernetes/apps/automation/n8n/app/workflows/automation-data-provisioner.json"
-canary_workflow="$repo_root/kubernetes/apps/automation/n8n/app/workflows/automation-data-canary.json"
+canary_workflow="${AUTOMATION_DATA_CANARY_WORKFLOW:-$repo_root/kubernetes/apps/automation/n8n/app/workflows/automation-data-canary.json}"
 kustomization="$repo_root/kubernetes/apps/automation/n8n/app/kustomization.yaml"
 
 [[ -f "$workflow" ]] || {
@@ -357,6 +357,44 @@ from pathlib import Path
 workflow = json.loads(Path(sys.argv[1]).read_text())
 nodes = workflow.get("nodes", [])
 by_name = {node.get("name"): node for node in nodes}
+expected_inventory = sorted([
+    ("Canary Setup", "n8n-nodes-base.stickyNote"),
+    ("Canary Webhook", "n8n-nodes-base.webhook"),
+    ("Test Stable Runtime Credential", "n8n-nodes-base.postgres"),
+    ("Bounded Canary Response", "n8n-nodes-base.code"),
+    ("Respond", "n8n-nodes-base.respondToWebhook"),
+])
+actual_inventory = sorted((node.get("name"), node.get("type")) for node in nodes)
+if actual_inventory != expected_inventory:
+    raise SystemExit("The automation-data canary must contain only the exact five-node inventory.")
+
+
+def contains_key(value, key):
+    if isinstance(value, dict):
+        return key in value or any(contains_key(child, key) for child in value.values())
+    if isinstance(value, list):
+        return any(contains_key(child, key) for child in value)
+    return False
+
+
+if contains_key(workflow, "credentials"):
+    raise SystemExit("The automation-data canary template embeds credential data or bindings.")
+
+expected_parameter_keys = {
+    "Canary Setup": {"content", "height", "width"},
+    "Canary Webhook": {"httpMethod", "path", "authentication", "responseMode", "options"},
+    "Test Stable Runtime Credential": {"operation", "query", "options"},
+    "Bounded Canary Response": {"jsCode"},
+    "Respond": {"respondWith", "responseBody", "options"},
+}
+for name, expected_keys in expected_parameter_keys.items():
+    parameters = by_name[name].get("parameters", {})
+    if set(parameters) != expected_keys:
+        raise SystemExit(f"{name} has parameters outside its bounded canary contract.")
+for name in ("Canary Webhook", "Test Stable Runtime Credential", "Respond"):
+    if by_name[name]["parameters"]["options"] != {}:
+        raise SystemExit(f"{name} must not add options outside its bounded canary contract.")
+
 if workflow.get("name") != "Automation Data Canary" or workflow.get("active") is not False:
     raise SystemExit("The automation-data canary must be the inactive exact workflow.")
 settings = workflow.get("settings", {})
@@ -390,7 +428,7 @@ for value in (
     if value not in code:
         raise SystemExit(f"The automation-data canary response omits {value}.")
 serialized = json.dumps(workflow)
-if any("credentials" in node for node in nodes) or '"password"' in serialized.lower():
+if '"password"' in serialized.lower():
     raise SystemExit("The automation-data canary template embeds credential data or bindings.")
 notes = by_name.get("Canary Setup", {}).get("parameters", {}).get("content", "")
 for value in ("Platform Canary Header", "automation-data/automation_data_canary/runtime"):
