@@ -203,6 +203,20 @@ serialized = json.dumps(workflow)
 require("DELETE" not in serialized.upper(), "The source workflow must not call source delete.")
 require(not any("credentials" in node for node in nodes), "The source workflow must not embed credential IDs.")
 
+# NocoDB 2026.08.2 (tag commit 28c50ff08c37fe3ced3a7dba021f7cba7b2c51dc)
+# defines the database member of IntegrationReq.type as "database". Keep the
+# create and rotation payloads aligned with that pinned public API contract.
+integration_payload_nodes = (
+    "Prepare Reader Integration",
+    "Build Reader Rotation Integration",
+    "Prepare Operator Integration",
+    "Build Operator Rotation Integration",
+)
+for name in integration_payload_nodes:
+    code = by_name.get(name, {}).get("parameters", {}).get("jsCode", "")
+    require("type: 'database'" in code, f"{name} must use the pinned NocoDB database integration type.")
+    require("type: 'db'" not in code, f"{name} uses the obsolete NocoDB integration type.")
+
 connections = workflow.get("connections", {})
 
 
