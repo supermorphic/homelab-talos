@@ -33,9 +33,25 @@ write_summary() {
 }
 
 inventory_json() {
-  local group="$1" version="$2" kind="$3" resource="$4" raw chunk
+  local group="$1" version="$2" kind="$3" resource="$4" raw
   raw="$(kubectl --kubeconfig "$kubeconfig" get "${resource}.${version}.${group}" --all-namespaces --output json)" || {
     echo "inventory-read-failed: ${group}/${version}/${kind}" >&2
+    return 1
+  }
+  GROUP="$group" VERSION="$version" KIND="$kind" yq -e '
+    [
+      (.apiVersion == (strenv(GROUP) + "/" + strenv(VERSION))),
+      (.kind == (strenv(KIND) + "List")),
+      ((.items | tag) == "!!seq"),
+      ([.items[] |
+        [
+          (.apiVersion == (strenv(GROUP) + "/" + strenv(VERSION))),
+          (.kind == strenv(KIND))
+        ] | all
+      ] | all)
+    ] | all
+  ' <<<"$raw" >/dev/null 2>&1 || {
+    echo "inventory-invalid-response: ${group}/${version}/${kind}" >&2
     return 1
   }
   GROUP="$group" VERSION="$version" KIND="$kind" yq -o=json -I=0 '
@@ -73,14 +89,15 @@ EOF
 
 consecutive_matches=0
 for attempt in {1..12}; do
-  targets_json="$(flux_alerts_prometheus_get "$prometheus_base_url" "$prometheus_resolve" '/api/v1/targets?state=active')" || {
-    write_summary "attempt-${attempt}: targets-query-failed"
-    consecutive_matches=0
-    [[ "$attempt" -lt 12 ]] && sleep 10
-    continue
-  }
-  dedicated_transport="$(SERVICE_NAME="$dedicated_service" NAMESPACE="$namespace" yq -r '[.data.activeTargets[] | select(.discoveredLabels.__meta_kubernetes_service_name == strenv(SERVICE_NAME) and .discoveredLabels.__meta_kubernetes_namespace == strenv(NAMESPACE)) | .labels | [has("job"), has("instance"), has("pod"), has("service"), has("endpoint"), has("namespace"), has("container")] | all] | all' <<<"$targets_json")"
-  candidate_transport="$(SERVICE_NAME="$candidate_service" NAMESPACE="$namespace" yq -r '[.data.activeTargets[] | select(.discoveredLabels.__meta_kubernetes_service_name == strenv(SERVICE_NAME) and .discoveredLabels.__meta_kubernetes_namespace == strenv(NAMESPACE)) | .labels | [has("job"), has("instance"), has("pod"), has("service"), has("endpoint"), has("namespace"), has("container")] | all] | all' <<<"$targets_json")"
+  targets_json="$(flux_alerts_prometheus_get "$prometheus_base_url" "$prometheus_resolve" '/api/v1/targets?state=active')" || targets_json=''
+  dedicated_transport="$(SERVICE_NAME="$dedicated_service" NAMESPACE="$namespace" yq -r '[.data.activeTargets[] | select(.discoveredLabels.__meta_kubernetes_service_name == strenv(SERVICE_NAME) and .discoveredLabels.__meta_kubernetes_namespace == strenv(NAMESPACE)) | .labels | [has("job"), has("instance"), has("pod"), has("service"), has("endpoint"), has("namespace"), has("container")] | all] | all' <<<"$targets_json" 2>/dev/null)" || dedicated_transport=''
+  candidate_transport="$(SERVICE_NAME="$candidate_service" NAMESPACE="$namespace" yq -r '[.data.activeTargets[] | select(.discoveredLabels.__meta_kubernetes_service_name == strenv(SERVICE_NAME) and .discoveredLabels.__meta_kubernetes_namespace == strenv(NAMESPACE)) | .labels | [has("job"), has("instance"), has("pod"), has("service"), has("endpoint"), has("namespace"), has("container")] | all] | all' <<<"$targets_json" 2>/dev/null)" || candidate_transport=''
+  dedicated_json="$(flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" "gotk_resource_info{service=\"${dedicated_service}\",namespace=\"${namespace}\"}")" || dedicated_json=''
+  candidate_json="$(flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" "gotk_candidate_resource_info{service=\"${candidate_service}\",namespace=\"${namespace}\"}")" || candidate_json=''
+  node_json="$(flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" "kube_node_info{service=\"${candidate_service}\",namespace=\"${namespace}\"}")" || node_json=''
+  pod_json="$(flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" "kube_pod_info{service=\"${candidate_service}\",namespace=\"${namespace}\"}")" || pod_json=''
+  inventory="$(gather_inventory)" || inventory=''
+  comparison=''
   if [[ "$(yq -r '.status // ""' <<<"$targets_json")" != 'success' ]] ||
     [[ "$(flux_alerts_target_count "$dedicated_service" "$namespace" <<<"$targets_json")" -le 0 ]] ||
     [[ "$(flux_alerts_target_healths "$dedicated_service" "$namespace" <<<"$targets_json")" != 'up' ]] ||
@@ -90,11 +107,6 @@ for attempt in {1..12}; do
     write_summary "attempt-${attempt}: target-acceptance-failed"
     consecutive_matches=0
   else
-    dedicated_json="$(flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" "gotk_resource_info{service=\"${dedicated_service}\",namespace=\"${namespace}\"}")" || dedicated_json=''
-    candidate_json="$(flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" "gotk_candidate_resource_info{service=\"${candidate_service}\",namespace=\"${namespace}\"}")" || candidate_json=''
-    node_json="$(flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" "kube_node_info{service=\"${candidate_service}\",namespace=\"${namespace}\"}")" || node_json=''
-    pod_json="$(flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" "kube_pod_info{service=\"${candidate_service}\",namespace=\"${namespace}\"}")" || pod_json=''
-    inventory="$(gather_inventory)" || inventory=''
     if [[ -n "$dedicated_json" && -n "$candidate_json" && -n "$node_json" && -n "$pod_json" && -n "$inventory" &&
       "$(yq -r '.status // ""' <<<"$dedicated_json")" == 'success' && "$(yq -r '.data.result | length' <<<"$dedicated_json")" -gt 0 &&
       "$(yq -r '.status // ""' <<<"$candidate_json")" == 'success' && "$(yq -r '.data.result | length' <<<"$candidate_json")" -gt 0 &&
