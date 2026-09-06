@@ -351,7 +351,7 @@ const execute = (name, input, lookup = {}, itemInputs = [input]) => {
   return new Function('$json', '$input', '$', code)(
     input,
     { all: () => itemInputs.map((json) => ({ json })) },
-    (nodeName) => ({ first: () => ({ json: lookup[nodeName] || input }) }),
+    (nodeName) => ({ first: () => lookup[nodeName] === null ? undefined : ({ json: lookup[nodeName] || input }) }),
   );
 };
 
@@ -611,6 +611,20 @@ if (operatorTargetReaderGate.postgresqlValidation.valid !== true || operatorTarg
 }
 if (operatorTargetOperatorGate.postgresqlValidation.valid !== true || operatorTargetOperatorGate.postgresqlValidation.controlledDmlPresent !== true) {
   throw new Error('operator PostgreSQL readiness matrix was not preserved from validate_nocodb_access');
+}
+for (const [node, errorGate] of [
+  ['Prepare Reader Rotation', 'Reader Error Rotation'],
+  ['Prepare Operator Rotation', 'Operator Error Rotation'],
+]) {
+  const cryptoInput = {
+    domain: 'domain_one', operation: 'rotate', requestedAccessKind: node.includes('Reader') ? 'reader' : 'operator',
+    accessKind: node.includes('Reader') ? 'reader' : 'operator', sourceId: 'source-1', integrationId: 'integration-1',
+    generatedValue: 'a'.repeat(48), postgresqlValidation: { valid: true },
+  };
+  const prepared = execute(node, cryptoInput, { [errorGate]: null })[0].json;
+  if (JSON.stringify(prepared) !== JSON.stringify(cryptoInput)) {
+    throw new Error(`${node} did not preserve the complete Crypto-node input when the normal IF output was empty`);
+  }
 }
 
 const storedReader = {

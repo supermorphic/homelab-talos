@@ -1018,7 +1018,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Reader Error Rotation').first().json;\nif (!$json.generatedValue) throw new Error('generation_failed');\nreturn [{ json: { ...context, generatedValue: $json.generatedValue } }];"
+        "jsCode": "if (!$json.generatedValue) throw new Error('generation_failed');\nreturn [{ json: $json }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1987,7 +1987,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Operator Error Rotation').first().json;\nif (!$json.generatedValue) throw new Error('generation_failed');\nreturn [{ json: { ...context, generatedValue: $json.generatedValue } }];"
+        "jsCode": "if (!$json.generatedValue) throw new Error('generation_failed');\nreturn [{ json: $json }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
