@@ -3,17 +3,36 @@
 # Shared, read-only helpers for the Flux resource-state alert signal path.
 # Callers own policy (fail-fast verification vs. aggregate diagnostics).
 
+# shellcheck disable=SC2034 # This source interface deliberately initializes caller-owned variables.
+flux_alerts_source() {
+  # Production remains on the dedicated exporter during shadow collection. Do not
+  # infer these identities from target health or chart-generated name fragments.
+  flux_alerts_service='flux-kube-state-metrics'
+  flux_alerts_deployment='flux-kube-state-metrics'
+  flux_alerts_serviceaccount='flux-kube-state-metrics'
+  flux_alerts_release='flux-kube-state-metrics'
+  flux_alerts_values='kubernetes/apps/monitoring/flux-kube-state-metrics/app/values.yaml'
+  flux_alerts_values_root='.'
+}
+
+flux_alerts_metric_selector() {
+  flux_alerts_source
+  printf 'gotk_resource_info{service="%s",namespace="monitoring"}\n' \
+    "$flux_alerts_service"
+}
+
 flux_alerts_configured_gvks() {
   local values_file="$1"
-  yq -r '
-    .customResourceState.config.spec.resources[] |
+  local values_root="${2-.}"
+  yq -r "
+    (${values_root}).customResourceState.config.spec.resources[] |
     [
       .groupVersionKind.group,
       .groupVersionKind.version,
       .groupVersionKind.kind
     ] |
     @tsv
-  ' "$values_file"
+  " "$values_file"
 }
 
 flux_alerts_prometheus_get() {
@@ -38,12 +57,13 @@ flux_alerts_prometheus_query() {
 
 flux_alerts_target_count() {
   local service_name="$1"
-  SERVICE_NAME="$service_name" yq -r '
+  local target_namespace="${2-}"
+  SERVICE_NAME="$service_name" NAMESPACE="$target_namespace" yq -r '
     [
       .data.activeTargets[]? |
       select(
-        .discoveredLabels.__meta_kubernetes_service_name == strenv(SERVICE_NAME) or
-        ((.scrapePool // "") | contains(strenv(SERVICE_NAME)))
+        .discoveredLabels.__meta_kubernetes_service_name == strenv(SERVICE_NAME) and
+        (strenv(NAMESPACE) == "" or .discoveredLabels.__meta_kubernetes_namespace == strenv(NAMESPACE))
       )
     ] |
     length
@@ -52,12 +72,13 @@ flux_alerts_target_count() {
 
 flux_alerts_target_healths() {
   local service_name="$1"
-  SERVICE_NAME="$service_name" yq -r '
+  local target_namespace="${2-}"
+  SERVICE_NAME="$service_name" NAMESPACE="$target_namespace" yq -r '
     [
       .data.activeTargets[]? |
       select(
-        .discoveredLabels.__meta_kubernetes_service_name == strenv(SERVICE_NAME) or
-        ((.scrapePool // "") | contains(strenv(SERVICE_NAME)))
+        .discoveredLabels.__meta_kubernetes_service_name == strenv(SERVICE_NAME) and
+        (strenv(NAMESPACE) == "" or .discoveredLabels.__meta_kubernetes_namespace == strenv(NAMESPACE))
       ) |
       (.health // "unknown")
     ] |
@@ -69,12 +90,13 @@ flux_alerts_target_healths() {
 
 flux_alerts_target_errors() {
   local service_name="$1"
-  SERVICE_NAME="$service_name" yq -r '
+  local target_namespace="${2-}"
+  SERVICE_NAME="$service_name" NAMESPACE="$target_namespace" yq -r '
     [
       .data.activeTargets[]? |
       select(
-        .discoveredLabels.__meta_kubernetes_service_name == strenv(SERVICE_NAME) or
-        ((.scrapePool // "") | contains(strenv(SERVICE_NAME)))
+        .discoveredLabels.__meta_kubernetes_service_name == strenv(SERVICE_NAME) and
+        (strenv(NAMESPACE) == "" or .discoveredLabels.__meta_kubernetes_namespace == strenv(NAMESPACE))
       ) |
       select((.lastError // "") != "") |
       .lastError

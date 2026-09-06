@@ -19,6 +19,8 @@ spec:
         - alert: FluxReconciliationFailure
           expr: >-
             gotk_resource_info{
+              service="flux-kube-state-metrics",
+              namespace="monitoring",
               customresource_kind=~"Kustomization|HelmRelease|GitRepository|OCIRepository|HelmRepository",
               ready!="True",
               suspended!="true"
@@ -39,11 +41,11 @@ spec:
               excluded.
         - alert: FluxResourceMetricsMissing
           expr: >-
-            absent(gotk_resource_info{customresource_kind="Kustomization"})
-            or absent(gotk_resource_info{customresource_kind="HelmRelease"})
-            or absent(gotk_resource_info{customresource_kind="GitRepository"})
-            or absent(gotk_resource_info{customresource_kind="OCIRepository"})
-            or absent(gotk_resource_info{customresource_kind="HelmRepository"})
+            absent(gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="Kustomization"})
+            or absent(gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="HelmRelease"})
+            or absent(gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="GitRepository"})
+            or absent(gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="OCIRepository"})
+            or absent(gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="HelmRepository"})
           for: 15m
           labels:
             severity: warning

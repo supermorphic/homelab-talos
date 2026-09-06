@@ -18,6 +18,23 @@ assert_eq() {
   }
 }
 
+flux_alerts_source
+assert_eq flux-kube-state-metrics "$flux_alerts_service" 'production service identity'
+assert_eq flux-kube-state-metrics "$flux_alerts_deployment" 'production deployment identity'
+assert_eq flux-kube-state-metrics "$flux_alerts_serviceaccount" 'production ServiceAccount identity'
+assert_eq flux-kube-state-metrics "$flux_alerts_release" 'production release identity'
+assert_eq kubernetes/apps/monitoring/flux-kube-state-metrics/app/values.yaml \
+  "$flux_alerts_values" 'production values identity'
+assert_eq . "$flux_alerts_values_root" 'production values root'
+assert_eq 'gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring"}' \
+  "$(flux_alerts_metric_selector)" 'production metric selector'
+assert_eq $'helm.toolkit.fluxcd.io\tv2\tHelmRelease\nkustomize.toolkit.fluxcd.io\tv1\tKustomization\nsource.toolkit.fluxcd.io\tv1\tGitRepository\nsource.toolkit.fluxcd.io\tv1\tHelmRepository\nsource.toolkit.fluxcd.io\tv1\tOCIRepository' \
+  "$(flux_alerts_configured_gvks "$flux_alerts_values" "$flux_alerts_values_root" | sort)" \
+  'dedicated configured GVKs'
+assert_eq $'helm.toolkit.fluxcd.io\tv2\tHelmRelease\nkustomize.toolkit.fluxcd.io\tv1\tKustomization\nsource.toolkit.fluxcd.io\tv1\tGitRepository\nsource.toolkit.fluxcd.io\tv1\tHelmRepository\nsource.toolkit.fluxcd.io\tv1\tOCIRepository' \
+  "$(flux_alerts_configured_gvks kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml '.["kube-state-metrics"]' | sort)" \
+  'bundled configured GVKs'
+
 targets_json='{
   "status": "success",
   "data": {
@@ -27,6 +44,7 @@ targets_json='{
         "health": "up",
         "lastError": "",
         "discoveredLabels": {
+          "__meta_kubernetes_namespace": "monitoring",
           "__meta_kubernetes_service_name": "flux-kube-state-metrics"
         }
       },
@@ -37,15 +55,33 @@ targets_json='{
         "discoveredLabels": {
           "__meta_kubernetes_service_name": "other"
         }
+      },
+      {
+        "scrapePool": "serviceMonitor/monitoring/flux-kube-state-metrics-candidate/0",
+        "health": "up",
+        "lastError": "",
+        "discoveredLabels": {
+          "__meta_kubernetes_namespace": "monitoring",
+          "__meta_kubernetes_service_name": "flux-kube-state-metrics-candidate"
+        }
+      },
+      {
+        "scrapePool": "serviceMonitor/other/flux-kube-state-metrics/0",
+        "health": "down",
+        "lastError": "wrong namespace",
+        "discoveredLabels": {
+          "__meta_kubernetes_namespace": "other",
+          "__meta_kubernetes_service_name": "flux-kube-state-metrics"
+        }
       }
     ]
   }
 }'
-assert_eq 1 "$(flux_alerts_target_count flux-kube-state-metrics <<<"$targets_json")" \
+assert_eq 1 "$(flux_alerts_target_count flux-kube-state-metrics monitoring <<<"$targets_json")" \
   'target count'
-assert_eq up "$(flux_alerts_target_healths flux-kube-state-metrics <<<"$targets_json")" \
+assert_eq up "$(flux_alerts_target_healths flux-kube-state-metrics monitoring <<<"$targets_json")" \
   'target health'
-assert_eq '' "$(flux_alerts_target_errors flux-kube-state-metrics <<<"$targets_json")" \
+assert_eq '' "$(flux_alerts_target_errors flux-kube-state-metrics monitoring <<<"$targets_json")" \
   'target errors'
 
 metric_json='{
