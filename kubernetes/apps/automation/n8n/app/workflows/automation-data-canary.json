@@ -1,9 +1,9 @@
 {
-  "name": "Automation Data Recovery Canary",
+  "name": "Automation Data Canary",
   "nodes": [
     {
       "parameters": {
-        "content": "## One-time recovery-drill binding\n\nKeep this template inactive until the staged rollout. Bind the existing **Platform Canary Header** credential to **Recovery Webhook** and the generated `automation-data/issue317_acceptance/runtime` Postgres credential to **Test Restored Runtime Credential**. The full-chain restore drill uses the restored encrypted bindings and retained `N8N_ENCRYPTION_KEY`; it never reads the domain password.",
+        "content": "## Stable production and recovery binding\n\nKeep this template inactive until the staged rollout. Bind the existing **Platform Canary Header** credential to **Canary Webhook** and the platform-created `automation-data/automation_data_canary/runtime` Postgres credential to **Test Stable Runtime Credential**. Gatus and the full-chain restore drill use the same scoped runtime credential; neither reads its password.",
         "height": 300,
         "width": 560
       },
@@ -11,12 +11,12 @@
       "typeVersion": 1,
       "position": [-600, -360],
       "id": "00000000-0000-4000-8000-000000000061",
-      "name": "Recovery Setup"
+      "name": "Canary Setup"
     },
     {
       "parameters": {
         "httpMethod": "POST",
-        "path": "automation-data-recovery-canary",
+        "path": "automation-data-canary",
         "authentication": "headerAuth",
         "responseMode": "responseNode",
         "options": {}
@@ -25,7 +25,7 @@
       "typeVersion": 2.1,
       "position": [-520, 0],
       "id": "00000000-0000-4000-8000-000000000062",
-      "name": "Recovery Webhook"
+      "name": "Canary Webhook"
     },
     {
       "parameters": {
@@ -37,17 +37,17 @@
       "typeVersion": 2.6,
       "position": [-240, 0],
       "id": "00000000-0000-4000-8000-000000000063",
-      "name": "Test Restored Runtime Credential"
+      "name": "Test Stable Runtime Credential"
     },
     {
       "parameters": {
-        "jsCode": "if ($json.database !== 'issue317_acceptance' || $json.role !== 'issue317_acceptance_runtime') throw new Error('restored_runtime_identity_mismatch');\nreturn [{ json: { status: 'ok', database: $json.database, role: $json.role, executionId: String($execution.id) } }];"
+        "jsCode": "if ($json.database !== 'automation_data_canary' || $json.role !== 'automation_data_canary_runtime') throw new Error('stable_runtime_identity_mismatch');\nreturn [{ json: { status: 'ok', database: $json.database, role: $json.role, executionId: String($execution.id) } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [40, 0],
       "id": "00000000-0000-4000-8000-000000000064",
-      "name": "Bounded Recovery Response"
+      "name": "Bounded Canary Response"
     },
     {
       "parameters": {
@@ -63,13 +63,13 @@
     }
   ],
   "connections": {
-    "Recovery Webhook": {
-      "main": [[{"node": "Test Restored Runtime Credential", "type": "main", "index": 0}]]
+    "Canary Webhook": {
+      "main": [[{"node": "Test Stable Runtime Credential", "type": "main", "index": 0}]]
     },
-    "Test Restored Runtime Credential": {
-      "main": [[{"node": "Bounded Recovery Response", "type": "main", "index": 0}]]
+    "Test Stable Runtime Credential": {
+      "main": [[{"node": "Bounded Canary Response", "type": "main", "index": 0}]]
     },
-    "Bounded Recovery Response": {
+    "Bounded Canary Response": {
       "main": [[{"node": "Respond", "type": "main", "index": 0}]]
     }
   },
