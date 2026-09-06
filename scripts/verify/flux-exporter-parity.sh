@@ -40,8 +40,8 @@ inventory_json() {
   }
   GROUP="$group" VERSION="$version" KIND="$kind" yq -e '
     [
-      (.apiVersion == (strenv(GROUP) + "/" + strenv(VERSION))),
-      (.kind == (strenv(KIND) + "List")),
+      (.apiVersion == "v1"),
+      (.kind == "List"),
       ((.items | tag) == "!!seq"),
       ([.items[] |
         [

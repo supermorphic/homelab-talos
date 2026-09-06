@@ -44,15 +44,15 @@ case " $* " in
     if [[ "${FAKE_INVENTORY_MODE:-wrong-gvk}" == malformed ]]; then
       printf '%s\n' '{not-json'
     elif [[ "${FAKE_INVENTORY_MODE:-wrong-gvk}" == valid ]]; then
-      printf '%s\n' '{"apiVersion":"kustomize.toolkit.fluxcd.io/v1","kind":"KustomizationList","items":[{"apiVersion":"kustomize.toolkit.fluxcd.io/v1","kind":"Kustomization","metadata":{"namespace":"flux-system","name":"cluster-apps"},"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}'
+      printf '%s\n' '{"apiVersion":"v1","kind":"List","items":[{"apiVersion":"kustomize.toolkit.fluxcd.io/v1","kind":"Kustomization","metadata":{"namespace":"flux-system","name":"cluster-apps"},"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}'
     else
       printf '%s\n' '{"apiVersion":"wrong.example.io/v1","kind":"WrongList","items":[{"apiVersion":"wrong.example.io/v1","kind":"WrongKind","metadata":{"namespace":"flux-system","name":"cluster-apps"},"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}'
     fi
     ;;
-  *' helmreleases.v2.helm.toolkit.fluxcd.io '*) [[ -z "${FAKE_CALL_LOG:-}" ]] || printf 'inventory-resource:helmreleases\n' >>"$FAKE_CALL_LOG"; printf '%s\n' '{"apiVersion":"helm.toolkit.fluxcd.io/v2","kind":"HelmReleaseList","items":[{"apiVersion":"helm.toolkit.fluxcd.io/v2","kind":"HelmRelease","metadata":{"namespace":"monitoring","name":"kube-prometheus-stack"},"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' ;;
-  *' gitrepositories.v1.source.toolkit.fluxcd.io '*) [[ -z "${FAKE_CALL_LOG:-}" ]] || printf 'inventory-resource:gitrepositories\n' >>"$FAKE_CALL_LOG"; printf '%s\n' '{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"GitRepositoryList","items":[{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"GitRepository","metadata":{"namespace":"flux-system","name":"flux-system"},"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' ;;
-  *' ocirepositories.v1.source.toolkit.fluxcd.io '*) [[ -z "${FAKE_CALL_LOG:-}" ]] || printf 'inventory-resource:ocirepositories\n' >>"$FAKE_CALL_LOG"; printf '%s\n' '{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"OCIRepositoryList","items":[{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"OCIRepository","metadata":{"namespace":"monitoring","name":"grafana"},"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' ;;
-  *' helmrepositories.v1.source.toolkit.fluxcd.io '*) [[ -z "${FAKE_CALL_LOG:-}" ]] || printf 'inventory-resource:helmrepositories\n' >>"$FAKE_CALL_LOG"; printf '%s\n' '{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"HelmRepositoryList","items":[{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"HelmRepository","metadata":{"namespace":"monitoring","name":"prometheus-community"},"spec":{"suspend":true},"status":{"conditions":[{"type":"Ready","status":"False"}]}}]}' ;;
+  *' helmreleases.v2.helm.toolkit.fluxcd.io '*) [[ -z "${FAKE_CALL_LOG:-}" ]] || printf 'inventory-resource:helmreleases\n' >>"$FAKE_CALL_LOG"; printf '%s\n' '{"apiVersion":"v1","kind":"List","items":[{"apiVersion":"helm.toolkit.fluxcd.io/v2","kind":"HelmRelease","metadata":{"namespace":"monitoring","name":"kube-prometheus-stack"},"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' ;;
+  *' gitrepositories.v1.source.toolkit.fluxcd.io '*) [[ -z "${FAKE_CALL_LOG:-}" ]] || printf 'inventory-resource:gitrepositories\n' >>"$FAKE_CALL_LOG"; printf '%s\n' '{"apiVersion":"v1","kind":"List","items":[{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"GitRepository","metadata":{"namespace":"flux-system","name":"flux-system"},"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' ;;
+  *' ocirepositories.v1.source.toolkit.fluxcd.io '*) [[ -z "${FAKE_CALL_LOG:-}" ]] || printf 'inventory-resource:ocirepositories\n' >>"$FAKE_CALL_LOG"; printf '%s\n' '{"apiVersion":"v1","kind":"List","items":[{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"OCIRepository","metadata":{"namespace":"monitoring","name":"grafana"},"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' ;;
+  *' helmrepositories.v1.source.toolkit.fluxcd.io '*) [[ -z "${FAKE_CALL_LOG:-}" ]] || printf 'inventory-resource:helmrepositories\n' >>"$FAKE_CALL_LOG"; printf '%s\n' '{"apiVersion":"v1","kind":"List","items":[{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"HelmRepository","metadata":{"namespace":"monitoring","name":"prometheus-community"},"spec":{"suspend":true},"status":{"conditions":[{"type":"Ready","status":"False"}]}}]}' ;;
   *) echo "Unexpected kubectl request: $*" >&2; exit 64 ;;
 esac
 EOF
@@ -79,6 +79,19 @@ assert_invalid_inventory_rejected() {
 
 assert_invalid_inventory_rejected wrong-gvk
 assert_invalid_inventory_rejected malformed
+
+if ! PATH="$fixture/bin:$PATH" FAKE_VECTOR="$vector" FAKE_TARGETS="$targets" \
+  FAKE_INVENTORY_MODE=valid bash "$verifier" "$fixture/kubeconfig" \
+  >"$fixture/valid.out" 2>&1; then
+  echo 'Verifier rejected kubectl generic List inventory responses.' >&2
+  cat "$fixture/valid.out" >&2
+  exit 1
+fi
+rg -Fq 'Flux exporter parity acceptance passed' "$fixture/valid.out" || {
+  echo 'Verifier did not report parity acceptance for generic List responses.' >&2
+  cat "$fixture/valid.out" >&2
+  exit 1
+}
 
 target_failure_log="$fixture/target-failure.log"
 : >"$target_failure_log"
