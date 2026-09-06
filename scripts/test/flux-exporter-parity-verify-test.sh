@@ -39,6 +39,8 @@ set -euo pipefail
 [[ -z "${FAKE_CALL_LOG:-}" ]] || printf 'inventory\n' >>"$FAKE_CALL_LOG"
 case " $* " in
   *' kustomizations.v1.kustomize.toolkit.fluxcd.io '*)
+    [[ -z "${FAKE_CALL_LOG:-}" ]] || printf 'inventory-resource:kustomizations\n' >>"$FAKE_CALL_LOG"
+    [[ "${FAKE_INVENTORY_MODE:-wrong-gvk}" != first-fails ]] || exit 33
     if [[ "${FAKE_INVENTORY_MODE:-wrong-gvk}" == malformed ]]; then
       printf '%s\n' '{not-json'
     elif [[ "${FAKE_INVENTORY_MODE:-wrong-gvk}" == valid ]]; then
@@ -47,10 +49,10 @@ case " $* " in
       printf '%s\n' '{"apiVersion":"wrong.example.io/v1","kind":"WrongList","items":[{"apiVersion":"wrong.example.io/v1","kind":"WrongKind","metadata":{"namespace":"flux-system","name":"cluster-apps"},"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}'
     fi
     ;;
-  *' helmreleases.v2.helm.toolkit.fluxcd.io '*) printf '%s\n' '{"apiVersion":"helm.toolkit.fluxcd.io/v2","kind":"HelmReleaseList","items":[{"apiVersion":"helm.toolkit.fluxcd.io/v2","kind":"HelmRelease","metadata":{"namespace":"monitoring","name":"kube-prometheus-stack"},"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' ;;
-  *' gitrepositories.v1.source.toolkit.fluxcd.io '*) printf '%s\n' '{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"GitRepositoryList","items":[{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"GitRepository","metadata":{"namespace":"flux-system","name":"flux-system"},"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' ;;
-  *' ocirepositories.v1.source.toolkit.fluxcd.io '*) printf '%s\n' '{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"OCIRepositoryList","items":[{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"OCIRepository","metadata":{"namespace":"monitoring","name":"grafana"},"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' ;;
-  *' helmrepositories.v1.source.toolkit.fluxcd.io '*) printf '%s\n' '{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"HelmRepositoryList","items":[{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"HelmRepository","metadata":{"namespace":"monitoring","name":"prometheus-community"},"spec":{"suspend":true},"status":{"conditions":[{"type":"Ready","status":"False"}]}}]}' ;;
+  *' helmreleases.v2.helm.toolkit.fluxcd.io '*) [[ -z "${FAKE_CALL_LOG:-}" ]] || printf 'inventory-resource:helmreleases\n' >>"$FAKE_CALL_LOG"; printf '%s\n' '{"apiVersion":"helm.toolkit.fluxcd.io/v2","kind":"HelmReleaseList","items":[{"apiVersion":"helm.toolkit.fluxcd.io/v2","kind":"HelmRelease","metadata":{"namespace":"monitoring","name":"kube-prometheus-stack"},"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' ;;
+  *' gitrepositories.v1.source.toolkit.fluxcd.io '*) [[ -z "${FAKE_CALL_LOG:-}" ]] || printf 'inventory-resource:gitrepositories\n' >>"$FAKE_CALL_LOG"; printf '%s\n' '{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"GitRepositoryList","items":[{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"GitRepository","metadata":{"namespace":"flux-system","name":"flux-system"},"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' ;;
+  *' ocirepositories.v1.source.toolkit.fluxcd.io '*) [[ -z "${FAKE_CALL_LOG:-}" ]] || printf 'inventory-resource:ocirepositories\n' >>"$FAKE_CALL_LOG"; printf '%s\n' '{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"OCIRepositoryList","items":[{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"OCIRepository","metadata":{"namespace":"monitoring","name":"grafana"},"spec":{"suspend":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' ;;
+  *' helmrepositories.v1.source.toolkit.fluxcd.io '*) [[ -z "${FAKE_CALL_LOG:-}" ]] || printf 'inventory-resource:helmrepositories\n' >>"$FAKE_CALL_LOG"; printf '%s\n' '{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"HelmRepositoryList","items":[{"apiVersion":"source.toolkit.fluxcd.io/v1","kind":"HelmRepository","metadata":{"namespace":"monitoring","name":"prometheus-community"},"spec":{"suspend":true},"status":{"conditions":[{"type":"Ready","status":"False"}]}}]}' ;;
   *) echo "Unexpected kubectl request: $*" >&2; exit 64 ;;
 esac
 EOF
@@ -99,5 +101,20 @@ inventory_refreshes="$(rg -c '^inventory$' "$target_failure_log")"
   echo "Target failure skipped Kubernetes inventory refreshes: expected 60, got ${inventory_refreshes}." >&2
   exit 1
 }
+
+first_inventory_failure_log="$fixture/first-inventory-failure.log"
+: >"$first_inventory_failure_log"
+if PATH="$fixture/bin:$PATH" FAKE_VECTOR="$vector" FAKE_TARGETS="$targets" \
+  FAKE_CALL_LOG="$first_inventory_failure_log" FAKE_INVENTORY_MODE=first-fails \
+  bash "$verifier" "$fixture/kubeconfig" >"$fixture/first-inventory-failure.out" 2>&1; then
+  echo 'Verifier unexpectedly accepted a failed first Kubernetes inventory request.' >&2
+  exit 1
+fi
+for resource in kustomizations helmreleases gitrepositories ocirepositories helmrepositories; do
+  [[ "$(rg -c "^inventory-resource:${resource}$" "$first_inventory_failure_log")" == 12 ]] || {
+    echo "First inventory failure skipped ${resource} refreshes." >&2
+    exit 1
+  }
+done
 
 echo 'Flux exporter parity verifier rejects invalid inventory and refreshes all inputs.'

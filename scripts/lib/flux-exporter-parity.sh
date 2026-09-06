@@ -80,7 +80,7 @@ flux_exporter_parity_load_inventory() {
   local inventory="$1" labels_name="$2"
   # shellcheck disable=SC2178 # The caller supplies an associative-array name.
   local -n labels_ref="$labels_name"
-  local api_version kind resource_namespace name ready suspended group version key expected rows expected_labels
+  local api_version kind resource_namespace name ready suspended group version key expected expected_labels index expected_count
   declare -A expected_gvks=() kind_counts=()
 
   while IFS=$'\t' read -r group version kind; do
@@ -92,23 +92,19 @@ flux_exporter_parity_load_inventory() {
     echo 'inventory-invalid-response:' >&2
     return 1
   fi
-  rows="$(yq -r '
-    .items[] |
-    [
-      (.apiVersion // ""), .kind, (.metadata.namespace // ""), (.metadata.name // ""),
-      ([.status.conditions[]? | select(.type == "Ready") | .status] | join("\u001f")),
-      ((.spec.suspend // false) | tostring)
-    ] | @tsv
-  ' <<<"$inventory")" || {
-    echo 'inventory-invalid-response:' >&2
-    return 1
-  }
-  [[ -n "$rows" ]] || {
+  expected_count="$(yq -r '.items | length' <<<"$inventory")"
+  [[ "$expected_count" -gt 0 ]] || {
     echo 'inventory-empty:' >&2
     return 1
   }
 
-  while IFS=$'\t' read -r api_version kind resource_namespace name ready suspended; do
+  for ((index = 0; index < expected_count; index++)); do
+    api_version="$(yq -r ".items[$index].apiVersion // \"\"" <<<"$inventory")"
+    kind="$(yq -r ".items[$index].kind // \"\"" <<<"$inventory")"
+    resource_namespace="$(yq -r ".items[$index].metadata.namespace // \"\"" <<<"$inventory")"
+    name="$(yq -r ".items[$index].metadata.name // \"\"" <<<"$inventory")"
+    ready="$(yq -r "[.items[$index].status.conditions[]? | select(.type == \"Ready\") | .status] | join(\"\\u001f\")" <<<"$inventory")"
+    suspended="$(yq -r "(.items[$index].spec.suspend // false) | tostring" <<<"$inventory")"
     group="${api_version%/*}"
     version="${api_version##*/}"
     [[ -n "$api_version" && "$group" != "$api_version" && -n "$version" && -n "$kind" && -n "$resource_namespace" && -n "$name" && "$ready" != *$'\x1f'* ]] || {
@@ -133,7 +129,7 @@ flux_exporter_parity_load_inventory() {
     fi
     labels_ref["$key"]="$expected_labels"
     kind_counts["$expected"]=$((kind_counts["$expected"] + 1))
-  done <<<"$rows"
+  done
 
   for expected in "${!expected_gvks[@]}"; do
     [[ "${kind_counts[$expected]}" -gt 0 ]] || {

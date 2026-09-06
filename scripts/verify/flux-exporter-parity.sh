@@ -71,12 +71,15 @@ inventory_json() {
 }
 
 gather_inventory() {
-  local items='' group version kind resource chunk
+  local items='' group version kind resource chunk inventory_status=0
   while IFS=$'\t' read -r group version kind resource; do
-    chunk="$(inventory_json "$group" "$version" "$kind" "$resource")" || return 1
-    chunk="${chunk#[}"
-    chunk="${chunk%]}"
-    items+="${items:+,}${chunk}"
+    if chunk="$(inventory_json "$group" "$version" "$kind" "$resource")"; then
+      chunk="${chunk#[}"
+      chunk="${chunk%]}"
+      items+="${items:+,}${chunk}"
+    else
+      inventory_status=1
+    fi
   done <<'EOF'
 kustomize.toolkit.fluxcd.io	v1	Kustomization	kustomizations
 helm.toolkit.fluxcd.io	v2	HelmRelease	helmreleases
@@ -84,6 +87,7 @@ source.toolkit.fluxcd.io	v1	GitRepository	gitrepositories
 source.toolkit.fluxcd.io	v1	OCIRepository	ocirepositories
 source.toolkit.fluxcd.io	v1	HelmRepository	helmrepositories
 EOF
+  [[ "$inventory_status" -eq 0 ]] || return 1
   printf '{"apiVersion":"v1","kind":"List","items":[%s]}\n' "$items"
 }
 

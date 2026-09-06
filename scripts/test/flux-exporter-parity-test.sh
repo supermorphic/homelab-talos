@@ -77,6 +77,12 @@ missing_suspension_json="$(yq -o=json 'del(.data.result[] | select(.metric.custo
 flux_exporter_compare "$dedicated_json" "$missing_suspension_json" "$inventory_json"
 missing_ready_json="$(yq -o=json 'del(.data.result[] | select(.metric.customresource_kind == "GitRepository") | .metric.ready)' <<<"$candidate_json")"
 assert_rejected 'missing Ready is not True' "$dedicated_json" "$missing_ready_json" "$inventory_json"
+# The production change that must make this assertion fail is collapsing the empty
+# API Ready field into suspension while parsing inventory rows.
+missing_ready_inventory_json="$(yq -o=json 'del(.items[] | select(.kind == "GitRepository") | .status.conditions)' <<<"$inventory_json")"
+matching_missing_ready_dedicated_json="$(yq -o=json 'del(.data.result[] | select(.metric.customresource_kind == "GitRepository") | .metric.ready)' <<<"$dedicated_json")"
+matching_missing_ready_candidate_json="$(yq -o=json 'del(.data.result[] | select(.metric.customresource_kind == "GitRepository") | .metric.ready)' <<<"$candidate_json")"
+flux_exporter_compare "$matching_missing_ready_dedicated_json" "$matching_missing_ready_candidate_json" "$missing_ready_inventory_json"
 invalid_value_json="$(yq -o=json '(.data.result[] | select(.metric.customresource_kind == "OCIRepository") | .value[1]) = "zero"' <<<"$candidate_json")"
 assert_rejected 'invalid sample value' "$dedicated_json" "$invalid_value_json" "$inventory_json"
 wrong_gvk_json="$(yq -o=json '(.data.result[] | select(.metric.customresource_kind == "OCIRepository") | .metric.customresource_version) = "v2"' <<<"$candidate_json")"
