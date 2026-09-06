@@ -10,7 +10,7 @@ set +x
 
 kubeconfig="$1"
 namespace='automation-data'
-job_name='nocodb-platform-preflight'
+job_name=''
 expected_revision='026-nocodb-v1'
 temp_dir=''
 run_marker=''
@@ -83,8 +83,11 @@ trap cleanup_preflight EXIT
 umask 077
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-nocodb-platform-preflight.XXXXXX")"
 chmod 700 "$temp_dir"
-run_marker="preflight-${temp_dir##*.}-$$"
+run_suffix="${temp_dir##*.}"
+run_suffix="${run_suffix,,}"
+run_marker="preflight-${run_suffix}-$$"
 run_marker="${run_marker//_/-}"
+job_name="nocodb-platform-${run_marker}"
 
 [[ -z "$(job_name_if_present)" ]] || {
   echo "Refusing NocoDB platform preflight: $namespace/$job_name already exists." >&2

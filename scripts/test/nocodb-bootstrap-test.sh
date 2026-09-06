@@ -138,6 +138,9 @@ case "$*" in
       evidence-lifecycle-source)
         [[ "$*" != *'scripts/lib'* ]] || exit 1
         ;;
+      evidence-validate-run-source)
+        [[ "$*" != *'scripts/test/validate-run.sh'* ]] || exit 1
+        ;;
       evidence-unknown-coverage) exit 2 ;;
     esac
     ;;
@@ -354,7 +357,7 @@ case "$url" in
     esac
     evidence_revision="$FAKE_REMOTE_MAIN"
     case "${FAKE_FAILURE:-}" in
-      evidence-docs|evidence-provisioning-source|evidence-backup-source|evidence-sql-source|evidence-image-source|evidence-policy-source|evidence-restore-source|evidence-lifecycle-source|evidence-unknown-coverage|evidence-object-missing|evidence-newest-unsuitable)
+      evidence-docs|evidence-provisioning-source|evidence-backup-source|evidence-sql-source|evidence-image-source|evidence-policy-source|evidence-restore-source|evidence-lifecycle-source|evidence-validate-run-source|evidence-unknown-coverage|evidence-object-missing|evidence-newest-unsuitable)
         evidence_revision="$FAKE_EVIDENCE_SHA"
         ;;
     esac
@@ -678,6 +681,10 @@ run_case evidence-docs
 assert_status 0
 assert_event "git cat-file -e ${evidence_sha}^{commit}"
 assert_event "git diff --quiet $evidence_sha $remote_main --"
+for shared_runtime_dependency in .justfile .mise.toml mise.lock pyproject.toml uv.lock \
+  scripts/test/junit_report.py scripts/test/junit_tools.py scripts/test/validate-run.sh; do
+  assert_event "$shared_runtime_dependency"
+done
 
 for failure in evidence-provisioning-source evidence-backup-source evidence-sql-source \
   evidence-image-source evidence-policy-source evidence-restore-source \
@@ -688,6 +695,12 @@ for failure in evidence-provisioning-source evidence-backup-source evidence-sql-
   assert_contains 'applicable provisioning and restore evidence'
   assert_no_activation
 done
+
+case_name='changing only the shared result validator requires new affected evidence'
+run_case evidence-validate-run-source
+assert_failure
+assert_contains 'applicable provisioning and restore evidence'
+assert_no_activation
 
 case_name='newest suitable restore evidence is selected when a newer affected run is ineligible'
 run_case evidence-newest-unsuitable

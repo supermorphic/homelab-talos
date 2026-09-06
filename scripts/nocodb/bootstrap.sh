@@ -416,18 +416,26 @@ require_attended_evidence() {
         return 1
       }
       common_evidence_paths=(
+        .justfile
+        .mise.toml
         kubernetes/apps/automation-data
         kubernetes/apps/automation/n8n/app/ciliumnetworkpolicy.yaml
         kubernetes/apps/automation/n8n/app/helmrelease.yaml
         kubernetes/apps/automation/n8n/app/kustomization.yaml
         kubernetes/apps/automation/n8n/ks.yaml
         kubernetes/mod.just
+        mise.lock
+        pyproject.toml
         scripts/lib
+        scripts/test/junit_report.py
+        scripts/test/junit_tools.py
         scripts/test/lib
         scripts/test/run-catalog-suite.sh
+        scripts/test/validate-run.sh
         scripts/validate/automation-data.sh
         scripts/verify/automation-data.sh
         tests/catalog.yaml
+        uv.lock
       )
       case "$suite" in
         test.automation-data-provisioning)

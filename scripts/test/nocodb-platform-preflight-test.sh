@@ -36,19 +36,72 @@ set -euo pipefail
 printf 'kubectl %s\n' "$*" >>"$PREFLIGHT_TEST_LOG"
 args=" $* "
 job="$PREFLIGHT_TEST_ROOT/job.yaml"
-if [[ "$args" == *' get job nocodb-platform-preflight --ignore-not-found --output name '* ]]; then
+replacement="$PREFLIGHT_TEST_ROOT/replacement.yaml"
+argument_after() {
+  local wanted="$1" previous='' argument
+  shift
+  for argument in "$@"; do
+    [[ "$previous" != "$wanted" ]] || { printf '%s\n' "$argument"; return; }
+    previous="$argument"
+  done
+  return 1
+}
+job_name_from_resource() {
+  local argument
+  for argument in "$@"; do
+    case "$argument" in job/*) printf '%s\n' "${argument#job/}"; return ;; esac
+  done
+  return 1
+}
+matching_job() {
+  local requested="$1" candidate candidate_name
+  for candidate in "$job" "$replacement"; do
+    [[ -f "$candidate" ]] || continue
+    candidate_name="$(yq -r '.metadata.name' "$candidate")"
+    [[ "$candidate_name" != "$requested" ]] || { printf '%s\n' "$candidate"; return; }
+  done
+  return 1
+}
+if [[ "$args" == *' get job '*' --ignore-not-found --output name '* ]]; then
+  requested="$(argument_after job "$@")"
   [[ "${PREFLIGHT_TEST_CASE:-}" != api-error ]] || exit 69
-  [[ ! -f "$job" ]] || printf '%s\n' 'job.batch/nocodb-platform-preflight'
-elif [[ "$args" == *' get job nocodb-platform-preflight --ignore-not-found --output json '* ]]; then
+  found="$(matching_job "$requested" || true)"
+  [[ -z "$found" ]] || printf 'job.batch/%s\n' "$requested"
+elif [[ "$args" == *' get job '*' --ignore-not-found --output json '* ]]; then
+  requested="$(argument_after job "$@")"
   [[ "${PREFLIGHT_TEST_CASE:-}" != api-error ]] || exit 69
-  [[ ! -f "$job" ]] || yq -o=json "$job"
+  found="$(matching_job "$requested" || true)"
+  if [[ -n "$found" ]]; then
+    current_json="$(yq -o=json "$found")"
+    if [[ "${PREFLIGHT_TEST_CASE:-}" == replacement-race ]]; then
+      if [[ "$requested" == nocodb-platform-preflight ]]; then
+        yq '.metadata.uid = "replacement-uid" |
+          .metadata.labels."homelab-talos/run-id" = "other-run"' \
+          "$found" >"$PREFLIGHT_TEST_ROOT/replaced.yaml"
+        mv "$PREFLIGHT_TEST_ROOT/replaced.yaml" "$found"
+      else
+        yq '.metadata.name = "nocodb-platform-preflight-other-run" |
+          .metadata.uid = "replacement-uid" |
+          .metadata.labels."homelab-talos/run-id" = "other-run"' \
+          "$found" >"$replacement"
+      fi
+    fi
+    printf '%s\n' "$current_json"
+  fi
 elif [[ "$args" == *' create --filename - '* ]]; then
   cat >"$job"
+  yq '.metadata.uid = "owned-uid"' "$job" >"$PREFLIGHT_TEST_ROOT/created.yaml"
+  mv "$PREFLIGHT_TEST_ROOT/created.yaml" "$job"
+  [[ -z "${PREFLIGHT_JOB_SNAPSHOT:-}" ]] || cp "$job" "$PREFLIGHT_JOB_SNAPSHOT"
   printf '%s\n' create-job >>"$PREFLIGHT_TEST_LOG"
   [[ "${PREFLIGHT_TEST_CASE:-}" != ambiguous-create ]] || exit 74
-elif [[ "$args" == *' wait --for=condition=Complete job/nocodb-platform-preflight --timeout=2m '* ]]; then
+elif [[ "$args" == *' wait --for=condition=Complete job/'*' --timeout=2m '* ]]; then
+  requested="$(job_name_from_resource "$@")"
+  [[ -n "$(matching_job "$requested" || true)" ]] || exit 68
   [[ "${PREFLIGHT_TEST_CASE:-}" != job-failed ]] || exit 75
-elif [[ "$args" == *' logs job/nocodb-platform-preflight --container=preflight '* ]]; then
+elif [[ "$args" == *' logs job/'*' --container=preflight '* ]]; then
+  requested="$(job_name_from_resource "$@")"
+  [[ -n "$(matching_job "$requested" || true)" ]] || exit 68
   if [[ "${PREFLIGHT_TEST_CASE:-}" == invalid-output ]]; then
     printf '%s\n' 'installed_revision=025-platform-v1' 'post_upgrade_backup=true'
   else
@@ -56,8 +109,12 @@ elif [[ "$args" == *' logs job/nocodb-platform-preflight --container=preflight '
   fi
 elif [[ "$args" == *' get pods --selector='*'--output json '* ]]; then
   printf '%s\n' '{"items":[{"status":{"phase":"Failed","containerStatuses":[{"name":"preflight","state":{"terminated":{"reason":"Error","exitCode":1}}}]}}]}'
-elif [[ "$args" == *' delete job nocodb-platform-preflight --wait=true --timeout=2m '* ]]; then
-  rm -f -- "$job"
+elif [[ "$args" == *' delete job '*' --wait=true --timeout=2m '* ]]; then
+  requested="$(argument_after job "$@")"
+  for candidate in "$job" "$replacement"; do
+    [[ -f "$candidate" ]] || continue
+    [[ "$(yq -r '.metadata.name' "$candidate")" != "$requested" ]] || rm -f -- "$candidate"
+  done
   printf '%s\n' delete-job >>"$PREFLIGHT_TEST_LOG"
 else
   echo "Unexpected kubectl invocation: $*" >&2
@@ -70,7 +127,7 @@ fail() { echo "NocoDB platform preflight test failed: $*" >&2; exit 1; }
 
 run_case() {
   local name="$1"
-  rm -f -- "$fixture/case/job.yaml"
+  rm -f -- "$fixture/case/job.yaml" "$fixture/case/replacement.yaml"
   : >"$fixture/events.log"
   set +e
   output="$(PATH="$fixture/bin:$PATH" PREFLIGHT_TEST_CASE="$name" \
@@ -105,17 +162,21 @@ for rejected in job-failed invalid-output api-error; do
   fi
 done
 
-# Capture one successful render by intercepting deletion after the behavior checks.
-# shellcheck disable=SC2016 # The replacement keeps stub-runtime variables literal.
-sed 's/rm -f -- "$job"/cp "$job" "${PREFLIGHT_JOB_SNAPSHOT:?}"\n  rm -f -- "$job"/' \
-  "$fixture/bin/kubectl" >"$fixture/bin/kubectl-snapshot"
-mv "$fixture/bin/kubectl-snapshot" "$fixture/bin/kubectl"
-chmod 700 "$fixture/bin/kubectl"
+run_case replacement-race
+[[ "$status" -eq 0 ]] || fail "replacement race failed: $output"
+[[ -f "$fixture/case/replacement.yaml" ]] ||
+  fail 'cleanup deleted the concurrently created Job from another run'
+[[ "$(yq -r '.metadata.name + "|" + .metadata.uid + "|" +
+  .metadata.labels."homelab-talos/run-id"' "$fixture/case/replacement.yaml")" == \
+  'nocodb-platform-preflight-other-run|replacement-uid|other-run' ]] ||
+  fail 'replacement-race fixture did not preserve the other run identity'
+
+# Capture one successful render for the fixed manifest contract checks.
 PREFLIGHT_JOB_SNAPSHOT="$job_snapshot" run_case success
 [[ "$status" -eq 0 && -f "$job_snapshot" ]] || fail 'could not capture the rendered Job'
 yq -e '
   .apiVersion == "batch/v1" and .kind == "Job" and
-  .metadata.name == "nocodb-platform-preflight" and
+  (.metadata.name | test("^nocodb-platform-preflight-[a-z0-9]+-[0-9]+$")) and
   .metadata.namespace == "automation-data" and
   .metadata.labels."homelab-talos/role" == "nocodb-platform-preflight" and
   .spec.activeDeadlineSeconds == 120 and .spec.backoffLimit == 0 and

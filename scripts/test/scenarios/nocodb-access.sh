@@ -2,6 +2,7 @@
 # Attended, catalog-coordinated NocoDB access acceptance.
 set -euo pipefail
 
+# shellcheck source=scripts/lib/common.sh
 source scripts/lib/common.sh
 # shellcheck source=scripts/lib/lease.sh
 source scripts/lib/lease.sh
