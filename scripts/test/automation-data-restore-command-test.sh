@@ -30,7 +30,7 @@ sed -n '/^resolve_backup_configmap()/,/^}/p' "$restore_scenario" \
 # shellcheck disable=SC1091 # Extract the production resolver without running the live scenario.
 source "$test_root/resolve-backup-configmap.sh"
 
-sed -n '/^write_phase()/,/^}/p; /^validate_restore_selectors()/,/^}/p; /^validate_reported_restore_selection()/,/^}/p; /^wait_for_restore_job()/,/^}/p; /^restore_job_manifest()/,/^}/p' \
+sed -n '/^write_phase()/,/^}/p; /^validate_restore_selectors()/,/^}/p; /^validate_reported_restore_selection()/,/^}/p; /^wait_for_restore_job()/,/^}/p; /^restore_job_manifest()/,/^}/p; /^request_job_manifest()/,/^}/p' \
   "$restore_scenario" >"$test_root/restore-scenario-functions.sh"
 # shellcheck disable=SC1091 # Extract production functions without running the live scenario.
 source "$test_root/restore-scenario-functions.sh"
@@ -82,6 +82,19 @@ export run_hash prefix ad_namespace n8n_namespace ad_restore_job n8n_restore_job
   ad_service n8n_service backup_configmap automation_data_restore_bundle n8n_restore_dump
 restore_job_manifest automation-data >"$test_root/automation-data-job.yaml"
 restore_job_manifest n8n >"$test_root/n8n-job.yaml"
+request_job="$prefix-request"
+n8n_app="$prefix-n8n"
+export request_job n8n_app
+request_job_manifest >"$test_root/request-job.yaml"
+request_script="$(yq -r '.spec.template.spec.containers[0].args[0]' "$test_root/request-job.yaml")"
+rg -Fq '/webhook/automation-data-canary' <<<"$request_script" ||
+  fail 'the restored request does not invoke the stable automation-data canary'
+rg -Fq "body.database !== 'automation_data_canary'" <<<"$request_script" ||
+  fail 'the restored request does not require the stable canary database identity'
+rg -Fq "body.role !== 'automation_data_canary_runtime'" <<<"$request_script" ||
+  fail 'the restored request does not require the stable canary runtime role'
+rg -Fq "JSON.stringify(['database','executionId','role','status'])" <<<"$request_script" ||
+  fail 'the restored request does not require the exact four-key canary response'
 [[ "$(yq -r '.spec.template.spec.containers[0].env[] | select(.name == "AUTOMATION_DATA_RESTORE_BUNDLE") | .value' \
   "$test_root/automation-data-job.yaml")" == "$automation_data_restore_bundle" ]] ||
   fail 'the exact automation-data bundle was not passed through the Job environment'
