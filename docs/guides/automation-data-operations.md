@@ -220,6 +220,17 @@ the existing **Platform Canary Header** credential to **Canary Webhook** and
 Publish **Automation Data Canary**. Keep its execution-data settings unchanged and do
 not add credential IDs or values to the template in Git.
 
+For an active platform that already has **Automation Data Recovery Canary**, do not
+import a second workflow. Update that workflow in place and preserve its workflow record
+and **Platform Canary Header** binding. Rename it **Automation Data Canary**; change its
+webhook to **Canary Webhook** at `POST /webhook/automation-data-canary`; replace its fixed
+identity with database `automation_data_canary` and role
+`automation_data_canary_runtime`; and bind
+`automation-data/automation_data_canary/runtime` to **Test Stable Runtime Credential**.
+Retain `saveDataErrorExecution: none`, `saveDataSuccessExecution: none`,
+`saveManualExecutions: false`, and `saveExecutionProgress: false`, then publish that same
+workflow.
+
 Gatus calls this published workflow every five minutes. Wait for a complete n8n dump and
 automation-data bundle that form a compatible pair: the n8n dump must contain the
 published workflow and its encrypted stable runtime credential, and the automation-data

@@ -732,6 +732,13 @@ drill. Final read-only run `20260906T142539Z-bfd6c1b6793c-operator-de1dd37b` pas
 deployment, storage, monitoring, and registry verification with canonical result
 validation.
 
+### Stable canary extension status
+
+The `bfd6c1b` recovery acceptance predates the stable-canary extension. Its source
+design and validation are implemented, but private workflow conversion, live Gatus
+observation, and a compatible-pair restore acceptance through **Automation Data Canary**
+remain pending.
+
 At the operator's request, this specification moved from identifier 025 to 026 to resolve
 the collision with node lifecycle. The [operations guide](../guides/automation-data-operations.md)
 and [recovery runbook](../runbooks/automation-data-recovery.md) retain the operational
