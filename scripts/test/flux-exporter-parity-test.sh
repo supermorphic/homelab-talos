@@ -85,7 +85,7 @@ assert_rejected 'malformed API response' '{"status":"error"}' "$candidate_json" 
 assert_rejected 'empty inventory' "$dedicated_json" "$candidate_json" '{"apiVersion":"v1","kind":"List","items":[]}'
 
 # Scrape transport labels differ, but semantic resource labels do not.
-transport_only_json="$(yq -o=json '(.data.result[].metric.job) = "different-job" | (.data.result[].metric.instance) = "10.0.0.99:8080" | (.data.result[].metric.pod) = "different-pod" | (.data.result[].metric.service) = "different-service"' <<<"$candidate_json")"
+transport_only_json="$(yq -o=json '(.data.result[].metric.job) = "different-job" | (.data.result[].metric.instance) = "192.0.2.99:8080" | (.data.result[].metric.pod) = "different-pod" | (.data.result[].metric.service) = "different-service"' <<<"$candidate_json")"
 flux_exporter_compare "$dedicated_json" "$transport_only_json" "$inventory_json"
 
 echo 'Flux exporter parity comparator tests passed.'

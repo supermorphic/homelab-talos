@@ -135,7 +135,7 @@ set -e
 	echo "$unsupported_output" >&2
 	exit 1
 }
-[[ "$unsupported_output" == 'usage: monitoring.sh [loki|alloy-logs|alloy-events]' ]]
+[[ "$unsupported_output" == 'usage: monitoring.sh [flux-exporter|loki|alloy-logs|alloy-events]' ]]
 
 set +e
 empty_output="$(cd "$tree_root" && "$validator" '' 2>&1)"
@@ -146,7 +146,7 @@ set -e
 	echo "$empty_output" >&2
 	exit 1
 }
-[[ "$empty_output" == 'usage: monitoring.sh [loki|alloy-logs|alloy-events]' ]]
+[[ "$empty_output" == 'usage: monitoring.sh [flux-exporter|loki|alloy-logs|alloy-events]' ]]
 
 set +e
 extra_output="$(cd "$tree_root" && "$validator" alloy-logs extra 2>&1)"
@@ -157,7 +157,7 @@ set -e
 	echo "$extra_output" >&2
 	exit 1
 }
-[[ "$extra_output" == 'usage: monitoring.sh [loki|alloy-logs|alloy-events]' ]]
+[[ "$extra_output" == 'usage: monitoring.sh [flux-exporter|loki|alloy-logs|alloy-events]' ]]
 
 reset_tree
 expect_pass 'production monitoring source'
