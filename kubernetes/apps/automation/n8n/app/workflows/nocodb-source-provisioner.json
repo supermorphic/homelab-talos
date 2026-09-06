@@ -259,7 +259,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Start Reader').first().json;\nconst state = $json.result;\nreturn [{ json: { ...context, ...(state || {}), operation: context.operation, registryOperation: state?.operation || null, accessKind: 'reader', alias: 'Read Model', schema: 'read_model', dataReadonly: true, schemaReadonly: true } }];"
+        "jsCode": "const context = $('Start Reader').first().json;\nconst state = $json.result;\nreturn [{ json: { ...context, ...(state || {}), baseId: state?.baseId ?? context.baseId, operation: context.operation, registryOperation: state?.operation || null, accessKind: 'reader', alias: 'Read Model', schema: 'read_model', dataReadonly: true, schemaReadonly: true } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1228,7 +1228,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Prepare Operator').first().json;\nconst state = $json.result;\nreturn [{ json: { ...context, ...(state || {}), operation: context.operation, registryOperation: state?.operation || null, accessKind: 'operator', alias: 'Operator', schema: 'operator', dataReadonly: false, schemaReadonly: true } }];"
+        "jsCode": "const context = $('Prepare Operator').first().json;\nconst state = $json.result;\nreturn [{ json: { ...context, ...(state || {}), baseId: state?.baseId ?? context.baseId, operation: context.operation, registryOperation: state?.operation || null, accessKind: 'operator', alias: 'Operator', schema: 'operator', dataReadonly: false, schemaReadonly: true } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,

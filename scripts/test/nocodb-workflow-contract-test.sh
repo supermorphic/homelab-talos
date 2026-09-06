@@ -445,6 +445,27 @@ const mergedRotation = execute(
 if (mergedRotation.operation !== 'rotate' || mergedRotation.registryOperation !== 'rotate' || mergedRotation.requestedAccessKind !== 'reader') {
   throw new Error('requested and retained source operations were not kept distinct');
 }
+for (const [name, contextNode] of [
+  ['Merge Reader State', 'Start Reader'],
+  ['Merge Operator State', 'Prepare Operator'],
+]) {
+  const retainedContextBase = execute(
+    name,
+    { result: { state: 'awaiting_grants', operation: 'sync', baseId: null } },
+    { [contextNode]: { ...sourceContext, operation: 'sync' } },
+  )[0].json;
+  if (retainedContextBase.baseId !== 'base-1') {
+    throw new Error(`${name} erased the discovered base with a null stored base`);
+  }
+  const retainedStoredBase = execute(
+    name,
+    { result: { state: 'ready', operation: 'sync', baseId: 'stored-base' } },
+    { [contextNode]: { ...sourceContext, operation: 'sync' } },
+  )[0].json;
+  if (retainedStoredBase.baseId !== 'stored-base') {
+    throw new Error(`${name} did not retain a non-null stored base for later identity checks`);
+  }
+}
 for (const [label, request, context, expected] of [
   ['targeted rotation', { operation: 'rotate', requestedAccessKind: 'reader' }, { ...sourceContext, accessKind: 'reader' }, 'rotate'],
   ['non-target reader work', { operation: 'rotate', requestedAccessKind: 'operator' }, { ...sourceContext, accessKind: 'reader' }, 'sync'],
