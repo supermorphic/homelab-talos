@@ -58,8 +58,8 @@ The cluster already supplies these relevant patterns:
   settings as the security boundary.
 - Add NocoDB sources through an explicit, repeatable n8n provisioning workflow without
   displaying or manually copying generated passwords.
-- Preserve NocoDB metadata, encrypted source credentials, saved configuration, and local
-  attachments through the established backup systems.
+- Preserve NocoDB metadata, encrypted source credentials, and saved configuration through
+  the automation-data backup system. Keep workflow artifacts external to NocoDB.
 - Keep NocoDB optional for each domain and removable without affecting authoritative
   domain data or normal n8n workflows.
 - Prove read, controlled-edit, rotation, denial, backup, and restore behavior against a
@@ -75,8 +75,11 @@ The cluster already supplies these relevant patterns:
 - Authentik, SSO, Enterprise-only NocoDB permissions, or paid NocoDB capabilities.
 - Adding Redis, a worker deployment, an application replica, MinIO, S3, or another data
   service.
-- Zero-downtime application upgrades, transactionally synchronized PostgreSQL and PVC
-  backups, or application high availability.
+- NocoDB-native uploads, comment attachments, or Attachment fields in the initial
+  operator surface, including temporarily unlocking source schema editing to enable them.
+- Defining a generic artifact registry, file-storage service, download proxy, or backup
+  system for workflow-generated files.
+- Zero-downtime application upgrades or application high availability.
 - Defining a career domain, career tables, career grants, or career data in this
   initiative.
 - Automatically deleting a NocoDB base, source, database role, or credential after a
@@ -134,9 +137,11 @@ per-domain `homelab-talos` manifest, SOPS Secret, or NetworkPolicy change.
 
 ### NocoDB is removable
 
-Removing the NocoDB Deployment, metadata database, or PVC must not remove or invalidate
+Removing the NocoDB Deployment or metadata database must not remove or invalidate
 domain databases, domain migrations, or normal n8n credentials. Reinstalling NocoDB can
 recreate its metadata and sources from backups and the provisioning contract.
+Authoritative artifact metadata and durable file references remain in the domain database;
+the underlying files remain with the workflow's external storage owner.
 
 ## Selected architecture
 
@@ -150,8 +155,10 @@ https://nocodb.lab.supermorphic.com
 one NocoDB application pod
       |-- metadata --> automation-data PostgreSQL database "nocodb"
       |-- reader source --> <domain>.read_model as <domain>_reader
-      |-- operator source --> <domain>.operator as <domain>_operator
-      `-- attachments --> retained 10 GiB Longhorn PVC
+      `-- operator source --> <domain>.operator as <domain>_operator
+
+workflow-generated files --> workflow-owned external file/object storage
+domain PostgreSQL records --> durable artifact metadata and references
 
 operator lifecycle command
       |
@@ -164,7 +171,6 @@ private n8n NocoDB source-provisioning workflow
 The NocoDB application package contains:
 
 - one official Helm release;
-- one separately declared, prune-protected attachment PVC;
 - one private `HTTPRoute`;
 - workload-scoped Cilium policy;
 - a fixed-purpose metadata-database bootstrap Job;
@@ -209,30 +215,26 @@ The chart is configured with:
 - `updateStrategy.type: Recreate`;
 - worker and autoscaling disabled;
 - no Redis configuration;
-- an explicitly validated attachment-access mode, shared by normal use and recovery;
+- no configured native attachment surface or attachment-dependent acceptance path;
 - a `ClusterIP` Service;
 - chart Ingress and chart NetworkPolicy disabled in favor of repository patterns;
 - the external PostgreSQL URL and both auth keys from an existing Secret; and
-- `persistence.existingClaim` bound to the separately declared PVC.
+- `persistence.enabled: false`, with disposable application scratch storage.
 
-One pod is intentional. The retained `ReadWriteOnce` claim can attach to only one node at
-a time. With the worker disabled and Redis absent, NocoDB runs source-creation jobs in the
-application pod's fallback queue. Attended acceptance must prove that this mode completes
-source creation and supports normal operator read and write behavior. `Recreate` satisfies
-the repository invariant for a Deployment that mounts a `ReadWriteOnce` PVC. The two
-Longhorn replicas are two storage copies for that one volume, not two NocoDB application
-instances. A pod or node move can cause a short outage while the volume detaches and
-reattaches.
+One pod is intentional. With the worker disabled and Redis absent, NocoDB runs
+source-creation jobs in the application pod's fallback queue. Attended acceptance must
+prove that this mode completes source creation and supports normal operator read and
+write behavior. Keep `Recreate`
+for a simple single-instance replacement. A pod or node move can cause a short outage.
+Metadata and source credentials survive in PostgreSQL; local scratch files do not.
 
-Attachment access must be selected from the pinned application's supported operator
-behavior. Prefer an authenticated attachment path and adapt the recovery canary to it;
-do not select application-wide access behavior merely to satisfy a test. The current
-implementation uses a comment-associated canary and `NC_SECURE_ATTACHMENTS=false`.
-That implementation is not a validated final choice. Before activation, exercise the
-supported authenticated alternative in the local integration test and reconcile the
-canary, manifests, guide, and restore drill together. If that alternative cannot support
-the required use, obtain an explicit operator decision on the access model. The private
-Gateway alone does not establish per-user attachment authorization.
+Native attachment behavior is not an activation requirement. Comment attachments are
+unavailable in the selected self-hosted Community deployment and are out of scope.
+External sources keep schema editing disabled at all times; no temporary unlock is
+permitted to configure Attachment fields. Remove the old upload/comment canary and its
+`NC_SECURE_ATTACHMENTS=false` override. Do not claim that omitting native attachment
+features disables every upload API in the application. Operators must not use NocoDB
+local storage for durable files.
 
 The current Community edition uses NocoDB's Sustainable Use License rather than an
 OSI-approved open-source license. Internal self-hosted use is within the selected
@@ -255,30 +257,34 @@ catalog, so it includes `nocodb` without a Git-managed database list. The global
 preserves the metadata login and its password verifier. Implementation must reconcile
 specification 025 and its backup tests with this additional platform database.
 
-## Attachment storage and recovery
+## External artifacts and recovery
 
-NocoDB mounts a separately declared 10 GiB Longhorn `ReadWriteOnce` PVC at
-`/usr/app/data`. The claim uses the default two Longhorn storage replicas and the default
-recurring-job group: daily local snapshots and off-cluster CIFS/NAS backups, with seven
-backups retained. Flux prune protection prevents ordinary package removal from deleting
-the claim.
+Workflow-generated files remain external to NocoDB. Each owning domain defines the
+authoritative PostgreSQL records for durable artifact metadata and references to the
+underlying file or object. Metadata can include a stable artifact identifier, storage
+locator, object version, media type, byte size, and checksum as required by that workflow.
+This feature does not impose a universal artifact schema or create another registry.
 
-This volume is required even though PostgreSQL holds application metadata. NocoDB stores
-uploaded attachments and related local artifacts outside PostgreSQL. Ephemeral storage
-would lose those files whenever the pod is replaced. No MinIO or S3 service is added
-because the repository does not currently operate a suitable S3-compatible platform.
+NocoDB may present those references as links. It does not ingest, copy, proxy, or own
+the files. Durable records must not depend on an expiring signed URL or embed reusable
+credentials. The storage owner controls access and any temporary download authorization.
+Replacing NocoDB must not require moving files or rewriting authoritative artifact
+identities.
 
-Recovery has two independently timed inputs:
+Without native attachments, the initial deployment has no NocoDB attachment PVC or
+Longhorn attachment-backup dependency. Use ephemeral application scratch storage and
+prove that replacing it preserves users, bases, views, encrypted source credentials,
+operator decisions, and artifact references through PostgreSQL.
 
-1. restore a complete automation-data logical bundle containing the `nocodb` database
-   and global roles; and
-2. restore the closest corresponding Longhorn backup of the NocoDB attachment PVC.
+NocoDB recovery restores a complete automation-data logical bundle containing the
+`nocodb` database, domain databases, source registry, and global roles. It verifies saved
+configuration, access, and durable artifact metadata/references. It does not recover or
+claim to validate the underlying external file bytes. Each workflow/storage owner must
+define its own file retention, backup, recovery, and reference-consistency checks.
 
-These backups are not transactionally synchronized. A restored metadata record can
-therefore refer to an attachment created outside the selected PVC recovery point, or a
-restored file can be unreferenced. This limited inconsistency is accepted for an
-operator-only tool. The restore drill must create an attachment before backup and prove
-that the restored UI can retrieve it.
+Future native attachment UX requires a separate design change backed by a demonstrated
+workflow need. That review must cover storage ownership, backup/recovery, replacement
+portability, Community-edition support, and whether schema editing can remain disabled.
 
 The SOPS-managed `NC_CONNECTION_ENCRYPT_KEY` is a recovery root. Losing or replacing it
 can make stored source credentials unreadable even when the metadata database survives.
@@ -587,7 +593,7 @@ bindings.
 
 The temporary resume uses an ownership marker and resource-version precondition. On
 failure, bootstrap re-suspends only the Kustomization mutation carrying its marker and
-preserves the PVC, database, metadata, and API state for diagnosis and retry. It does not
+preserves the database, metadata, and API state for diagnosis and retry. It does not
 delete or regenerate a connection encryption key, administrator, token, or n8n credential
 as compensation. A retry reconciles the credential from observed state and permits at
 most one preserved orphan-token replacement as described above. Bootstrap keeps cleanup
@@ -765,32 +771,18 @@ successful probe returns only the resulting bounded public-sharing evidence and 
 the n8n `NocoDB Operator API` credential path; it does not restate the PostgreSQL source
 validation matrix as if the acceptance data API calls had measured it.
 
-Every successful synthetic `probe` also establishes or verifies one persistent
-attachment recovery canary. The operator table reserves
-`run_id=recovery-canary-v1` with a partial unique index; incoming commands cannot use
-that run ID and normal cleanup does not select it. The row records a versioned bounded
-state and exact observed base, source, table, default-view, comment, and attachment
-identity. Its fixed file is `issue334-recovery-canary-v1.txt`, contains the UTF-8 bytes
-`nocodb-issue334-attachment-canary-v1` followed by one newline, has size 37, and has
-SHA-256 `09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3`.
+Every successful synthetic `probe` establishes or verifies persistent PostgreSQL canary
+records and the exact observed base, source, table, and default-view identities. Use
+reserved synthetic identities that normal run cleanup cannot select. The records include
+an operator decision and bounded artifact metadata with a durable synthetic external
+reference; acceptance and restore read these values back independently.
 
-The state transition is `pending` to `uploading` to `uploaded` to `ready`. A fixed
-owner-authority PostgreSQL `INSERT ... ON CONFLICT DO NOTHING` initializes the row, so
-concurrent probes re-list and join the same identity. A second fixed owner-authority
-update claims `pending` before the single multipart `POST /api/v2/storage/upload`.
-The returned canonical path is recorded immediately.
-The workflow then associates that file with the fixed row through
-`POST /api/v2/meta/comments`, reads the exact live comment and FileReference, records
-their IDs, and downloads the recorded `/download/*` path to compare the exact bytes.
-It also reads and records the exact default grid-view identity instead of guessing its
-title or type. A `ready` rerun performs only these reads and download. A probe that loses
-the upload claim or observes `uploading` waits five seconds and re-lists the fixed row,
-at most twelve times. It joins repair or verification if the winner reaches `uploaded`
-or `ready`. If the row remains `uploading` for 60 seconds, the lost-response ambiguity
-fails closed and never repeats the upload. This bounds an interrupted run to at most one
-unassociated upload. Responses expose only the bounded non-secret identities, path,
-size, media type, and checksum. Code nodes create and read binary values through n8n's
-binary-data helpers so the check works with the required filesystem binary mode.
+This is a record/reference recovery test, not an external storage service test. Synthetic
+references use documentation-only targets and are not fetched. Do not upload a file,
+create a comment attachment or FileReference, download `/download/*`, add an Attachment
+field, or relax source schema flags. Remove the obsolete upload state machine rather
+than retaining it as a fallback. Idempotent initialization and subsequent readback must
+preserve the same canary, artifact, and saved-view identities across reruns and recovery.
 
 ## Command lifecycle
 
@@ -830,9 +822,8 @@ After durable activation, absence is an outage and must not silently skip verifi
 Prometheus alerts cover:
 
 - unavailable Deployment or health target;
-- repeated restarts and OOM kills;
-- failed or overdue metadata bootstrap or acceptance Jobs; and
-- attachment PVC use at the established 70% warning and 85% critical thresholds.
+- repeated restarts and OOM kills; and
+- failed or overdue metadata bootstrap or acceptance Jobs.
 
 Existing automation-data SQL Exporter metrics cover metadata-database size, connections,
 transactions, backup freshness, and catalog consistency. NocoDB does not expose a
@@ -853,7 +844,7 @@ It reuses repository-wide Helm, Kustomize, Kubernetes-schema, policy, Secret-sha
 ShellCheck, formatting, link, and gitleaks checks. New independent assertions cover:
 
 - immutable chart and image digests;
-- one replica, `Recreate`, disabled worker and Redis, and one existing PVC;
+- one replica, `Recreate`, disabled worker and Redis, and no NocoDB PVC dependency;
 - exact private route and application URL;
 - no runtime, migrator, owner, provisioner, or backup credential reference;
 - fixed source operations and absence of arbitrary SQL or target fields;
@@ -865,8 +856,8 @@ ShellCheck, formatting, link, and gitleaks checks. New independent assertions co
 - no ordinary-sync credential replacement for a ready source; and
 - no career-domain artifact.
 
-CI does not start NocoDB or PostgreSQL, create a source, test live privileges, create an
-attachment backup, or perform a restore.
+CI does not start NocoDB or PostgreSQL, create a source, test live privileges, or perform
+a restore.
 
 ### Disposable local integration
 
@@ -888,13 +879,14 @@ and source-command response validation together. It proves:
 - unchanged sync and targeted rotation after job-history expiry;
 - ready-source behavior after application restart, plus fail-closed interrupted creation;
 - additive schema refresh without changing source identity or credentials;
-- attachment upload, authorized retrieval, persistence after restart, and recovery; and
+- durable operator and artifact-reference records plus saved-view persistence after
+  application scratch replacement and recovery; and
 - removal of only run-owned containers, networks, and storage, with absence read-back.
 
 Use synthetic aged-job fixtures in the fast contract tests and real aged job metadata in
 the disposable environment; do not alter the host clock or production metadata. A local
-test does not replace attended proof of the private Gateway, Cilium policy, Longhorn
-replicas, or paired live backups. Record local and live evidence separately.
+test does not replace attended proof of the private Gateway, Cilium policy, or live
+metadata backup/recovery. Record local and live evidence separately.
 
 ### Read-only live verification
 
@@ -903,9 +895,9 @@ mise exec -- just kube nocodb-verify
 ```
 
 The verifier observes Flux readiness, Deployment rollout, Service endpoints, private
-route, Gatus, Prometheus rules, workload policy, attachment PVC identity and Longhorn
-robustness, and current automation-data backup freshness. It does not read application
-metadata, inspect Secrets, authenticate to NocoDB, or alter target state.
+route, Gatus, Prometheus rules, workload policy, and current automation-data backup
+freshness. It does not read application metadata, inspect Secrets, authenticate to
+NocoDB, or alter target state.
 Before monitoring enrollment, an explicitly invoked verifier checks the staged/attended
 phase against Git intent and reports that phase, rather than claiming durable activation.
 It must distinguish intentional inactivity from failure of an intended active service.
@@ -936,13 +928,14 @@ never edits or publishes n8n workflow bindings.
    `completed`, then discovers exactly one source and reads it by ID before recording
    `ready`;
 4. reader creation completes before operator creation in the same base;
-5. source GET metadata reports only the reader `read_model` search path, and the returned
-   table metadata itself reports schema `read_model`; the reader source reflects exactly
-   its `acceptance_facts` table with no unexpected table, and its normal fact query
+5. source GET metadata reports only the reader `read_model` search path. The pinned table
+   API returns `schema: null`; bind each table to its exact source ID and that validated
+   search path rather than guessing a schema from the null field. The reader reflects
+   exactly its `acceptance_facts` table with no unexpected table, and its normal fact query
    succeeds through the NocoDB data API;
-6. source GET metadata reports only the operator `operator` search path, and the returned
-   table metadata itself reports schema `operator`; the operator source reflects exactly
-   its `acceptance_decision` table with no unexpected table, and normal insert, read,
+6. source GET metadata reports only the operator `operator` search path. Resolve the
+   pinned null table schema through that exact source identity as above. The operator
+   reflects exactly its `acceptance_decision` table with no unexpected table, and normal insert, read,
    approved-column update, and run-owned delete operations succeed. The pinned table-list
    endpoint returns its complete list without pagination; if it supplies page metadata,
    the test also requires the returned row count to be complete and `isLastPage=true`;
@@ -956,9 +949,9 @@ never edits or publishes n8n workflow bindings.
 10. unchanged sync is idempotent and does not alter ready credential generations, job
     IDs, source IDs, or integration IDs;
 11. explicit rotation restores one working source without revealing its password; and
-12. every successful probe creates or verifies the fixed persistent attachment canary,
-    including its exact saved-view identity, durable comment/FileReference association,
-    canonical path, size, media type, checksum, and downloaded bytes; and
+12. every successful probe creates or verifies persistent decision/artifact-reference
+    canaries, including their exact PostgreSQL values and saved-view identities, without
+    uploading or fetching files or enabling native Attachment fields; and
 13. cleanup pages through and deletes at most 1,000 matching rows for the current run,
     then reads again to prove their absence while retaining the synthetic recovery
     canary. Any unexpectedly permitted reader insert is also deleted by its unique ID
@@ -981,8 +974,7 @@ NOCODB_RESTORE_CONFIRM='restore:nocodb:metadata' \
   mise exec -- just kube nocodb-restore-drill
 ```
 
-The isolated drill uses a complete automation-data logical bundle and the closest
-Longhorn attachment backup. It proves:
+The isolated drill uses a complete automation-data logical bundle. It proves:
 
 1. restored NocoDB metadata, global roles, source registry, and catalogs agree;
 2. the retained connection encryption key decrypts the restored source credentials;
@@ -990,19 +982,19 @@ Longhorn attachment backup. It proves:
    `operator` schemas of an isolated restored synthetic domain and retain the expected
    privilege denials;
 4. a saved base and view remain available;
-5. an attachment created before backup is retrievable from the restored PVC;
+5. authoritative operator decisions and durable artifact metadata/references survive;
 6. the restored automation-data service can publish a fresh complete logical bundle; and
 7. all run-owned workloads, Services, policies, and temporary claims are removed and
    proved absent.
 
 Runtime-created Jobs resolve the exact generated backup ConfigMap selected by the
 accepted deployed workload and validate its expected script keys. They must not use an
-unhashed generator name or select an arbitrary stale ConfigMap. The detached Longhorn
-volume is checked before binding; two healthy attached replicas are checked after the
-restored workload mounts it.
+unhashed generator name or select an arbitrary stale ConfigMap. There is no NocoDB
+attachment volume restore or paired file-backup selection. Any temporary PostgreSQL
+storage follows the existing automation-data restore contract.
 
 The restore drill never points restored NocoDB at the live domain service and never
-overwrites the running metadata database or PVC.
+overwrites the running metadata database or authoritative domain data.
 
 ## Rollout
 
@@ -1023,9 +1015,9 @@ Rollout follows dependency and authority order:
 6. Import, bind, and publish the private source workflow. Provision the synthetic domain
    before binding its existing migrator credential to the acceptance workflow; publish
    that workflow only after every required credential exists and is bound.
-7. Run access and browser acceptance. Wait for complete automation-data and Longhorn
-   backups that contain the persistent NocoDB state.
-8. Run the confirmed paired NocoDB restore drill.
+7. Run access and browser acceptance. Wait for a complete automation-data logical backup
+   containing NocoDB metadata, source state, and the persistent domain canaries.
+8. Run the confirmed NocoDB metadata restore drill.
 9. After acceptance passes, make the reviewed Git activation change: set NocoDB's
    `spec.suspend: false`, enroll its monitoring and recurring verification together,
    verify their active behavior, and record dated results in this specification.
@@ -1038,7 +1030,7 @@ remain agent-run under repository policy.
 ## Failure handling
 
 - A NocoDB outage does not block n8n domain workflows or direct PostgreSQL access.
-- A failed bootstrap preserves the database, PVC, and API objects and re-suspends only
+- A failed bootstrap preserves the database and API objects and re-suspends only
   state that bootstrap resumed.
 - A failed source operation records non-secret state and retains its registry row,
   operation, job ID, role, base, integration, and source identity for deterministic
@@ -1046,10 +1038,10 @@ remain agent-run under repository policy.
   rotation retries require exact retained identity; failed initial creation retries
   require zero sources.
 - A ready credential changes only through explicit targeted rotation or attended repair.
-- A full or unavailable attachment PVC makes NocoDB unavailable rather than falling back
-  to ephemeral storage.
-- Loss of NocoDB metadata can be recovered from automation-data logical backup; loss of
-  attachments can be recovered separately from Longhorn backup.
+- Loss of NocoDB metadata can be recovered from automation-data logical backup. Local
+  scratch loss is expected on replacement and must not lose supported durable state.
+- A missing or unavailable external artifact is a workflow/storage-owner recovery issue;
+  NocoDB neither owns the file nor repairs its reference automatically.
 - Loss of `NC_CONNECTION_ENCRYPT_KEY` cannot be repaired from the metadata database. The
   operator must restore the retained Secret. If the key is permanently lost, a
   separately reviewed recovery must establish replacement encryption material and rotate
@@ -1063,21 +1055,32 @@ As of 2026-09-05, the repository contains the staged NocoDB package, optional
 automation-data roles and single source registry, secret-free n8n workflows, lifecycle
 commands, monitoring, offline contract tests, operations guide, and recovery runbook.
 The NocoDB Flux Kustomization is selected by its parent and remains
-`spec.suspend: true`. No NocoDB bootstrap, source sync, access acceptance, backup pairing,
+`spec.suspend: true`. No NocoDB bootstrap, source sync, access acceptance,
 or restore drill has run against the live cluster. No active service or recovery
 capability is claimed.
 
 The 2026-09-05 integration audit revised this design after the initial implementation.
-The fixed existing-platform upgrade and old/new backup compatibility are implemented and
-pass disposable populated PostgreSQL upgrade, rerun, fresh-equivalence, and isolated
-restore tests. They have not been invoked against the live cluster. Shared response
-validation, ready-source independence
-from historical jobs, generated restore references, activation-aware monitoring, and
-disposable integration requirements above are acceptance work still to be completed.
-The operations guide and recovery runbook describe the initial implementation; reconcile
-them with the tested result before rollout. Component contract-test passes do not mark
-these integration requirements complete. The transient execution plan remains under
-`.tmp/plans/026-nocodb-operator-ui.md` and is not a committed design artifact.
+The fixed existing-platform upgrade and old/new backup compatibility pass disposable
+populated PostgreSQL upgrade, rerun, fresh-equivalence, and isolated restore tests.
+Shared response validation, generated restore references, activation-aware monitoring,
+and bootstrap evidence fixes are implemented. Local real-component tests prove source
+creation, sync after job-history expiry, application restart, selected operator rotation,
+and additive metadata refresh with existing table/view identity preserved. Full CI passes
+at `d201d6f5b67019f02fe021ee72082d772f543577`. These results are not live acceptance.
+
+On 2026-09-06 the operator removed native attachments from the initial scope and forbade
+temporary schema unlocks to enable them. This design revision replaces the attachment
+canary with PostgreSQL decision/artifact-reference records and proposes removing the
+attachment-only PVC and paired-backup dependency. Review that storage consequence before
+implementation. The staged manifests, guide, recovery runbook, and acceptance scripts
+still contain the earlier attachment design and must be reconciled together; their native
+attachment procedures are not accepted rollout instructions.
+
+The full feedback loop, replacement of application scratch storage, revised record-based
+recovery, final integration passes, and attended acceptance remain outstanding. No native
+attachment workaround or live activation has been performed. The transient execution
+plan remains under `.tmp/plans/026-nocodb-operator-ui.md` and must be updated for this scope
+revision after design review; it is not a committed design artifact.
 
 ## Rejected alternatives
 
@@ -1117,23 +1120,25 @@ A custom broker or one-off administrative script would add a separate credential
 state machine. The existing automation-data provisioner pattern can safely add this
 fixed, opt-in operation while PostgreSQL functions retain authority.
 
-### Ephemeral application storage
+### NocoDB-native attachment storage in the initial surface
 
-Ephemeral `/usr/app/data` would lose uploaded attachments during normal pod replacement.
-A retained 10 GiB PVC avoids that behavior without introducing another data platform.
+Native attachments are not required for the initial operator surface. Comment attachments
+are unavailable in the selected Community deployment, and configuring Attachment fields
+must not relax the external-source schema-read-only boundary. The earlier retained
+10 GiB attachment PVC and paired-backup requirement are superseded by external artifact
+ownership and PostgreSQL reference records. Ephemeral application scratch storage is
+appropriate only because supported durable state lives outside it.
 
 ### Two application replicas
 
-Multiple replicas require Redis and a different attachment-storage design. Two Longhorn
-replicas already protect the single volume from one storage-copy failure; they do not
-make the application highly available. One application replica is proportional to this
-operator-only service.
+Multiple application replicas and Redis are not justified for this operator-only
+service. One application replica remains proportional to the workload.
 
 ### Separate object storage
 
-Adding MinIO or another S3-compatible service only for NocoDB would create a larger
-platform, backup, monitoring, and recovery obligation than the current attachment load
-justifies.
+Adding MinIO or another S3-compatible service only for NocoDB would introduce storage
+ownership and recovery obligations outside this feature. Workflow owners select and
+operate their artifact storage independently.
 
 ### Native Kubernetes manifests
 
@@ -1143,11 +1148,11 @@ explicit repository-owned overrides is the smaller maintenance surface.
 
 ## Review triggers
 
-Revisit this design when attachment growth approaches the PVC alert thresholds; more
-than one application replica becomes necessary; the cluster gains a supported
-S3-compatible platform; NocoDB changes its source API, license, token scopes, metadata
-schema, or attachment behavior; Enterprise SSO or permission features become available;
-or the number of enabled domains makes one workspace operationally difficult.
+Revisit this design when a workflow demonstrates a need for native attachment UX; more
+than one application replica becomes necessary; NocoDB changes its source API, license,
+token scopes, or metadata schema; Enterprise SSO or permission features become available;
+or the number of enabled domains makes one workspace operationally difficult. Any native
+attachment proposal must satisfy the separate design review described above.
 
 After live rollout or recovery changes, reconcile this specification with actual chart
 and image pins, API behavior, role grants, Secret keys, backup coverage, command names,
