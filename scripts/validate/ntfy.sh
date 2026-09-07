@@ -75,14 +75,19 @@ done
 identities="$base/config/identities.yaml"
 [[ -f "$identities" ]] || { echo "Missing ntfy identity registry: $identities" >&2; exit 1; }
 [[ "$(yq -r '[.identities | keys | .[]] | sort | join(",")' "$identities")" == \
-  'alertmanager,automation,homepage,seerr,subscriber' ]] || {
-  echo 'Refusing: the registry must hold exactly subscriber/alertmanager/seerr/homepage/automation.' >&2
+  'alertmanager,automation,homepage,n8n,seerr,subscriber' ]] || {
+  echo 'Refusing: the registry must hold exactly subscriber/alertmanager/seerr/homepage/n8n/automation.' >&2
   exit 1
 }
 [[ "$(yq -r '.identities.subscriber.status + ":" + .identities.subscriber.credential + ":" + .identities.subscriber.consumer' "$identities")" == 'active:password:none' ]]
 [[ "$(yq -r '.identities.alertmanager.status + ":" + .identities.alertmanager.credential + ":" + .identities.alertmanager.consumer' "$identities")" == 'active:token:alertmanager-auth' ]]
 [[ "$(yq -r '.identities.seerr.status + ":" + .identities.seerr.credential + ":" + .identities.seerr.consumer' "$identities")" == 'active:token:seerr-api' ]]
 [[ "$(yq -r '.identities.homepage.status + ":" + .identities.homepage.credential + ":" + .identities.homepage.consumer' "$identities")" == 'active:token:homepage-secret' ]]
+[[ "$(yq -r '.identities.n8n.status + ":" + .identities.n8n.credential + ":" + .identities.n8n.consumer' "$identities")" == 'active:token:n8n-api' ]]
+[[ "$(yq -r '.identities.n8n.access | map(.topic + ":" + .permission) | join(",")' "$identities")" == 'homelab:wo' ]] || {
+  echo 'Refusing: the n8n identity must have only write-only homelab access.' >&2
+  exit 1
+}
 [[ "$(yq -r '.identities.automation.status' "$identities")" == 'retired' ]] || {
   echo 'Refusing: the retired automation identity must remain tombstoned.' >&2
   exit 1
@@ -117,7 +122,9 @@ ntfy_sync_recipe="$(sed -n '/^ntfy-consumer-sync consumer:/,/^[^[:space:]#]/p' k
 for required_guard in \
   "require_deployed_source 'ntfy consumer sync'" \
   'get gitrepository flux-system' \
-  'for app in ntfy homepage seerr' \
+  'required_apps=(ntfy homepage seerr)' \
+  'required_apps=(ntfy n8n)' \
+  'N8N_API_KEY' \
   'status.lastAppliedRevision'; do
   rg -Fq -- "$required_guard" <<<"$ntfy_sync_recipe" || {
     echo "Refusing: ntfy-consumer-sync is missing its deployed-source guard: $required_guard" >&2

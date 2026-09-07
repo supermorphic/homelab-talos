@@ -399,8 +399,8 @@ persist an authenticated event to an external domain store before it returns a s
 acknowledgement when the provider's retry contract requires that guarantee. Execution
 history remains operational evidence and a debugging aid.
 
-The initial operating model is UI-first. The public infrastructure repository owns only
-the platform and a secret-free synthetic canary template. Stable career workflows are
+The operating model is UI-first. The public infrastructure repository owns the platform
+and secret-free shared platform workflow templates. Stable career workflows are
 later exported to a separate private repository after their behavior is understood.
 Credential values are never included in exported workflow commits. Native n8n
 source-control environments are not introduced because the selected Community deployment
@@ -456,13 +456,52 @@ can send traffic to the pod. If PostgreSQL becomes unavailable during a canary r
 required execution-persistence update cannot complete and the request cannot satisfy the
 successful last-node response contract.
 
-n8n records workflow failures according to the 14-day and 10,000-execution retention
-bounds. Prometheus alerts on platform failure patterns; the UI remains the detailed
+When a workflow enables saved failures, n8n retains those records within the 14-day
+and 10,000-execution retention bounds. Prometheus alerts on platform failure patterns; the UI remains the detailed
 execution-debugging surface.
 
 Provider retry behavior, event idempotency keys, dead-letter handling, and reconciliation
 belong to each integration's owning repository. The public edge only routes approved
 paths; it does not define application processing semantics.
+
+### Shared workflow failure notifications
+
+Issue [383](https://github.com/supermorphic/homelab-talos/issues/383) adds one platform-owned
+Error Trigger workflow, `Platform Workflow Failure Handler`. Its secret-free template is
+imported into n8n using the existing workflow operating model. A formatter selects only
+bounded operational metadata and sends one authenticated JSON publish to ntfy's existing
+`homelab` topic at normal priority. A dedicated `n8n` identity has only `homelab:wo` access;
+its token reaches the named `Platform Failure ntfy` n8n credential through the existing
+identity lifecycle and an API-managed consumer sync. The retired `automation` identity
+remains retired. Token generation and synchronization require the documented operator
+credential workflow.
+
+Consumers explicitly select the handler or resolve its instance ID and set
+`settings.errorWorkflow` during their normal setup. The platform keeps no consumer
+inventory and does not reconcile consumer workflows. Existing platform canaries and
+monitoring remain independent. Workflow owners can choose another error policy.
+
+Notifications use fixed summaries rather than raw error text, which can contain provider
+responses or domain data. Workflow and node names are bounded metadata that consumers
+must keep free of sensitive data. Execution IDs and a link on the fixed private editor
+origin support investigation; unavailable fields are labeled, including detection time
+when the input has no usable failure timestamp. Handler execution data is not retained,
+because its incoming Error Trigger event can contain sensitive error context. The handler
+has no downstream error workflow, redirects, retries, or business-workflow retry path.
+Delivery uses one request with a ten-second timeout. Failures during an ntfy outage are
+not queued for later delivery. Notification volume follows failed automatic executions;
+this capability does not promise deduplication or detect schedules that never execute.
+
+The current Cilium policies require a reciprocal workload-specific TCP/80 allowance from
+n8n to ntfy. No public route or additional monitoring resource is needed. The native
+save/publish and caller-permission behavior is checked against pinned n8n `2.36.7` during
+acceptance, and must be rechecked on upgrades; it is not an architectural invariant.
+
+Acceptance uses two independent private, authenticated automatic failure fixtures bound
+to the same handler, with synthetic sensitive markers. It checks notification content,
+execution links, bounded delivery failure, absence of recursive executions, and cleanup.
+The procedure and current validation status belong in the
+[n8n operations guide](../guides/n8n-operations.md#shared-workflow-failure-notifications).
 
 ## Capacity
 

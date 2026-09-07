@@ -480,8 +480,9 @@ expected_workflows=(
   'automation-data-canary.json=workflows/automation-data-canary.json'
   'automation-data-provisioner.json=workflows/automation-data-provisioner.json'
   'platform-canary.json=workflows/platform-canary.json'
+  'platform-workflow-failure.json=workflows/platform-workflow-failure.json'
 )
 [[ "${packaged_workflows[*]}" == "${expected_workflows[*]}" ]] || {
-  echo 'The n8n workflow ConfigMap must package both secret-free templates.' >&2
+  echo 'The n8n workflow ConfigMap must package the exact shared platform templates.' >&2
   exit 1
 }

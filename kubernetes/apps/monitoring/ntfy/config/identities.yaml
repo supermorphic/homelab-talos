@@ -13,6 +13,7 @@
 #     alertmanager-auth auth.yml key inside ntfy-secret, mounted by the adapter
 #     homepage-secret   copied into Secret/homepage-ntfy (homepage namespace)
 #     seerr-api         pushed to Seerr via `just kube ntfy-consumer-sync seerr`
+#     n8n-api           pushed to n8n via `just kube ntfy-consumer-sync n8n`
 # - status: retired is a tombstone: reconcile removes the identity's users, ACLs, and
 #   tokens from the Secret (ntfy then deletes them from auth.db on restart) and the
 #   tombstone blocks accidental recreation. Removing an identity from this file
@@ -45,5 +46,11 @@ identities:
     access:
       - { topic: critical, permission: ro }
     consumer: homepage-secret
+  n8n:
+    status: active
+    credential: token
+    access:
+      - { topic: homelab, permission: wo }
+    consumer: n8n-api
   automation:
     status: retired

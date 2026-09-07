@@ -1278,7 +1278,7 @@ for resource in ciliumnetworkpolicy.yaml helmrelease.yaml httproute.yaml ocirepo
     exit 1
   }
 done
-expected_n8n_configmaps='[{"files":["values.yaml=values.yaml"],"name":"n8n-values"},{"files":["automation-data-provisioner.json=workflows/automation-data-provisioner.json","automation-data-canary.json=workflows/automation-data-canary.json","platform-canary.json=workflows/platform-canary.json"],"name":"n8n-workflow-templates"}]'
+expected_n8n_configmaps='[{"files":["values.yaml=values.yaml"],"name":"n8n-values"},{"files":["automation-data-provisioner.json=workflows/automation-data-provisioner.json","automation-data-canary.json=workflows/automation-data-canary.json","platform-canary.json=workflows/platform-canary.json","platform-workflow-failure.json=workflows/platform-workflow-failure.json"],"name":"n8n-workflow-templates"}]'
 actual_n8n_configmaps="$(yq -o=json -I=0 '
   [.configMapGenerator[] | {"files": .files, "name": .name}] | sort_by(.name)
 ' "$n8n_kustomization")"
@@ -1587,7 +1587,7 @@ actual_n8n_ingress="$(yq -o=json -I=0 '
   echo 'n8n ingress must admit only both Envoy data planes, Prometheus, and kubelet probes.' >&2
   exit 1
 }
-expected_n8n_egress='[{"toEndpoints":[],"toCIDRSet":["0.0.0.0/0 except=0.0.0.0/8,10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,172.16.0.0/12,192.0.0.0/24,192.0.2.0/24,192.168.0.0/16,192.88.99.0/24,198.18.0.0/15,198.51.100.0/24,203.0.113.0/24,224.0.0.0/4,240.0.0.0/4"],"toPorts":["443/TCP"]},{"toEndpoints":["app.kubernetes.io/name=automation-data-postgresql,k8s:io.kubernetes.pod.namespace=automation-data"],"toCIDRSet":[],"toPorts":["5432/TCP"]},{"toEndpoints":["app.kubernetes.io/name=n8n-postgresql,k8s:io.kubernetes.pod.namespace=automation"],"toCIDRSet":[],"toPorts":["5432/TCP"]},{"toEndpoints":["k8s:io.kubernetes.pod.namespace=kube-system,k8s:k8s-app=kube-dns"],"toCIDRSet":[],"toPorts":["53/TCP","53/UDP"]}]'
+expected_n8n_egress='[{"toEndpoints":[],"toCIDRSet":["0.0.0.0/0 except=0.0.0.0/8,10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,172.16.0.0/12,192.0.0.0/24,192.0.2.0/24,192.168.0.0/16,192.88.99.0/24,198.18.0.0/15,198.51.100.0/24,203.0.113.0/24,224.0.0.0/4,240.0.0.0/4"],"toPorts":["443/TCP"]},{"toEndpoints":["app.kubernetes.io/name=automation-data-postgresql,k8s:io.kubernetes.pod.namespace=automation-data"],"toCIDRSet":[],"toPorts":["5432/TCP"]},{"toEndpoints":["app.kubernetes.io/name=n8n-postgresql,k8s:io.kubernetes.pod.namespace=automation"],"toCIDRSet":[],"toPorts":["5432/TCP"]},{"toEndpoints":["app.kubernetes.io/name=ntfy,k8s:io.kubernetes.pod.namespace=ntfy"],"toCIDRSet":[],"toPorts":["80/TCP"]},{"toEndpoints":["k8s:io.kubernetes.pod.namespace=kube-system,k8s:k8s-app=kube-dns"],"toCIDRSet":[],"toPorts":["53/TCP","53/UDP"]}]'
 actual_n8n_egress="$(yq -o=json -I=0 '
   [.spec.egress[] | {
     "toEndpoints": ([.toEndpoints[]?.matchLabels |
@@ -1599,18 +1599,28 @@ actual_n8n_egress="$(yq -o=json -I=0 '
 ' "$n8n_policy")"
 [[ "$(yq -r '[.spec.egress[] | keys | sort | join(",")] | sort | join(";")' \
     "$n8n_policy")" == \
-    'toCIDRSet,toPorts;toEndpoints,toPorts;toEndpoints,toPorts;toEndpoints,toPorts' && \
+    'toCIDRSet,toPorts;toEndpoints,toPorts;toEndpoints,toPorts;toEndpoints,toPorts;toEndpoints,toPorts' && \
   "$(yq -r '[.spec.egress[].toEndpoints[]? | keys | sort | join(",")] | sort | join(";")' \
-    "$n8n_policy")" == 'matchLabels;matchLabels;matchLabels' && \
+    "$n8n_policy")" == 'matchLabels;matchLabels;matchLabels;matchLabels' && \
   "$(yq -r '[.spec.egress[].toCIDRSet[]? | keys | sort | join(",")] | sort | join(";")' \
     "$n8n_policy")" == 'cidr,except' && \
   "$(yq -r '[.spec.egress[].toPorts[] | keys | sort | join(",")] | sort | join(";")' \
-    "$n8n_policy")" == 'ports;ports;ports;ports' && \
+    "$n8n_policy")" == 'ports;ports;ports;ports;ports' && \
   "$(yq -r '[.spec.egress[].toPorts[].ports[] | keys | sort | join(",")] | sort | join(";")' \
     "$n8n_policy")" == \
-    'port,protocol;port,protocol;port,protocol;port,protocol;port,protocol' && \
+    'port,protocol;port,protocol;port,protocol;port,protocol;port,protocol;port,protocol' && \
   "$actual_n8n_egress" == "$expected_n8n_egress" ]] || {
-  echo 'n8n egress must reach only DNS, the two PostgreSQL services, and public IPv4 HTTPS.' >&2
+  echo 'n8n egress must reach only DNS, the two PostgreSQL services, ntfy HTTP, and public IPv4 HTTPS.' >&2
+  exit 1
+}
+
+# The reciprocal ntfy rule must identify only the n8n workload and HTTP port.
+[[ "$(yq -o=json -I=0 '
+  [.spec.ingress[] | select(.fromEndpoints[]?.matchLabels |
+    ."app.kubernetes.io/name" == "n8n" or ."k8s:io.kubernetes.pod.namespace" == "automation")]
+' kubernetes/apps/monitoring/ntfy/app/ciliumnetworkpolicy.yaml)" == \
+  '[{"fromEndpoints":[{"matchLabels":{"k8s:io.kubernetes.pod.namespace":"automation","app.kubernetes.io/name":"n8n"}}],"toPorts":[{"ports":[{"port":"80","protocol":"TCP"}]}]}]' ]] || {
+  echo 'ntfy must admit n8n through one workload-specific TCP/80 rule.' >&2
   exit 1
 }
 

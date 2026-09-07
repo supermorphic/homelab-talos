@@ -1,0 +1,74 @@
+{
+  "name": "Platform Workflow Failure Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [-320, 0],
+      "id": "10000000-0000-4000-8000-000000000001",
+      "name": "Failure Event"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nif (items.length !== 1) throw new Error('failure_event_item_count_invalid');\nconst event = items[0]?.json;\nconst isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);\nconst hasExecution = isObject(event?.execution);\nconst hasTrigger = isObject(event?.trigger);\nif (!isObject(event) || !isObject(event.workflow) || hasExecution === hasTrigger) {\n  throw new Error('failure_event_shape_invalid');\n}\nconst boundedName = (value) => {\n  if (typeof value !== 'string') return 'unavailable';\n  const normalized = value\n    .replace(/[\\u0000-\\u001f\\u007f-\\u009f]/gu, ' ')\n    .replace(/\\s+/gu, ' ')\n    .trim();\n  if (!normalized) return 'unavailable';\n  return Array.from(normalized).slice(0, 40).join('');\n};\nconst idValue = (value) => {\n  if (typeof value === 'string') return value;\n  if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return String(value);\n  return '';\n};\nconst workflowId = idValue(event.workflow.id);\nconst executionId = hasExecution ? idValue(event.execution.id) : '';\nconst validWorkflowId = /^[A-Za-z0-9_-]{1,64}$/.test(workflowId);\nconst validExecutionId = /^[1-9][0-9]{0,19}$/.test(executionId);\nconst failure = hasExecution ? event.execution : event.trigger;\nconst rawTimestamp = isObject(failure.error) ? failure.error.timestamp : undefined;\nlet failureTimestamp;\ntry {\n  const timestampMs = typeof rawTimestamp === 'number' && Number.isFinite(rawTimestamp)\n    ? rawTimestamp\n    : typeof rawTimestamp === 'string' && rawTimestamp.length <= 64\n      ? Date.parse(rawTimestamp)\n      : Number.NaN;\n  if (Number.isFinite(timestampMs)) failureTimestamp = new Date(timestampMs).toISOString();\n} catch {}\nconst timestampLabel = failureTimestamp ? 'Failed at' : 'Detected at';\nconst timestamp = failureTimestamp ?? new Date().toISOString();\nconst notification = {\n  topic: 'homelab',\n  title: 'n8n workflow failed',\n  priority: 3,\n  message: [\n    hasExecution ? 'Automatic workflow execution failed.' : 'Automatic workflow trigger failed.',\n    `Workflow: ${boundedName(event.workflow.name)}`,\n    `Node: ${hasExecution ? boundedName(event.execution.lastNodeExecuted) : 'trigger'}`,\n    `Execution: ${validExecutionId ? executionId : 'unavailable'}`,\n    `${timestampLabel}: ${timestamp}`,\n  ].join('\\n'),\n};\nif (validWorkflowId && validExecutionId) {\n  notification.click = `https://n8n.lab.supermorphic.com/workflow/${workflowId}/executions/${executionId}`;\n}\nreturn [{ json: notification }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-40, 0],
+      "id": "10000000-0000-4000-8000-000000000002",
+      "name": "Format Failure Notification"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ntfy.ntfy.svc.cluster.local",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "timeout": 10000,
+          "sendCredentialsOnCrossOriginRedirect": false
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [240, 0],
+      "id": "10000000-0000-4000-8000-000000000003",
+      "name": "Publish Failure Notification",
+      "executeOnce": true,
+      "retryOnFail": false
+    }
+  ],
+  "connections": {
+    "Failure Event": {
+      "main": [[{"node": "Format Failure Notification", "type": "main", "index": 0}]]
+    },
+    "Format Failure Notification": {
+      "main": [[{"node": "Publish Failure Notification", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "none",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false,
+    "saveExecutionProgress": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "10000000-0000-4000-8000-000000000004",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

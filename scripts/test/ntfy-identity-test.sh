@@ -117,15 +117,16 @@ assert_stamps() {
 assert_no_secret_echo() {
   local value
   for value in "$ntfy_fixture_sub_hash" "$ntfy_fixture_am_hash" "$ntfy_fixture_seerr_hash" \
-    "$ntfy_fixture_automation_hash" "$ntfy_fixture_homepage_hash" "$ntfy_fixture_am_token" \
+    "$ntfy_fixture_automation_hash" "$ntfy_fixture_homepage_hash" "$ntfy_fixture_n8n_hash" \
+    "$ntfy_fixture_am_token" \
     "$ntfy_fixture_seerr_token" "$ntfy_fixture_automation_token" "$ntfy_fixture_homepage_token"; do
     assert_not_contains "$value"
   done
 }
 
-expected_users_main="alertmanager:$ntfy_fixture_am_hash:user,homepage:$ntfy_fixture_homepage_hash:user,seerr:$ntfy_fixture_seerr_hash:user,subscriber:$ntfy_fixture_sub_hash:user"
-expected_access_main='alertmanager:critical:wo,alertmanager:homelab:wo,homepage:critical:ro,seerr:media:wo,subscriber:critical:ro,subscriber:homelab:ro,subscriber:media:ro'
-expected_tokens_main="alertmanager:$ntfy_fixture_am_token,homepage:$ntfy_fixture_homepage_token,seerr:$ntfy_fixture_seerr_token"
+expected_users_main="alertmanager:$ntfy_fixture_am_hash:user,homepage:$ntfy_fixture_homepage_hash:user,n8n:$ntfy_fixture_n8n_hash:user,seerr:$ntfy_fixture_seerr_hash:user,subscriber:$ntfy_fixture_sub_hash:user"
+expected_access_main='alertmanager:critical:wo,alertmanager:homelab:wo,homepage:critical:ro,n8n:homelab:wo,seerr:media:wo,subscriber:critical:ro,subscriber:homelab:ro,subscriber:media:ro'
+expected_tokens_main="alertmanager:$ntfy_fixture_am_token,homepage:$ntfy_fixture_homepage_token,n8n:$ntfy_fixture_n8n_token,seerr:$ntfy_fixture_seerr_token"
 
 # --- Guard + argument handling ------------------------------------------------
 new_case guard
@@ -137,6 +138,10 @@ assert_contains "Set NTFY_IDENTITY_CONFIRM='reconcile:monitoring:ntfy:all:sops'"
 run_id 'ensure:monitoring:ntfy:bogus:sops' ensure bogus
 assert_status 1
 assert_contains "'bogus' is not an identity"
+run_id - ensure n8n
+assert_status 1
+assert_contains "Set NTFY_IDENTITY_CONFIRM='ensure:monitoring:ntfy:n8n:sops'"
+assert_not_contains "Provisioned 'n8n'"
 set +e
 OUT="$(scripts/secrets/ntfy-identity.sh frobnicate all 2>&1)"
 STATUS=$?
@@ -192,6 +197,21 @@ rg -Fq "subscriber:$ntfy_fixture_sub_hash" <<<"$users" || fail 'subscriber hash 
   fail 'homepage ACL missing'
 [[ "$(ntfy_secret_key "$NTFY_HOMEPAGE_SECRET_FILE" token)" == "$generated_homepage_token" ]] ||
   fail 'homepage Secret token does not match the canonical token'
+
+# --- New API-managed identity is created only by an explicit operator ensure ----
+new_case ensure-generates-n8n pre-n8n
+run_id 'ensure:monitoring:ntfy:n8n:sops' ensure n8n
+assert_ok
+users="$(ntfy_secret_key "$NTFY_SECRET_FILE" NTFY_AUTH_USERS)"
+n8n_user="$(tr ',' '\n' <<<"$users" | rg '^n8n:')"
+[[ "$n8n_user" =~ ^n8n:\$2[aby]\$.+:user$ ]] || fail "generated n8n hash is not bcrypt: $n8n_user"
+tokens="$(ntfy_secret_key "$NTFY_SECRET_FILE" NTFY_AUTH_TOKENS)"
+generated_n8n_token="$(tr ',' '\n' <<<"$tokens" | rg '^n8n:' | cut -d: -f2)"
+[[ "$generated_n8n_token" =~ ^tk_[a-z0-9]{29}$ ]] || fail "generated n8n token malformed: $generated_n8n_token"
+[[ "$(ntfy_secret_key "$NTFY_SECRET_FILE" NTFY_AUTH_ACCESS)" == *'n8n:homelab:wo'* ]] ||
+  fail 'n8n homelab write-only ACL missing'
+assert_contains 'ntfy-consumer-sync n8n'
+assert_not_contains "$generated_n8n_token"
 
 # --- Drift: unknown identity in the Secret must be tombstoned first ------------
 new_case reconcile-drift
@@ -268,6 +288,26 @@ run_id 'finalize:monitoring:ntfy:seerr:sops' finalize seerr
 assert_status 1
 assert_contains 'no pending token'
 
+new_case rotate-n8n-staged
+run_id 'rotate:monitoring:ntfy:n8n:sops' rotate n8n
+assert_ok
+tokens="$(ntfy_secret_key "$NTFY_SECRET_FILE" NTFY_AUTH_TOKENS)"
+rg -q "n8n:$ntfy_fixture_n8n_token," <<<"$tokens," || fail 'current n8n token not kept during staging'
+pending_entry="$(tr ',' '\n' <<<"$tokens" | rg '^n8n:.+:pending$')"
+pending_token="$(cut -d: -f2 <<<"$pending_entry")"
+[[ "$pending_token" =~ ^tk_[a-z0-9]{29}$ && "$pending_token" != "$ntfy_fixture_n8n_token" ]] ||
+  fail 'n8n pending token missing or malformed'
+assert_contains 'ntfy-consumer-sync n8n'
+assert_contains 'finalize n8n'
+assert_contains 'synthetic delivery proof'
+assert_not_contains 'to test and synchronize it'
+assert_not_contains "$pending_token"
+run_id 'finalize:monitoring:ntfy:n8n:sops' finalize n8n
+assert_ok
+tokens="$(ntfy_secret_key "$NTFY_SECRET_FILE" NTFY_AUTH_TOKENS)"
+[[ "$(tr ',' '\n' <<<"$tokens" | rg -c '^n8n:')" == '1' ]] || fail 'finalize must leave one n8n token'
+rg -q "n8n:$pending_token" <<<"$tokens" || fail 'n8n pending token not promoted'
+
 # --- Rotation: the human password identity is refused ----------------------------
 new_case rotate-subscriber
 run_id 'rotate:monitoring:ntfy:subscriber:sops' rotate subscriber
@@ -310,6 +350,17 @@ set -e
 assert_status 1
 assert_contains 'plaintext credential'
 [[ "$(git hash-object "$NTFY_SECRET_FILE")" == "$before" ]] || fail 'original Secret was replaced'
+
+new_case ensure-failure-no-success pre-n8n
+set +e
+OUT="$(STUB_SOPS_PASSTHROUGH=1 NTFY_IDENTITY_CONFIRM='ensure:monitoring:ntfy:n8n:sops' \
+  scripts/secrets/ntfy-identity.sh ensure n8n 2>&1)"
+STATUS=$?
+set -e
+assert_status 1
+assert_contains 'plaintext credential'
+assert_not_contains "Provisioned 'n8n'"
+assert_not_contains "lifecycle 'ensure' completed"
 
 # --- Annotation-only drift is repaired without rewriting ciphertext ------------
 new_case stamp-repair
@@ -399,10 +450,10 @@ run_id 'reconcile:monitoring:ntfy:all:sops' reconcile all
 assert_ok
 users="$(ntfy_secret_key "$NTFY_SECRET_FILE" NTFY_AUTH_USERS)"
 tokens="$(ntfy_secret_key "$NTFY_SECRET_FILE" NTFY_AUTH_TOKENS)"
-for id in alertmanager homepage seerr subscriber; do
+for id in alertmanager homepage n8n seerr subscriber; do
   rg -q "^${id}:" < <(tr ',' '\n' <<<"$users") || fail "bootstrap reconcile omitted user $id"
 done
-for id in alertmanager homepage seerr; do
+for id in alertmanager homepage n8n seerr; do
   entry="$(tr ',' '\n' <<<"$tokens" | rg "^${id}:")"
   [[ "${entry#*:}" =~ ^tk_[a-z0-9]{29}$ ]] || fail "bootstrap reconcile token malformed for $id"
 done

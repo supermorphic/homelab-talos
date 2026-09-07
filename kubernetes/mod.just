@@ -988,10 +988,11 @@ alertmanager-ntfy-verify: require-bash
 flux-alert-delivery-test: require-bash
     @scripts/test/run-catalog-suite.sh test.e2e.flux-alert-delivery -- scripts/test/scenarios/flux-alert-delivery.sh {{quote(kubeconfig)}}
 
-# Synchronize an API-managed ntfy consumer (seerr) with its token from the canonical
-# ntfy Secret: enforce the managed ntfy settings through Seerr's settings API, proving
-# the candidate with Seerr's test endpoint before saving. Operator-only; needs the age
-# key and LAN reachability. Guard: NTFY_CONSUMER_SYNC_CONFIRM='sync:media:seerr:ntfy'.
+# Synchronize an API-managed ntfy consumer with its token from the canonical ntfy
+# Secret. Seerr uses its settings API; n8n creates or updates only the named Header Auth
+# credential and takes N8N_API_KEY from the environment. Operator-only; needs the age
+# key and private application reachability. The script enforces a consumer-specific
+# NTFY_CONSUMER_SYNC_CONFIRM guard.
 ntfy-consumer-sync consumer: require-bash
     #!/usr/bin/env bash
     set -euo pipefail
@@ -1007,13 +1008,38 @@ ntfy-consumer-sync consumer: require-bash
       exit 1
     }
 
+    case '{{consumer}}' in
+      seerr)
+        sync_sources=(
+          kubernetes/mod.just
+          scripts/secrets/ntfy-consumer-sync.sh
+          kubernetes/apps/monitoring/ntfy
+          kubernetes/apps/monitoring/homepage/app/homepage-seerr.sops.yaml
+          kubernetes/apps/media/seerr
+        )
+        required_apps=(ntfy homepage seerr)
+        ;;
+      n8n)
+        [[ -n "${N8N_API_KEY:-}" ]] || {
+          echo 'Refusing ntfy consumer sync: set N8N_API_KEY in the environment.' >&2
+          exit 1
+        }
+        sync_sources=(
+          kubernetes/mod.just
+          scripts/secrets/ntfy-consumer-sync.sh
+          kubernetes/apps/monitoring/ntfy
+          kubernetes/apps/automation/n8n
+        )
+        required_apps=(ntfy n8n)
+        ;;
+      *)
+        echo "Refusing ntfy consumer sync: unknown consumer '{{consumer}}'." >&2
+        exit 1
+        ;;
+    esac
+
     source scripts/lib/rollout.sh
-    require_deployed_source 'ntfy consumer sync' \
-      kubernetes/mod.just \
-      scripts/secrets/ntfy-consumer-sync.sh \
-      kubernetes/apps/monitoring/ntfy \
-      kubernetes/apps/monitoring/homepage/app/homepage-seerr.sops.yaml \
-      kubernetes/apps/media/seerr
+    require_deployed_source 'ntfy consumer sync' "${sync_sources[@]}"
 
     remote_ref="$(git ls-remote --exit-code origin refs/heads/main)"
     read -r remote_sha _ <<<"$remote_ref"
@@ -1031,7 +1057,7 @@ ntfy-consumer-sync consumer: require-bash
       echo "Refusing ntfy consumer sync: origin/main=$remote_sha Flux=$flux_sha." >&2
       exit 1
     }
-    for app in ntfy homepage seerr; do
+    for app in "${required_apps[@]}"; do
       state="$(
         kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
           get kustomization "$app" --output json

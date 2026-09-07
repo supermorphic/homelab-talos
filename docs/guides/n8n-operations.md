@@ -571,6 +571,129 @@ Keep the shared edge infrastructure while another approved path remains. If this
 the last public integration, use [public exposure rollback](#public-exposure-rollback),
 including route pruning before suspension and router-forward removal ordering.
 
+## Shared workflow failure notifications
+
+Use `Platform Workflow Failure Handler` as the normal Error Workflow for automatic
+production executions. Consumers choose it explicitly; a workflow may use another policy.
+The handler sends one normal-priority notification to ntfy `homelab` per failed execution.
+It does not retry the business workflow, recover missed schedules, or retain a delivery
+queue. An ntfy outage can lose notifications. Keep existing platform monitoring enabled.
+
+### One-time setup
+
+1. Complete the [n8n ntfy publisher setup](ntfy-operations.md#n8n-workflow-failures),
+   including the dedicated write-only identity and `Platform Failure ntfy` credential.
+2. Import the secret-free
+   [handler template](../../kubernetes/apps/automation/n8n/app/workflows/platform-workflow-failure.json)
+   into the private n8n editor. Check for an existing workflow with the exact name first;
+   update that workflow in place on later changes so consumers retain its ID. Stop on
+   duplicate names. Flux does not import or reconcile workflows.
+3. Before binding a credential, require the HTTP Request node to use exactly **POST**
+   to the fixed URL `http://ntfy.ntfy.svc.cluster.local` (root path), with no dynamic URL.
+   Require JSON publish with fixed `topic: homelab` and `priority: 3`. Bind exactly the
+   `Platform Failure ntfy` Header Auth credential. Leave the handler's own Error Workflow unset. Keep retries and redirects disabled and the request timeout
+   at ten seconds. Keep saved successful, failed, manual, and intermediate execution data
+   disabled: Error Trigger input can contain raw error context.
+4. Check the handler's caller permissions allow the intended production workflows without
+   maintaining a per-consumer allowlist. Use the existing trusted project/owner boundary.
+5. Save and publish the handler, then perform synthetic acceptance below before adopting
+   it in production.
+
+For pinned n8n `2.36.7`, the
+[error-workflow loader](https://github.com/n8n-io/n8n/blob/n8n%402.36.7/packages/cli/src/workflows/workflow-execution.service.ts)
+loads the published workflow version and rejects a missing active version. General
+[Error Trigger documentation](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.errortrigger/)
+says publication is unnecessary. Follow the pinned implementation and prove it with an
+automatic failure on this installation; recheck save/publish behavior after upgrades.
+Manual editor executions do not prove Error Trigger delivery.
+
+### Consumer adoption and notification contract
+
+In the consumer workflow's Settings, select `Platform Workflow Failure Handler` as its
+**Error Workflow**, save, and publish the consumer as required by its trigger. For API-based
+setup, resolve exactly one handler by its exact name, then use its instance ID as the
+consumer's `settings.errorWorkflow`. Fail on zero or duplicate matches. Keep that ID in
+the consumer's own deployment configuration, not a platform consumer inventory. Updating
+an existing handler preserves bindings; deleting and reimporting it requires rebinding.
+No `homelab-talos` change is required for a new consumer or automation-data domain.
+
+Workflow and node names must be static, non-sensitive operational labels. The formatter
+limits each name to 40 Unicode code points and normalizes control characters and
+whitespace; it cannot infer whether a human
+has put personal information into a name. The notification includes execution metadata
+when available and constructs its link on the fixed private editor origin. Missing
+execution details are explicitly labeled. A valid error timestamp is the failure time;
+otherwise the notification labels the time as detection time.
+
+The summary is fixed text. Raw error messages, stacks, provider responses, input/output
+payloads, credentials, and domain data are excluded. Open the source execution in n8n for
+details. Consumers that disable saved failed executions may have no retained execution to
+open. Handled errors, continued failures, and failures before execution starts are subject
+to n8n's native Error Trigger behavior; this is not a guarantee that every unsuccessful
+business outcome generates a notification.
+
+### Synthetic acceptance
+
+This is an attended, controlled test: it publishes ntfy messages and creates temporary
+workflow state. Use only the two repository fixtures and synthetic data. Do not bind
+production credentials to them or invoke providers or domain databases. Run one acceptance
+session at a time. Public artifacts contain only pass/fail results and fixture labels;
+keep instance workflow and execution IDs in local acceptance notes for matching and
+cleanup. Use the existing subscriber account to inspect `homelab`; the publisher token
+cannot read messages.
+
+1. Confirm the deployment runs the pinned version and `mise exec -- just kube n8n-verify`
+   passes. Require the merged source revision to be reconciled, the dedicated identity
+   synchronized, and no duplicate handler. Record the handler ID and its publication
+   state. Immediately before use, check its three-node graph, exact POST to the fixed
+   `http://ntfy.ntfy.svc.cluster.local` root URL, `Platform Failure ntfy` Header Auth
+   binding, JSON `topic: homelab` and `priority: 3`, no downstream Error Workflow, disabled
+   retries/redirects, ten-second HTTP timeout, and disabled execution-data retention.
+2. Import the two inactive templates in
+   [the fixture directory](../../tests/fixtures/n8n-failure-notifications/). Record their
+   exact IDs. The templates are `Platform Failure Fixture One` and
+   `Platform Failure Fixture Two`, with paths `platform-failure-fixture-one` and
+   `platform-failure-fixture-two`. Bind both to the same handler ID and a temporary
+   private Header Auth
+   credential whose header **Name** is `X-Platform-Failure-Test` and whose **Value** is
+   a fresh temporary token. Use unique private webhook paths if a previous test occupies
+   the fixture paths. Do not add public routes. Publish both fixtures.
+3. Send one authenticated POST to each fixture's **production webhook path through the
+   private editor origin**. The Stop And Error node must fail each automatic execution.
+   Do not use the editor's Execute Workflow button or `/webhook-test/`. Record the two
+   failed execution IDs and time of each request from n8n. These fixtures acknowledge
+   receipt before failing, so an HTTP success response does not prove execution success.
+4. Require exactly one `homelab` notification for each of those execution IDs. Verify
+   distinct workflow names, the failing node, normal priority, time labels, fixed summary,
+   and an execution link opening the corresponding failure in n8n. Inspect the actual
+   stored ntfy messages: no synthetic sensitive marker from either fixture may appear.
+   A formatter unit test or an HTTP response alone does not prove this delivery.
+5. Prove a notification failure remains bounded using a **temporary copy** of the handler,
+   with no Error Workflow and the same retry, redirect, and timeout settings. For this
+   synthetic-only copy, temporarily save failed execution data to obtain test evidence;
+   never make this retention change on the shared handler or bind a production workflow
+   to the copy. Bind an invalid synthetic bearer credential, then bind one fixture to
+   that copy. Save/publish the changed test workflows and send one automatic request. Require the delivery attempt to end with authentication
+   failure, zero ntfy messages for that execution, and no recursive handler executions
+   during a 60-second observation window. Inspect the copy's retained synthetic failure
+   and execution list. The shared handler has no retained execution records by design.
+   Restore and publish the fixture's binding to the shared handler and prove delivery again.
+6. In a `finally`-style cleanup, unpublish and remove only the two recorded fixture IDs
+   and the temporary handler copy and its retained synthetic execution, then remove only
+   their temporary credentials. Verify the temporary workflows are inactive/absent and their private production webhooks no
+   longer execute. Keep the shared handler and its publisher credential. Cleanup failure
+   means acceptance is incomplete even if notifications arrived.
+
+After credential rotation, repeat positive delivery acceptance before finalizing the new
+token. For upgrades, also confirm the handler executes the intended saved/published version
+and caller permissions still permit both fixtures. Do not broaden permissions as a test
+workaround.
+
+**Activation status:** source implementation is prepared for operator activation. Live
+shared-handler delivery acceptance is pending until the dedicated identity is generated,
+deployed, synchronized, and the synthetic procedure passes. Do not treat offline CI as
+proof of ntfy or phone delivery.
+
 ## Day-2 operation and controlled assurance
 
 Use `mise exec -- just kube n8n-verify` for normal read-only day-2 verification. The

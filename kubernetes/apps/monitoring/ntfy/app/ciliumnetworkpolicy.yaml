@@ -31,6 +31,15 @@ spec:
         - ports:
             - port: "80"
               protocol: TCP
+    # The shared n8n Error Trigger workflow publishes only through authenticated HTTP.
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: automation
+            app.kubernetes.io/name: n8n
+      toPorts:
+        - ports:
+            - port: "80"
+              protocol: TCP
     # Kubelet liveness/readiness/startup probes hit /v1/health on port 80.
     - fromEntities:
         - host

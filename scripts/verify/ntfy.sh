@@ -51,14 +51,15 @@ tokens="$("${kc[@]}" --namespace "$ns" exec deployment/ntfy -c app -- \
   sh -c 'printf %s "$NTFY_AUTH_TOKENS"')"
 token_for() { awk -F, -v u="$1" '{for(i=1;i<=NF;i++){n=split($i,a,":"); if(a[1]==u){print a[2]; exit}}}' <<<"$tokens"; }
 seerr_token="$(token_for seerr)"
+n8n_token="$(token_for n8n)"
 am_token="$(token_for alertmanager)"
 registered_homepage_token="$(token_for homepage)"
 # shellcheck disable=SC2016 # Variable expands in the remote container, not this shell.
 homepage_token="$("${kc[@]}" --namespace homepage exec deployment/homepage -c homepage -- \
   sh -c 'printf %s "$HOMEPAGE_VAR_NTFY_TOKEN"')"
-[[ -n "$seerr_token" && -n "$am_token" && -n "$registered_homepage_token" &&
+[[ -n "$seerr_token" && -n "$n8n_token" && -n "$am_token" && -n "$registered_homepage_token" &&
   -n "$homepage_token" ]] || {
-  echo 'Could not read the expected seerr/alertmanager/homepage tokens.' >&2
+  echo 'Could not read the expected seerr/n8n/alertmanager/homepage tokens.' >&2
   exit 1
 }
 [[ "$homepage_token" == "$registered_homepage_token" ]] || {
@@ -68,6 +69,10 @@ homepage_token="$("${kc[@]}" --namespace homepage exec deployment/homepage -c ho
 
 # seerr is write-only on media: it must NOT be able to publish to critical.
 [[ "$(code -X POST -H "Authorization: Bearer $seerr_token" -d 'verify' "$base_url/critical")" == '403' ]] || { echo 'seerr token could publish to critical (should be denied).' >&2; exit 1; }
+# n8n is write-only on homelab: denied requests prove it cannot read homelab or publish
+# to critical without sending a notification.
+[[ "$(code -H "Authorization: Bearer $n8n_token" "$base_url/homelab/json?poll=1")" == '403' ]] || { echo 'n8n token could read homelab (should be denied).' >&2; exit 1; }
+[[ "$(code -X POST -H "Authorization: Bearer $n8n_token" -d 'verify' "$base_url/critical")" == '403' ]] || { echo 'n8n token could publish to critical (should be denied).' >&2; exit 1; }
 # alertmanager is write-only: it must NOT be able to read a topic.
 [[ "$(code -H "Authorization: Bearer $am_token" "$base_url/critical/json?poll=1")" == '403' ]] || { echo 'alertmanager token could read critical (should be denied).' >&2; exit 1; }
 # Homepage is read-only on critical and has no access to the other dashboard topics.
