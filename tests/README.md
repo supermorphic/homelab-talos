@@ -95,7 +95,7 @@ exact current-main base + rebased candidate head
 ```
 
 The full `mise exec -- just ci` command remains available and required locally under
-current repository policy. See [Spec 024](../docs/specs/024-ci-runtime-and-merge-throughput-optimization.md)
+current repository policy. See [Spec 027](../docs/specs/027-deterministic-ci-gates.md)
 for the shadow, split-all, and selective rollout checkpoints and protection transition.
 
 ## Offline harness execution
