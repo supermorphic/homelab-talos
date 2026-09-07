@@ -26,6 +26,7 @@ register_harness_shell_case must-not-run touch "$must_not_run"
 
 set +e
 run_registered_harness_shell_cases "$fragment_root" 1 0 \
+	validation.test-harness \
 	>"$fixture_root/runner.out" 2>&1
 runner_status="$?"
 set -e

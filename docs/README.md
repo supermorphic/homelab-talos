@@ -65,6 +65,7 @@
 - [021 — Repository Command Lifecycle](specs/021-repository-command-lifecycle.md) — Defines command semantics, safeguards, authority separation, and the approved targeted harmonization.
 - [022 — Grafana Alloy and Loki Centralized Logging](specs/022-grafana-alloy-loki.md) — Defines centralized Kubernetes, Talos, and Event logging through Alloy, Loki, and Grafana.
 - [023 — n8n Workflow Automation Platform](specs/023-n8n-workflow-automation-platform.md) — Describes the n8n platform, private access, public webhook boundary, persistence, and recovery design.
-- [024 — CI Runtime and Merge-Throughput Optimization](specs/024-ci-runtime-and-merge-throughput-optimization.md) — Describes the staged CI optimization design and its validation requirements.
+- [024 — CI Runtime and Merge-Throughput Optimization](specs/024-ci-runtime-and-merge-throughput-optimization.md) — Records the Stage 1 design, final outcome, and decision to proceed to selective CI.
 - [025 — Node Lifecycle and Maintenance](specs/025-node-lifecycle-and-maintenance.md) — Defines guarded node disruption, maintenance, and recovery acceptance across Talos, Kubernetes, and Longhorn.
 - [026 — Automation Data PostgreSQL Platform](specs/026-automation-data-postgresql-platform.md) — Records the shared workflow database, provisioning, backup, monitoring, and acceptance evidence.
+- [027 — Deterministic CI Gates](specs/027-deterministic-ci-gates.md) — Defines Stage 2 category selection, evidence ownership, merge enforcement, and staged rollout.

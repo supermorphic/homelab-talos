@@ -37,6 +37,69 @@ executes the shell unit-test suites, and runs Python unit tests via `uv run
 unsets SOPS age-key variables. `mise exec -- just test catalog-validate` runs
 only the catalog checks.
 
+## Deterministic CI groups and ownership checks
+
+The Stage 2 runtime selector has four execution groups: always-running `core`, plus
+`observability`, `automation`, and `ci-framework`. `full` selects their exact union.
+The provider rollout is still advisory shadow planning: the required GitHub `ci` job
+runs full validation. Split jobs and selective enforcement are later rollout steps.
+
+| File | Responsibility |
+| --- | --- |
+| `tests/impact.yaml` | Runtime path rules: select groups or full fallback. |
+| `tests/catalog.yaml` | Commands and suite membership for each execution group. |
+| `scripts/test/validate-chainsaw.sh` | Run or list the actual harness work in each group. |
+| `scripts/test/core/test_public_webhook_routes.py` and `test_internal_dns_endpoints.py` | Core-owned production-validator regressions, discovered separately from framework tests. |
+| `tests/fixtures/ci-impact/ownership.yaml` | Test-only examples connecting changed inputs to required evidence; no expected groups. |
+| `scripts/test/test_ci_plan.py` | Test the real selector against rules and independent coverage examples. |
+| `scripts/test/validate-harness-groups-test.sh` | Check exact-once harness membership and full/group equality. |
+| `scripts/test/ci_plan.py` | Create a deterministic plan bound to base and candidate commits. |
+| `scripts/test/run-ci.sh` | Execute catalog suites and bind canonical group results to the plan. |
+| `scripts/test/ci_reconcile.py` | Require complete passed results for every selected group and suite. |
+| `.github/workflows/ci.yml` | Provider checkout, execution, and artifact handling. |
+
+The ownership fixture does not schedule CI. It checks that the actual selected groups
+contain the evidence reviewers know is required:
+
+```text
+reviewed changed input -> real classifier -> selected groups -> real harness listings
+reviewed required tests --------------------------------------> membership assertion
+```
+
+For example, editing the internal DNS validator must select a group that executes its
+Python regression tests. Checking only that its path selects `core` would miss a test
+accidentally assigned to `ci-framework`. Review source consumers and fixtures when adding
+conditional coverage; do not infer ownership solely from the language or test directory.
+
+Inspect work without running it:
+
+```sh
+mise exec -- bash scripts/test/validate-chainsaw.sh --list core
+mise exec -- bash scripts/test/validate-chainsaw.sh --list observability
+mise exec -- bash scripts/test/validate-chainsaw.sh --list automation
+mise exec -- bash scripts/test/validate-chainsaw.sh --list ci-framework
+```
+
+Run the focused ownership and group-union checks:
+
+```sh
+mise exec -- uv run --locked python -m unittest scripts/test/test_ci_plan.py
+mise exec -- bash scripts/test/validate-harness-groups-test.sh
+```
+
+The planned enforced workflow is:
+
+```text
+exact current-main base + rebased candidate head
+  -> ci-plan -> core + selected groups -> ci-group -> ci-reconcile -> merge-gate
+```
+
+The full `mise exec -- just ci` command remains available and required locally under
+current repository policy. See [Spec 027](../docs/specs/027-deterministic-ci-gates.md)
+for the shadow, split-all, and selective rollout checkpoints and protection transition.
+
+## Offline harness execution
+
 The offline harness keeps its cheap/high-signal and repository-mutating shell
 checks in a serial preflight. It then runs the remaining isolated shell cases
 with four bounded workers. Each worker receives a private temporary directory;
@@ -221,6 +284,13 @@ The coordinator resolves the complete ordered CI execution list before it starts
 the first suite. Each suite receives `/dev/null` as stdin. A validator cannot
 consume later suite IDs or wait for interactive input, and an empty or failed
 execution-list lookup fails before suite execution.
+
+`mise exec -- just test ci-reconcile PLAN RESULTS OUTPUT` checks downloaded group
+results against the plan and the complete catalog executions from its exact candidate
+Git commit. Every expected suite must be present and passed; unexpected suites fail.
+The candidate commit and its `tests/catalog.yaml` blob must be available locally.
+Reconciliation does not use a changed working-tree catalog as evidence for that commit.
+This interface is offline groundwork; the advisory shadow rollout still runs full CI.
 
 Node.js and Allure are pinned through mise. Generate static Awesome reports with
 `mise exec -- just test report <run-id>` or `report-latest`; output is

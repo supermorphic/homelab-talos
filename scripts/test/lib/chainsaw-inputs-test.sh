@@ -112,6 +112,8 @@ validator_root="$fixture_root/validator repository"
 mkdir -p "$validator_root/scripts/test/lib" "$validator_root/tests/chainsaw/nested" \
 	"$validator_root/tests/chainsaw/with space" \
 	"$validator_root/tests/fixtures/chainsaw/support" "$validator_root/bin"
+mkdir -p "$validator_root/scripts/test/core" "$validator_root/scripts/test/scenarios" \
+	"$validator_root/tests/probes/vpn"
 cp "$repo_root/scripts/test/validate-chainsaw.sh" \
 	"$validator_root/scripts/test/validate-chainsaw.sh"
 cp "$repo_root/scripts/test/lib/chainsaw-inputs.sh" \
@@ -125,6 +127,12 @@ printf '%s\n' '#!/usr/bin/env bash' 'exit 0' \
 	>"$validator_root/scripts/test/validate-catalog.sh"
 chmod +x "$validator_root/scripts/test/run-native-junit-validator.sh" \
 	"$validator_root/scripts/test/validate-catalog.sh"
+for python_test in \
+	scripts/test/core/test_core.py \
+	scripts/test/scenarios/test_scenario.py \
+	tests/probes/vpn/test_probe.py; do
+	printf '%s\n' 'import unittest' >"$validator_root/$python_test"
+done
 
 while IFS= read -r test_script; do
 	[[ "$test_script" == 'scripts/test/validate-chainsaw.sh' ]] && continue
@@ -137,7 +145,7 @@ while IFS= read -r test_script; do
 	chmod +x "$validator_root/$test_script"
 done < <(
 	awk '
-		/^[[:space:]]*(run_shell_case|register_harness_shell_case) / {
+		/^[[:space:]]*(run_group_shell_case|register_group_shell_case|run_shell_case|register_harness_shell_case) / {
 			for (field = 1; field <= NF; field++) {
 				if ($field ~ /^(scripts\/test|tests\/probes)\/.*\.sh$/) print $field
 			}
@@ -212,6 +220,10 @@ git -C "$validator_root" config user.name 'Chainsaw Validator Test'
 git -C "$validator_root" add tests
 git -C "$validator_root" commit -qm 'validator fixture'
 
+python_listing="$(bash "$validator_root/scripts/test/validate-chainsaw.sh" --list all |
+	sed -n 's/^python://p')"
+[[ "$python_listing" == $'scripts/test/core\nscripts/test/scenarios\ntests/probes/vpn\nscripts/test' ]]
+
 chainsaw_log="$fixture_root/chainsaw.log"
 yq_log="$fixture_root/yq.log"
 shell_case_log="$fixture_root/shell-cases.log"
@@ -250,8 +262,8 @@ if rg -q 'chainsaw-test\.ya?ml' "$yq_log"; then
 	echo 'Chainsaw test documents were reparsed with yq.' >&2
 	exit 1
 fi
-[[ "$(wc -l <"$shell_case_log" | tr -d ' ')" -eq 63 ]]
-rg -Fx 'Harness shell cases passed: cases=63 parallel_jobs=4.' "$passing_output" || {
+[[ "$(wc -l <"$shell_case_log" | tr -d ' ')" -eq 64 ]]
+rg -Fx 'Harness shell cases passed: cases=64 parallel_jobs=4.' "$passing_output" || {
 	cat "$passing_output" >&2
 	exit 1
 }
