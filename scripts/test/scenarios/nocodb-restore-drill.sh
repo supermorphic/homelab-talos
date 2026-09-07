@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Attended, catalog-coordinated NocoDB metadata and attachment restore drill.
+# Attended, catalog-coordinated NocoDB metadata restore drill.
 set -euo pipefail
 set +x
 
@@ -23,7 +23,7 @@ require_bash
 # Refuse before kubeconfig inspection or any Kubernetes request.
 expected_confirmation='restore:nocodb:metadata'
 [[ "${NOCODB_RESTORE_CONFIRM:-}" == "$expected_confirmation" ]] || {
-	echo "Refusing NocoDB restore drill: set NOCODB_RESTORE_CONFIRM=$expected_confirmation after reviewing its isolated storage and cleanup scope." >&2
+	echo "Refusing NocoDB restore drill: set NOCODB_RESTORE_CONFIRM=$expected_confirmation after reviewing its isolated PostgreSQL storage and cleanup scope." >&2
 	exit 1
 }
 
@@ -47,22 +47,17 @@ run_hash="$(printf '%s' "$run_id" | shasum -a 256 | cut -c1-12)"
 lease_holder="${TEST_CAMPAIGN_LEASE_HOLDER:-$run_id}"
 prefix="nc-restore-$run_hash"
 namespace='automation-data'
-longhorn_namespace='longhorn-system'
 database="$prefix-db"
 database_service="$prefix-db"
 database_pvc="$prefix-db-data"
 restore_job="$prefix-load"
 preflight_job="$prefix-preflight"
-attachment_volume="$prefix-attachments"
-attachment_pv="$prefix-attachments-pv"
-attachment_pvc="$prefix-attachments"
 app="$prefix-nocodb"
 app_service="$prefix-nocodb"
 request_job="$prefix-request"
 policy="$prefix-policy"
 backup_configmap=''
 kc=(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace")
-kl=(kubectl --kubeconfig "$kubeconfig" --namespace "$longhorn_namespace")
 kcluster=(kubectl --kubeconfig "$kubeconfig")
 
 umask 077
@@ -78,9 +73,9 @@ write_phase() {
     }' >"$run_dir/$phase.json"
 }
 
-write_phase assertion not-classified 'isolated metadata and attachment assertions have not completed'
+write_phase assertion not-classified 'isolated metadata assertions have not completed'
 write_phase cleanup not-classified 'run-owned restore resources have not been removed'
-write_phase recovery not-required 'production NocoDB, PostgreSQL, and claims are not modified'
+write_phase recovery not-required 'production NocoDB and PostgreSQL are not modified'
 
 verify_lease() {
 	verify_test_lease_holder "$kubeconfig" "$lease_holder" || {
@@ -356,29 +351,25 @@ cleanup() {
 	if [[ "$cleanup_ok" == true ]]; then
 		for target in "job/$request_job" "deployment/$app" "service/$app_service" \
 			"job/$restore_job" "job/$preflight_job" "statefulset/$database" "service/$database_service" \
-			"pvc/$database_pvc" "pvc/$attachment_pvc" "ciliumnetworkpolicy/$policy"; do
+			"pvc/$database_pvc" "ciliumnetworkpolicy/$policy"; do
 			delete_owned "$namespace" "$target" || cleanup_ok=false
 		done
-		delete_owned - "persistentvolume/$attachment_pv" || cleanup_ok=false
-		delete_owned "$longhorn_namespace" "volumes.longhorn.io/$attachment_volume" || cleanup_ok=false
 	fi
 	for target in "job/$request_job" "deployment/$app" "service/$app_service" \
 		"job/$restore_job" "job/$preflight_job" "statefulset/$database" "service/$database_service" \
-		"pvc/$database_pvc" "pvc/$attachment_pvc" "ciliumnetworkpolicy/$policy"; do
+		"pvc/$database_pvc" "ciliumnetworkpolicy/$policy"; do
 		resource_absent "$namespace" "$target" || cleanup_ok=false
 	done
-	resource_absent - "persistentvolume/$attachment_pv" || cleanup_ok=false
-	resource_absent "$longhorn_namespace" "volumes.longhorn.io/$attachment_volume" || cleanup_ok=false
 	rm -rf -- "$temp_dir" || cleanup_ok=false
 	[[ ! -e "$temp_dir" ]] || cleanup_ok=false
 	if [[ "$cleanup_ok" == true ]]; then
-		write_phase cleanup passed 'all and only run-owned workloads, policy, Services, PV, PVCs, and Longhorn Volume are absent'
+		write_phase cleanup passed 'all and only run-owned workloads, policy, Services, and the isolated PostgreSQL PVC are absent'
 	else
 		write_phase cleanup failed 'one or more run-owned resources remain or failed the ownership guard'
 		[[ "$final_exit" -ne 0 ]] || final_exit=1
 	fi
 	if [[ "$original_exit" -ne 0 && "$(yq -r '.status' "$run_dir/assertion.json" 2>/dev/null)" == not-classified ]]; then
-		write_phase assertion failed 'isolated metadata or attachment recovery did not satisfy the fixed contract'
+		write_phase assertion failed 'isolated metadata recovery did not satisfy the fixed contract'
 	fi
 	exit "$final_exit"
 }
@@ -396,20 +387,12 @@ route_targets_service "$app_service" "$routes" && {
 
 for target in "job/$request_job" "deployment/$app" "service/$app_service" \
 	"job/$restore_job" "job/$preflight_job" "statefulset/$database" "service/$database_service" \
-	"pvc/$database_pvc" "pvc/$attachment_pvc" "ciliumnetworkpolicy/$policy"; do
+	"pvc/$database_pvc" "ciliumnetworkpolicy/$policy"; do
 	resource_absent "$namespace" "$target" || {
 		echo "Refusing to adopt existing $namespace/$target." >&2
 		exit 1
 	}
 done
-resource_absent - "persistentvolume/$attachment_pv" || {
-	echo "Refusing to adopt existing persistentvolume/$attachment_pv." >&2
-	exit 1
-}
-resource_absent "$longhorn_namespace" "volumes.longhorn.io/$attachment_volume" || {
-	echo "Refusing to adopt existing Longhorn Volume $attachment_volume." >&2
-	exit 1
-}
 
 # Bind the restore Job to the exact generated script source selected by both the local
 # package and the current deployed backup CronJob. A stale ConfigMap with matching keys
@@ -454,57 +437,7 @@ CONFIGMAP_NAME="$deployed_backup_configmap" jq -e '
 }
 backup_configmap="$deployed_backup_configmap"
 
-production_pvc="$temp_dir/production-pvc.json"
-production_pv="$temp_dir/production-pv.json"
-"${kc[@]}" get persistentvolumeclaim nocodb-data --output json >"$production_pvc"
-production_pv_name="$(jq -er '
-  select(.status.phase == "Bound") |
-  select(.spec.resources.requests.storage == "10Gi" and .spec.storageClassName == "longhorn") |
-  select(.spec.accessModes == ["ReadWriteOnce"]) |
-  select(.metadata.uid | type == "string" and length > 0) |
-  .spec.volumeName | select(type == "string" and length > 0)
-' "$production_pvc")" || {
-	echo 'The production NocoDB attachment claim is not Bound to one PV.' >&2
-	exit 1
-}
-"${kcluster[@]}" get persistentvolume "$production_pv_name" --output json >"$production_pv"
-production_volume="$(PVC_UID="$(jq -r '.metadata.uid' "$production_pvc")" jq -er '
-  select(.spec.claimRef.namespace == "automation-data" and .spec.claimRef.name == "nocodb-data") |
-  select(.spec.claimRef.uid == env.PVC_UID) |
-  select(.spec.capacity.storage == "10Gi" and .spec.accessModes == ["ReadWriteOnce"]) |
-  select(.spec.csi.driver == "driver.longhorn.io") |
-  .spec.csi.volumeHandle | select(type == "string" and length > 0)
-' "$production_pv")" || {
-	echo 'The production NocoDB claim does not have an exact Longhorn volume binding.' >&2
-	exit 1
-}
-
-backup_target="$temp_dir/backup-target.json"
-backups="$temp_dir/backups.json"
-"${kl[@]}" get backuptargets.longhorn.io default --output json >"$backup_target"
-jq -e '
-  .metadata.name == "default" and .status.available == true and
-  (.spec.backupTargetURL | type == "string" and length > 0)
-' "$backup_target" >/dev/null || {
-	echo 'The default off-cluster Longhorn BackupTarget is not available.' >&2
-	exit 1
-}
-"${kl[@]}" get backups.longhorn.io --output json >"$backups"
-
-# Reject missing or malformed attachment recovery candidates before creating anything.
-jq -e --arg volume "$production_volume" '
-  [.items[] | select(.status.state == "Completed" and
-    .status.volumeName == $volume and .spec.backupTargetName == "default")] as $matching |
-  ($matching | length) > 0 and all($matching[];
-    .status.volumeSize == "10737418240" and
-    (.status.url | type == "string" and test("^[A-Za-z][A-Za-z0-9+.-]*://[^[:space:]]+$")) and
-    (.status.backupCreatedAt | fromdateiso8601 | type == "number"))
-' "$backups" >/dev/null || {
-	echo 'No complete attachment recovery candidates with the required URL and size.' >&2
-	exit 1
-}
-
-# This observational Job is the only resource allowed before both recovery inputs pass.
+# This observational Job is the only resource allowed before the logical recovery input passes.
 preflight_manifest="$temp_dir/preflight.yaml"
 nocodb_restore_preflight_manifest "$preflight_job" "$run_hash" >"$preflight_manifest"
 create_owned_manifests "$namespace" "$preflight_manifest"
@@ -515,18 +448,6 @@ selected_bundle="$(sed -n 's/^selected_bundle=//p' "$temp_dir/preflight.log")"
 	echo 'The logical preflight omitted exact complete-bundle evidence.' >&2
 	exit 1
 }
-selected_backup="$(nocodb_restore_select_attachment_backup "$selected_bundle" \
-	"$production_volume" default "$backups")" || {
-	echo 'No completed off-cluster attachment backup matches the bound NocoDB volume.' >&2
-	exit 1
-}
-selected_backup_url="$(jq -er '.url' <<<"$selected_backup")"
-selected_backup_size="$(jq -er '.volumeSize' <<<"$selected_backup")"
-nocodb_restore_require_inputs "/backups/$selected_bundle" "$selected_backup_url" "$selected_backup_size" || {
-	echo 'Both metadata and attachment recovery inputs are required.' >&2
-	exit 1
-}
-
 delete_owned "$namespace" "job/$preflight_job"
 resource_absent "$namespace" "job/$preflight_job"
 
@@ -560,44 +481,25 @@ nocodb_restore_validate_source_registry "$temp_dir/source-registry.json" || {
 	exit 1
 }
 
-volume_manifest="$temp_dir/attachment-volume.yaml"
-binding_manifest="$temp_dir/attachment-binding.yaml"
-nocodb_restore_longhorn_volume_manifest "$attachment_volume" "$selected_backup_url" \
-	"$selected_backup_size" "$run_hash" >"$volume_manifest"
-verify_lease
-create_owned_manifests "$longhorn_namespace" "$volume_manifest"
-volume_healthy=false
-for _ in {1..180}; do
-	"${kl[@]}" get "volumes.longhorn.io/$attachment_volume" --output json \
-		>"$temp_dir/attachment-volume.json"
-	if nocodb_restore_validate_volume_pre_bind "$attachment_volume" "$selected_backup_url" \
-		"$selected_backup_size" "$temp_dir/attachment-volume.json"; then
-		volume_healthy=true
-		break
-	fi
-	sleep 5
-done
-[[ "$volume_healthy" == true ]] || {
-	echo 'The restored attachment Volume did not complete the detached restore phase.' >&2
+database_service_json="$temp_dir/database-service.json"
+"${kc[@]}" get service "$database_service" --output json >"$database_service_json"
+DATABASE_SERVICE="$database_service" RUN_HASH="$run_hash" jq -e '
+  .kind == "Service" and .metadata.name == env.DATABASE_SERVICE and
+  .metadata.namespace == "automation-data" and
+  .metadata.labels."homelab-talos/test" == "nocodb-restore-drill" and
+  .metadata.labels."homelab-talos/run-id" == env.RUN_HASH and
+  .metadata.labels."homelab-talos/role" == "database" and
+  .spec.selector == .metadata.labels and
+  (.spec.clusterIP | type == "string" and test("^[0-9A-Fa-f:.]+$") and . != "None")
+' "$database_service_json" >/dev/null || {
+	echo 'The isolated PostgreSQL Service identity, selector, or ClusterIP is invalid.' >&2
 	exit 1
 }
-
-nocodb_restore_static_binding_manifests "$attachment_pv" "$attachment_pvc" \
-	"$attachment_volume" "$run_hash" >"$binding_manifest"
-verify_lease
-create_owned_manifests - "$binding_manifest"
-"${kc[@]}" wait --for=jsonpath='{.status.phase}'=Bound \
-	"persistentvolumeclaim/$attachment_pvc" --timeout=10m >/dev/null
-
-database_ip="$("${kc[@]}" get service "$database_service" --output jsonpath='{.spec.clusterIP}')"
-[[ "$database_ip" =~ ^[0-9A-Fa-f:.]+$ && "$database_ip" != None ]] || {
-	echo 'The isolated PostgreSQL Service has no usable ClusterIP.' >&2
-	exit 1
-}
+database_ip="$(jq -r '.spec.clusterIP' "$database_service_json")"
 app_manifest="$temp_dir/application.yaml"
 live_policy="$temp_dir/live-policy.json"
-nocodb_restore_application_manifests "$app" "$app_service" "$attachment_pvc" \
-	"$database_ip" "$run_hash" >"$app_manifest"
+nocodb_restore_application_manifests "$app" "$app_service" "$database_ip" \
+	"$run_hash" >"$app_manifest"
 "${kc[@]}" get "ciliumnetworkpolicy/$policy" --output json >"$live_policy"
 nocodb_restore_validate_isolation "$app_manifest" "$live_policy" \
 	"$database_ip" "$run_hash" || {
@@ -608,21 +510,6 @@ nocodb_restore_validate_isolation "$app_manifest" "$live_policy" \
 verify_lease
 create_owned_manifests "$namespace" "$app_manifest"
 "${kc[@]}" rollout status "deployment/$app" --timeout=20m >/dev/null
-
-volume_healthy=false
-for _ in {1..180}; do
-	"${kl[@]}" get "volumes.longhorn.io/$attachment_volume" --output json >"$temp_dir/attachment-volume.json"
-	if nocodb_restore_validate_volume_attached "$attachment_volume" "$selected_backup_url" \
-		"$selected_backup_size" "$temp_dir/attachment-volume.json"; then
-		volume_healthy=true
-		break
-	fi
-	sleep 5
-done
-[[ "$volume_healthy" == true ]] || {
-	echo 'The mounted attachment Volume did not become healthy with exactly two RW replicas.' >&2
-	exit 1
-}
 
 # This drill creates no HTTPRoute. Recheck after Service creation before any request Job.
 "${kcluster[@]}" get httproutes.gateway.networking.k8s.io --all-namespaces --output json >"$routes"
@@ -645,13 +532,12 @@ RUN_HASH="$run_hash" SELECTED_BUNDLE="$selected_bundle" \
 	yq --null-input --output-format json '{
     "runHash":strenv(RUN_HASH),
     "selectedAutomationDataBundle":strenv(SELECTED_BUNDLE),
-    "completedAttachmentBackupSelected":true,
-    "restoredAttachmentVolumeHealthy":true,
+    "freshApplicationScratch":true,
     "hostAliasesIndependentlyValidated":true,
     "networkPolicyIndependentlyValidated":true,
-    "workspaceBaseViewSourcesAndAttachmentValidated":true,
+    "workspaceBaseViewSourcesAndRecordsValidated":true,
     "postRecoveryBundle":strenv(POST_RECOVERY_BUNDLE),
     "productionMutation":false
   }' >"$run_dir/nocodb-restore-evidence.json"
-write_phase assertion passed 'isolated NocoDB metadata, encrypted sources, privilege denials, saved view, attachment checksum, and fresh backup passed'
-echo "NocoDB metadata and attachment restore drill passed with $selected_bundle; cleanup will remove all run-owned resources."
+write_phase assertion passed 'isolated NocoDB metadata, encrypted sources, privilege denials, saved view, record references, and fresh backup passed'
+echo "NocoDB metadata restore drill passed with $selected_bundle; cleanup will remove all run-owned resources."

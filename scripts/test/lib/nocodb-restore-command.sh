@@ -232,115 +232,10 @@ nocodb_restore_validate_source_registry() { # <registry-json>
   ' "$registry_json" >/dev/null
 }
 
-nocodb_restore_select_attachment_backup() { # <bundle-name> <volume> <target> <backups-json>
-	local bundle_name="$1" volume_name="$2" target_name="$3" backups_json="$4"
-	[[ "$bundle_name" =~ ^automation-data-([0-9]{4})([0-9]{2})([0-9]{2})T([0-9]{2})([0-9]{2})([0-9]{2})Z$ ]] || return 1
-	local bundle_time="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}T${BASH_REMATCH[4]}:${BASH_REMATCH[5]}:${BASH_REMATCH[6]}Z"
-	jq -er --arg volume "$volume_name" --arg target "$target_name" \
-		--arg captured_at "$bundle_time" '
-      ($captured_at | fromdateiso8601) as $captured_epoch |
-      [.items[] | select(
-        .status.state == "Completed" and
-        .status.volumeName == $volume and
-        .spec.backupTargetName == $target and
-        (.status.backupCreatedAt | type == "string") and
-        (.status.url | type == "string" and length > 0)
-      ) | {
-        url: .status.url,
-        volumeSize: .status.volumeSize,
-        created: (.status.backupCreatedAt | fromdateiso8601),
-        distance: (((.status.backupCreatedAt | fromdateiso8601) - $captured_epoch) | fabs),
-        name: .metadata.name
-      }] |
-      sort_by(.distance, .created, .name) |
-      if length > 0 then .[0] | {name, url, volumeSize} |
-        if .volumeSize == "10737418240" and (.url | test("^[A-Za-z][A-Za-z0-9+.-]*://[^\\s]+$"))
-        then . else error("invalid attachment backup URL or size") end
-      else error("no completed matching backup") end
-    ' "$backups_json"
-}
-
-nocodb_restore_require_inputs() { # <bundle-path> <backup-url> <volume-size>
-	local bundle_path="$1" backup_url="$2" volume_size="$3" bundle_name
-	bundle_name="$(basename "$bundle_path")"
-	[[ "$bundle_name" =~ ^automation-data-[0-9]{8}T[0-9]{6}Z$ &&
-		"$backup_url" =~ ^[A-Za-z][A-Za-z0-9+.-]*://[^[:space:]]+$ && "$volume_size" == 10737418240 ]]
-}
-
-nocodb_restore_longhorn_volume_manifest() { # <volume-name> <backup-url> <volume-size> <run-hash>
-	local volume_name="$1" backup_url="$2" volume_size="$3" run_hash="$4"
-	[[ "$volume_size" == 10737418240 ]] || return 1
-	VOLUME_NAME="$volume_name" BACKUP_URL="$backup_url" VOLUME_SIZE="$volume_size" RUN_HASH="$run_hash" \
-		yq --null-input --output-format yaml '
-      {
-        "apiVersion": "longhorn.io/v1beta2",
-        "kind": "Volume",
-        "metadata": {
-          "name": strenv(VOLUME_NAME),
-          "namespace": "longhorn-system",
-          "labels": {
-            "homelab-talos/test": "nocodb-restore-drill",
-            "homelab-talos/run-id": strenv(RUN_HASH),
-            "homelab-talos/role": "attachments"
-          }
-        },
-        "spec": {
-          "accessMode": "rwo",
-          "backupTargetName": "default",
-          "dataEngine": "v1",
-          "dataLocality": "disabled",
-          "frontend": "blockdev",
-          "fromBackup": strenv(BACKUP_URL),
-          "numberOfReplicas": 2,
-          "size": strenv(VOLUME_SIZE),
-          "staleReplicaTimeout": 30
-        }
-      }
-    '
-}
-
-nocodb_restore_static_binding_manifests() { # <pv-name> <pvc-name> <volume-name> <run-hash>
-	local pv_name="$1" pvc_name="$2" volume_name="$3" run_hash="$4"
+nocodb_restore_application_manifests() { # <app> <service> <database-ip> <run-hash>
+	local app_name="$1" service_name="$2" database_ip="$3" run_hash="$4"
 	# shellcheck disable=SC2016 # yq evaluates its own variables.
-	PV_NAME="$pv_name" PVC_NAME="$pvc_name" VOLUME_NAME="$volume_name" RUN_HASH="$run_hash" \
-		yq --null-input --output-format yaml '
-      {
-        "homelab-talos/test": "nocodb-restore-drill",
-        "homelab-talos/run-id": strenv(RUN_HASH)
-      } as $labels |
-      [
-        {
-          "apiVersion": "v1", "kind": "PersistentVolume",
-          "metadata": {"name": strenv(PV_NAME), "labels": ($labels * {"homelab-talos/role":"attachment-pv"})},
-          "spec": {
-            "accessModes": ["ReadWriteOnce"], "capacity": {"storage":"10Gi"},
-            "claimRef": {"name":strenv(PVC_NAME),"namespace":"automation-data"},
-            "csi": {
-              "driver":"driver.longhorn.io", "fsType":"ext4",
-              "volumeAttributes":{"numberOfReplicas":"2","staleReplicaTimeout":"30"},
-              "volumeHandle":strenv(VOLUME_NAME)
-            },
-            "persistentVolumeReclaimPolicy":"Retain", "storageClassName":"longhorn",
-            "volumeMode":"Filesystem"
-          }
-        },
-        {
-          "apiVersion":"v1", "kind":"PersistentVolumeClaim",
-          "metadata":{"name":strenv(PVC_NAME),"namespace":"automation-data","labels":($labels * {"homelab-talos/role":"attachment-pvc"})},
-          "spec": {
-            "accessModes":["ReadWriteOnce"], "resources":{"requests":{"storage":"10Gi"}},
-            "storageClassName":"longhorn", "volumeMode":"Filesystem", "volumeName":strenv(PV_NAME)
-          }
-        }
-      ] | .[] | split_doc
-    '
-}
-
-nocodb_restore_application_manifests() { # <app> <service> <pvc> <database-ip> <run-hash>
-	local app_name="$1" service_name="$2" pvc_name="$3" database_ip="$4" run_hash="$5"
-	# shellcheck disable=SC2016 # yq evaluates its own variables.
-	APP_NAME="$app_name" SERVICE_NAME="$service_name" PVC_NAME="$pvc_name" \
-		DATABASE_IP="$database_ip" RUN_HASH="$run_hash" \
+	APP_NAME="$app_name" SERVICE_NAME="$service_name" DATABASE_IP="$database_ip" RUN_HASH="$run_hash" \
 		yq --null-input --output-format yaml '
       {
         "homelab-talos/test":"nocodb-restore-drill",
@@ -375,7 +270,6 @@ nocodb_restore_application_manifests() { # <app> <service> <pvc> <database-ip> <
                   {"name":"NC_CONNECTION_ENCRYPT_KEY","valueFrom":{"secretKeyRef":{"name":"nocodb-credentials","key":"NC_CONNECTION_ENCRYPT_KEY"}}},
                   {"name":"NC_SITE_URL","value":("http://" + strenv(SERVICE_NAME) + ".automation-data.svc.cluster.local:8080")},
                   {"name":"NC_ALLOW_LOCAL_EXTERNAL_DBS","value":"true"},
-                  {"name":"NC_SECURE_ATTACHMENTS","value":"false"},
                   {"name":"NC_DISABLE_TELE","value":"true"},
                   {"name":"NC_DISABLE_SUPPORT_CHAT","value":"true"}
                 ],
@@ -384,7 +278,7 @@ nocodb_restore_application_manifests() { # <app> <service> <pvc> <database-ip> <
                 "securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true,"runAsNonRoot":true,"runAsUser":1000,"runAsGroup":1000},
                 "volumeMounts":[{"name":"data","mountPath":"/usr/app/data"},{"name":"tmp","mountPath":"/tmp"}]
               }],
-              "volumes":[{"name":"data","persistentVolumeClaim":{"claimName":strenv(PVC_NAME)}},{"name":"tmp","emptyDir":{}}]
+              "volumes":[{"name":"data","emptyDir":{}},{"name":"tmp","emptyDir":{}}]
             }}
           }
         }
@@ -435,6 +329,29 @@ nocodb_restore_validate_isolation() { # <app-yaml> <policy-yaml> <database-ip> <
   ' "$app_yaml" >/dev/null || return 1
 
 	# shellcheck disable=SC2016 # yq evaluates its own variables.
+	yq ea -e '
+    select(.kind == "Deployment") | [
+      ([.spec.template.spec.volumes[]? | select(has("persistentVolumeClaim"))] | length) == 0,
+      ([.spec.template.spec.volumes[]? | select(.name == "data" and (.emptyDir | type) == "!!map" and (.emptyDir | length) == 0)] | length) == 1,
+      ([.spec.template.spec.volumes[]? | select(.name == "tmp" and (.emptyDir | type) == "!!map" and (.emptyDir | length) == 0)] | length) == 1,
+      ([.spec.template.spec.containers[0].volumeMounts[]? | [.name, .mountPath] | join("=")] | sort | join(",")) == "data=/usr/app/data,tmp=/tmp",
+      ([.spec.template.spec.containers[0].env[]? | select(.name == "NC_SECURE_ATTACHMENTS")] | length) == 0,
+      ([.spec.template.spec.containers[0].env[]? | select(
+        .name == "DATABASE_URL" and .valueFrom.secretKeyRef.name == "nocodb-credentials" and
+        .valueFrom.secretKeyRef.key == "DATABASE_URL"
+      )] | length) == 1,
+      ([.spec.template.spec.containers[0].env[]? | select(
+        .name == "NC_AUTH_JWT_SECRET" and .valueFrom.secretKeyRef.name == "nocodb-credentials" and
+        .valueFrom.secretKeyRef.key == "NC_AUTH_JWT_SECRET"
+      )] | length) == 1,
+      ([.spec.template.spec.containers[0].env[]? | select(
+        .name == "NC_CONNECTION_ENCRYPT_KEY" and .valueFrom.secretKeyRef.name == "nocodb-credentials" and
+        .valueFrom.secretKeyRef.key == "NC_CONNECTION_ENCRYPT_KEY"
+      )] | length) == 1
+    ] | all
+  ' "$app_yaml" >/dev/null || return 1
+
+	# shellcheck disable=SC2016 # yq evaluates its own variables.
 	RUN_HASH="$run_hash" yq -e '
     .kind == "CiliumNetworkPolicy" and .metadata.namespace == "automation-data" and
     .metadata.labels."homelab-talos/test" == "nocodb-restore-drill" and
@@ -468,30 +385,6 @@ nocodb_restore_validate_isolation() { # <app-yaml> <policy-yaml> <database-ip> <
         ":" + .port + "/" + .protocol)
     ] | sort | join(",")) == "nocodb>database:5432/TCP,nocodb>kube-dns:53/TCP,nocodb>kube-dns:53/UDP,request>kube-dns:53/TCP,request>kube-dns:53/UDP,request>nocodb:8080/TCP,restore>database:5432/TCP,restore>kube-dns:53/TCP,restore>kube-dns:53/UDP"
   ' "$policy_yaml" >/dev/null
-}
-
-nocodb_restore_validate_volume_pre_bind() { # <volume-name> <backup-url> <volume-size> <volume-json>
-	local volume_name="$1" backup_url="$2" volume_size="$3" volume_json="$4"
-	VOLUME_NAME="$volume_name" BACKUP_URL="$backup_url" VOLUME_SIZE="$volume_size" jq -e '
-    .metadata.name == env.VOLUME_NAME and
-    .spec.fromBackup == env.BACKUP_URL and .spec.size == env.VOLUME_SIZE and
-    .spec.numberOfReplicas == 2 and
-    .status.state == "detached" and .status.robustness == "unknown" and
-    .status.restoreRequired == false and .status.replicaModeMap == {}
-  ' "$volume_json" >/dev/null
-}
-
-nocodb_restore_validate_volume_attached() { # <volume-name> <backup-url> <volume-size> <volume-json>
-	local volume_name="$1" backup_url="$2" volume_size="$3" volume_json="$4"
-	VOLUME_NAME="$volume_name" BACKUP_URL="$backup_url" VOLUME_SIZE="$volume_size" jq -e '
-    .metadata.name == env.VOLUME_NAME and
-    .spec.fromBackup == env.BACKUP_URL and .spec.size == env.VOLUME_SIZE and
-    .spec.numberOfReplicas == 2 and
-    .status.state == "attached" and
-    .status.robustness == "healthy" and .status.restoreRequired == false and
-    ([.status.replicaModeMap[]] | length) == 2 and
-    all(.status.replicaModeMap[]; . == "RW")
-  ' "$volume_json" >/dev/null
 }
 
 nocodb_restore_resource_is_owned() { # <run-hash> <resource-json>

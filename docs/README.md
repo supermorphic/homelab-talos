@@ -35,7 +35,7 @@
 
 - [Recover n8n](runbooks/n8n-recovery.md) — Choose pod, Longhorn, logical-restore, or full-reconstruction recovery while preserving the matching encrypted key.
 - [Recover automation-data PostgreSQL](runbooks/automation-data-recovery.md) — Recover the shared domain database platform and prove the restored n8n credential-to-role-verifier chain.
-- [Recover NocoDB](runbooks/nocodb-recovery.md) — Choose pod, attachment-volume, metadata, source-operation, or paired recovery while preserving the connection encryption key.
+- [Recover NocoDB](runbooks/nocodb-recovery.md) — Choose pod, metadata, source-operation, or isolated logical-bundle recovery while preserving the connection encryption key.
 - [Recover Plex remote playback with Relay](runbooks/plex-relay-fallback.md) — Diagnose Relay fallback when direct remote access is unavailable.
 - [Recover Plex and Plexamp Sonos playback](runbooks/plex-sonos-recovery.md) — Restore native Sonos library access or Plexamp player control.
 - [Respond to Plex network alerts](runbooks/plex-network-alerts.md) — Diagnose, contain, and recover Plex traffic, telemetry, and workload-policy alerts.
@@ -71,4 +71,4 @@
 - [025 — Node Lifecycle and Maintenance](specs/025-node-lifecycle-and-maintenance.md) — Defines guarded node disruption, maintenance, and recovery acceptance across Talos, Kubernetes, and Longhorn.
 - [026 — Automation Data PostgreSQL Platform](specs/026-automation-data-postgresql-platform.md) — Records the shared workflow database, provisioning, backup, monitoring, and acceptance evidence.
 - [027 — Deterministic CI Gates](specs/027-deterministic-ci-gates.md) — Defines Stage 2 category selection, evidence ownership, merge enforcement, and staged rollout.
-- [026 — NocoDB Operator UI](specs/026-nocodb-operator-ui.md) — Defines the staged private UI, separate read and operator surfaces, asynchronous source lifecycle, and paired recovery.
+- [026 — NocoDB Operator UI](specs/026-nocodb-operator-ui.md) — Defines the staged private UI, separate read and operator surfaces, asynchronous source lifecycle, and metadata-only recovery.

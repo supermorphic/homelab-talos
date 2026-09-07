@@ -16,7 +16,7 @@ deployment_count="$(yq ea -r 'select(.kind == "Deployment") | .metadata.name' "$
 [[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "nocodb") | .spec.replicas' "$helm_render")" == '1' ]] ||
   fail 'NocoDB must render exactly one replica'
 [[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "nocodb") | .spec.strategy.type' "$helm_render")" == 'Recreate' ]] ||
-  fail 'the RWO NocoDB Deployment must use Recreate'
+  fail 'the single NocoDB Deployment must use Recreate'
 [[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "nocodb") | (.spec.strategy | has("rollingUpdate"))' "$helm_render")" == 'false' ]] ||
   fail 'the Recreate NocoDB Deployment must not retain a rollingUpdate strategy'
 ! yq ea -r 'select(.kind == "Deployment") | .metadata.name' "$helm_render" | rg -q 'worker' ||
@@ -27,14 +27,31 @@ deployment_count="$(yq ea -r 'select(.kind == "Deployment") | .metadata.name' "$
   fail 'the NocoDB image digest is not selected'
 [[ "$(yq ea -r 'select(.kind == "Service" and .metadata.name == "nocodb") | [.spec.type, .spec.ports[0].port] | join(",")' "$helm_render")" == 'ClusterIP,8080' ]] ||
   fail 'the rendered NocoDB Service must expose only ClusterIP TCP/8080'
-[[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "nocodb") | .spec.template.spec.volumes[] | select(.persistentVolumeClaim.claimName == "nocodb-data") | .persistentVolumeClaim.claimName' "$helm_render")" == 'nocodb-data' ]] ||
-  fail 'the NocoDB Deployment must mount only the existing nocodb-data claim'
-[[ "$(yq ea -o=json -I=0 'select(.kind == "Deployment" and .metadata.name == "nocodb") | .spec.template.spec.volumes' "$helm_render")" == \
-  '[{"name":"data","persistentVolumeClaim":{"claimName":"nocodb-data"}}]' ]] ||
-  fail 'the NocoDB Deployment must have only the expected persistent volume'
-[[ "$(yq ea -o=json -I=0 'select(.kind == "Deployment" and .metadata.name == "nocodb") | [.spec.template.spec.containers[] | {"name": .name, "volumeMounts": (.volumeMounts // [])}]' "$helm_render")" == \
-  '[{"name":"nocodb","volumeMounts":[{"name":"data","mountPath":"/usr/app/data"}]}]' ]] ||
-  fail 'the NocoDB Deployment must have only the expected attachment volume mount'
+render_has_native_storage() { # <render>
+  if yq ea -e 'select(.kind == "PersistentVolumeClaim")' "$1" >/dev/null 2>&1; then
+    return 0
+  fi
+  yq ea -e 'select(.kind == "Deployment" and .metadata.name == "nocodb") |
+    ([.spec.template.spec.volumes[]? | select(has("persistentVolumeClaim"))] | length) > 0 or
+    ([.spec.template.spec.containers[]?.env[]? | select(.name == "NC_SECURE_ATTACHMENTS")] | length) > 0
+  ' "$1" >/dev/null 2>&1
+}
+! render_has_native_storage "$source_render" || fail 'the NocoDB source render contains a claim or native-attachment override'
+! render_has_native_storage "$helm_render" || fail 'the NocoDB chart render contains a claim mount or native-attachment override'
+
+# Mutation checks prove that the negative render contract catches each forbidden shape.
+yq ea 'select(.kind == "Deployment" and .metadata.name == "nocodb")' \
+  "$helm_render" >"${helm_render}.claim-mutation"
+yq -i '.spec.template.spec.volumes = [{"name":"data","persistentVolumeClaim":{"claimName":"nocodb-data"}}]' \
+  "${helm_render}.claim-mutation"
+render_has_native_storage "${helm_render}.claim-mutation" ||
+  fail 'the render guard accepted a NocoDB claim mount'
+yq ea 'select(.kind == "Deployment" and .metadata.name == "nocodb")' \
+  "$helm_render" >"${helm_render}.attachment-env-mutation"
+yq -i '.spec.template.spec.containers[0].env += [{"name":"NC_SECURE_ATTACHMENTS","value":"false"}]' \
+  "${helm_render}.attachment-env-mutation"
+render_has_native_storage "${helm_render}.attachment-env-mutation" ||
+  fail 'the render guard accepted a native-attachment override'
 ! yq ea -r 'select(.kind == "ServiceMonitor") | .metadata.name' "$source_render" "$helm_render" | rg -q . ||
   fail 'NocoDB must not render a ServiceMonitor'
 ! rg -q 'NC_INVITE_ONLY_SIGNUP|career' "$source_render" "$helm_render" ||
@@ -44,8 +61,6 @@ deployment_count="$(yq ea -r 'select(.kind == "Deployment") | .metadata.name' "$
 [[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "nocodb") | .spec.template.metadata.annotations."observability.supermorphic.com/logs" // "enabled"' "$helm_render")" != 'disabled' ]] ||
   fail 'the NocoDB pod must remain in namespace-wide Alloy log collection'
 
-[[ "$(yq ea -r 'select(.kind == "PersistentVolumeClaim" and .metadata.name == "nocodb-data") | [.spec.resources.requests.storage, .spec.accessModes[0], .spec.storageClassName, .metadata.annotations."kustomize.toolkit.fluxcd.io/prune"] | join(",")' "$source_render")" == '10Gi,ReadWriteOnce,longhorn,disabled' ]] ||
-  fail 'the retained 10Gi Longhorn RWO attachment PVC is incorrect'
 [[ "$(yq ea -r 'select(.kind == "HTTPRoute" and .metadata.name == "nocodb") | [.spec.hostnames[0], .spec.parentRefs[0].namespace, .spec.parentRefs[0].name, .spec.parentRefs[0].sectionName, .spec.rules[0].matches[0].path.value, .spec.rules[0].backendRefs[0].name, .spec.rules[0].backendRefs[0].port] | join(",")' "$source_render")" == 'nocodb.lab.supermorphic.com,networking,internal,https,/,nocodb,8080' ]] ||
   fail 'the private NocoDB route is incorrect'
 [[ "$(yq ea -r 'select(.kind == "HTTPRoute" and .metadata.name == "nocodb") | .metadata.annotations."external-dns.k8s.io/audience"' "$source_render")" == 'internal' ]] ||
@@ -122,15 +137,15 @@ values='kubernetes/apps/automation-data/nocodb/app/values.yaml'
   fail 'the NocoDB Recreate values must explicitly clear rollingUpdate'
 [[ "$(yq -r '[.image.registry, .image.repository, .image.tag, .image.digest] | join(",")' "$values")" == 'docker.io,nocodb/nocodb,2026.08.2,sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9' ]] ||
   fail 'the NocoDB image value pin is incorrect'
-[[ "$(yq -r '[.externalDatabase.existingSecret, .externalDatabase.existingSecretUrlKey, .auth.existingSecret, .persistence.existingClaim, .service.type, .service.port, .nocodb.publicUrl] | join(",")' "$values")" == 'nocodb-credentials,DATABASE_URL,nocodb-credentials,nocodb-data,ClusterIP,8080,https://nocodb.lab.supermorphic.com' ]] ||
+[[ "$(yq -r '[.externalDatabase.existingSecret, .externalDatabase.existingSecretUrlKey, .auth.existingSecret, .persistence.enabled, (.persistence | has("existingClaim")), .service.type, .service.port, .nocodb.publicUrl] | join(",")' "$values")" == 'nocodb-credentials,DATABASE_URL,nocodb-credentials,false,false,ClusterIP,8080,https://nocodb.lab.supermorphic.com' ]] ||
   fail 'the NocoDB database, auth, persistence, service, or URL values are incorrect'
 [[ "$(yq -r '[.nocodb.disableMux, .nocodb.disableTelemetry] | join(",")' "$values")" == 'true,true' ]] ||
   fail 'the NocoDB privacy values are incorrect'
-[[ "$(yq -r '[.nocodb.extraEnvVars[] | [.name, (.value // .valueFrom.secretKeyRef.name), (.valueFrom.secretKeyRef.key // "")] | join("/")] | sort | join(",")' "$values")" == 'NC_ADMIN_EMAIL/nocodb-credentials/NC_ADMIN_EMAIL,NC_ADMIN_PASSWORD/nocodb-credentials/NC_ADMIN_PASSWORD,NC_ALLOW_LOCAL_EXTERNAL_DBS/true/,NC_DISABLE_SUPPORT_CHAT/true/,NC_SECURE_ATTACHMENTS/false/' ]] ||
+[[ "$(yq -r '[.nocodb.extraEnvVars[] | [.name, (.value // .valueFrom.secretKeyRef.name), (.valueFrom.secretKeyRef.key // "")] | join("/")] | sort | join(",")' "$values")" == 'NC_ADMIN_EMAIL/nocodb-credentials/NC_ADMIN_EMAIL,NC_ADMIN_PASSWORD/nocodb-credentials/NC_ADMIN_PASSWORD,NC_ALLOW_LOCAL_EXTERNAL_DBS/true/,NC_DISABLE_SUPPORT_CHAT/true/' ]] ||
   fail 'the NocoDB explicit environment contract is incorrect'
 ! rg -q 'envFrom|NC_INVITE_ONLY_SIGNUP|NC_REDIS_URL' "$values" ||
   fail 'NocoDB values must not bulk-load credentials or configure unsupported settings'
-[[ "$(yq -r '[.resources[]] | sort | join(",")' kubernetes/apps/automation-data/nocodb/app/kustomization.yaml)" == './ciliumnetworkpolicy.yaml,./helmrelease.yaml,./httproute.yaml,./metadata-bootstrap-job.yaml,./ocirepository.yaml,./persistentvolumeclaim.yaml' ]] ||
+[[ "$(yq -r '[.resources[]] | sort | join(",")' kubernetes/apps/automation-data/nocodb/app/kustomization.yaml)" == './ciliumnetworkpolicy.yaml,./helmrelease.yaml,./httproute.yaml,./metadata-bootstrap-job.yaml,./ocirepository.yaml' ]] ||
   fail 'the NocoDB app kustomization resource set is incorrect'
 
 ks='kubernetes/apps/automation-data/nocodb/ks.yaml'

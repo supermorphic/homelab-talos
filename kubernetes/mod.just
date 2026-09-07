@@ -45,8 +45,8 @@ nocodb-source-rotate domain access_kind: require-bash
 nocodb-access-test: require-bash
     @scripts/test/run-catalog-suite.sh test.nocodb-access -- scripts/test/scenarios/nocodb-access.sh {{quote(kubeconfig)}}
 
-# Restore NocoDB metadata and its closest attachment backup into isolated run-owned
-# resources. Guard: NOCODB_RESTORE_CONFIRM='restore:nocodb:metadata'.
+# Restore one complete NocoDB logical bundle into isolated PostgreSQL with fresh
+# application scratch. Guard: NOCODB_RESTORE_CONFIRM='restore:nocodb:metadata'.
 nocodb-restore-drill: require-bash
     @scripts/test/run-catalog-suite.sh test.nocodb-restore-drill -- scripts/test/scenarios/nocodb-restore-drill.sh {{quote(kubeconfig)}}
 

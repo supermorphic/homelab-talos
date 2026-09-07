@@ -97,51 +97,6 @@ if nocodb_restore_validate_source_registry "$fixture/source-registry-error.json"
 	fail 'a non-ready retained source was accepted'
 fi
 
-backups="$fixture/backups.json"
-jq -n '{items: [
-  {metadata:{name:"backup-before"},spec:{backupTargetName:"default"},status:{state:"Completed",volumeName:"pvc-nocodb-volume",backupCreatedAt:"2026-09-04T02:20:00Z",url:"s3://off-cluster/backup-before",volumeSize:"10737418240"}},
-  {metadata:{name:"backup-closest"},spec:{backupTargetName:"default"},status:{state:"Completed",volumeName:"pvc-nocodb-volume",backupCreatedAt:"2026-09-04T02:31:00Z",url:"s3://off-cluster/backup-closest",volumeSize:"10737418240"}},
-  {metadata:{name:"backup-failed"},spec:{backupTargetName:"default"},status:{state:"Error",volumeName:"pvc-nocodb-volume",backupCreatedAt:"2026-09-04T02:30:00Z",url:"s3://off-cluster/backup-failed",volumeSize:"10737418240"}},
-  {metadata:{name:"backup-wrong-volume"},spec:{backupTargetName:"default"},status:{state:"Completed",volumeName:"different-volume",backupCreatedAt:"2026-09-04T02:30:00Z",url:"s3://off-cluster/backup-wrong-volume",volumeSize:"10737418240"}}
-]}' >"$backups"
-selected_backup="$(nocodb_restore_select_attachment_backup \
-	automation-data-20260904T023000Z pvc-nocodb-volume default "$backups")" ||
-	fail 'closest completed attachment backup selection failed'
-[[ "$(jq -cS . <<<"$selected_backup")" == '{"name":"backup-closest","url":"s3://off-cluster/backup-closest","volumeSize":"10737418240"}' ]] ||
-	fail 'the closest completed backup for the bound volume was not selected'
-selected_backup_url="$(jq -r '.url' <<<"$selected_backup")"
-selected_backup_size="$(jq -r '.volumeSize' <<<"$selected_backup")"
-
-jq -n '{items:[]}' >"$fixture/backups-empty.json"
-if nocodb_restore_select_attachment_backup automation-data-20260904T023000Z \
-	pvc-nocodb-volume default "$fixture/backups-empty.json" >/dev/null 2>&1; then
-	fail 'a missing Longhorn backup was accepted'
-fi
-jq '.items |= map(select(.status.volumeName != "pvc-nocodb-volume"))' \
-	"$backups" >"$fixture/backups-mismatch.json"
-if nocodb_restore_select_attachment_backup automation-data-20260904T023000Z \
-	pvc-nocodb-volume default "$fixture/backups-mismatch.json" >/dev/null 2>&1; then
-	fail 'a backup for a different Longhorn volume was selected'
-fi
-jq '.items |= map(select(.status.state != "Completed"))' \
-	"$backups" >"$fixture/backups-incomplete.json"
-if nocodb_restore_select_attachment_backup automation-data-20260904T023000Z \
-	pvc-nocodb-volume default "$fixture/backups-incomplete.json" >/dev/null 2>&1; then
-	fail 'a non-completed Longhorn backup was selected'
-fi
-
-if nocodb_restore_require_inputs "$selected_bundle" '' '' >/dev/null 2>&1; then
-	fail 'a metadata-only restore was accepted'
-fi
-if nocodb_restore_require_inputs '' "$selected_backup_url" "$selected_backup_size" >/dev/null 2>&1; then
-	fail 'an attachment-only restore was accepted'
-fi
-if nocodb_restore_require_inputs "$selected_bundle" "$selected_backup_url" '' >/dev/null 2>&1; then
-	fail 'an attachment restore without the exact backup size was accepted'
-fi
-nocodb_restore_require_inputs "$selected_bundle" "$selected_backup_url" "$selected_backup_size" ||
-	fail 'the complete metadata and attachment recovery unit was rejected'
-
 run_hash='0123456789ab'
 prefix="nc-restore-$run_hash"
 preflight_manifest="$fixture/preflight.yaml"
@@ -187,48 +142,12 @@ rm -f -- "$missing_required/databases/db-bm9jb2Ri.dump"
 if PATH="$fixture/bin:$PATH" BACKUP_DIR="$fixture/missing-required" sh -ceu "$preflight_command" >/dev/null 2>&1; then
 	fail 'logical preflight accepted a complete bundle without NocoDB metadata'
 fi
-volume_manifest="$fixture/volume.yaml"
-binding_manifest="$fixture/binding.yaml"
 app_manifest="$fixture/app.yaml"
 policy_manifest="$fixture/policy.yaml"
 
-nocodb_restore_longhorn_volume_manifest "$prefix-attachments" "$selected_backup_url" \
-	"$selected_backup_size" "$run_hash" >"$volume_manifest"
-yq -e '
-  .kind == "Volume" and .apiVersion == "longhorn.io/v1beta2" and
-  .metadata.namespace == "longhorn-system" and
-  .metadata.name == "nc-restore-0123456789ab-attachments" and
-  .metadata.labels."homelab-talos/test" == "nocodb-restore-drill" and
-  .metadata.labels."homelab-talos/run-id" == "0123456789ab" and
-  .spec.fromBackup == "s3://off-cluster/backup-closest" and
-  .spec.size == "10737418240" and
-  .spec.numberOfReplicas == 2
-' "$volume_manifest" >/dev/null || fail 'Longhorn restore Volume render is unsafe'
-
-nocodb_restore_static_binding_manifests "$prefix-attachments-pv" \
-	"$prefix-attachments" "$prefix-attachments" "$run_hash" >"$binding_manifest"
-yq ea -e '
-  select(.kind == "PersistentVolume") |
-  .metadata.name == "nc-restore-0123456789ab-attachments-pv" and
-  .spec.capacity.storage == "10Gi" and
-  (.spec.accessModes | join(",")) == "ReadWriteOnce" and
-  .spec.csi.driver == "driver.longhorn.io" and
-  .spec.csi.volumeHandle == "nc-restore-0123456789ab-attachments" and
-  .spec.claimRef.namespace == "automation-data" and
-  .spec.claimRef.name == "nc-restore-0123456789ab-attachments"
-' "$binding_manifest" >/dev/null || fail 'static attachment PV render is unsafe'
-yq ea -e '
-  select(.kind == "PersistentVolumeClaim") |
-  .metadata.namespace == "automation-data" and
-  .metadata.name == "nc-restore-0123456789ab-attachments" and
-  .spec.volumeName == "nc-restore-0123456789ab-attachments-pv" and
-  .spec.resources.requests.storage == "10Gi" and
-  (.spec.accessModes | join(",")) == "ReadWriteOnce"
-' "$binding_manifest" >/dev/null || fail 'static attachment PVC render is unsafe'
-
 isolated_ip='192.0.2.45'
 nocodb_restore_application_manifests "$prefix-nocodb" "$prefix-nocodb" \
-	"$prefix-attachments" "$isolated_ip" "$run_hash" >"$app_manifest"
+	"$isolated_ip" "$run_hash" >"$app_manifest"
 yq ea -e '
   select(.kind == "Deployment") |
   .spec.replicas == 1 and .spec.strategy.type == "Recreate" and
@@ -238,20 +157,40 @@ yq ea -e '
   .spec.template.spec.hostAliases[0].hostnames[0] == "automation-data-postgresql" and
   .spec.template.spec.hostAliases[0].hostnames[1] == "automation-data-postgresql.automation-data.svc.cluster.local" and
   (.spec.template.spec.containers | length) == 1 and
-  .spec.template.spec.containers[0].image == "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9"
+  .spec.template.spec.containers[0].image == "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9" and
+  ([.spec.template.spec.volumes[] | select(has("persistentVolumeClaim"))] | length) == 0 and
+  ([.spec.template.spec.volumes[] | select(.name == "data" and has("emptyDir"))] | length) == 1 and
+  ([.spec.template.spec.containers[0].volumeMounts[] | select(.name == "data" and .mountPath == "/usr/app/data")] | length) == 1 and
+  ([.spec.template.spec.containers[0].env[] | select(.name == "NC_SECURE_ATTACHMENTS")] | length) == 0
 ' "$app_manifest" >/dev/null || fail 'restored NocoDB application render is unsafe'
-
-# The pinned producer and restore consumer use the canonical /download/* contract.
-# Require one literal string value; a duplicate, boolean, or absent setting is unsafe.
-yq ea -o=json 'select(.kind == "Deployment")' "$app_manifest" | jq -e '
-  [.spec.template.spec.containers[0].env[] | select(.name == "NC_SECURE_ATTACHMENTS")] |
-  length == 1 and .[0].value == "false" and (.[0] | has("valueFrom") | not)
-' >/dev/null || fail 'restored NocoDB must set NC_SECURE_ATTACHMENTS exactly once to string false'
 
 nocodb_restore_policy_manifest "$prefix-policy" "$prefix-db" "$prefix-nocodb" \
 	"$prefix-request" "$run_hash" >"$policy_manifest"
 nocodb_restore_validate_isolation "$app_manifest" "$policy_manifest" \
 	"$isolated_ip" "$run_hash" || fail 'valid host redirection and exact policy were rejected'
+
+yq 'select(.kind == "Deployment") |
+  .spec.template.spec.volumes[0] = {"name":"data","persistentVolumeClaim":{"claimName":"nocodb-data"}}' \
+  "$app_manifest" >"$fixture/app-claim.yaml"
+if nocodb_restore_validate_isolation "$fixture/app-claim.yaml" "$policy_manifest" \
+	"$isolated_ip" "$run_hash" >/dev/null 2>&1; then
+	fail 'isolated recovery accepted a NocoDB claim mount'
+fi
+yq 'select(.kind == "Deployment") |
+  .spec.template.spec.containers[0].env += [{"name":"NC_SECURE_ATTACHMENTS","value":"false"}]' \
+  "$app_manifest" >"$fixture/app-attachment-env.yaml"
+if nocodb_restore_validate_isolation "$fixture/app-attachment-env.yaml" "$policy_manifest" \
+	"$isolated_ip" "$run_hash" >/dev/null 2>&1; then
+	fail 'isolated recovery accepted a native-attachment override'
+fi
+yq 'select(.kind == "Deployment") |
+  (.spec.template.spec.containers[0].env[] | select(.name == "NC_CONNECTION_ENCRYPT_KEY") |
+    .valueFrom.secretKeyRef.key) = "replacement-key"' \
+  "$app_manifest" >"$fixture/app-wrong-key-reference.yaml"
+if nocodb_restore_validate_isolation "$fixture/app-wrong-key-reference.yaml" "$policy_manifest" \
+	"$isolated_ip" "$run_hash" >/dev/null 2>&1; then
+	fail 'isolated recovery accepted a different connection-key reference'
+fi
 
 yq '.specs[2].egress[1].toEndpoints[0].matchLabels."homelab-talos/run-id" = "another-run"' \
 	"$policy_manifest" >"$fixture/policy-wrong-database.yaml"
@@ -272,51 +211,6 @@ if nocodb_restore_validate_isolation "$fixture/app-wrong-ip.yaml" "$policy_manif
 	"$isolated_ip" "$run_hash" >/dev/null 2>&1; then
 	fail 'source host redirection to a different Service IP was accepted'
 fi
-
-pre_bind_volume="$fixture/pre-bind-volume.json"
-jq -n --arg name "$prefix-attachments" --arg url "$selected_backup_url" \
-	--arg size "$selected_backup_size" '{
-  metadata:{name:$name},spec:{numberOfReplicas:2,fromBackup:$url,size:$size},
-  status:{state:"detached",robustness:"unknown",restoreRequired:false,replicaModeMap:{}}
-}' >"$pre_bind_volume"
-nocodb_restore_validate_volume_pre_bind "$prefix-attachments" "$selected_backup_url" \
-	"$selected_backup_size" "$pre_bind_volume" ||
-	fail 'a completed detached Longhorn 1.12 restore was rejected before binding'
-for mutation in attached restore-required wrong-backup wrong-size nonempty-replicas; do
-	case "$mutation" in
-	attached) expression='.status.state = "attached" | .status.robustness = "healthy" | .status.replicaModeMap = {"replica-a":"RW","replica-b":"RW"}' ;;
-	restore-required) expression='.status.restoreRequired = true' ;;
-	wrong-backup) expression='.spec.fromBackup = "s3://off-cluster/different-backup"' ;;
-	wrong-size) expression='.spec.size = "5368709120"' ;;
-	nonempty-replicas) expression='.status.replicaModeMap = {"replica-a":"RW"}' ;;
-	esac
-	jq "$expression" "$pre_bind_volume" >"$fixture/pre-bind-$mutation.json"
-	if nocodb_restore_validate_volume_pre_bind "$prefix-attachments" "$selected_backup_url" \
-		"$selected_backup_size" "$fixture/pre-bind-$mutation.json"; then
-		fail "the pre-bind gate accepted $mutation state"
-	fi
-done
-
-attached_volume="$fixture/attached-volume.json"
-jq '.status.state = "attached" | .status.robustness = "healthy" |
-  .status.replicaModeMap = {"replica-a":"RW","replica-b":"RW"}' \
-	"$pre_bind_volume" >"$attached_volume"
-nocodb_restore_validate_volume_attached "$prefix-attachments" "$selected_backup_url" \
-	"$selected_backup_size" "$attached_volume" ||
-	fail 'a mounted healthy two-replica restored volume was rejected'
-for mutation in detached failed-rebuild wrong-backup wrong-size; do
-	case "$mutation" in
-	detached) expression='.status.state = "detached" | .status.robustness = "unknown" | .status.replicaModeMap = {}' ;;
-	failed-rebuild) expression='.status.replicaModeMap["replica-b"] = "ERR"' ;;
-	wrong-backup) expression='.spec.fromBackup = "s3://off-cluster/different-backup"' ;;
-	wrong-size) expression='.spec.size = "5368709120"' ;;
-	esac
-	jq "$expression" "$attached_volume" >"$fixture/attached-$mutation.json"
-	if nocodb_restore_validate_volume_attached "$prefix-attachments" "$selected_backup_url" \
-		"$selected_backup_size" "$fixture/attached-$mutation.json"; then
-		fail "the post-mount gate accepted $mutation state"
-	fi
-done
 
 owned_resource="$fixture/owned.json"
 jq -n --arg run_hash "$run_hash" '{metadata:{labels:{

@@ -103,7 +103,7 @@ Foundation workflows preserve the same boundary:
 
 The staged NocoDB operator UI uses the automation-data PostgreSQL and private n8n
 boundaries. Its Git-managed Flux Kustomization remains suspended until attended access,
-backup, and paired restore acceptance pass:
+logical-backup, and isolated restore acceptance pass:
 
 | Command | Behavior |
 |---|---|
@@ -112,9 +112,9 @@ backup, and paired restore acceptance pass:
 | `just bootstrap nocodb` | Initialize metadata and settings and bind one NocoDB API token directly to n8n |
 | `just kube nocodb-source-sync <domain>` | Reconcile the fixed `read_model` source and eligible `operator` source for one managed domain |
 | `just kube nocodb-source-rotate <domain> <kind>` | Rotate one selected reader or operator PostgreSQL login and matching NocoDB integration |
-| `just kube nocodb-verify` | Observe workload, route, policy, attachment storage, monitoring, and backup freshness without reading application state |
-| `just kube nocodb-access-test` | Run bounded synthetic source, privilege, rotation, and persistent attachment-canary acceptance |
-| `just kube nocodb-restore-drill` | Validate paired metadata and attachment backups in isolated run-owned resources |
+| `just kube nocodb-verify` | Observe workload, route, policy, monitoring, and logical-backup freshness without reading application state |
+| `just kube nocodb-access-test` | Run bounded synthetic source, privilege, rotation, and persistent record/reference-canary acceptance |
+| `just kube nocodb-restore-drill` | Validate one complete logical bundle with isolated PostgreSQL and fresh NocoDB scratch |
 
 Source creation in NocoDB `2026.08.2` is asynchronous. Source sync records and polls the
 returned job ID, then discovers and validates the created source before it records

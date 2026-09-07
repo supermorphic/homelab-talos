@@ -28,7 +28,7 @@ endpoint="$(yq -o=json -I=0 '.config.endpoints[] | select(.name == "nocodb")' "$
   "$(yq -r '.metadata.namespace' "$rule")" == 'monitoring' && \
   "$(yq -r '.spec.groups[0].name' "$rule")" == 'nocodb' ]] || fail 'NocoDB alert rule identity is incorrect.'
 
-expected_alerts=$'NocoDBAcceptanceJobFailed\nNocoDBAcceptanceJobOverdue\nNocoDBContainerOomKilled\nNocoDBContainerRestarting\nNocoDBDown\nNocoDBMetadataBootstrapJobFailed\nNocoDBMetadataBootstrapJobOverdue\nNocoDBPersistentVolumeClaimNotBound\nNocoDBPersistentVolumeUsageCritical\nNocoDBPersistentVolumeUsageWarning\nNocoDBProbeMissing\nNocoDBWorkloadUnavailable'
+expected_alerts=$'NocoDBAcceptanceJobFailed\nNocoDBAcceptanceJobOverdue\nNocoDBContainerOomKilled\nNocoDBContainerRestarting\nNocoDBDown\nNocoDBMetadataBootstrapJobFailed\nNocoDBMetadataBootstrapJobOverdue\nNocoDBProbeMissing\nNocoDBWorkloadUnavailable'
 actual_alerts="$(yq -r '.spec.groups[0].rules[].alert' "$rule" | LC_ALL=C sort)"
 [[ "$actual_alerts" == "$expected_alerts" ]] || fail "NocoDB alert coverage is incorrect: $actual_alerts"
 
@@ -39,13 +39,12 @@ for required_expression in \
   'kube_pod_container_status_restarts_total' \
   'reason="OOMKilled"' \
   'job_name="nocodb-metadata-bootstrap"' \
-  'job_name=~"nocodb-acceptance-.*"' \
-  'kube_persistentvolumeclaim_status_phase' \
-  'kubelet_volume_stats_available_bytes' \
-  '> 70' \
-  '> 85'; do
+  'job_name=~"nocodb-acceptance-.*"'; do
   rg -Fq -- "$required_expression" "$rule" || fail "Missing required PromQL contract: $required_expression"
 done
+
+! rg -q 'persistentvolumeclaim|kubelet_volume_stats' "$rule" ||
+  fail 'NocoDB alerts must not observe application-local storage'
 
 ! rg -Fxq '  - ./nocodb.yaml' "$kustomization" || fail 'Staged NocoDB PrometheusRule must not be selected.'
 ! rg -q 'ServiceMonitor|alloy|loki' "$repo_root/kubernetes/apps/automation-data/nocodb" ||

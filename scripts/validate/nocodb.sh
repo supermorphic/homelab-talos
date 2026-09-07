@@ -12,7 +12,6 @@ for file in \
   "$app/ocirepository.yaml" \
   "$app/helmrelease.yaml" \
   "$app/values.yaml" \
-  "$app/persistentvolumeclaim.yaml" \
   "$app/httproute.yaml" \
   "$app/ciliumnetworkpolicy.yaml" \
   "$app/metadata-bootstrap-job.yaml"; do

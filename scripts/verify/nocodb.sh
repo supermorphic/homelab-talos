@@ -259,32 +259,6 @@ def normalize(value, path=()):
 raise SystemExit(0 if normalize(policy) == normalize(expected) else 1)
 ' <<<"$policy" || fail 'NocoDB CiliumNetworkPolicy identity or ports differ from the contract.'
 
-pvc="$("${kc[@]}" --namespace "$namespace" get persistentvolumeclaim nocodb-data --output json)"
-yq -p=json -e '
-  .status.phase == "Bound" and .spec.storageClassName == "longhorn" and
-  .spec.resources.requests.storage == "10Gi" and .spec.volumeName != ""
-' - >/dev/null <<<"$pvc" || fail 'NocoDB attachment PVC is not the expected Bound 10Gi Longhorn claim.'
-volume_name="$(yq -p=json -r '.spec.volumeName' - <<<"$pvc")"
-
-volumes="$("${kc[@]}" --namespace longhorn-system get volumes.longhorn.io --output json)"
-# shellcheck disable=SC2016 # yq evaluates the literal expression.
-VOLUME_NAME="$volume_name" yq -p=json -e '
-  [.items[]? | select(
-    .status.kubernetesStatus.namespace == "automation-data" and
-    .status.kubernetesStatus.pvcName == "nocodb-data" and
-    .status.kubernetesStatus.pvName == strenv(VOLUME_NAME)
-  )] as $matches |
-  [
-    (($matches | length) == 1),
-    ($matches[0].metadata.labels."recurring-job-group.longhorn.io/default" == "enabled"),
-    ($matches[0].spec.numberOfReplicas == 2),
-    ($matches[0].status.state == "attached"),
-    ($matches[0].status.robustness == "healthy"),
-    (($matches[0].status.replicaModeMap | length) == 2),
-    (([$matches[0].status.replicaModeMap[]? | select(. == "RW")] | length) == 2)
-  ] | all
-' - >/dev/null <<<"$volumes" || fail 'NocoDB Longhorn volume identity, attached health, two RW replicas, or default recurring group is invalid.'
-
 query_value() {
   local query="$1" response
   response="$(flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" "$query")" || return 1
@@ -293,9 +267,9 @@ query_value() {
 
 if [[ "$monitoring_required" == true ]]; then
   rule="$("${kc[@]}" --namespace monitoring get prometheusrule nocodb --output json)"
-  expected_rules=$'NocoDBAcceptanceJobFailed\nNocoDBAcceptanceJobOverdue\nNocoDBContainerOomKilled\nNocoDBContainerRestarting\nNocoDBDown\nNocoDBMetadataBootstrapJobFailed\nNocoDBMetadataBootstrapJobOverdue\nNocoDBPersistentVolumeClaimNotBound\nNocoDBPersistentVolumeUsageCritical\nNocoDBPersistentVolumeUsageWarning\nNocoDBProbeMissing\nNocoDBWorkloadUnavailable'
+  expected_rules=$'NocoDBAcceptanceJobFailed\nNocoDBAcceptanceJobOverdue\nNocoDBContainerOomKilled\nNocoDBContainerRestarting\nNocoDBDown\nNocoDBMetadataBootstrapJobFailed\nNocoDBMetadataBootstrapJobOverdue\nNocoDBProbeMissing\nNocoDBWorkloadUnavailable'
   actual_rules="$(yq -p=json -r '.spec.groups[]? | select(.name == "nocodb") | .rules[]?.alert' - <<<"$rule" | LC_ALL=C sort)"
-  [[ "$actual_rules" == "$expected_rules" ]] || fail 'NocoDB PrometheusRule does not expose the exact 12-alert contract.'
+  [[ "$actual_rules" == "$expected_rules" ]] || fail 'NocoDB PrometheusRule does not expose the exact nine-alert contract.'
 
   [[ "$(query_value 'gatus_results_endpoint_success{name="nocodb", group="Platform"}')" == '1' ]] ||
     fail 'NocoDB Gatus success metric is absent or unhealthy.'
@@ -313,7 +287,7 @@ VALUE="$backup_timestamp" yq -n -e 'env(VALUE) | tonumber as $value | [($value >
   fail 'Automation-data logical backup freshness is absent or older than 36 hours.'
 
 if [[ "$monitoring_required" == true ]]; then
-  echo "NocoDB read-only verification passed: phase=$phase; current Flux and Helm state, one Ready Pod, private Service and route, policy, retained attachment volume, Gatus, alerts, and automation-data logical backup freshness match their contracts."
+  echo "NocoDB read-only verification passed: phase=$phase; current Flux and Helm state, one Ready Pod, private Service and route, policy, Gatus, alerts, and automation-data logical backup freshness match their contracts."
 else
-  echo "NocoDB read-only verification passed: phase=$phase; the temporary workload, private Service and route, policy, retained attachment volume, and automation-data logical backup freshness match their direct contracts; monitoring remains intentionally unenrolled."
+  echo "NocoDB read-only verification passed: phase=$phase; the temporary workload, private Service and route, policy, and automation-data logical backup freshness match their direct contracts; monitoring remains intentionally unenrolled."
 fi

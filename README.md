@@ -17,8 +17,8 @@ exact public webhook, controlled assurance, and rollback. Use the
 database recovery.
 The [NocoDB operations guide](docs/guides/nocodb-operations.md) covers the staged private
 operator UI, domain source adoption, targeted rotation, and attended acceptance. Use the
-[NocoDB recovery runbook](docs/runbooks/nocodb-recovery.md) for pod, attachment-volume,
-metadata, source-operation, or paired recovery.
+[NocoDB recovery runbook](docs/runbooks/nocodb-recovery.md) for pod, metadata,
+source-operation, or isolated logical-bundle recovery.
 
 ## Development workflow
 
@@ -247,9 +247,9 @@ available for focused developer validation.
 | `just bootstrap nocodb` | Guardedly activate NocoDB, initialize metadata and application settings, and bind one broad API token directly to n8n | `.kube/config`; `N8N_API_KEY`; `NOCODB_BOOTSTRAP_CONFIRM=bootstrap:nocodb` | Operator-only; mutating with owned suspension rollback |
 | `just kube nocodb-source-sync <domain>` | Reconcile eligible reader and operator sources through the fixed private n8n workflow | Private source header; `NOCODB_SOURCE_SYNC_CONFIRM=sync:nocodb:<domain>` | Operator-only; state-changing source lifecycle |
 | `just kube nocodb-source-rotate <domain> <kind>` | Rotate only one selected PostgreSQL reader or operator login and matching NocoDB integration | Private source header; `NOCODB_SOURCE_ROTATE_CONFIRM=rotate:nocodb:<domain>:<kind>` | Operator-only credential administration |
-| `just kube nocodb-verify` | Observe NocoDB workload, route, policy, storage, monitoring, and backup freshness without reading application state | `.kube/config` | Operator-only and read-only |
-| `just kube nocodb-access-test` | Prove synthetic reader/operator access, denials, idempotence, targeted rotation, and the persistent attachment canary | `.kube/config`; three private webhook URLs and tokens; `NOCODB_ACCESS_TEST_CONFIRM=test:nocodb:access` | Operator-only; bounded state-changing test |
-| `just kube nocodb-restore-drill` | Restore paired metadata and attachment backups into isolated run-owned resources and prove the persistent canary | `.kube/config`; `NOCODB_RESTORE_CONFIRM=restore:nocodb:metadata` | Operator-only; temporary state-changing drill |
+| `just kube nocodb-verify` | Observe NocoDB workload, route, policy, monitoring, and logical-backup freshness without reading application state | `.kube/config` | Operator-only and read-only |
+| `just kube nocodb-access-test` | Prove synthetic reader/operator access, denials, idempotence, targeted rotation, and the persistent record/reference canary | `.kube/config`; three private webhook URLs and tokens; `NOCODB_ACCESS_TEST_CONFIRM=test:nocodb:access` | Operator-only; bounded state-changing test |
+| `just kube nocodb-restore-drill` | Restore one complete logical bundle into isolated PostgreSQL with fresh NocoDB scratch and prove metadata, source, view, credential, decision, and artifact-reference recovery | `.kube/config`; `NOCODB_RESTORE_CONFIRM=restore:nocodb:metadata` | Operator-only; temporary state-changing drill |
 | `just test smoke platform n8n` | Assert stable n8n resources without DNS, credentials, mutation, or pod exec | `.kube/config` | Operator-only and read-only |
 | `just test resilience n8n-persistence` | Recreate only the n8n and PostgreSQL pods while proving claim, sentinel, canary, and backup recovery | `.kube/config`; `N8N_CANARY_TOKEN`; `CLUSTER_CHAOS_CONFIRM=chaos:n8n-persistence` | Operator-only and disruptive |
 | `just kube cilium-status` | Print Helm, node, pod, and Cilium status | — | Read-only |

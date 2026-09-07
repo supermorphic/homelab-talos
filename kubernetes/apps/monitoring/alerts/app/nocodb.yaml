@@ -66,22 +66,3 @@ spec:
           for: 5m
           labels: {severity: warning}
           annotations: {summary: NocoDB acceptance Job is overdue}
-        - alert: NocoDBPersistentVolumeClaimNotBound
-          expr: >-
-            kube_persistentvolumeclaim_status_phase{namespace="automation-data",persistentvolumeclaim="nocodb-data",phase="Bound"} == 0
-            or absent(kube_persistentvolumeclaim_status_phase{namespace="automation-data",persistentvolumeclaim="nocodb-data",phase="Bound"})
-          for: 5m
-          labels: {severity: critical}
-          annotations: {summary: NocoDB attachment claim is absent or unbound}
-        - alert: NocoDBPersistentVolumeUsageWarning
-          expr: >-
-            (100 * (1 - max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_available_bytes{namespace="automation-data",persistentvolumeclaim="nocodb-data"}) / max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_capacity_bytes{namespace="automation-data",persistentvolumeclaim="nocodb-data"})) > 70) <= 85
-          for: 15m
-          labels: {severity: warning}
-          annotations: {summary: NocoDB attachment claim use is above 70 percent}
-        - alert: NocoDBPersistentVolumeUsageCritical
-          expr: >-
-            100 * (1 - max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_available_bytes{namespace="automation-data",persistentvolumeclaim="nocodb-data"}) / max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_capacity_bytes{namespace="automation-data",persistentvolumeclaim="nocodb-data"})) > 85
-          for: 5m
-          labels: {severity: critical}
-          annotations: {summary: NocoDB attachment claim use is above 85 percent}

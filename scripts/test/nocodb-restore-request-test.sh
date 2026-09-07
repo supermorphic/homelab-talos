@@ -32,14 +32,14 @@ globalThis.fetch = async (input, options = {}) => {
   if (url.pathname === '/api/v2/meta/workspaces' && method === 'GET') return json({list:[{id:'workspace-1',title:'Automation Data'}]});
   if (url.pathname === '/api/v2/meta/bases' && method === 'GET') return json({list:[{id:'base-acceptance',title:'issue334_acceptance',fk_workspace_id:'workspace-1'}]});
   if (url.pathname === '/api/v2/meta/workspaces/workspace-1/integrations' && method === 'GET') return json({list:[
-    {id:'integration-reader',title:'automation-data/issue334_acceptance/reader',type:'database',sub_type:'pg'},
+    {id:'integration-reader',title:'automation-data/issue334_acceptance/reader',type:fixtureCase === 'wrong-integration-type' ? 'api' : 'database',sub_type:'pg'},
     {id:'integration-operator',title:'automation-data/issue334_acceptance/operator',type:'database',sub_type:'pg'}
   ]});
   if (url.pathname === '/api/v2/meta/bases/base-acceptance/sources' && method === 'GET') return json({list:[{id:'source-reader'},{id:'source-operator'}]});
-  if (url.pathname === '/api/v2/meta/bases/base-acceptance/sources/source-reader' && method === 'GET') return json({id:'source-reader',fk_integration_id:'integration-reader',alias:'Read Model',config:{searchPath:['read_model']},is_data_readonly:true,is_schema_readonly:true});
+  if (url.pathname === '/api/v2/meta/bases/base-acceptance/sources/source-reader' && method === 'GET') return json({id:'source-reader',fk_integration_id:'integration-reader',alias:'Read Model',config:{searchPath:[fixtureCase === 'wrong-search-path' ? 'operator' : 'read_model']},is_data_readonly:true,is_schema_readonly:true});
   if (url.pathname === '/api/v2/meta/bases/base-acceptance/sources/source-operator' && method === 'GET') return json({id:'source-operator',fk_integration_id:fixtureCase === 'wrong-integration' ? 'replacement' : 'integration-operator',alias:'Operator',config:{searchPath:['operator']},is_data_readonly:false,is_schema_readonly:true});
   if (url.pathname === '/api/v2/meta/bases/base-acceptance/tables' && method === 'GET') return json({list:[
-    {id:'table-facts',title:'acceptance_facts',table_name:'acceptance_facts',schema:null,source_id:'source-reader'},
+    {id:'table-facts',title:'acceptance_facts',table_name:'acceptance_facts',schema:null,source_id:fixtureCase === 'wrong-table-source' ? 'source-operator' : 'source-reader'},
     {id:'table-decision',title:'acceptance_decision',table_name:'acceptance_decision',schema:null,source_id:'source-operator'}
   ]});
   if (url.pathname === '/api/v2/meta/tables/table-facts/views' && method === 'GET') {
@@ -121,7 +121,8 @@ rg -q '^GET /api/v2/tables/table-decision/records\?.*where=.*recovery-canary-v2'
 
 for rejected_case in missing-canary-fact duplicate-canary-fact wrong-artifact-uri wrong-artifact-sha \
   wrong-fact-id legacy-attachment missing-canary-decision duplicate-canary-decision wrong-decision \
-  legacy-decision-attachment wrong-saved-view wrong-view-title wrong-view-type wrong-integration; do
+  legacy-decision-attachment wrong-saved-view wrong-view-title wrong-view-type wrong-integration \
+  wrong-integration-type wrong-search-path wrong-table-source; do
 	IFS=$'\t' read -r case_name status output events < <(run_case "$rejected_case")
 	[[ "$status" -ne 0 ]] || record_failure "$case_name producer-contract violation was accepted"
 done

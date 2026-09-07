@@ -5,7 +5,7 @@ automation-data PostgreSQL domains. NocoDB is an optional operator interface. Po
 remains the authority boundary, and n8n remains the workflow and bulk-change boundary.
 
 The NocoDB package is present in Git with its Flux Kustomization suspended. The live
-bootstrap, source acceptance, backup pairing, and restore drill have not run. Do not
+bootstrap, source acceptance, logical backup, and restore drill have not run. Do not
 claim that NocoDB is active or recoverable until the attended rollout in this guide has
 completed and its evidence has been reviewed.
 
@@ -28,8 +28,8 @@ Start activation only when all of these conditions are true:
 - the operator has the SOPS age private key, task-scoped cluster credentials, private
   access to NocoDB and n8n, and access to the test report catalog;
 - the operator has the full-access Community-edition n8n API key needed by bootstrap;
-- the operator can retain the NocoDB connection encryption key and can access the
-  off-cluster Longhorn backup target; and
+- the operator can retain the NocoDB connection encryption key and can access complete
+  automation-data logical bundles; and
 - all secret values can stay in the operator environment, standard input, password
   manager, or encrypted Secret. Do not send them to an agent or place them in Git,
   command arguments, logs, or saved workflow executions.
@@ -66,11 +66,11 @@ The reviewed revision also revokes inherited `PUBLIC CONNECT` on the `postgres` 
 databases, including connectable templates, and accepts `CONNECT` only to the selected
 domain database. Do not restore either public grant as a source-connectivity workaround.
 
-NocoDB uses one application pod, no worker, and no Redis. It mounts a retained 10 GiB
-Longhorn `ReadWriteOnce` claim with two storage replicas. The Deployment uses `Recreate`.
-The replicas protect one volume; they are not two NocoDB instances or a backup.
-`NC_SECURE_ATTACHMENTS=false` is an explicit part of the pinned attachment-canary
-contract. Do not change it without redesigning and validating attachment recovery.
+NocoDB uses one application pod, no worker, and no Redis. Application-local storage is
+ephemeral, and the Deployment uses `Recreate`. PostgreSQL stores supported durable
+metadata, encrypted source credentials, bases, views, and application configuration.
+Do not use local NocoDB uploads for durable files. This deployment does not configure a
+native-attachment override, but it does not claim to disable every upload API.
 
 ## Recovery roots
 
@@ -78,15 +78,14 @@ Retain these materials outside the cluster:
 
 - the SOPS age private key;
 - the exact `NC_CONNECTION_ENCRYPT_KEY` stored in the encrypted NocoDB Secret;
-- access to complete automation-data logical bundles and the off-cluster Longhorn
-  backup target; and
+- access to complete automation-data logical bundles; and
 - the operator account and private n8n access needed for attended administration.
 
 The automation-data logical bundle preserves the `nocodb` metadata database, the source
-registry, optional role definitions, and role password verifiers. The Longhorn backup
-preserves attachment bytes. These systems take backups at different times and are not
-transactionally synchronized. Keep both inputs and use the closest attachment backup to
-the selected logical bundle.
+registry, optional role definitions, role password verifiers, operator decisions, and
+durable artifact metadata and references. Workflow or storage owners retain and recover
+the referenced external file bytes separately. NocoDB recovery does not fetch or validate
+those bytes and does not define a general artifact service or schema.
 
 ## Staged activation
 
@@ -210,7 +209,7 @@ More than one matching orphan is a hard stop; revoke the unexpected tokens throu
 attended review before retrying.
 
 On failure, bootstrap re-suspends only the live Kustomization mutation that carries its
-ownership marker. It preserves the PVC, metadata database, token state, and n8n
+ownership marker. It preserves the metadata database, token state, and n8n
 credential for diagnosis and retry.
 
 **Expected result:** NocoDB is healthy for attended setup, required application settings
@@ -305,10 +304,9 @@ NOCODB_VERIFY_PHASE=attended mise exec -- just kube nocodb-verify
 ```
 
 This form requires the live Kustomization and direct Deployment, Helm, Service, route,
-policy, storage, and backup observations to be healthy. It does not require the Gatus
+policy, and logical-backup observations to be healthy. It does not require the Gatus
 endpoint, PrometheusRule, or recurring verification enrollment that remain inactive
-until durable activation. The default staged check rejects an active Deployment. It
-permits the retained attachment PVC because retained storage is not an active workload.
+until durable activation. The default staged check rejects an active Deployment.
 
 After Git records `spec.suspend: false`, the plain command automatically selects the
 durable-active phase. It then also requires the exact Gatus endpoint, Prometheus rules,
@@ -419,13 +417,11 @@ identity; and feedback reports `original`, `corrected`, `corrected`, `refreshed`
 that the reader is visibly read-only and that the operator can make the intended small
 edit.
 
-### 8. Wait for paired backups and run the restore drill
+### 8. Wait for a complete logical backup and run the restore drill
 
-The automation-data logical CronJob runs at `00:30 Etc/UTC`. The default Longhorn group
-takes a daily snapshot at `02:00` and an off-cluster backup at `03:00`, retaining seven
-of each. Wait until a complete logical bundle contains the NocoDB metadata, source
-registry, optional roles, and synthetic canary metadata, and until a completed Longhorn
-backup contains the attachment bytes.
+The automation-data logical CronJob runs at `00:30 Etc/UTC`. Wait until one complete,
+checksum-valid logical bundle contains the NocoDB metadata, source registry, optional
+roles, operator decision, saved view, and synthetic artifact-reference canary.
 
 Then run the attended isolated drill:
 
@@ -434,14 +430,14 @@ NOCODB_RESTORE_CONFIRM='restore:nocodb:metadata' \
   mise exec -- just kube nocodb-restore-drill
 ```
 
-The drill selects a complete logical bundle and the closest completed attachment backup.
-It never overwrites the production database or claim and creates no HTTPRoute. For its
-full gates and cleanup behavior, see
-[Full paired recovery](../runbooks/nocodb-recovery.md#full-paired-recovery).
+The drill selects one complete logical bundle, restores it to an isolated 20 GiB
+PostgreSQL claim, and starts NocoDB with fresh ephemeral scratch. It never overwrites the
+production database and creates no HTTPRoute. For its full gates and cleanup behavior,
+see [Isolated metadata recovery](../runbooks/nocodb-recovery.md#isolated-metadata-recovery).
 
 **Expected result:** Restored metadata, source identities, PostgreSQL grants, saved view,
-and attachment bytes pass; the isolated restored database publishes a fresh logical
-bundle; and all run-owned resources are absent after cleanup.
+operator decision, and artifact metadata/reference pass; the isolated restored database
+publishes a fresh logical bundle; and all run-owned resources are absent after cleanup.
 
 ### 9. Make activation durable only after acceptance
 
@@ -462,8 +458,9 @@ For normal work:
    operator editing is required.
 4. Use `nocodb-source-rotate` only for explicit, target-bound reader or operator login
    rotation.
-5. Confirm that later automation-data and Longhorn backups contain any important new
-   NocoDB metadata and attachment state.
+5. Confirm that a later complete automation-data logical bundle contains important new
+   NocoDB metadata and record/reference state. Recover external artifact bytes through
+   their workflow or storage owner.
 
 A NocoDB outage does not block the authoritative domain database or normal n8n
 workflows. Do not broaden a NocoDB login to work around an application problem.
@@ -486,7 +483,6 @@ workflows. Do not broaden a NocoDB login to work around an application problem.
 ## Destructive administration
 
 The lifecycle workflows do not delete a NocoDB source, base, registry row, domain, or
-PostgreSQL role. They also do not delete the retained attachment claim. Decommissioning
-requires a separately reviewed, attended procedure with an explicit target, current
-ownership and dependency checks, a fresh validated logical bundle, a current attachment
-backup, and immediate precondition checks before each destructive mutation.
+PostgreSQL role. Decommissioning requires a separately reviewed, attended procedure with
+an explicit target, current ownership and dependency checks, a fresh validated logical
+bundle, and immediate precondition checks before each destructive mutation.

@@ -124,32 +124,8 @@ print(json.dumps(document, separators=(",", ":")))
       esac
       printf '%s\n' "$policy"
     fi ;;
-  *' get persistentvolumeclaim nocodb-data '*)
-    printf '%s\n' '{"spec":{"storageClassName":"longhorn","resources":{"requests":{"storage":"10Gi"}},"volumeName":"pvc-volume"},"status":{"phase":"Bound"}}' ;;
-  *' get volumes.longhorn.io '*)
-    if [[ "${FIXTURE_CASE:-healthy}" == longhorn-third-failed ]]; then
-      printf '%s\n' '{"items":[{"metadata":{"labels":{"recurring-job-group.longhorn.io/default":"enabled"}},"spec":{"numberOfReplicas":2},"status":{"kubernetesStatus":{"namespace":"automation-data","pvcName":"nocodb-data","pvName":"pvc-volume"},"state":"attached","robustness":"healthy","replicaModeMap":{"replica-a":"RW","replica-b":"RW","replica-c":"ERR"}}}]}'
-    elif [[ "${FIXTURE_CASE:-healthy}" == longhorn-attached-wo ]]; then
-      printf '%s\n' '{"items":[{"metadata":{"labels":{"recurring-job-group.longhorn.io/default":"enabled"}},"spec":{"numberOfReplicas":2},"status":{"kubernetesStatus":{"namespace":"automation-data","pvcName":"nocodb-data","pvName":"pvc-volume"},"state":"attached","robustness":"healthy","replicaModeMap":{"replica-a":"RW","replica-b":"WO"}}}]}'
-    elif [[ "${FIXTURE_CASE:-healthy}" == longhorn-missing-config ]]; then
-      printf '%s\n' '{"items":[{"metadata":{"labels":{"recurring-job-group.longhorn.io/default":"enabled"}},"status":{"kubernetesStatus":{"namespace":"automation-data","pvcName":"nocodb-data","pvName":"pvc-volume"},"state":"attached","robustness":"healthy","replicaModeMap":{"replica-a":"RW","replica-b":"RW"}}}]}'
-    elif [[ "${FIXTURE_CASE:-healthy}" == longhorn-detached-bad ]]; then
-      printf '%s\n' '{"items":[{"metadata":{"labels":{"recurring-job-group.longhorn.io/default":"enabled"}},"spec":{"numberOfReplicas":2},"status":{"kubernetesStatus":{"namespace":"automation-data","pvcName":"nocodb-data","pvName":"pvc-volume"},"state":"detached","robustness":"unknown","replicaModeMap":{"replica-a":"RW","replica-b":"ERR"}}}]}'
-    elif [[ "${FIXTURE_CASE:-healthy}" == longhorn-detached-healthy ]]; then
-      printf '%s\n' '{"items":[{"metadata":{"labels":{"recurring-job-group.longhorn.io/default":"enabled"}},"spec":{"numberOfReplicas":2},"status":{"kubernetesStatus":{"namespace":"automation-data","pvcName":"nocodb-data","pvName":"pvc-volume"},"state":"detached","robustness":"unknown","replicaModeMap":{}}}]}'
-    elif [[ "${FIXTURE_CASE:-healthy}" == longhorn-detached-rw ]]; then
-      printf '%s\n' '{"items":[{"metadata":{"labels":{"recurring-job-group.longhorn.io/default":"enabled"}},"spec":{"numberOfReplicas":2},"status":{"kubernetesStatus":{"namespace":"automation-data","pvcName":"nocodb-data","pvName":"pvc-volume"},"state":"detached","robustness":"unknown","replicaModeMap":{"replica-a":"RW"}}}]}'
-    elif [[ "${FIXTURE_CASE:-healthy}" == longhorn-detached-wo ]]; then
-      printf '%s\n' '{"items":[{"metadata":{"labels":{"recurring-job-group.longhorn.io/default":"enabled"}},"spec":{"numberOfReplicas":2},"status":{"kubernetesStatus":{"namespace":"automation-data","pvcName":"nocodb-data","pvName":"pvc-volume"},"state":"detached","robustness":"unknown","replicaModeMap":{"replica-a":"WO"}}}]}'
-    elif [[ "${FIXTURE_CASE:-healthy}" == longhorn-detached-err ]]; then
-      printf '%s\n' '{"items":[{"metadata":{"labels":{"recurring-job-group.longhorn.io/default":"enabled"}},"spec":{"numberOfReplicas":2},"status":{"kubernetesStatus":{"namespace":"automation-data","pvcName":"nocodb-data","pvName":"pvc-volume"},"state":"detached","robustness":"unknown","replicaModeMap":{"replica-a":"ERR"}}}]}'
-    elif [[ "${FIXTURE_CASE:-healthy}" == longhorn-detached-missing-config ]]; then
-      printf '%s\n' '{"items":[{"metadata":{"labels":{"recurring-job-group.longhorn.io/default":"enabled"}},"status":{"kubernetesStatus":{"namespace":"automation-data","pvcName":"nocodb-data","pvName":"pvc-volume"},"state":"detached","robustness":"unknown","replicaModeMap":{}}}]}'
-    else
-      printf '%s\n' '{"items":[{"metadata":{"labels":{"recurring-job-group.longhorn.io/default":"enabled"}},"spec":{"numberOfReplicas":2},"status":{"kubernetesStatus":{"namespace":"automation-data","pvcName":"nocodb-data","pvName":"pvc-volume"},"state":"attached","robustness":"healthy","replicaModeMap":{"replica-a":"RW","replica-b":"RW"}}}]}'
-    fi ;;
   *' get prometheusrule nocodb '*)
-    printf '%s\n' '{"spec":{"groups":[{"name":"nocodb","rules":[{"alert":"NocoDBAcceptanceJobFailed"},{"alert":"NocoDBAcceptanceJobOverdue"},{"alert":"NocoDBContainerOomKilled"},{"alert":"NocoDBContainerRestarting"},{"alert":"NocoDBDown"},{"alert":"NocoDBMetadataBootstrapJobFailed"},{"alert":"NocoDBMetadataBootstrapJobOverdue"},{"alert":"NocoDBPersistentVolumeClaimNotBound"},{"alert":"NocoDBPersistentVolumeUsageCritical"},{"alert":"NocoDBPersistentVolumeUsageWarning"},{"alert":"NocoDBProbeMissing"},{"alert":"NocoDBWorkloadUnavailable"}]}]}}' ;;
+    printf '%s\n' '{"spec":{"groups":[{"name":"nocodb","rules":[{"alert":"NocoDBAcceptanceJobFailed"},{"alert":"NocoDBAcceptanceJobOverdue"},{"alert":"NocoDBContainerOomKilled"},{"alert":"NocoDBContainerRestarting"},{"alert":"NocoDBDown"},{"alert":"NocoDBMetadataBootstrapJobFailed"},{"alert":"NocoDBMetadataBootstrapJobOverdue"},{"alert":"NocoDBProbeMissing"},{"alert":"NocoDBWorkloadUnavailable"}]}]}}' ;;
   *) echo "Unexpected Kubernetes observation: $*" >&2; exit 64 ;;
 esac
 EOF
@@ -199,9 +175,9 @@ case "$url" in
       exit 65
     }
     if [[ "${FIXTURE_CASE:-healthy}" == rules-unhealthy ]]; then
-      printf '%s\n' '{"status":"success","data":{"groups":[{"name":"nocodb","rules":[{"name":"NocoDBAcceptanceJobFailed","health":"ok","lastError":""},{"name":"NocoDBAcceptanceJobOverdue","health":"err","lastError":"bad query"},{"name":"NocoDBContainerOomKilled","health":"ok","lastError":""},{"name":"NocoDBContainerRestarting","health":"ok","lastError":""},{"name":"NocoDBDown","health":"ok","lastError":""},{"name":"NocoDBMetadataBootstrapJobFailed","health":"ok","lastError":""},{"name":"NocoDBMetadataBootstrapJobOverdue","health":"ok","lastError":""},{"name":"NocoDBPersistentVolumeClaimNotBound","health":"ok","lastError":""},{"name":"NocoDBPersistentVolumeUsageCritical","health":"ok","lastError":""},{"name":"NocoDBPersistentVolumeUsageWarning","health":"ok","lastError":""},{"name":"NocoDBProbeMissing","health":"ok","lastError":""},{"name":"NocoDBWorkloadUnavailable","health":"ok","lastError":""}]}]}}'
+      printf '%s\n' '{"status":"success","data":{"groups":[{"name":"nocodb","rules":[{"name":"NocoDBAcceptanceJobFailed","health":"ok","lastError":""},{"name":"NocoDBAcceptanceJobOverdue","health":"err","lastError":"bad query"},{"name":"NocoDBContainerOomKilled","health":"ok","lastError":""},{"name":"NocoDBContainerRestarting","health":"ok","lastError":""},{"name":"NocoDBDown","health":"ok","lastError":""},{"name":"NocoDBMetadataBootstrapJobFailed","health":"ok","lastError":""},{"name":"NocoDBMetadataBootstrapJobOverdue","health":"ok","lastError":""},{"name":"NocoDBProbeMissing","health":"ok","lastError":""},{"name":"NocoDBWorkloadUnavailable","health":"ok","lastError":""}]}]}}'
     else
-      printf '%s\n' '{"status":"success","data":{"groups":[{"name":"nocodb","rules":[{"name":"NocoDBAcceptanceJobFailed","health":"ok","lastError":""},{"name":"NocoDBAcceptanceJobOverdue","health":"ok","lastError":""},{"name":"NocoDBContainerOomKilled","health":"ok","lastError":""},{"name":"NocoDBContainerRestarting","health":"ok","lastError":""},{"name":"NocoDBDown","health":"ok","lastError":""},{"name":"NocoDBMetadataBootstrapJobFailed","health":"ok","lastError":""},{"name":"NocoDBMetadataBootstrapJobOverdue","health":"ok","lastError":""},{"name":"NocoDBPersistentVolumeClaimNotBound","health":"ok","lastError":""},{"name":"NocoDBPersistentVolumeUsageCritical","health":"ok","lastError":""},{"name":"NocoDBPersistentVolumeUsageWarning","health":"ok","lastError":""},{"name":"NocoDBProbeMissing","health":"ok","lastError":""},{"name":"NocoDBWorkloadUnavailable","health":"ok","lastError":""}]}]}}'
+      printf '%s\n' '{"status":"success","data":{"groups":[{"name":"nocodb","rules":[{"name":"NocoDBAcceptanceJobFailed","health":"ok","lastError":""},{"name":"NocoDBAcceptanceJobOverdue","health":"ok","lastError":""},{"name":"NocoDBContainerOomKilled","health":"ok","lastError":""},{"name":"NocoDBContainerRestarting","health":"ok","lastError":""},{"name":"NocoDBDown","health":"ok","lastError":""},{"name":"NocoDBMetadataBootstrapJobFailed","health":"ok","lastError":""},{"name":"NocoDBMetadataBootstrapJobOverdue","health":"ok","lastError":""},{"name":"NocoDBProbeMissing","health":"ok","lastError":""},{"name":"NocoDBWorkloadUnavailable","health":"ok","lastError":""}]}]}}'
     fi ;;
   'https://prometheus.lab.supermorphic.com/api/v1/query')
     case "$data_argument" in
@@ -328,16 +304,11 @@ expect_fixture_failure "$staged_source" suspended unsupported unknown-phase
 
 for fixture_case in worker redis-pod redis-service policy-broadened policy-extra-auth \
   policy-extra-cidr policy-extra-to-cidr policy-extra-entity policy-extra-fqdn \
-  policy-extra-expression policy-extra-l7 policy-extra-rule longhorn-third-failed \
-  longhorn-attached-wo longhorn-missing-config longhorn-detached-bad \
-  longhorn-detached-rw longhorn-detached-wo longhorn-detached-err \
-  longhorn-detached-missing-config; do
+  policy-extra-expression policy-extra-l7 policy-extra-rule; do
   expect_fixture_failure "$staged_source" active attended "$fixture_case"
 done
 expect_fixture_failure "$durable_source" active '' rules-unhealthy
 expect_fixture_failure "$durable_source" active '' gatus-down
-
-expect_fixture_failure "$staged_source" active attended longhorn-detached-healthy
 
 if PATH="$fixture/bin:$PATH" OBSERVATIONS="$fixture/observations.log" \
   "$fixture/bin/curl" --request POST 'https://prometheus.lab.supermorphic.com/api/v1/query' >/dev/null 2>&1; then
@@ -357,8 +328,6 @@ while IFS= read -r observation; do
     *' get endpointslice '*) ;;
     *' get httproute '*) ;;
     *' get ciliumnetworkpolicy '*) ;;
-    *' get persistentvolumeclaim '*) ;;
-    *' get volumes.longhorn.io '*) ;;
     *' get prometheusrule '*) ;;
     curl\ *) ;;
     *) echo "NocoDB verification contract test failed: disallowed observation: $observation" >&2; exit 1 ;;

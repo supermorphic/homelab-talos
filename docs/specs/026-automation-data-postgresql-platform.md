@@ -178,6 +178,10 @@ roles only for domains that explicitly opt in. It does not add a second domain r
 or change the core provisioning contract. The reader source row is the canonical base
 identity; an optional operator source row must use that same base.
 
+NocoDB adds no application claim or attachment-volume backup dependency. Its supported
+durable metadata, source state, operator decisions, and artifact references remain in the
+catalog-discovered logical bundle; external artifact bytes remain with their storage owner.
+
 ## PostgreSQL runtime
 
 PostgreSQL runs as one StatefulSet replica. The initial implementation uses the same

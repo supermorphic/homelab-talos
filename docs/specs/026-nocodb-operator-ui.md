@@ -1068,19 +1068,18 @@ creation, sync after job-history expiry, application restart, selected operator 
 and additive metadata refresh with existing table/view identity preserved. Full CI passes
 at `d201d6f5b67019f02fe021ee72082d772f543577`. These results are not live acceptance.
 
-On 2026-09-06 the operator removed native attachments from the initial scope and forbade
-temporary schema unlocks to enable them. This design revision replaces the attachment
-canary with PostgreSQL decision/artifact-reference records and proposes removing the
-attachment-only PVC and paired-backup dependency. Review that storage consequence before
-implementation. The staged manifests, guide, recovery runbook, and acceptance scripts
-still contain the earlier attachment design and must be reconciled together; their native
-attachment procedures are not accepted rollout instructions.
+On 2026-09-07 the repository implementation removed native attachments from the initial
+scope without relaxing source schema-readonly flags. The acceptance path uses exact
+PostgreSQL decision and artifact-reference records. The application now uses ephemeral
+scratch, has no NocoDB claim or volume alert, and recovery uses one complete logical
+bundle with isolated 20 GiB PostgreSQL and fresh NocoDB scratch. The drill retains exact
+source routing, credential, view, record, bundle, ownership, and cleanup checks. It does
+not select an attachment backup or fetch external artifact bytes.
 
-The full feedback loop, replacement of application scratch storage, revised record-based
-recovery, final integration passes, and attended acceptance remain outstanding. No native
-attachment workaround or live activation has been performed. The transient execution
-plan remains under `.tmp/plans/026-nocodb-operator-ui.md` and must be updated for this scope
-revision after design review; it is not a committed design artifact.
+The disposable full-stack integration pass and attended acceptance remain outstanding.
+No native attachment workaround or live activation has been performed. The transient
+execution plan remains under `.tmp/plans/026-nocodb-operator-ui.md`; it is not a committed
+design artifact.
 
 ## Rejected alternatives
 
