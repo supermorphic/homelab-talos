@@ -66,7 +66,8 @@ class InternalDNSEndpointTests(unittest.TestCase):
                             }
                         ],
                         "matches": [
-                            {"path": {"type": "Exact", "value": "/webhook/platform-canary"}}
+                            {"path": {"type": "Exact", "value": "/webhook/platform-canary"}},
+                            {"path": {"type": "Exact", "value": "/webhook/theirstack-jobs"}},
                         ],
                     }
                 ],

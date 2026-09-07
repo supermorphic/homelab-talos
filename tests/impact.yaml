@@ -84,11 +84,10 @@ conditional_paths:
     - scripts/diagnose/flux-alerts.sh
     - scripts/verify/logging.sh
     - scripts/verify/alertmanager-ntfy.sh
-    - scripts/verify/flux-exporter-parity.sh
+    - scripts/verify/monitoring.sh
     - scripts/test/flux-alerts-diagnostics-test.sh
     - scripts/test/flux-alert-delivery-test.sh
-    - scripts/test/flux-exporter-parity-test.sh
-    - scripts/test/flux-exporter-parity-verify-test.sh
+    - scripts/test/monitoring-verify-test.sh
     - scripts/test/logging-verify-test.sh
     - scripts/test/monitoring-alloy-logs-validator-test.sh
     - scripts/test/monitoring-loki-validator-test.sh

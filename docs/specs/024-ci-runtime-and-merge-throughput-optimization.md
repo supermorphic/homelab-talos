@@ -1217,11 +1217,11 @@ The PR is not yet merged at this checkpoint; post-merge shadow observations, spl
 execution, and selective enforcement remain pending. Local correctness fixtures can
 cover change classes absent from natural PRs without creating synthetic public PRs.
 
-After integrating current main, the general harness retains 64 unique shell identities:
-22 `core`, 20 `observability`, three `automation`, and 19 `ci-framework`. These include
-the original 60 cases, the CI workflow contract, and three newly merged Flux exporter
-cases. Core production-validator Python regressions have their own discovery directory
-instead of sharing the framework-only root discovery. The catalog contains 121 unique
+After integrating current main, the general harness retains 63 unique shell identities:
+22 `core`, 19 `observability`, three `automation`, and 19 `ci-framework`. These include
+the original 60 cases, the CI workflow contract, and the retained bundled Flux exporter and monitoring verifier
+cases. The dedicated-exporter parity experiment was removed by main in PR #379. Core production-validator Python regressions have their own discovery directory
+instead of sharing the framework-only root discovery. The catalog contains 120 unique
 suite identities. Its full `ci` execution contains 43 suite identities: 32
 `core`, seven `observability`, three `automation`, and one `ci-framework`.
 

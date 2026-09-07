@@ -44,7 +44,8 @@ class PublicWebhookRouteTests(unittest.TestCase):
                             }
                         ],
                         "matches": [
-                            {"path": {"type": "Exact", "value": "/webhook/platform-canary"}}
+                            {"path": {"type": "Exact", "value": "/webhook/platform-canary"}},
+                            {"path": {"type": "Exact", "value": "/webhook/theirstack-jobs"}},
                         ],
                     }
                 ],
@@ -77,7 +78,7 @@ class PublicWebhookRouteTests(unittest.TestCase):
         self.write("extra.yml", extra)
         process = self.run_validator("foundation.sh")
         self.assertEqual(process.returncode, 1, process.stderr)
-        self.assertIn("exactly one complete Platform Canary HTTPRoute contract", process.stderr)
+        self.assertIn("exactly one complete HTTPRoute contract", process.stderr)
 
     def test_missing_route_and_changed_contract_fail(self):
         (self.apps / "approved.json").unlink()
@@ -88,7 +89,7 @@ class PublicWebhookRouteTests(unittest.TestCase):
         self.write("changed.yaml", changed)
         process = self.run_validator()
         self.assertEqual(process.returncode, 1, process.stderr)
-        self.assertIn("exactly one complete Platform Canary HTTPRoute contract", process.stderr)
+        self.assertIn("exactly one complete HTTPRoute contract", process.stderr)
 
 
 if __name__ == "__main__":

@@ -10,11 +10,11 @@ contracts:
       - scripts/validate/internal-dns-endpoints.sh
     required_tests:
       - python:scripts/test/core/test_internal_dns_endpoints.py
-  flux-exporter-parity-verifier:
+  monitoring-verifier:
     changed_inputs:
-      - scripts/verify/flux-exporter-parity.sh
+      - scripts/verify/monitoring.sh
     required_tests:
-      - shell:flux-exporter-parity-verifier
+      - shell:monitoring-verifier
   monitoring-flux-exporter-validator:
     changed_inputs:
       - scripts/validate/monitoring.sh

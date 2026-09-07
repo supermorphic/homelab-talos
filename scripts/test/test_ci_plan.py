@@ -152,11 +152,10 @@ class ClassificationTests(unittest.TestCase):
     def test_observability_implementations_select_owned_tests(self):
         cases = {
             "scripts/diagnose/flux-alerts.sh": ("core", "observability"),
-            "scripts/verify/flux-exporter-parity.sh": ("core", "observability"),
+            "scripts/verify/monitoring.sh": ("core", "observability"),
             "scripts/verify/logging.sh": ("core", "observability"),
             "scripts/verify/alertmanager-ntfy.sh": ("core", "observability"),
-            "scripts/test/flux-exporter-parity-test.sh": ("core", "observability"),
-            "scripts/test/flux-exporter-parity-verify-test.sh": ("core", "observability"),
+            "scripts/test/monitoring-verify-test.sh": ("core", "observability"),
             "scripts/test/monitoring-flux-exporter-test.sh": ("core", "observability"),
             "kubernetes/mod.just": ("core", "observability", "automation", "ci-framework"),
         }
