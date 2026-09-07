@@ -1190,7 +1190,7 @@ and dated acceptance results.
 - [n8n Wait node persistence behavior](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.wait/)
 - [PostgreSQL 17 privileges](https://www.postgresql.org/docs/17/ddl-priv.html)
 - [PostgreSQL 17 role attributes](https://www.postgresql.org/docs/17/role-attributes.html)
-- [Automation-data PostgreSQL specification](025-automation-data-postgresql-platform.md)
+- [Automation-data PostgreSQL specification](026-automation-data-postgresql-platform.md)
 - [Repository command lifecycle](021-repository-command-lifecycle.md)
 
 ## Pull request linkage
