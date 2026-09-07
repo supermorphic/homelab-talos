@@ -130,7 +130,10 @@ terminal_job_states = {"completed", "failed"}
 
 
 def normalized_path(url):
-    require(host in url, f"NocoDB URL does not use the fixed service host: {url}")
+    require(
+        url.startswith(host + "/") or url.startswith("={{ '" + host + "/"),
+        f"NocoDB URL does not use the fixed service host: {url}",
+    )
     suffix = url.split(host, 1)[1]
     if "/workspaces/" in suffix and "/integrations" in suffix:
         return "/api/v2/meta/workspaces/:workspaceId/integrations"
@@ -1038,6 +1041,21 @@ for node in postgres_nodes:
     if node["name"] in {"Clear Feedback Residue", "Cleanup Feedback Fact"} | runtime_names:
         require(node.get("alwaysOutputData") is True, f"{node['name']} must fail closed through a zero-row result.")
 
+clear_feedback = by_name.get("Clear Feedback Residue", {}).get("parameters", {})
+require(
+    "WHERE id = $3 AND run_id = $1" in clear_feedback.get("query", "")
+    and "WHERE run_id = $1 AND run_id <>" not in clear_feedback.get("query", "")
+    and clear_feedback.get("options", {}).get("queryReplacement")
+    == "={{ [$json.runId, $json.factId, $json.residueDecisionId] }}",
+    "Pre-feedback decision cleanup must target at most one independently observed exact row.",
+)
+cleanup_fact = by_name.get("Cleanup Feedback Fact", {}).get("parameters", {})
+require(
+    "WHERE id = $1 AND run_id = $2 AND id <> -334" in cleanup_fact.get("query", "")
+    and cleanup_fact.get("options", {}).get("queryReplacement") == "={{ [$json.factId, $json.runId] }}",
+    "Feedback fact cleanup must bind the exact non-reserved fact identity.",
+)
+
 notes = by_name.get("Acceptance Setup", {}).get("parameters", {}).get("content", "")
 for label in (
     "automation-data/issue334_acceptance/migrator",
@@ -1051,6 +1069,60 @@ for name in sorted(migrator_names | runtime_names):
 
 http_nodes = [node for node in nodes if node.get("type") == "n8n-nodes-base.httpRequest"]
 require(http_nodes, "The acceptance workflow must use the NocoDB Operator API.")
+host = "http://nocodb.automation-data.svc.cluster.local:8080"
+
+
+def normalized_path(url):
+    require(host in url, f"NocoDB URL does not use the fixed service host: {url}")
+    suffix = url.split(host, 1)[1]
+    if suffix.endswith("/views' }}"):
+        return "/api/v2/meta/tables/:tableId/views"
+    if suffix.endswith("/share' }}"):
+        return "/api/v2/meta/tables/:tableId/share"
+    if suffix.endswith("/shared' }}"):
+        return "/api/v2/meta/bases/:baseId/shared"
+    if "/sources/" in suffix:
+        return "/api/v2/meta/bases/:baseId/sources/:sourceId"
+    if suffix.endswith("/sources' }}"):
+        return "/api/v2/meta/bases/:baseId/sources"
+    if suffix.endswith("/tables' }}"):
+        return "/api/v2/meta/bases/:baseId/tables"
+    if suffix.endswith("/records' }}"):
+        return "/api/v2/tables/:tableId/records"
+    return suffix.rstrip("/")
+
+
+expected_http = {
+    "List Acceptance Bases": ("GET", "/api/v2/meta/bases"),
+    "List Acceptance Sources": ("GET", "/api/v2/meta/bases/:baseId/sources"),
+    "Get Acceptance Reader Source": ("GET", "/api/v2/meta/bases/:baseId/sources/:sourceId"),
+    "Get Acceptance Operator Source": ("GET", "/api/v2/meta/bases/:baseId/sources/:sourceId"),
+    "List Acceptance Tables": ("GET", "/api/v2/meta/bases/:baseId/tables"),
+    "Get Acceptance Base Share": ("GET", "/api/v2/meta/bases/:baseId/shared"),
+    "Get Reader Shared Views": ("GET", "/api/v2/meta/tables/:tableId/share"),
+    "Get Operator Shared Views": ("GET", "/api/v2/meta/tables/:tableId/share"),
+    "List Cleanup Decisions": ("GET", "/api/v2/tables/:tableId/records"),
+    "Delete Cleanup Page": ("DELETE", "/api/v2/tables/:tableId/records"),
+    "Insert Acceptance Decision": ("POST", "/api/v2/tables/:tableId/records"),
+    "Read Inserted Decision": ("GET", "/api/v2/tables/:tableId/records"),
+    "Update Acceptance Decision": ("PATCH", "/api/v2/tables/:tableId/records"),
+    "Read Updated Decision": ("GET", "/api/v2/tables/:tableId/records"),
+    "Try Protected Column Update": ("PATCH", "/api/v2/tables/:tableId/records"),
+    "Try Reader Insert": ("POST", "/api/v2/tables/:tableId/records"),
+    "Delete Probe Decision": ("DELETE", "/api/v2/tables/:tableId/records"),
+    "Confirm Probe Cleanup": ("GET", "/api/v2/tables/:tableId/records"),
+    "Confirm Cleanup Absence": ("GET", "/api/v2/tables/:tableId/records"),
+    "Read Acceptance Facts": ("GET", "/api/v2/tables/:tableId/records"),
+    "Get Recovery Saved View": ("GET", "/api/v2/meta/tables/:tableId/views"),
+    "Read Recovery Fact": ("GET", "/api/v2/tables/:tableId/records"),
+    "Read Recovery Decision": ("GET", "/api/v2/tables/:tableId/records"),
+    "List Feedback Residue": ("GET", "/api/v2/tables/:tableId/records"),
+    "Insert Feedback Decision": ("POST", "/api/v2/tables/:tableId/records"),
+    "Read Refreshed Fact": ("GET", "/api/v2/tables/:tableId/records"),
+    "Read Cleanup Fact": ("GET", "/api/v2/tables/:tableId/records"),
+    "Read Retained Recovery Fact": ("GET", "/api/v2/tables/:tableId/records"),
+}
+require({node["name"] for node in http_nodes} == set(expected_http), "Acceptance HTTP node set is not exact.")
 for node in http_nodes:
     parameters = node.get("parameters", {})
     require(
@@ -1059,8 +1131,9 @@ for node in http_nodes:
         f"{node['name']} must use Header Auth.",
     )
     require(
-        "http://nocodb.automation-data.svc.cluster.local:8080/" in parameters.get("url", ""),
-        f"{node['name']} has an unapproved API host.",
+        (parameters.get("method", "GET"), normalized_path(parameters.get("url", "")))
+        == expected_http[node["name"]],
+        f"{node['name']} has an unapproved HTTP method or API path.",
     )
     require(not node.get("credentials"), f"{node['name']} embeds a credential ID.")
 
@@ -1082,6 +1155,29 @@ require(
     and {item.get("name"): str(item.get("value")) for item in recovery_decision.get("queryParameters", {}).get("parameters", [])}
     == {"where": "(run_id,eq,recovery-canary-v2)", "limit": "2"},
     "Recovery decision must use one exact bounded operator query.",
+)
+for name, expected_query in (
+    ("List Feedback Residue", {"where": "={{ '(run_id,eq,' + encodeURIComponent($json.runId) + ')' }}", "limit": "2"}),
+    ("Read Cleanup Fact", {"where": "={{ '(id,eq,' + $('Prepare Cleanup Fact').first().json.factId + ')~and(run_id,eq,' + encodeURIComponent($('Prepare Cleanup Fact').first().json.runId) + ')' }}", "limit": "2"}),
+    ("Read Retained Recovery Fact", {"where": "(id,eq,-334)~and(run_id,eq,recovery-canary-v2)", "limit": "2"}),
+):
+    parameters = by_name.get(name, {}).get("parameters", {})
+    query = {item.get("name"): str(item.get("value")) for item in parameters.get("queryParameters", {}).get("parameters", [])}
+    require(query == expected_query, f"{name} must use its exact bounded identity query.")
+
+share_nodes = {
+    name: by_name[name].get("parameters", {})
+    for name in ("Get Acceptance Base Share", "Get Reader Shared Views", "Get Operator Shared Views")
+}
+require(
+    all(parameters.get("method", "GET") == "GET" for parameters in share_nodes.values()),
+    "Acceptance public-share checks must remain GET-only.",
+)
+reader_read = by_name.get("Read Acceptance Facts", {}).get("parameters", {})
+require(
+    {item.get("name"): str(item.get("value")) for item in reader_read.get("queryParameters", {}).get("parameters", [])}
+    == {"limit": "1"},
+    "The acceptance probe must retain its one-record reader bound.",
 )
 
 connections = workflow.get("connections", {})
@@ -1114,7 +1210,9 @@ for source, target in (
     ("Require Recovery Fact", "Read Recovery Decision"),
     ("Read Recovery Decision", "Require Recovery Decision"),
     ("Require Recovery Decision", "Prepare Acceptance Response"),
-    ("Prepare Feedback Fact", "Clear Feedback Residue"),
+    ("Prepare Feedback Fact", "List Feedback Residue"),
+    ("List Feedback Residue", "Require Feedback Residue Bounded"),
+    ("Require Feedback Residue Bounded", "Clear Feedback Residue"),
     ("Clear Feedback Residue", "Publish Initial Feedback Fact"),
     ("Publish Initial Feedback Fact", "Require Initial Runtime Fact"),
     ("Require Initial Runtime Fact", "Insert Feedback Decision"),
@@ -1130,10 +1228,40 @@ for source, target in (
     ("Prepare Feedback Response", "Respond"),
     ("Require Cleanup Absent", "Prepare Cleanup Fact"),
     ("Prepare Cleanup Fact", "Cleanup Feedback Fact"),
-    ("Cleanup Feedback Fact", "Require Cleanup Fact"),
+    ("Cleanup Feedback Fact", "Read Cleanup Fact"),
+    ("Read Cleanup Fact", "Require Cleanup Fact Absent"),
+    ("Require Cleanup Fact Absent", "Read Retained Recovery Fact"),
+    ("Read Retained Recovery Fact", "Require Cleanup Fact"),
     ("Require Cleanup Fact", "Respond"),
 ):
     require(target in outgoing(source), f"Acceptance graph must route {source} to {target}.")
+require(
+    "Get Acceptance Reader Source" in outgoing("Keep Acceptance Sources")
+    and "Get Acceptance Operator Source" in outgoing("Capture Acceptance Reader Source")
+    and "List Acceptance Tables" in outgoing("Capture Acceptance Operator Source"),
+    "Acceptance must read both exact source configurations before resolving reflected tables.",
+)
+require(
+    "Get Acceptance Base Share" in outgoing("Resolve Acceptance Tables")
+    and "Get Reader Shared Views" in outgoing("Require Acceptance Base Private")
+    and "Get Operator Shared Views" in outgoing("Require Reader Shares Empty")
+    and "Cleanup Only" in outgoing("Require Operator Shares Empty"),
+    "Acceptance must validate the base and both exact table share surfaces before operations.",
+)
+require(
+    "Insert Acceptance Decision" in outgoing("Require Reader Facts Read"),
+    "The successful bounded reader GET must be verified before write probes.",
+)
+require(
+    "Cleanup Unexpected Reader Insert" in outgoing("Reader Insert Denied")
+    and "Fail Unexpected Reader Insert" in outgoing("Cleanup Unexpected Reader Insert"),
+    "An unexpectedly permitted reader insert must be cleaned before failure.",
+)
+require(
+    "List Cleanup Decisions" in outgoing("Continue Cleanup")
+    and "Require Cleanup Absent" in outgoing("Confirm Cleanup Absence"),
+    "Decision cleanup must page within its bound and independently prove absence.",
+)
 
 response_predecessors = {
     source
@@ -1234,6 +1362,105 @@ for (const mutate of [
   }
 }
 
+const privateBase = execute(
+  'Require Acceptance Base Private',
+  { uuid: null, roles: null, fk_custom_url_id: null },
+  { 'Resolve Acceptance Tables': resolved },
+)[0].json;
+for (const body of [{ roles: null }, { uuid: 'public-base-uuid', roles: 'viewer' }]) {
+  if (!rejects('Require Acceptance Base Private', body, { 'Resolve Acceptance Tables': resolved }, /acceptance_base_share_invalid/)) {
+    throw new Error('missing or non-null base share UUID was accepted');
+  }
+}
+const noReaderShares = execute(
+  'Require Reader Shares Empty', { list: [], pageInfo: { totalRows: 0, isLastPage: true } },
+  { 'Require Acceptance Base Private': privateBase },
+)[0].json;
+const noOperatorShares = execute(
+  'Require Operator Shares Empty', { list: [], pageInfo: { totalRows: 0, isLastPage: true } },
+  { 'Require Reader Shares Empty': noReaderShares },
+)[0].json;
+if (noOperatorShares.publicSharing.views.length !== 2) throw new Error('private table share evidence was not retained');
+for (const [name, lookup] of [
+  ['Require Reader Shares Empty', { 'Require Acceptance Base Private': privateBase }],
+  ['Require Operator Shares Empty', { 'Require Reader Shares Empty': noReaderShares }],
+]) {
+  for (const body of [{ list: [{ id: 'view-one', uuid: 'shared-view' }] }, { unexpected: [] }]) {
+    if (!rejects(name, body, lookup, /acceptance_table_share_invalid/)) {
+      throw new Error(`${name} accepted a public or malformed share collection`);
+    }
+  }
+}
+
+const readerReadContext = { ...resolved, operation: 'probe', runId: 'run-one' };
+const readerRead = execute('Require Reader Facts Read', {
+  statusCode: 200,
+  body: { list: [{ id: -334, fact: 'artifact-available' }], pageInfo: { totalRows: 1 } },
+  context: readerReadContext,
+})[0].json;
+if (readerRead.readerRead !== true) throw new Error('successful bounded reader GET was not verified');
+if (!rejects('Require Reader Facts Read', { statusCode: 200, body: {}, context: readerReadContext }, {}, /reader_read_invalid/)) {
+  throw new Error('malformed reader GET was accepted');
+}
+const protectedContext = { ...readerRead, recordId: 7 };
+const protectedDenial = execute('Capture Protected Update Denial', {
+  statusCode: 400,
+  body: {
+    error: 'ERR_DATABASE_OP_FAILED', code: '42501',
+    message: "The database user does not have permission to access 'acceptance_decision'.",
+  },
+  context: protectedContext,
+})[0].json;
+if (protectedDenial.protectedUpdateDenied !== true) throw new Error('exact PostgreSQL authorization denial was not accepted');
+for (const response of [
+  { statusCode: 500, body: { message: 'network failure' }, context: protectedContext },
+  { statusCode: 400, body: { error: 'ERR_DATABASE_OP_FAILED', code: '23505', message: 'duplicate' }, context: protectedContext },
+]) {
+  if (!rejects('Capture Protected Update Denial', response, {}, /protected_update_denial_invalid/)) {
+    throw new Error('non-authorization protected-update error was accepted');
+  }
+}
+const negativeOne = execute('Prepare Reader Negative Probe', {}, { 'Capture Protected Update Denial': { ...protectedDenial, runId: 'run-one' } })[0].json;
+const negativeTwo = execute('Prepare Reader Negative Probe', {}, { 'Capture Protected Update Denial': { ...protectedDenial, runId: 'run-two' } })[0].json;
+if (negativeOne.readerProbeId === negativeTwo.readerProbeId || negativeOne.readerProbeFact !== 'forbidden:run-one') {
+  throw new Error('reader negative probe is not unique and run-bound');
+}
+const readerDenial = execute('Evaluate Reader Insert Denial', {
+  statusCode: 403,
+  body: { error: 'ERR_FORBIDDEN', message: "Forbidden - Source 'Read Model' is read-only" },
+  context: negativeOne,
+})[0].json;
+if (readerDenial.readerInsertDenied !== true || readerDenial.unexpectedlyPermitted !== false) {
+  throw new Error('exact read-only source denial was not accepted');
+}
+const readerUnexpected = execute('Evaluate Reader Insert Denial', {
+  statusCode: 200, body: { id: negativeOne.readerProbeId }, context: negativeOne,
+})[0].json;
+if (readerUnexpected.unexpectedlyPermitted !== true) throw new Error('unexpected reader insert did not route to cleanup');
+if (!rejects('Evaluate Reader Insert Denial', {
+  statusCode: 400, body: { error: 'ERR_DUPLICATE_RECORD', message: 'duplicate key' }, context: negativeOne,
+}, {}, /reader_insert_denial_invalid/)) throw new Error('duplicate residue created a false reader-denial pass');
+
+const cleanupContext = { operation: 'cleanup', runId: 'run-one', cleanupPageCount: 0, removedCount: 0 };
+const cleanupPage = execute('Prepare Cleanup Page', {
+  ...cleanupContext, rows: [{ id: 1, run_id: 'run-one' }, { id: 2, run_id: 'run-one' }],
+})[0].json;
+if (!cleanupPage.hasRows || cleanupPage.cleanupPageCount !== 1 || cleanupPage.deleteRows.length !== 2) {
+  throw new Error('cleanup page was not bounded and prepared');
+}
+const cleanupDone = execute('Prepare Cleanup Page', { ...cleanupPage, rows: [] })[0].json;
+if (cleanupDone.hasRows !== false || cleanupDone.removedCount !== 2) throw new Error('cleanup removed count was not retained');
+if (!rejects('Prepare Cleanup Page', {
+  ...cleanupContext, cleanupPageCount: 10, rows: [{ id: 3, run_id: 'run-one' }],
+}, {}, /cleanup_page_bound_exceeded/)) throw new Error('cleanup accepted rows beyond its page bound');
+const cleanupAbsent = execute('Require Cleanup Absent', {
+  statusCode: 200, body: { list: [], pageInfo: { totalRows: 0 } }, context: cleanupDone,
+})[0].json;
+if (cleanupAbsent.ok !== true || cleanupAbsent.removedCount !== 2) throw new Error('decision cleanup absence was not verified');
+if (!rejects('Require Cleanup Absent', {
+  statusCode: 200, body: { list: [], pageInfo: { totalRows: 1 } }, context: cleanupDone,
+}, {}, /cleanup_absence_invalid/)) throw new Error('inconsistent decision absence evidence was accepted');
+
 const probeContext = {
   ...resolved, inserted: true, read: true, readerRead: true, decisionUpdated: true,
   protectedUpdateDenied: true, protectedUpdateStatus: 400, protectedUpdateEvidence: 'postgresql_42501',
@@ -1324,6 +1551,37 @@ const prepared = execute('Prepare Feedback Fact', {}, { 'Feedback Only': { ...re
 if (!Number.isSafeInteger(prepared.factId) || prepared.factId === -334) throw new Error('feedback fact ID is not safe and run-bound');
 const otherPrepared = execute('Prepare Feedback Fact', {}, { 'Feedback Only': { ...resolved, operation: 'feedback', runId: 'feedback-run-two' } })[0].json;
 if (prepared.factId === otherPrepared.factId) throw new Error('distinct feedback runs reused a fact ID');
+const noFeedbackResidue = execute('Require Feedback Residue Bounded', {
+  list: [], pageInfo: { totalRows: 0, isLastPage: true },
+}, { 'Prepare Feedback Fact': prepared })[0].json;
+if (noFeedbackResidue.residueDecisionId !== null) throw new Error('empty feedback residue selected a row');
+const oneFeedbackResidue = execute('Require Feedback Residue Bounded', {
+  list: [{ id: 73, run_id: prepared.runId, decision: 'corrected' }],
+  pageInfo: { totalRows: 1, isLastPage: true },
+}, { 'Prepare Feedback Fact': prepared })[0].json;
+if (oneFeedbackResidue.residueDecisionId !== 73) throw new Error('one exact feedback residue row was not selected');
+for (const body of [
+  {
+    list: [
+      { id: 73, run_id: prepared.runId, decision: 'corrected' },
+      { id: 74, run_id: prepared.runId, decision: 'corrected' },
+    ],
+    pageInfo: { totalRows: 2, isLastPage: true },
+  },
+  {
+    list: [{ id: 73, run_id: 'other-run', decision: 'corrected' }],
+    pageInfo: { totalRows: 1, isLastPage: true },
+  },
+  {
+    list: [{ id: null, run_id: prepared.runId, decision: 'corrected' }],
+    pageInfo: { totalRows: 1, isLastPage: true },
+  },
+  { list: [], pageInfo: { totalRows: 1, isLastPage: false } },
+]) {
+  if (!rejects('Require Feedback Residue Bounded', body, { 'Prepare Feedback Fact': prepared }, /feedback_residue_invalid/)) {
+    throw new Error('duplicate, mismatched, or incomplete feedback residue was accepted');
+  }
+}
 if (!rejects('Require Initial Runtime Fact', {
   factId: prepared.factId, runId: prepared.runId, fact: 'original',
 }, { 'Prepare Feedback Fact': prepared }, /feedback_initial_fact_invalid/)) {
@@ -1365,6 +1623,37 @@ for (const invalid of [
 ]) {
   if (!rejects('Prepare Feedback Response', invalid, { 'Require Refreshed Reader Fact': observed }, /feedback_after_refresh_invalid/)) {
     throw new Error('unobserved or losing feedback result was accepted');
+  }
+}
+
+const cleanupFactContext = {
+  ...cleanupAbsent, factsTableId: 'table-facts', decisionTableId: 'table-decisions', factId: prepared.factId,
+};
+const factAbsent = execute('Require Cleanup Fact Absent', {
+  list: [], pageInfo: { totalRows: 0, isLastPage: true },
+}, { 'Prepare Cleanup Fact': cleanupFactContext })[0].json;
+if (factAbsent.factId !== prepared.factId || factAbsent.runId !== cleanupAbsent.runId) {
+  throw new Error('exact cleanup fact absence did not retain context');
+}
+if (!rejects('Require Cleanup Fact Absent', {
+  list: [{ id: prepared.factId, run_id: cleanupAbsent.runId, fact: 'refreshed' }],
+  pageInfo: { totalRows: 1, isLastPage: true },
+}, { 'Prepare Cleanup Fact': cleanupFactContext }, /cleanup_fact_absence_invalid/)) {
+  throw new Error('remaining exact feedback fact was accepted as absent');
+}
+const retainedCanary = execute('Require Cleanup Fact', {
+  list: [factFixture], pageInfo: { totalRows: 1, isLastPage: true },
+}, { 'Require Cleanup Fact Absent': factAbsent })[0].json;
+if (retainedCanary.ok !== true || retainedCanary.removedCount !== 2) {
+  throw new Error('cleanup response was not gated by retained recovery fact evidence');
+}
+for (const body of [
+  { list: [], pageInfo: { totalRows: 0, isLastPage: true } },
+  { list: [{ ...factFixture, run_id: 'other-run' }], pageInfo: { totalRows: 1, isLastPage: true } },
+  { list: [{ ...factFixture, id: -335 }], pageInfo: { totalRows: 1, isLastPage: true } },
+]) {
+  if (!rejects('Require Cleanup Fact', body, { 'Require Cleanup Fact Absent': factAbsent }, /cleanup_canary_invalid/)) {
+    throw new Error('cleanup responded without exact retained recovery fact evidence');
   }
 }
 JS

@@ -919,7 +919,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $json.context || $('Prepare Cleanup Page').last().json;\nconst body = $json.body;\nif ($json.statusCode !== 200 || !body || !Array.isArray(body.list) || !body.pageInfo || body.list.length !== 0) throw new Error('cleanup_absence_invalid');\nreturn [{ json: { ok: true, operation: 'cleanup', runId: context.runId, domain: 'issue334_acceptance', removedCount: context.removedCount } }];"
+        "jsCode": "const context = $json.context || $('Prepare Cleanup Page').last().json;\nconst body = $json.body;\nif ($json.statusCode !== 200 || !body || !Array.isArray(body.list) || !body.pageInfo || body.list.length !== 0 || Number(body.pageInfo.totalRows) !== 0) throw new Error('cleanup_absence_invalid');\nreturn [{ json: { ok: true, operation: 'cleanup', runId: context.runId, domain: 'issue334_acceptance', removedCount: context.removedCount } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1227,16 +1227,61 @@
     },
     {
       "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "={{ '(run_id,eq,' + encodeURIComponent($json.runId) + ')' }}"
+            },
+            {
+              "name": "limit",
+              "value": "2"
+            }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3720,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000104",
+      "name": "List Feedback Residue",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Prepare Feedback Fact').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nconst pageInfo = $json?.pageInfo;\nif (!Array.isArray(rows) || rows.length > 1 || !pageInfo || Number(pageInfo.totalRows) !== rows.length || pageInfo.isLastPage !== true ||\n  rows.some((row) => !Number.isSafeInteger(Number(row.id)) || Number(row.id) <= 0 || row.run_id !== context.runId)) {\n  throw new Error('feedback_residue_invalid');\n}\nreturn [{ json: { ...context, residueDecisionId: rows.length === 1 ? Number(rows[0].id) : null } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3960,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000105",
+      "name": "Require Feedback Residue Bounded",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
         "operation": "executeQuery",
-        "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nDELETE FROM operator.acceptance_decision WHERE run_id = $1 AND run_id <> 'recovery-canary-v2';\nDELETE FROM app.acceptance_fact WHERE id = $2 AND run_id = $1 AND id <> -334;\nCOMMIT;",
+        "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nDELETE FROM operator.acceptance_decision WHERE id = $3 AND run_id = $1 AND run_id <> 'recovery-canary-v2';\nDELETE FROM app.acceptance_fact WHERE id = $2 AND run_id = $1 AND id <> -334;\nCOMMIT;",
         "options": {
-          "queryReplacement": "={{ [$json.runId, $json.factId] }}"
+          "queryReplacement": "={{ [$json.runId, $json.factId, $json.residueDecisionId] }}"
         }
       },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
-        3720,
+        4200,
         180
       ],
       "id": "20000000-0000-4000-8000-000000000088",
@@ -1255,7 +1300,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
-        3960,
+        4440,
         180
       ],
       "id": "20000000-0000-4000-8000-000000000089",
@@ -1491,12 +1536,88 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Prepare Cleanup Fact').first().json;\nreturn [{ json: { ok: true, operation: 'cleanup', runId: context.runId, domain: 'issue334_acceptance', removedCount: context.removedCount } }];"
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $('Prepare Cleanup Fact').first().json.factsTableId + '/records' }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "={{ '(id,eq,' + $('Prepare Cleanup Fact').first().json.factId + ')~and(run_id,eq,' + encodeURIComponent($('Prepare Cleanup Fact').first().json.runId) + ')' }}"
+            },
+            {
+              "name": "limit",
+              "value": "2"
+            }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4920,
+        -300
+      ],
+      "id": "20000000-0000-4000-8000-000000000106",
+      "name": "Read Cleanup Fact",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Prepare Cleanup Fact').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nconst pageInfo = $json?.pageInfo;\nif (!Array.isArray(rows) || rows.length !== 0 || !pageInfo || Number(pageInfo.totalRows) !== 0 || pageInfo.isLastPage !== true) {\n  throw new Error('cleanup_fact_absence_invalid');\n}\nreturn [{ json: context }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        4920,
+        5160,
+        -300
+      ],
+      "id": "20000000-0000-4000-8000-000000000107",
+      "name": "Require Cleanup Fact Absent",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.factsTableId + '/records' }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "(id,eq,-334)~and(run_id,eq,recovery-canary-v2)"
+            },
+            {
+              "name": "limit",
+              "value": "2"
+            }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5400,
+        -300
+      ],
+      "id": "20000000-0000-4000-8000-000000000108",
+      "name": "Read Retained Recovery Fact",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Cleanup Fact Absent').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nconst pageInfo = $json?.pageInfo;\nif (!Array.isArray(rows) || rows.length !== 1 || !pageInfo || Number(pageInfo.totalRows) !== 1 || pageInfo.isLastPage !== true) {\n  throw new Error('cleanup_canary_invalid');\n}\nconst row = rows[0];\nif (Number(row.id) !== -334 || row.run_id !== 'recovery-canary-v2' || row.fact !== 'artifact-available' ||\n  row.artifact_id !== 'issue334-artifact-v1' || row.artifact_uri !== 'https://artifacts.example.invalid/issue334/artifact-v1' ||\n  row.artifact_media_type !== 'text/plain' || Number(row.artifact_size_bytes) !== 37 ||\n  row.artifact_sha256 !== '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3') {\n  throw new Error('cleanup_canary_invalid');\n}\nreturn [{ json: { ok: true, operation: 'cleanup', runId: context.runId, domain: 'issue334_acceptance', removedCount: context.removedCount } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5640,
         -300
       ],
       "id": "20000000-0000-4000-8000-000000000103",
@@ -2554,6 +2675,60 @@
       "main": [
         [
           {
+            "node": "Read Cleanup Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Cleanup Fact": {
+      "main": [
+        [
+          {
+            "node": "Require Cleanup Fact Absent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Cleanup Fact Absent": {
+      "main": [
+        [
+          {
+            "node": "Read Retained Recovery Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Retained Recovery Fact": {
+      "main": [
+        [
+          {
             "node": "Require Cleanup Fact",
             "type": "main",
             "index": 0
@@ -2659,6 +2834,42 @@
       ]
     },
     "Prepare Feedback Fact": {
+      "main": [
+        [
+          {
+            "node": "List Feedback Residue",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Feedback Residue": {
+      "main": [
+        [
+          {
+            "node": "Require Feedback Residue Bounded",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Feedback Residue Bounded": {
       "main": [
         [
           {
