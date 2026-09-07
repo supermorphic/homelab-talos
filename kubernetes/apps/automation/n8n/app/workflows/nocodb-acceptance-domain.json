@@ -613,7 +613,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Cleanup Only').first().json;\nconst record = Array.isArray($json) ? $json[0] : $json;\nconst recordId = record?.id ?? record?.Id;\nif (recordId === undefined || recordId === null) throw new Error('inserted_decision_id_missing');\nreturn [{ json: { ...context, recordId, inserted: true } }];"
+        "jsCode": "const context = $('Require Reader Facts Read').first().json;\nconst record = Array.isArray($json) ? $json[0] : $json;\nconst recordId = record?.id ?? record?.Id;\nif (recordId === undefined || recordId === null) throw new Error('inserted_decision_id_missing');\nreturn [{ json: { ...context, recordId, inserted: true } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,

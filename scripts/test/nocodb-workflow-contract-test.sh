@@ -1552,6 +1552,56 @@ if (JSON.stringify(response.recoveryCanary) !== JSON.stringify(expectedCanary) |
   throw new Error('probe response did not expose only the record recovery canary');
 }
 
+const chainedReaderRead = execute('Require Reader Facts Read', {
+  statusCode: 200,
+  body: { list: [factFixture], pageInfo: { totalRows: 1 } },
+  context: { ...noOperatorShares, operation: 'probe', runId: 'run-chain' },
+})[0].json;
+const chainedInsert = execute(
+  'Normalize Inserted Decision', { id: 91 },
+  { 'Cleanup Only': noOperatorShares, 'Require Reader Facts Read': chainedReaderRead },
+)[0].json;
+const chainedRead = execute('Require Inserted Decision', {
+  list: [{ id: 91, run_id: chainedInsert.runId, decision: 'pending', protected_created_at: 'fixed-time' }],
+}, { 'Normalize Inserted Decision': chainedInsert })[0].json;
+const chainedUpdated = execute('Require Updated Decision', {
+  list: [{ id: 91, run_id: chainedInsert.runId, decision: 'approved', protected_created_at: 'fixed-time' }],
+}, { 'Require Inserted Decision': chainedRead })[0].json;
+const chainedProtected = execute('Capture Protected Update Denial', {
+  statusCode: 400,
+  body: {
+    error: 'ERR_DATABASE_OP_FAILED', code: '42501',
+    message: "The database user does not have permission to access 'acceptance_decision'.",
+  },
+  context: chainedUpdated,
+})[0].json;
+const chainedNegative = execute(
+  'Prepare Reader Negative Probe', {}, { 'Capture Protected Update Denial': chainedProtected },
+)[0].json;
+const chainedReaderDenial = execute('Evaluate Reader Insert Denial', {
+  statusCode: 403,
+  body: { error: 'ERR_FORBIDDEN', message: "Forbidden - Source 'Read Model' is read-only" },
+  context: chainedNegative,
+})[0].json;
+const chainedView = execute('Require Recovery Saved View', {
+  list: [{ id: 'view-facts', fk_model_id: 'table-facts', title: 'acceptance_facts', type: 3, uuid: null }],
+}, {
+  'Evaluate Reader Insert Denial': chainedReaderDenial,
+  'Confirm Probe Cleanup': { list: [], pageInfo: { totalRows: 0 } },
+})[0].json;
+const chainedFact = execute(
+  'Require Recovery Fact', { list: [factFixture] }, { 'Require Recovery Saved View': chainedView },
+)[0].json;
+const chainedCanary = execute(
+  'Require Recovery Decision', { list: [decisionFixture] }, { 'Require Recovery Fact': chainedFact },
+)[0].json;
+const chainedResponse = execute(
+  'Prepare Acceptance Response', {}, { 'Require Recovery Decision': chainedCanary },
+)[0].json;
+if (chainedResponse.readerRead !== true || chainedResponse.runId !== 'run-chain') {
+  throw new Error('reader-read evidence did not survive the actual producer-to-response Code-node chain');
+}
+
 const prepared = execute('Prepare Feedback Fact', {}, { 'Feedback Only': { ...resolved, operation: 'feedback', runId: 'feedback-run-one' } })[0].json;
 if (!Number.isSafeInteger(prepared.factId) || prepared.factId === -334) throw new Error('feedback fact ID is not safe and run-bound');
 const otherPrepared = execute('Prepare Feedback Fact', {}, { 'Feedback Only': { ...resolved, operation: 'feedback', runId: 'feedback-run-two' } })[0].json;
