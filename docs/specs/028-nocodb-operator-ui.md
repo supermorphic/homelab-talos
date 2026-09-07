@@ -12,7 +12,7 @@ PostgreSQL remains authoritative. n8n remains the orchestration and bulk-change 
 NocoDB is a removable interface over database privileges defined by each domain.
 
 This design extends the platform in
-[specification 025](025-automation-data-postgresql-platform.md). It cannot become active
+[specification 026](026-automation-data-postgresql-platform.md). It cannot become active
 until that platform has completed bootstrap, provisioning acceptance, backup validation,
 and its full-chain restore drill.
 
@@ -1093,8 +1093,8 @@ separate restored application. Run-owned resources were absent after each run.
 This local evidence does not establish live Gateway or Cilium behavior, Longhorn
 recovery, or browser usability. Attended cluster acceptance and activation remain
 outstanding. No native attachment workaround or live activation has been performed. The
-transient execution plan remains under `.tmp/plans/026-nocodb-operator-ui.md`; it is not
-a committed design artifact.
+publication plan remains under `.tmp/plans/027-nocodb-publication.md`; it is not a
+committed design artifact.
 
 ## Rejected alternatives
 

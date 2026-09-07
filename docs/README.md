@@ -71,4 +71,4 @@
 - [025 — Node Lifecycle and Maintenance](specs/025-node-lifecycle-and-maintenance.md) — Defines guarded node disruption, maintenance, and recovery acceptance across Talos, Kubernetes, and Longhorn.
 - [026 — Automation Data PostgreSQL Platform](specs/026-automation-data-postgresql-platform.md) — Records the shared workflow database, provisioning, backup, monitoring, and acceptance evidence.
 - [027 — Deterministic CI Gates](specs/027-deterministic-ci-gates.md) — Defines Stage 2 category selection, evidence ownership, merge enforcement, and staged rollout.
-- [026 — NocoDB Operator UI](specs/026-nocodb-operator-ui.md) — Defines the staged private UI, separate read and operator surfaces, asynchronous source lifecycle, and metadata-only recovery.
+- [028 — NocoDB Operator UI](specs/028-nocodb-operator-ui.md) — Defines the staged private UI, separate read and operator surfaces, asynchronous source lifecycle, and metadata-only recovery.

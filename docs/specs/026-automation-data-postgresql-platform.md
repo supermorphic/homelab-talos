@@ -286,7 +286,7 @@ as a `NOLOGIN` grant target when the `operator` schema exists. A reviewed migrat
 grants the intended table, column, sequence, and optional row-policy authority. A second
 source sync enables the login only after catalog validation passes. These roles and the
 source lifecycle are defined in
-[specification 026](026-nocodb-operator-ui.md).
+[specification 028](028-nocodb-operator-ui.md).
 
 ## Domain role and grant model
 
@@ -781,7 +781,7 @@ The [operations guide](../guides/automation-data-operations.md) and
 [recovery runbook](../runbooks/automation-data-recovery.md) retain procedures and test
 mechanics outside this durable design record.
 
-The optional NocoDB extension in specification 026 is separate from that accepted
+The optional NocoDB extension in specification 028 is separate from that accepted
 platform baseline. Its repository implementation does not establish live NocoDB
 provisioning or recovery; NocoDB remains staged pending its own acceptance.
 

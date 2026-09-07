@@ -10,7 +10,7 @@ claim that NocoDB is active or recoverable until the attended rollout in this gu
 completed and its evidence has been reviewed.
 
 The repository procedures are reconciled with the tested offline and disposable local
-implementation described in [specification 026](../specs/026-nocodb-operator-ui.md).
+implementation described in [specification 028](../specs/028-nocodb-operator-ui.md).
 Before activation, complete the operator-run existing-platform upgrade and attended
 cluster acceptance for the deployed revision. This local evidence does not prove live
 access, browser behavior, backup publication, restore behavior, or activation.

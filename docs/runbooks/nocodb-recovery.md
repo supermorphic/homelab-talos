@@ -10,7 +10,7 @@ the attended NocoDB access test, complete logical backup, and restore drill pass
 describe an unrun drill as established recoverability.
 
 This runbook is reconciled with the tested offline and disposable local implementation
-in [specification 026](../specs/026-nocodb-operator-ui.md). Its local restore proof does
+in [specification 028](../specs/028-nocodb-operator-ui.md). Its local restore proof does
 not establish live backup publication, Longhorn recovery, Gateway access, or browser
 behavior. Require the attended checks below before using the result as live rollout or
 recovery acceptance.
