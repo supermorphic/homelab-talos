@@ -44,7 +44,6 @@ EOF
 
 nocodb_restore_request_script() {
 	cat <<'EOF'
-import {createHash} from 'node:crypto';
 import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -103,48 +102,37 @@ try {
     if (matches.length !== 1 || source.id !== matches[0].sourceId || source.fk_integration_id !== matches[0].integrationId) throw new Error('registry_source_mismatch');
     const integration = integrations.filter((item) => item.id === matches[0].integrationId);
     if (integration.length !== 1 || integration[0].title !== `automation-data/issue334_acceptance/${kind}` ||
-        integration[0].type !== 'db' || integration[0].sub_type !== 'pg') throw new Error('registry_integration_mismatch');
+        integration[0].type !== 'database' || integration[0].sub_type !== 'pg') throw new Error('registry_integration_mismatch');
   }
 
   const tables = list((await bounded(`/api/v2/meta/bases/${base.id}/tables`, {headers})).json);
-  const facts = tables.find((table) => table?.title === 'acceptance_facts' && table.table_name === 'acceptance_facts' && table.schema === 'read_model' && table.source_id === reader.id);
-  decisionTable = tables.find((table) => table?.title === 'acceptance_decision' && table.table_name === 'acceptance_decision' && table.schema === 'operator' && table.source_id === operator.id);
+  const facts = tables.find((table) => table?.title === 'acceptance_facts' && table.table_name === 'acceptance_facts' && table.schema === null && table.source_id === reader.id);
+  decisionTable = tables.find((table) => table?.title === 'acceptance_decision' && table.table_name === 'acceptance_decision' && table.schema === null && table.source_id === operator.id);
   if (tables.length !== 2 || !facts?.id || !decisionTable?.id) throw new Error('schema_separation_failed');
   await bounded(`/api/v2/tables/${facts.id}/records?limit=100`, {headers});
   await bounded(`/api/v2/tables/${decisionTable.id}/records?limit=100`, {headers});
 
-  const exactKeys = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&
-    JSON.stringify(Object.keys(value).sort()) === JSON.stringify(keys.sort());
   const id = (value) => typeof value === 'string' && /^[A-Za-z0-9_-]+$/.test(value);
-  const canaryResponse = (await bounded(`/api/v2/tables/${decisionTable.id}/records?where=(run_id,eq,recovery-canary-v1)&limit=2`, {headers})).json;
-  const rows = list(canaryResponse);
-  if (rows.length !== 1 || canaryResponse.pageInfo?.totalRows !== 1 || rows[0].run_id !== 'recovery-canary-v1' || typeof rows[0].decision !== 'string') throw new Error('attachment_canary_missing');
-  const canary = JSON.parse(rows[0].decision);
-  if (!exactKeys(canary, ['kind','version','state','baseId','sourceId','tableId','rowId','savedView','commentId','attachment']) ||
-      canary.kind !== 'nocodb-attachment-recovery-canary' || canary.version !== 1 || canary.state !== 'ready' ||
-      canary.baseId !== base.id || canary.sourceId !== operator.id || canary.tableId !== decisionTable.id ||
-      canary.rowId !== String(rows[0].id) || !id(canary.rowId) || !id(canary.commentId)) throw new Error('canary_identity_failed');
-  const view = canary.savedView;
-  if (!exactKeys(view, ['id','tableId','title','type']) || !id(view.id) || view.tableId !== facts.id ||
-      view.title !== 'acceptance_facts' || view.type !== 3) throw new Error('canary_view_failed');
+  const factResponse = (await bounded(`/api/v2/tables/${facts.id}/records?where=(id,eq,-334)&limit=2`, {headers})).json;
+  const factRows = list(factResponse);
+  if (factRows.length !== 1 || (factResponse.pageInfo && factResponse.pageInfo.totalRows !== 1)) throw new Error('recovery_fact_missing');
+  const fact = factRows[0];
+  if (Object.keys(fact).some((key) => key.toLowerCase().startsWith('attach')) ||
+      Number(fact.id) !== -334 || fact.run_id !== 'recovery-canary-v2' || fact.fact !== 'artifact-available' ||
+      fact.artifact_id !== 'issue334-artifact-v1' || fact.artifact_uri !== 'https://artifacts.example.invalid/issue334/artifact-v1' ||
+      fact.artifact_media_type !== 'text/plain' || Number(fact.artifact_size_bytes) !== 37 ||
+      fact.artifact_sha256 !== '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3') {
+    throw new Error('recovery_fact_invalid');
+  }
+  const decisionResponse = (await bounded(`/api/v2/tables/${decisionTable.id}/records?where=(run_id,eq,recovery-canary-v2)&limit=2`, {headers})).json;
+  const decisionRows = list(decisionResponse);
+  if (decisionRows.length !== 1 || (decisionResponse.pageInfo && decisionResponse.pageInfo.totalRows !== 1)) throw new Error('recovery_decision_missing');
+  const decision = decisionRows[0];
+  if (!Number.isSafeInteger(Number(decision.id)) || decision.run_id !== 'recovery-canary-v2' || decision.decision !== 'retain' ||
+      Object.keys(decision).some((key) => key.toLowerCase().startsWith('attach'))) throw new Error('recovery_decision_invalid');
   const views = list((await bounded(`/api/v2/meta/tables/${facts.id}/views`, {headers})).json);
-  if (views.length !== 1 || views[0].id !== view.id || views[0].fk_model_id !== view.tableId ||
-      views[0].title !== view.title || views[0].type !== view.type) throw new Error('saved_view_failed');
-  const attachment = canary.attachment;
-  if (!exactKeys(attachment, ['id','path','title','mimetype','size','sha256']) || !id(attachment.id) ||
-      !/^download\/issue334_acceptance\/recovery-canary-v1\/issue334-recovery-canary-v1_[A-Za-z0-9_-]{5}\.txt$/.test(attachment.path) ||
-      attachment.title !== 'issue334-recovery-canary-v1.txt' || attachment.mimetype !== 'text/plain' ||
-      attachment.size !== 37 || attachment.sha256 !== '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3') throw new Error('canary_attachment_failed');
-  const comments = list((await bounded(`/api/v2/meta/comments?fk_model_id=${decisionTable.id}&row_id=${canary.rowId}`, {headers})).json);
-  const matches = comments.filter((item) => item.id === canary.commentId);
-  if (comments.length !== 1 || matches.length !== 1) throw new Error('canary_comment_missing');
-  const comment = matches[0];
-  if (comment.base_id !== base.id || comment.source_id !== operator.id || comment.fk_model_id !== decisionTable.id ||
-      String(comment.row_id) !== canary.rowId || comment.comment !== 'issue334-recovery-canary-v1' ||
-      !Array.isArray(comment.attachments) || comment.attachments.length !== 1 ||
-      ['id','path','title','mimetype','size'].some((key) => comment.attachments[0][key] !== attachment[key])) throw new Error('canary_comment_mismatch');
-  const downloaded = await bounded(`/${attachment.path}`, {headers}, [200], false, 37);
-  if (downloaded.bytes.byteLength !== 37 || createHash('sha256').update(downloaded.bytes).digest('hex') !== attachment.sha256) throw new Error('attachment_checksum_failed');
+  if (views.length !== 1 || !id(views[0].id) || views[0].fk_model_id !== facts.id ||
+      views[0].title !== 'acceptance_facts' || views[0].type !== 3 || views[0].uuid !== null) throw new Error('saved_view_failed');
 
   const readerDenied = await bounded(`/api/v2/tables/${facts.id}/records`, {
     method:'POST', headers:{...headers,'Content-Type':'application/json'},

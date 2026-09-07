@@ -179,7 +179,7 @@ cleanup() {
     :
   elif [[ "$cleanup_ok" == true ]]; then
     write_phase cleanup passed \
-      'current-run rows were removed; domain, base, sources, and reserved attachment canary were retained'
+      'current-run rows were removed; domain, base, sources, and reserved record canary were retained'
   else
     write_phase cleanup failed \
       'current-run acceptance cleanup or retained-canary read-back failed'
@@ -300,10 +300,12 @@ jq -e '
   exit 1
 }
 migrator_credential_id="$(jq -r '.migratorCredentialId' "$provision_response")"
-expected_binding_confirm="bound:issue334_acceptance:$migrator_credential_id"
+runtime_credential_id="$(jq -r '.runtimeCredentialId' "$provision_response")"
+expected_binding_confirm="bound:issue334_acceptance:$migrator_credential_id:$runtime_credential_id"
 [[ "$acceptance_binding_confirm" == "$expected_binding_confirm" ]] || {
   printf 'Generated migrator credential ID: %s\n' "$migrator_credential_id" >&2
-  echo 'Bind this credential to the issue334_acceptance PostgreSQL node in the acceptance workflow, then publish the workflow.' >&2
+  printf 'Generated runtime credential ID: %s\n' "$runtime_credential_id" >&2
+  echo 'Bind these credentials to their named migrator and runtime PostgreSQL nodes in the acceptance workflow, then publish the workflow.' >&2
   printf "Rerun with NOCODB_ACCEPTANCE_BINDING_CONFIRM='%s'.\n" "$expected_binding_confirm" >&2
   exit 1
 }
@@ -475,24 +477,26 @@ validate_probe() { # <response> <source-response>
     .publicSharing.basePublicShareUuid == null and
     (.publicSharing.views | length) == 2 and
     ([.publicSharing.views[] | [.title,.publicShareUuid]] | sort) == [["acceptance_decision",null],["acceptance_facts",null]] and
-    (.attachmentCanary | keys) == [
-      "attachmentId","commentId","mimetype","path","rowId","savedViewId",
-      "savedViewTableId","savedViewTitle","savedViewType","sha256","size","state","title"
+    (.recoveryCanary | keys) == [
+      "artifact","baseId","decisionTableId","factId","factTableId","operatorSourceId",
+      "readerSourceId","rowId","state","version","viewId"
     ] and
-    .attachmentCanary.state == "ready" and
-    (.attachmentCanary.rowId | type == "string" and length > 0) and
-    (.attachmentCanary.savedViewId | type == "string" and length > 0) and
-    (.attachmentCanary.savedViewTableId | type == "string" and length > 0) and
-    .attachmentCanary.savedViewTableId == $facts_tables[0].id and
-    .attachmentCanary.savedViewTitle == "acceptance_facts" and
-    .attachmentCanary.savedViewType == 3 and
-    (.attachmentCanary.commentId | type == "string" and length > 0) and
-    (.attachmentCanary.attachmentId | type == "string" and length > 0) and
-    (.attachmentCanary.path | type == "string" and test("^download/issue334_acceptance/recovery-canary-v1/issue334-recovery-canary-v1_[A-Za-z0-9_-]{5}\\.txt$")) and
-    .attachmentCanary.title == "issue334-recovery-canary-v1.txt" and
-    .attachmentCanary.mimetype == "text/plain" and
-    .attachmentCanary.size == 37 and
-    .attachmentCanary.sha256 == "09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3"
+    .recoveryCanary.version == 2 and .recoveryCanary.state == "ready" and
+    .recoveryCanary.baseId == env.BASE_ID and
+    .recoveryCanary.readerSourceId == env.READER_SOURCE_ID and
+    .recoveryCanary.operatorSourceId == env.OPERATOR_SOURCE_ID and
+    .recoveryCanary.factTableId == $facts_tables[0].id and
+    .recoveryCanary.decisionTableId == $decision_tables[0].id and
+    (.recoveryCanary.viewId | type == "string" and length > 0) and
+    (.recoveryCanary.rowId | type == "string" and length > 0) and
+    .recoveryCanary.factId == -334 and
+    .recoveryCanary.artifact == {
+      id:"issue334-artifact-v1",
+      uri:"https://artifacts.example.invalid/issue334/artifact-v1",
+      mediaType:"text/plain",
+      sizeBytes:37,
+      sha256:"09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3"
+    }
   ' "$response" >/dev/null
 }
 
@@ -502,18 +506,38 @@ validate_probe "$probe_one" "$ready_sync" || {
   echo 'The through-n8n access probe omitted a required success, denial boolean, UI flag, or public-share assertion.' >&2
   exit 1
 }
-canary_evidence="$run_dir/diagnostics/attachment-canary.json"
+canary_evidence="$run_dir/diagnostics/recovery-canary.json"
 base_id="$(jq -r '.baseId' "$ready_sync")"
-table_id="$(jq -r '.attachmentCanary.savedViewTableId' "$probe_one")"
-jq -n --arg domain issue334_acceptance --arg base_id "$base_id" --arg table_id "$table_id" \
+fact_table_id="$(jq -r '.recoveryCanary.factTableId' "$probe_one")"
+jq -n --arg domain issue334_acceptance --arg base_id "$base_id" --arg fact_table_id "$fact_table_id" \
   --slurpfile before "$probe_one" '{
     domain: $domain,
     baseId: $base_id,
-    tableId: $table_id,
-    beforeRotation: $before[0].attachmentCanary,
+    factTableId: $fact_table_id,
+    beforeRotation: $before[0].recoveryCanary,
     afterRotation: null
   }' >"$canary_evidence"
 chmod 600 "$canary_evidence"
+
+feedback_response="$temp_dir/feedback.json"
+acceptance_request feedback "$feedback_response"
+RUN_ID="$run_id" jq -e '
+  .ok == true and .operation == "feedback" and .runId == env.RUN_ID and
+  .domain == "issue334_acceptance" and
+  (.factId | type == "number" and . != -334) and
+  .feedback == {
+    initialFact:"original",
+    operatorDecision:"corrected",
+    effectiveBeforeRefresh:"corrected",
+    refreshedFact:"refreshed",
+    effectiveAfterRefresh:"corrected"
+  }
+' "$feedback_response" >/dev/null || {
+  echo 'The runtime feedback sequence omitted an independently observed value.' >&2
+  exit 1
+}
+jq '{runId,factId,feedback}' "$feedback_response" >"$run_dir/diagnostics/feedback.json"
+chmod 600 "$run_dir/diagnostics/feedback.json"
 
 unchanged_sync="$temp_dir/source-sync-unchanged.json"
 source_request sync "$unchanged_sync"
@@ -568,13 +592,13 @@ validate_probe "$probe_two" "$rotated_source" || {
   echo 'The post-rotation through-n8n access probe failed.' >&2
   exit 1
 }
-updated_canary_evidence="$temp_dir/attachment-canary.json"
+updated_canary_evidence="$temp_dir/recovery-canary.json"
 jq --slurpfile after "$probe_two" \
-  '.afterRotation = $after[0].attachmentCanary' "$canary_evidence" >"$updated_canary_evidence"
+  '.afterRotation = $after[0].recoveryCanary' "$canary_evidence" >"$updated_canary_evidence"
 chmod 600 "$updated_canary_evidence"
 mv "$updated_canary_evidence" "$canary_evidence"
 jq -e '.beforeRotation == .afterRotation' "$canary_evidence" >/dev/null || {
-  echo 'Operator rotation replaced or changed the durable attachment canary.' >&2
+  echo 'Operator rotation replaced or changed the durable record canary.' >&2
   exit 1
 }
 

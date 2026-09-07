@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## Synthetic acceptance setup\n\nImport this inactive template through the private n8n editor. Bind **automation-data/issue334_acceptance/migrator** to all six Postgres nodes, **NocoDB Operator API** to every HTTP Request node, and **NocoDB Acceptance Header** to **Acceptance Webhook**. Run structure, source sync, grants, source sync, then probe. The retained recovery attachment uses pinned `NC_SECURE_ATTACHMENTS=false` and the private NocoDB route. Keep execution persistence disabled.",
+        "content": "## Synthetic acceptance setup\n\nImport this inactive template through the private n8n editor. Bind **automation-data/issue334_acceptance/migrator** to **Create Acceptance Structure**, **Grant Acceptance Access**, **Clear Reader Negative Residue**, **Cleanup Unexpected Reader Insert**, **Clear Feedback Residue**, and **Cleanup Feedback Fact**. Bind **automation-data/issue334_acceptance/runtime** to **Publish Initial Feedback Fact**, **Consume Feedback Before Refresh**, **Refresh Feedback Fact**, and **Consume Feedback After Refresh**. Bind **NocoDB Operator API** to every HTTP Request node and **NocoDB Acceptance Header** to **Acceptance Webhook**. Run structure, source sync, grants, source sync, probe, then feedback. Keep execution persistence disabled. NocoDB receives neither PostgreSQL credential.",
         "height": 380,
         "width": 540
       },
@@ -35,7 +35,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['operation', 'runId']);\nif (Object.keys(body).some((key) => !allowedFields.has(key)) || Object.keys(body).length !== 2) throw new Error('unexpected_request_field');\nconst { operation, runId } = body;\nif (!['structure', 'grants', 'probe', 'cleanup'].includes(operation)) throw new Error('invalid_operation');\nif (typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(runId)) throw new Error('invalid_run_id');\nif (runId === 'recovery-canary-v1') throw new Error('reserved_run_id');\nreturn [{ json: { operation, runId } }];"
+        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['operation', 'runId']);\nif (Object.keys(body).some((key) => !allowedFields.has(key)) || Object.keys(body).length !== 2) throw new Error('unexpected_request_field');\nconst { operation, runId } = body;\nif (!['structure', 'grants', 'probe', 'cleanup', 'feedback'].includes(operation)) throw new Error('invalid_operation');\nif (typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(runId)) throw new Error('invalid_run_id');\nif (['recovery-canary-v1', 'recovery-canary-v2'].includes(runId)) throw new Error('reserved_run_id');\nreturn [{ json: { operation, runId } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -142,6 +142,29 @@
               },
               "renameOutput": true,
               "outputKey": "cleanup"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.operation }}",
+                    "rightValue": "feedback",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "feedback"
             }
           ]
         },
@@ -159,7 +182,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nCREATE SCHEMA IF NOT EXISTS read_model AUTHORIZATION issue334_acceptance_owner;\nCREATE SCHEMA IF NOT EXISTS operator AUTHORIZATION issue334_acceptance_owner;\nCREATE TABLE IF NOT EXISTS app.acceptance_fact (\n  id bigint PRIMARY KEY,\n  fact text NOT NULL\n);\nCREATE OR REPLACE VIEW read_model.acceptance_facts AS\nSELECT id, fact FROM app.acceptance_fact;\nCREATE TABLE IF NOT EXISTS operator.acceptance_decision (\n  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,\n  run_id text NOT NULL,\n  decision text NOT NULL,\n  protected_created_at timestamptz NOT NULL DEFAULT clock_timestamp()\n);\nCREATE UNIQUE INDEX IF NOT EXISTS issue334_acceptance_recovery_canary_one\nON operator.acceptance_decision (run_id)\nWHERE run_id = 'recovery-canary-v1';\nCOMMIT;",
+        "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nCREATE SCHEMA IF NOT EXISTS read_model AUTHORIZATION issue334_acceptance_owner;\nCREATE SCHEMA IF NOT EXISTS operator AUTHORIZATION issue334_acceptance_owner;\nCREATE TABLE IF NOT EXISTS app.acceptance_fact (\n  id bigint PRIMARY KEY,\n  run_id text,\n  fact text NOT NULL,\n  artifact_id text,\n  artifact_uri text,\n  artifact_media_type text,\n  artifact_size_bytes bigint,\n  artifact_sha256 text\n);\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS run_id text;\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS artifact_id text;\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS artifact_uri text;\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS artifact_media_type text;\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS artifact_size_bytes bigint;\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS artifact_sha256 text;\nCREATE UNIQUE INDEX IF NOT EXISTS issue334_acceptance_fact_run_id\nON app.acceptance_fact (run_id) WHERE run_id IS NOT NULL;\nCREATE OR REPLACE VIEW read_model.acceptance_facts AS\nSELECT id, fact, run_id, artifact_id, artifact_uri, artifact_media_type,\n  artifact_size_bytes, artifact_sha256\nFROM app.acceptance_fact;\nCREATE TABLE IF NOT EXISTS operator.acceptance_decision (\n  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,\n  run_id text NOT NULL,\n  decision text NOT NULL,\n  protected_created_at timestamptz NOT NULL DEFAULT clock_timestamp()\n);\nCREATE UNIQUE INDEX IF NOT EXISTS issue334_acceptance_recovery_canary_v2_one\nON operator.acceptance_decision (run_id)\nWHERE run_id = 'recovery-canary-v2';\nINSERT INTO app.acceptance_fact (\n  id, run_id, fact, artifact_id, artifact_uri, artifact_media_type,\n  artifact_size_bytes, artifact_sha256\n) VALUES (\n  -334, 'recovery-canary-v2', 'artifact-available',\n  'issue334-artifact-v1', 'https://artifacts.example.invalid/issue334/artifact-v1',\n  'text/plain', 37,\n  '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3'\n) ON CONFLICT (id) DO NOTHING;\nINSERT INTO operator.acceptance_decision (run_id, decision)\nVALUES ('recovery-canary-v2', 'retain')\nON CONFLICT DO NOTHING;\nDO $block$\nBEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM app.acceptance_fact\n    WHERE id = -334 AND run_id = 'recovery-canary-v2'\n      AND fact = 'artifact-available'\n      AND artifact_id = 'issue334-artifact-v1'\n      AND artifact_uri = 'https://artifacts.example.invalid/issue334/artifact-v1'\n      AND artifact_media_type = 'text/plain'\n      AND artifact_size_bytes = 37\n      AND artifact_sha256 = '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3'\n  ) OR NOT EXISTS (\n    SELECT 1 FROM operator.acceptance_decision\n    WHERE run_id = 'recovery-canary-v2' AND decision = 'retain'\n  ) THEN\n    RAISE EXCEPTION 'recovery_canary_incompatible';\n  END IF;\nEND\n$block$;\nCOMMIT;\nSELECT current_user AS \"credentialRole\";",
         "options": {}
       },
       "type": "n8n-nodes-base.postgres",
@@ -174,7 +197,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const request = $('Normalize Acceptance Request').first().json;\nreturn [{ json: { ok: true, operation: request.operation, runId: request.runId, domain: 'issue334_acceptance', structureReady: true } }];"
+        "jsCode": "const request = $('Normalize Acceptance Request').first().json;\nif ($json.credentialRole !== 'issue334_acceptance_migrator') throw new Error('acceptance_migrator_binding_invalid');\nreturn [{ json: { ok: true, operation: request.operation, runId: request.runId, domain: 'issue334_acceptance', structureReady: true } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -189,7 +212,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "DO $block$\nBEGIN\n  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'issue334_acceptance_operator') THEN\n    RAISE EXCEPTION 'operator_candidate_missing';\n  END IF;\nEND\n$block$;\nBEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nGRANT USAGE ON SCHEMA operator TO issue334_acceptance_operator;\nGRANT SELECT, INSERT, DELETE ON TABLE operator.acceptance_decision TO issue334_acceptance_operator;\nGRANT UPDATE (decision) ON TABLE operator.acceptance_decision TO issue334_acceptance_operator;\nGRANT USAGE ON SEQUENCE operator.acceptance_decision_id_seq TO issue334_acceptance_operator;\nCOMMIT;",
+        "query": "DO $block$\nBEGIN\n  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'issue334_acceptance_operator') THEN\n    RAISE EXCEPTION 'operator_candidate_missing';\n  END IF;\n  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'issue334_acceptance_runtime') THEN\n    RAISE EXCEPTION 'runtime_role_missing';\n  END IF;\nEND\n$block$;\nBEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nGRANT USAGE ON SCHEMA operator TO issue334_acceptance_operator;\nGRANT SELECT, INSERT, DELETE ON TABLE operator.acceptance_decision TO issue334_acceptance_operator;\nGRANT UPDATE (decision) ON TABLE operator.acceptance_decision TO issue334_acceptance_operator;\nGRANT USAGE ON SEQUENCE operator.acceptance_decision_id_seq TO issue334_acceptance_operator;\nGRANT USAGE ON SCHEMA read_model, operator TO issue334_acceptance_runtime;\nGRANT SELECT ON TABLE read_model.acceptance_facts TO issue334_acceptance_runtime;\nGRANT SELECT ON TABLE operator.acceptance_decision TO issue334_acceptance_runtime;\nCOMMIT;\nSELECT current_user AS \"credentialRole\";",
         "options": {}
       },
       "type": "n8n-nodes-base.postgres",
@@ -199,12 +222,12 @@
         -100
       ],
       "id": "20000000-0000-4000-8000-000000000007",
-      "name": "Grant Acceptance Operator Access",
+      "name": "Grant Acceptance Access",
       "onError": "continueErrorOutput"
     },
     {
       "parameters": {
-        "jsCode": "const request = $('Normalize Acceptance Request').first().json;\nreturn [{ json: { ok: true, operation: request.operation, runId: request.runId, domain: 'issue334_acceptance', grantsReady: true } }];"
+        "jsCode": "const request = $('Normalize Acceptance Request').first().json;\nif ($json.credentialRole !== 'issue334_acceptance_migrator') throw new Error('acceptance_migrator_binding_invalid');\nreturn [{ json: { ok: true, operation: request.operation, runId: request.runId, domain: 'issue334_acceptance', grantsReady: true } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1024,149 +1047,7 @@
     },
     {
       "parameters": {
-        "method": "GET",
-        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $('Require Recovery Saved View').first().json.decisionTableId + '/records' }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendQuery": true,
-        "queryParameters": {"parameters": [{"name": "where", "value": "(run_id,eq,recovery-canary-v1)"}, {"name": "limit", "value": "2"}]},
-        "options": {}
-      },
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [5280, 40],
-      "id": "20000000-0000-4000-8000-000000000059",
-      "name": "List Recovery Canary Rows",
-      "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {
-        "jsCode": "const context = $('Require Recovery Saved View').first().json;\nconst list = Array.isArray($json) ? $json : $json.list;\nconst pageInfo = $json.pageInfo;\nif (!Array.isArray(list) || list.length > 1 || !pageInfo || pageInfo.totalRows !== list.length) throw new Error('recovery_canary_row_invalid');\nconst canaryPollCount = $('Increment Recovery Canary Poll').isExecuted ? $('Increment Recovery Canary Poll').last().json.canaryPollCount : 0;\nif (!Number.isInteger(canaryPollCount) || canaryPollCount < 0 || canaryPollCount > 12) throw new Error('recovery_canary_poll_invalid');\nif (list.length === 0) { if (canaryPollCount !== 0) throw new Error('recovery_canary_row_invalid'); return [{ json: { ...context, canaryRow: null, canaryAction: 'create', canaryPollCount } }]; }\nconst row = list[0];\nif (row.run_id !== 'recovery-canary-v1' || !Number.isSafeInteger(Number(row.id))) throw new Error('recovery_canary_row_invalid');\nlet decision;\ntry { decision = JSON.parse(row.decision); } catch { throw new Error('recovery_canary_row_invalid'); }\nif (!decision || decision.kind !== 'nocodb-attachment-recovery-canary' || decision.version !== 1 || !['pending','uploading','uploaded','ready'].includes(decision.state)) throw new Error('recovery_canary_row_invalid');\nconst exact = (value, keys) => Object.keys(value).sort().join(',') === [...keys].sort().join(',');\nif (['pending','uploading'].includes(decision.state) && !exact(decision, ['kind','version','state'])) throw new Error('recovery_canary_row_invalid');\nif (decision.state === 'uploading') { if (canaryPollCount >= 12) throw new Error('attachment_upload_ambiguous'); return [{ json: { ...context, canaryRow: row, rowId: Number(row.id), canaryDecision: decision, canaryAction: 'wait', canaryPollCount } }]; }\nif (['uploaded','ready'].includes(decision.state)) {\n  if (!exact(decision, ['kind','version','state','baseId','sourceId','tableId','rowId','savedView','commentId','attachment']) || decision.baseId !== context.baseId || decision.sourceId !== context.operatorSourceId || decision.tableId !== context.decisionTableId || String(decision.rowId) !== String(row.id) || JSON.stringify(decision.savedView) !== JSON.stringify(context.savedView)) throw new Error('recovery_canary_row_invalid');\n  const attachment = decision.attachment;\n  if (!attachment || attachment.title !== 'issue334-recovery-canary-v1.txt' || attachment.mimetype !== 'text/plain' || attachment.size !== 37 || attachment.sha256 !== '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3' || !/^download\\/issue334_acceptance\\/recovery-canary-v1\\/issue334-recovery-canary-v1_[A-Za-z0-9_-]{5}\\.txt$/.test(attachment.path)) throw new Error('recovery_canary_row_invalid');\n  if (decision.state === 'uploaded' && (decision.commentId !== null || attachment.id !== null)) throw new Error('recovery_canary_row_invalid');\n  if (decision.state === 'ready' && (typeof decision.commentId !== 'string' || !decision.commentId || typeof attachment.id !== 'string' || !attachment.id)) throw new Error('recovery_canary_row_invalid');\n}\nconst canaryAction = decision.state === 'pending' ? 'upload' : (decision.state === 'uploaded' ? 'associate' : 'verify');\nreturn [{ json: { ...context, canaryRow: row, rowId: Number(row.id), canaryDecision: decision, canaryAction, canaryPollCount } }];"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [5520, 40],
-      "id": "20000000-0000-4000-8000-000000000060",
-      "name": "Inspect Recovery Canary Row",
-      "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {"rules": {"values": [
-        {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"leftValue": "={{ $json.canaryAction }}", "rightValue": "create", "operator": {"type": "string", "operation": "equals"}}], "combinator": "and"}},
-        {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"leftValue": "={{ $json.canaryAction }}", "rightValue": "upload", "operator": {"type": "string", "operation": "equals"}}], "combinator": "and"}},
-        {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"leftValue": "={{ $json.canaryAction }}", "rightValue": "associate", "operator": {"type": "string", "operation": "equals"}}], "combinator": "and"}},
-        {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"leftValue": "={{ $json.canaryAction }}", "rightValue": "verify", "operator": {"type": "string", "operation": "equals"}}], "combinator": "and"}}
-        ,{"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"leftValue": "={{ $json.canaryAction }}", "rightValue": "wait", "operator": {"type": "string", "operation": "equals"}}], "combinator": "and"}}
-      ]}, "options": {}},
-      "type": "n8n-nodes-base.switch",
-      "typeVersion": 3.2,
-      "position": [5760, 40],
-      "id": "20000000-0000-4000-8000-000000000061",
-      "name": "Select Recovery Canary State"
-    },
-    {
-      "parameters": {"operation": "executeQuery", "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nINSERT INTO operator.acceptance_decision (run_id, decision)\nVALUES ('recovery-canary-v1', '{\"kind\":\"nocodb-attachment-recovery-canary\",\"version\":1,\"state\":\"pending\"}')\nON CONFLICT DO NOTHING;\nCOMMIT;", "options": {}},
-      "type": "n8n-nodes-base.postgres", "typeVersion": 2.6, "position": [6000, -140],
-      "id": "20000000-0000-4000-8000-000000000062", "name": "Initialize Recovery Canary Row", "alwaysOutputData": true, "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {"operation": "executeQuery", "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nUPDATE operator.acceptance_decision\nSET decision = '{\"kind\":\"nocodb-attachment-recovery-canary\",\"version\":1,\"state\":\"uploading\"}'\nWHERE id = $1\nAND run_id = 'recovery-canary-v1'\nAND decision = '{\"kind\":\"nocodb-attachment-recovery-canary\",\"version\":1,\"state\":\"pending\"}'\nRETURNING id AS \"rowId\";\nCOMMIT;", "options": {"queryReplacement": "={{ [$json.rowId] }}"}},
-      "type": "n8n-nodes-base.postgres", "typeVersion": 2.6, "position": [6000, -40],
-      "id": "20000000-0000-4000-8000-000000000063", "name": "Claim Recovery Canary Upload", "alwaysOutputData": true, "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {"jsCode": "const context = $('Inspect Recovery Canary Row').first().json;\nconst claimWon = String($json.rowId ?? '') === String(context.rowId);\nif ($json.rowId !== undefined && !claimWon) throw new Error('recovery_canary_claim_failed');\nreturn [{ json: { ...context, claimWon, canaryAction: claimWon ? 'upload' : 'wait' } }];"},
-      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [6240, -40],
-      "id": "20000000-0000-4000-8000-000000000064", "name": "Require Recovery Canary Claim", "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {"jsCode": "const buffer = Buffer.from('bm9jb2RiLWlzc3VlMzM0LWF0dGFjaG1lbnQtY2FuYXJ5LXYxCg==', 'base64');\nconst canaryFile = await helpers.prepareBinaryData(buffer, 'issue334-recovery-canary-v1.txt', 'text/plain');\nreturn [{ json: $json, binary: { canaryFile } }];"},
-      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [6480, -40],
-      "id": "20000000-0000-4000-8000-000000000065", "name": "Prepare Recovery Canary Binary", "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {"method": "POST", "url": "http://nocodb.automation-data.svc.cluster.local:8080/api/v2/storage/upload", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendQuery": true, "queryParameters": {"parameters": [{"name": "path", "value": "issue334_acceptance/recovery-canary-v1"}]}, "sendBody": true, "contentType": "multipart-form-data", "bodyParameters": {"parameters": [{"parameterType": "formBinaryData", "name": "file", "inputDataFieldName": "canaryFile"}]}, "options": {}},
-      "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [6720, -40],
-      "id": "20000000-0000-4000-8000-000000000066", "name": "Upload Recovery Canary", "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {"jsCode": "const context = $('Prepare Recovery Canary Binary').first().json;\nconst candidates = Array.isArray($json) ? $json : [$json];\nif (candidates.length !== 1) throw new Error('recovery_canary_upload_invalid');\nconst file = candidates[0];\nif (!file || !/^download\\/issue334_acceptance\\/recovery-canary-v1\\/issue334-recovery-canary-v1_[A-Za-z0-9_-]{5}\\.txt$/.test(file.path) || file.title !== 'issue334-recovery-canary-v1.txt' || file.mimetype !== 'text/plain' || file.size !== 37) throw new Error('recovery_canary_upload_invalid');\nconst attachment = { id: null, path: file.path, title: file.title, mimetype: file.mimetype, size: file.size, sha256: '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3' };\nconst canaryDecision = { kind: 'nocodb-attachment-recovery-canary', version: 1, state: 'uploaded', baseId: context.baseId, sourceId: context.operatorSourceId, tableId: context.decisionTableId, rowId: String(context.rowId), savedView: context.savedView, commentId: null, attachment };\nreturn [{ json: { ...context, canaryDecision } }];"},
-      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [6960, -40],
-      "id": "20000000-0000-4000-8000-000000000067", "name": "Require Recovery Canary Upload", "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {"method": "PATCH", "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ JSON.stringify([{ id: $json.rowId, decision: JSON.stringify($json.canaryDecision) }]) }}", "options": {}},
-      "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [7200, -40],
-      "id": "20000000-0000-4000-8000-000000000068", "name": "Record Uploaded Recovery Canary", "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {"jsCode": "const context = $('Require Recovery Canary Upload').first().json;\nconst rows = Array.isArray($json) ? $json : [$json];\nif (rows.length !== 1 || String(rows[0].id) !== String(context.rowId)) throw new Error('recovery_canary_upload_record_invalid');\nreturn [{ json: context }];"},
-      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [7440, -40],
-      "id": "20000000-0000-4000-8000-000000000069", "name": "Require Uploaded Recovery Canary", "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {"method": "GET", "url": "http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/comments", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendQuery": true, "queryParameters": {"parameters": [{"name": "fk_model_id", "value": "={{ $('Inspect Recovery Canary Row').first().json.decisionTableId }}"}, {"name": "row_id", "value": "={{ String($('Inspect Recovery Canary Row').first().json.rowId) }}"}]}, "options": {}},
-      "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [7680, 40],
-      "id": "20000000-0000-4000-8000-000000000070", "name": "List Recovery Canary Comments", "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {"jsCode": "const context = $('Require Uploaded Recovery Canary').isExecuted ? $('Require Uploaded Recovery Canary').first().json : $('Inspect Recovery Canary Row').first().json;\nconst list = Array.isArray($json) ? $json : $json.list;\nif (!Array.isArray(list)) throw new Error('recovery_canary_comment_invalid');\nif (list.length === 0) { if (context.canaryDecision.state !== 'uploaded') throw new Error('recovery_canary_comment_invalid'); return [{ json: { ...context, createComment: true, needsReadyWrite: true } }]; }\nif (list.length !== 1) throw new Error('recovery_canary_comment_invalid');\nconst comment = list[0]; const attachments = comment.attachments; const expected = context.canaryDecision.attachment;\nif (comment.base_id !== context.baseId || comment.source_id !== context.operatorSourceId || comment.fk_model_id !== context.decisionTableId || String(comment.row_id) !== String(context.rowId) || comment.comment !== 'issue334-recovery-canary-v1' || !Array.isArray(attachments) || attachments.length !== 1) throw new Error('recovery_canary_comment_invalid');\nconst file = attachments[0];\nif (typeof comment.id !== 'string' || !comment.id || typeof file.id !== 'string' || !file.id || file.path !== expected.path || file.title !== expected.title || file.mimetype !== expected.mimetype || file.size !== expected.size) throw new Error('recovery_canary_comment_invalid');\nconst canaryDecision = { ...context.canaryDecision, state: 'ready', commentId: comment.id, attachment: { ...expected, id: file.id } };\nif (context.canaryDecision.state === 'ready' && JSON.stringify(context.canaryDecision) !== JSON.stringify(canaryDecision)) throw new Error('recovery_canary_comment_invalid');\nreturn [{ json: { ...context, canaryDecision, attachment: canaryDecision.attachment, createComment: false, needsReadyWrite: context.canaryDecision.state !== 'ready' } }];"},
-      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [7920, 40],
-      "id": "20000000-0000-4000-8000-000000000071", "name": "Inspect Recovery Canary Comments", "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"leftValue": "={{ $json.createComment }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true", "singleValue": true}}], "combinator": "and"}, "options": {}},
-      "type": "n8n-nodes-base.if", "typeVersion": 2.2, "position": [8160, 40],
-      "id": "20000000-0000-4000-8000-000000000072", "name": "Recovery Canary Comment Missing"
-    },
-    {
-      "parameters": {"method": "POST", "url": "http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/comments", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ JSON.stringify({ fk_model_id: $json.decisionTableId, row_id: String($json.rowId), comment: 'issue334-recovery-canary-v1', attachments: [{ path: $json.canaryDecision.attachment.path, title: $json.canaryDecision.attachment.title, mimetype: $json.canaryDecision.attachment.mimetype, size: $json.canaryDecision.attachment.size }] }) }}", "options": {}},
-      "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [8400, -40],
-      "id": "20000000-0000-4000-8000-000000000073", "name": "Create Recovery Canary Comment", "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"leftValue": "={{ $json.needsReadyWrite }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true", "singleValue": true}}], "combinator": "and"}, "options": {}},
-      "type": "n8n-nodes-base.if", "typeVersion": 2.2, "position": [8400, 120],
-      "id": "20000000-0000-4000-8000-000000000074", "name": "Recovery Canary Ready Recorded"
-    },
-    {
-      "parameters": {"method": "PATCH", "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ JSON.stringify([{ id: $json.rowId, decision: JSON.stringify($json.canaryDecision) }]) }}", "options": {}},
-      "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [8640, 80],
-      "id": "20000000-0000-4000-8000-000000000075", "name": "Record Ready Recovery Canary", "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {"jsCode": "const context = $('Inspect Recovery Canary Comments').first().json;\nconst rows = Array.isArray($json) ? $json : [$json];\nif (rows.length !== 1 || String(rows[0].id) !== String(context.rowId) || context.canaryDecision.state !== 'ready') throw new Error('recovery_canary_ready_record_invalid');\nreturn [{ json: context }];"},
-      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [8880, 80],
-      "id": "20000000-0000-4000-8000-000000000076", "name": "Require Ready Recovery Canary", "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {"method": "GET", "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/' + $json.attachment.path }}", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "options": {"response": {"response": {"responseFormat": "file", "outputPropertyName": "canaryDownload"}}}},
-      "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [9120, 120],
-      "id": "20000000-0000-4000-8000-000000000077", "name": "Download Recovery Canary", "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {"jsCode": "const context = $('Require Ready Recovery Canary').isExecuted ? $('Require Ready Recovery Canary').first().json : $('Inspect Recovery Canary Comments').first().json;\nconst buffer = await helpers.getBinaryDataBuffer(0, 'canaryDownload');\nif (!Buffer.isBuffer(buffer) || buffer.length !== 37 || buffer.toString('base64') !== 'bm9jb2RiLWlzc3VlMzM0LWF0dGFjaG1lbnQtY2FuYXJ5LXYxCg==' || context.canaryDecision.state !== 'ready') throw new Error('recovery_canary_download_invalid');\nconst decision = context.canaryDecision;\nreturn [{ json: { ...context, attachmentCanary: { state: 'ready', rowId: String(context.rowId), savedViewId: decision.savedView.id, savedViewTableId: decision.savedView.tableId, savedViewTitle: decision.savedView.title, savedViewType: decision.savedView.type, commentId: decision.commentId, attachmentId: decision.attachment.id, path: decision.attachment.path, title: decision.attachment.title, mimetype: decision.attachment.mimetype, size: decision.attachment.size, sha256: decision.attachment.sha256 } } }];"},
-      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [9360, 120],
-      "id": "20000000-0000-4000-8000-000000000078", "name": "Require Recovery Canary Download", "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2}, "conditions": [{"leftValue": "={{ $json.claimWon }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true", "singleValue": true}}], "combinator": "and"}, "options": {}},
-      "type": "n8n-nodes-base.if", "typeVersion": 2.2, "position": [6480, -100],
-      "id": "20000000-0000-4000-8000-000000000079", "name": "Recovery Canary Upload Claimed"
-    },
-    {
-      "parameters": {"amount": 5, "unit": "seconds"},
-      "type": "n8n-nodes-base.wait", "typeVersion": 1.1, "position": [6480, 220],
-      "id": "20000000-0000-4000-8000-000000000080", "name": "Wait Recovery Canary Join"
-    },
-    {
-      "parameters": {"jsCode": "const canaryPollCount = Number($json.canaryPollCount) + 1;\nif (!Number.isInteger(canaryPollCount) || canaryPollCount < 1 || canaryPollCount > 12) throw new Error('recovery_canary_poll_invalid');\nreturn [{ json: { ...$json, canaryPollCount } }];"},
-      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [6720, 220],
-      "id": "20000000-0000-4000-8000-000000000081", "name": "Increment Recovery Canary Poll", "onError": "continueErrorOutput"
-    },
-    {
-      "parameters": {
-        "jsCode": "const context = $('Require Recovery Canary Download').first().json;\nif (context.inserted !== true || context.read !== true || context.readerRead !== true || context.decisionUpdated !== true || context.protectedUpdateDenied !== true || context.readerInsertDenied !== true || context.publicSharing?.basePublicShareUuid !== null || context.publicSharing?.views?.length !== 2 || context.attachmentCanary?.state !== 'ready') throw new Error('probe_evidence_incomplete');\nreturn [{ json: {\n  ok: true,\n  operation: 'probe',\n  runId: context.runId,\n  domain: 'issue334_acceptance',\n  credentialProof: { throughN8n: true, credentialName: 'NocoDB Operator API' },\n  inserted: context.inserted,\n  read: context.read,\n  readerRead: context.readerRead,\n  decisionUpdated: context.decisionUpdated,\n  removed: true,\n  reflectedSchemas: context.reflectedSchemas,\n  reflectedTables: context.reflectedTables,\n  publicSharing: context.publicSharing,\n  attachmentCanary: context.attachmentCanary,\n  forbiddenOperations: {\n    protectedUpdateDenied: context.protectedUpdateDenied,\n    protectedUpdateStatus: context.protectedUpdateStatus,\n    protectedUpdateEvidence: context.protectedUpdateEvidence,\n    readerInsertDenied: context.readerInsertDenied,\n    readerInsertStatus: context.readerInsertStatus,\n    readerInsertEvidence: context.readerInsertEvidence\n  }\n} }];"
+        "jsCode": "const context = $('Require Recovery Decision').first().json;\nif (context.inserted !== true || context.read !== true || context.readerRead !== true || context.decisionUpdated !== true ||\n  context.protectedUpdateDenied !== true || context.readerInsertDenied !== true ||\n  context.publicSharing?.basePublicShareUuid !== null || context.publicSharing?.views?.length !== 2 ||\n  context.recoveryCanary?.version !== 2 || context.recoveryCanary?.state !== 'ready') throw new Error('probe_evidence_incomplete');\nreturn [{ json: {\n  ok: true,\n  operation: 'probe',\n  runId: context.runId,\n  domain: 'issue334_acceptance',\n  credentialProof: { throughN8n: true, credentialName: 'NocoDB Operator API' },\n  inserted: context.inserted,\n  read: context.read,\n  readerRead: context.readerRead,\n  decisionUpdated: context.decisionUpdated,\n  removed: true,\n  reflectedSchemas: context.reflectedSchemas,\n  reflectedTables: context.reflectedTables,\n  publicSharing: context.publicSharing,\n  recoveryCanary: context.recoveryCanary,\n  forbiddenOperations: {\n    protectedUpdateDenied: context.protectedUpdateDenied,\n    protectedUpdateStatus: context.protectedUpdateStatus,\n    protectedUpdateEvidence: context.protectedUpdateEvidence,\n    readerInsertDenied: context.readerInsertDenied,\n    readerInsertStatus: context.readerInsertStatus,\n    readerInsertEvidence: context.readerInsertEvidence,\n  },\n} }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1206,6 +1087,421 @@
       ],
       "id": "20000000-0000-4000-8000-000000000035",
       "name": "Respond"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.operation === 'feedback' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3240,
+        120
+      ],
+      "id": "20000000-0000-4000-8000-000000000082",
+      "name": "Feedback Only"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.factsTableId + '/records' }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "(id,eq,-334)"
+            },
+            {
+              "name": "limit",
+              "value": "2"
+            }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5760,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000083",
+      "name": "Read Recovery Fact",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Recovery Saved View').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nif (rows.length !== 1) throw new Error('recovery_fact_invalid');\nconst row = rows[0];\nconst forbidden = Object.keys(row).some((key) => key.toLowerCase().startsWith('attach') || ['path', 'signedpath', 'signedurl'].includes(key.toLowerCase()));\nif (forbidden ||\n  Number(row.id) !== -334 || row.run_id !== 'recovery-canary-v2' || row.fact !== 'artifact-available' ||\n  row.artifact_id !== 'issue334-artifact-v1' || row.artifact_uri !== 'https://artifacts.example.invalid/issue334/artifact-v1' ||\n  row.artifact_media_type !== 'text/plain' || Number(row.artifact_size_bytes) !== 37 ||\n  row.artifact_sha256 !== '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3') {\n  throw new Error('recovery_fact_invalid');\n}\nreturn [{ json: { ...context, recoveryFact: row } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6000,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000084",
+      "name": "Require Recovery Fact",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "(run_id,eq,recovery-canary-v2)"
+            },
+            {
+              "name": "limit",
+              "value": "2"
+            }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6240,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000085",
+      "name": "Read Recovery Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Recovery Fact').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nif (rows.length !== 1) throw new Error('recovery_decision_invalid');\nconst row = rows[0];\nif (!Number.isSafeInteger(Number(row.id)) || row.run_id !== 'recovery-canary-v2' || row.decision !== 'retain' ||\n  ['attachment', 'attachments', 'commentId'].some((key) => Object.prototype.hasOwnProperty.call(row, key))) {\n  throw new Error('recovery_decision_invalid');\n}\nconst fact = context.recoveryFact;\nreturn [{ json: { ...context, recoveryCanary: {\n  version: 2,\n  state: 'ready',\n  baseId: context.baseId,\n  readerSourceId: context.readerSourceId,\n  operatorSourceId: context.operatorSourceId,\n  factTableId: context.factsTableId,\n  decisionTableId: context.decisionTableId,\n  viewId: context.savedView.id,\n  rowId: String(row.id),\n  factId: -334,\n  artifact: {\n    id: fact.artifact_id,\n    uri: fact.artifact_uri,\n    mediaType: fact.artifact_media_type,\n    sizeBytes: Number(fact.artifact_size_bytes),\n    sha256: fact.artifact_sha256,\n  },\n} } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6480,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000086",
+      "name": "Require Recovery Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Feedback Only').first().json;\nlet hash = 2166136261;\nfor (const character of context.runId) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619) >>> 0;\nconst factId = 7000000000 + hash;\nif (!Number.isSafeInteger(factId) || factId === -334 || context.runId === 'recovery-canary-v2') throw new Error('feedback_fact_id_invalid');\nreturn [{ json: { ...context, factId } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3480,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000087",
+      "name": "Prepare Feedback Fact",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nDELETE FROM operator.acceptance_decision WHERE run_id = $1 AND run_id <> 'recovery-canary-v2';\nDELETE FROM app.acceptance_fact WHERE id = $2 AND run_id = $1 AND id <> -334;\nCOMMIT;",
+        "options": {
+          "queryReplacement": "={{ [$json.runId, $json.factId] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        3720,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000088",
+      "name": "Clear Feedback Residue",
+      "alwaysOutputData": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH published AS (\n  INSERT INTO app.acceptance_fact (id, run_id, fact)\n  VALUES ($1, $2, 'original')\n  RETURNING id, run_id, fact\n)\nSELECT id AS \"factId\", run_id AS \"runId\", fact, current_user AS \"runtimeRole\"\nFROM published;",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Feedback Fact').first().json.factId, $('Prepare Feedback Fact').first().json.runId] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        3960,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000089",
+      "name": "Publish Initial Feedback Fact",
+      "alwaysOutputData": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Prepare Feedback Fact').first().json;\nif ($json.runtimeRole !== 'issue334_acceptance_runtime' || String($json.factId) !== String(context.factId) ||\n  $json.runId !== context.runId || $json.fact !== 'original') throw new Error('feedback_initial_fact_invalid');\nreturn [{ json: { ...context, initialFact: $json.fact } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4200,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000090",
+      "name": "Require Initial Runtime Fact",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ run_id: $json.runId, decision: 'corrected' }) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4440,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000091",
+      "name": "Insert Feedback Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Initial Runtime Fact').first().json;\nconst row = Array.isArray($json) ? $json[0] : $json;\nconst decisionRowId = row?.id ?? row?.Id;\nif (decisionRowId === undefined || decisionRowId === null) throw new Error('feedback_decision_id_missing');\nreturn [{ json: { ...context, decisionRowId } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4680,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000092",
+      "name": "Normalize Feedback Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT f.id AS \"factId\", f.run_id AS \"runId\", f.fact AS \"initialFact\",\n  d.decision AS \"operatorDecision\", COALESCE(d.decision, f.fact) AS \"effectiveBeforeRefresh\",\n  current_user AS \"runtimeRole\"\nFROM app.acceptance_fact AS f\nJOIN operator.acceptance_decision AS d ON d.run_id = f.run_id\nWHERE f.id = $1 AND f.run_id = $2 AND d.id = $3;",
+        "options": {
+          "queryReplacement": "={{ [$json.factId, $json.runId, $json.decisionRowId] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        4920,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000093",
+      "name": "Consume Feedback Before Refresh",
+      "alwaysOutputData": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Normalize Feedback Decision').first().json;\nif ($json.runtimeRole !== 'issue334_acceptance_runtime' || String($json.factId) !== String(context.factId) ||\n  $json.runId !== context.runId || $json.initialFact !== 'original' ||\n  $json.operatorDecision !== 'corrected' || $json.effectiveBeforeRefresh !== 'corrected') {\n  throw new Error('feedback_before_refresh_invalid');\n}\nreturn [{ json: { ...context, initialFact: $json.initialFact, operatorDecision: $json.operatorDecision, effectiveBeforeRefresh: $json.effectiveBeforeRefresh } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5160,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000094",
+      "name": "Require Feedback Before Refresh",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH refreshed AS (\n  UPDATE app.acceptance_fact SET fact = 'refreshed'\n  WHERE id = $1 AND run_id = $2 AND fact = 'original'\n  RETURNING id, run_id, fact\n)\nSELECT id AS \"factId\", run_id AS \"runId\", fact, current_user AS \"runtimeRole\"\nFROM refreshed;",
+        "options": {
+          "queryReplacement": "={{ [$json.factId, $json.runId] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        5400,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000095",
+      "name": "Refresh Feedback Fact",
+      "alwaysOutputData": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Feedback Before Refresh').first().json;\nif ($json.runtimeRole !== 'issue334_acceptance_runtime' || String($json.factId) !== String(context.factId) ||\n  $json.runId !== context.runId || $json.fact !== 'refreshed') throw new Error('feedback_refresh_invalid');\nreturn [{ json: context }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5640,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000096",
+      "name": "Require Refreshed Runtime Fact",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.factsTableId + '/records' }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "={{ '(id,eq,' + $json.factId + ')' }}"
+            },
+            {
+              "name": "limit",
+              "value": "2"
+            }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5880,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000097",
+      "name": "Read Refreshed Fact",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Refreshed Runtime Fact').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nconst matches = rows.filter((row) => String(row.id) === String(context.factId) && row.run_id === context.runId);\nif (rows.length !== 1 || matches.length !== 1 || matches[0].fact !== 'refreshed') throw new Error('feedback_reader_refresh_invalid');\nreturn [{ json: { ...context, refreshedFact: matches[0].fact } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6120,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000098",
+      "name": "Require Refreshed Reader Fact",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT f.id AS \"factId\", f.run_id AS \"runId\", f.fact AS \"refreshedFact\",\n  d.decision AS \"operatorDecision\", COALESCE(d.decision, f.fact) AS \"effectiveAfterRefresh\",\n  current_user AS \"runtimeRole\"\nFROM app.acceptance_fact AS f\nJOIN operator.acceptance_decision AS d ON d.run_id = f.run_id\nWHERE f.id = $1 AND f.run_id = $2 AND d.id = $3;",
+        "options": {
+          "queryReplacement": "={{ [$json.factId, $json.runId, $json.decisionRowId] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        6360,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000099",
+      "name": "Consume Feedback After Refresh",
+      "alwaysOutputData": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Refreshed Reader Fact').first().json;\nif ($json.runtimeRole !== 'issue334_acceptance_runtime' || String($json.factId) !== String(context.factId) ||\n  $json.runId !== context.runId || $json.refreshedFact !== 'refreshed' ||\n  $json.operatorDecision !== context.operatorDecision || $json.effectiveAfterRefresh !== 'corrected') {\n  throw new Error('feedback_after_refresh_invalid');\n}\nreturn [{ json: {\n  ok: true,\n  operation: 'feedback',\n  runId: context.runId,\n  domain: 'issue334_acceptance',\n  factId: context.factId,\n  feedback: {\n    initialFact: context.initialFact,\n    operatorDecision: context.operatorDecision,\n    effectiveBeforeRefresh: context.effectiveBeforeRefresh,\n    refreshedFact: $json.refreshedFact,\n    effectiveAfterRefresh: $json.effectiveAfterRefresh,\n  },\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6600,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000100",
+      "name": "Prepare Feedback Response",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Cleanup Absent').first().json;\nlet hash = 2166136261;\nfor (const character of context.runId) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619) >>> 0;\nconst factId = 7000000000 + hash;\nif (!Number.isSafeInteger(factId) || factId === -334 || context.runId === 'recovery-canary-v2') throw new Error('cleanup_fact_id_invalid');\nreturn [{ json: { ...context, factId } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4440,
+        -300
+      ],
+      "id": "20000000-0000-4000-8000-000000000101",
+      "name": "Prepare Cleanup Fact",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nDELETE FROM app.acceptance_fact WHERE id = $1 AND run_id = $2 AND id <> -334;\nCOMMIT;",
+        "options": {
+          "queryReplacement": "={{ [$json.factId, $json.runId] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        4680,
+        -300
+      ],
+      "id": "20000000-0000-4000-8000-000000000102",
+      "name": "Cleanup Feedback Fact",
+      "alwaysOutputData": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Prepare Cleanup Fact').first().json;\nreturn [{ json: { ok: true, operation: 'cleanup', runId: context.runId, domain: 'issue334_acceptance', removedCount: context.removedCount } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4920,
+        -300
+      ],
+      "id": "20000000-0000-4000-8000-000000000103",
+      "name": "Require Cleanup Fact",
+      "onError": "continueErrorOutput"
     }
   ],
   "pinData": {},
@@ -1250,7 +1546,14 @@
         ],
         [
           {
-            "node": "Grant Acceptance Operator Access",
+            "node": "Grant Acceptance Access",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "List Acceptance Bases",
             "type": "main",
             "index": 0
           }
@@ -1276,24 +1579,6 @@
         [
           {
             "node": "Structure Result",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Prepare Acceptance Error Response",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Grant Acceptance Operator Access": {
-      "main": [
-        [
-          {
-            "node": "Grant Result",
             "type": "main",
             "index": 0
           }
@@ -1525,38 +1810,110 @@
     },
     "Get Acceptance Base Share": {
       "main": [
-        [{"node": "Require Acceptance Base Private", "type": "main", "index": 0}],
-        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+        [
+          {
+            "node": "Require Acceptance Base Private",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Require Acceptance Base Private": {
       "main": [
-        [{"node": "Get Reader Shared Views", "type": "main", "index": 0}],
-        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+        [
+          {
+            "node": "Get Reader Shared Views",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Get Reader Shared Views": {
       "main": [
-        [{"node": "Require Reader Shares Empty", "type": "main", "index": 0}],
-        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+        [
+          {
+            "node": "Require Reader Shares Empty",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Require Reader Shares Empty": {
       "main": [
-        [{"node": "Get Operator Shared Views", "type": "main", "index": 0}],
-        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+        [
+          {
+            "node": "Get Operator Shared Views",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Get Operator Shared Views": {
       "main": [
-        [{"node": "Require Operator Shares Empty", "type": "main", "index": 0}],
-        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+        [
+          {
+            "node": "Require Operator Shares Empty",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Require Operator Shares Empty": {
       "main": [
-        [{"node": "Cleanup Only", "type": "main", "index": 0}],
-        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+        [
+          {
+            "node": "Cleanup Only",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Cleanup Only": {
@@ -1570,7 +1927,7 @@
         ],
         [
           {
-            "node": "Read Acceptance Facts",
+            "node": "Feedback Only",
             "type": "main",
             "index": 0
           }
@@ -1884,148 +2241,231 @@
       ]
     },
     "Initialize Cleanup": {
-      "main": [[{"node": "List Cleanup Decisions", "type": "main", "index": 0}]]
+      "main": [
+        [
+          {
+            "node": "List Cleanup Decisions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Cleanup Rows Present": {
       "main": [
-        [{"node": "Delete Cleanup Page", "type": "main", "index": 0}],
-        [{"node": "Confirm Cleanup Absence", "type": "main", "index": 0}]
+        [
+          {
+            "node": "Delete Cleanup Page",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Confirm Cleanup Absence",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Confirm Cleanup Absence": {
       "main": [
-        [{"node": "Require Cleanup Absent", "type": "main", "index": 0}],
-        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+        [
+          {
+            "node": "Require Cleanup Absent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Require Cleanup Absent": {
       "main": [
-        [{"node": "Respond", "type": "main", "index": 0}],
-        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+        [
+          {
+            "node": "Prepare Cleanup Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Read Acceptance Facts": {
       "main": [
-        [{"node": "Require Reader Facts Read", "type": "main", "index": 0}],
-        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+        [
+          {
+            "node": "Require Reader Facts Read",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Require Reader Facts Read": {
       "main": [
-        [{"node": "Insert Acceptance Decision", "type": "main", "index": 0}],
-        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+        [
+          {
+            "node": "Insert Acceptance Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Prepare Reader Negative Probe": {
       "main": [
-        [{"node": "Clear Reader Negative Residue", "type": "main", "index": 0}],
-        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+        [
+          {
+            "node": "Clear Reader Negative Residue",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Clear Reader Negative Residue": {
       "main": [
-        [{"node": "Try Reader Insert", "type": "main", "index": 0}],
-        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+        [
+          {
+            "node": "Try Reader Insert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Reader Insert Denied": {
       "main": [
-        [{"node": "Delete Probe Decision", "type": "main", "index": 0}],
-        [{"node": "Cleanup Unexpected Reader Insert", "type": "main", "index": 0}]
+        [
+          {
+            "node": "Delete Probe Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Cleanup Unexpected Reader Insert",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Cleanup Unexpected Reader Insert": {
       "main": [
-        [{"node": "Fail Unexpected Reader Insert", "type": "main", "index": 0}],
-        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+        [
+          {
+            "node": "Fail Unexpected Reader Insert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Fail Unexpected Reader Insert": {
       "main": [
-        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}],
-        [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Get Recovery Saved View": {
-      "main": [[{"node": "Require Recovery Saved View", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
-    },
-    "Require Recovery Saved View": {
-      "main": [[{"node": "List Recovery Canary Rows", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
-    },
-    "List Recovery Canary Rows": {
-      "main": [[{"node": "Inspect Recovery Canary Row", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
-    },
-    "Inspect Recovery Canary Row": {
-      "main": [[{"node": "Select Recovery Canary State", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
-    },
-    "Select Recovery Canary State": {
       "main": [
-        [{"node": "Initialize Recovery Canary Row", "type": "main", "index": 0}],
-        [{"node": "Claim Recovery Canary Upload", "type": "main", "index": 0}],
-        [{"node": "List Recovery Canary Comments", "type": "main", "index": 0}],
-        [{"node": "List Recovery Canary Comments", "type": "main", "index": 0}],
-        [{"node": "Wait Recovery Canary Join", "type": "main", "index": 0}]
+        [
+          {
+            "node": "Require Recovery Saved View",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Initialize Recovery Canary Row": {
-      "main": [[{"node": "List Recovery Canary Rows", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
-    },
-    "Claim Recovery Canary Upload": {
-      "main": [[{"node": "Require Recovery Canary Claim", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
-    },
-    "Require Recovery Canary Claim": {
-      "main": [[{"node": "Recovery Canary Upload Claimed", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
-    },
-    "Recovery Canary Upload Claimed": {
-      "main": [[{"node": "Prepare Recovery Canary Binary", "type": "main", "index": 0}], [{"node": "Wait Recovery Canary Join", "type": "main", "index": 0}]]
-    },
-    "Wait Recovery Canary Join": {
-      "main": [[{"node": "Increment Recovery Canary Poll", "type": "main", "index": 0}]]
-    },
-    "Increment Recovery Canary Poll": {
-      "main": [[{"node": "List Recovery Canary Rows", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
-    },
-    "Prepare Recovery Canary Binary": {
-      "main": [[{"node": "Upload Recovery Canary", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
-    },
-    "Upload Recovery Canary": {
-      "main": [[{"node": "Require Recovery Canary Upload", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
-    },
-    "Require Recovery Canary Upload": {
-      "main": [[{"node": "Record Uploaded Recovery Canary", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
-    },
-    "Record Uploaded Recovery Canary": {
-      "main": [[{"node": "Require Uploaded Recovery Canary", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
-    },
-    "Require Uploaded Recovery Canary": {
-      "main": [[{"node": "List Recovery Canary Comments", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
-    },
-    "List Recovery Canary Comments": {
-      "main": [[{"node": "Inspect Recovery Canary Comments", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
-    },
-    "Inspect Recovery Canary Comments": {
-      "main": [[{"node": "Recovery Canary Comment Missing", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
-    },
-    "Recovery Canary Comment Missing": {
-      "main": [[{"node": "Create Recovery Canary Comment", "type": "main", "index": 0}], [{"node": "Recovery Canary Ready Recorded", "type": "main", "index": 0}]]
-    },
-    "Create Recovery Canary Comment": {
-      "main": [[{"node": "List Recovery Canary Comments", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
-    },
-    "Recovery Canary Ready Recorded": {
-      "main": [[{"node": "Record Ready Recovery Canary", "type": "main", "index": 0}], [{"node": "Download Recovery Canary", "type": "main", "index": 0}]]
-    },
-    "Record Ready Recovery Canary": {
-      "main": [[{"node": "Require Ready Recovery Canary", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
-    },
-    "Require Ready Recovery Canary": {
-      "main": [[{"node": "Download Recovery Canary", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
-    },
-    "Download Recovery Canary": {
-      "main": [[{"node": "Require Recovery Canary Download", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
-    },
-    "Require Recovery Canary Download": {
-      "main": [[{"node": "Prepare Acceptance Response", "type": "main", "index": 0}], [{"node": "Prepare Acceptance Error Response", "type": "main", "index": 0}]]
+    "Require Recovery Saved View": {
+      "main": [
+        [
+          {
+            "node": "Read Recovery Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Prepare Acceptance Response": {
       "main": [
@@ -2050,6 +2490,420 @@
         [
           {
             "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Grant Acceptance Access": {
+      "main": [
+        [
+          {
+            "node": "Grant Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Feedback Only": {
+      "main": [
+        [
+          {
+            "node": "Prepare Feedback Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Read Acceptance Facts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Cleanup Fact": {
+      "main": [
+        [
+          {
+            "node": "Cleanup Feedback Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cleanup Feedback Fact": {
+      "main": [
+        [
+          {
+            "node": "Require Cleanup Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Cleanup Fact": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Recovery Fact": {
+      "main": [
+        [
+          {
+            "node": "Require Recovery Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Recovery Fact": {
+      "main": [
+        [
+          {
+            "node": "Read Recovery Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Recovery Decision": {
+      "main": [
+        [
+          {
+            "node": "Require Recovery Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Recovery Decision": {
+      "main": [
+        [
+          {
+            "node": "Prepare Acceptance Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Feedback Fact": {
+      "main": [
+        [
+          {
+            "node": "Clear Feedback Residue",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear Feedback Residue": {
+      "main": [
+        [
+          {
+            "node": "Publish Initial Feedback Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish Initial Feedback Fact": {
+      "main": [
+        [
+          {
+            "node": "Require Initial Runtime Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Initial Runtime Fact": {
+      "main": [
+        [
+          {
+            "node": "Insert Feedback Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Feedback Decision": {
+      "main": [
+        [
+          {
+            "node": "Normalize Feedback Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Feedback Decision": {
+      "main": [
+        [
+          {
+            "node": "Consume Feedback Before Refresh",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consume Feedback Before Refresh": {
+      "main": [
+        [
+          {
+            "node": "Require Feedback Before Refresh",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Feedback Before Refresh": {
+      "main": [
+        [
+          {
+            "node": "Refresh Feedback Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Refresh Feedback Fact": {
+      "main": [
+        [
+          {
+            "node": "Require Refreshed Runtime Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Refreshed Runtime Fact": {
+      "main": [
+        [
+          {
+            "node": "Read Refreshed Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Refreshed Fact": {
+      "main": [
+        [
+          {
+            "node": "Require Refreshed Reader Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Refreshed Reader Fact": {
+      "main": [
+        [
+          {
+            "node": "Consume Feedback After Refresh",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consume Feedback After Refresh": {
+      "main": [
+        [
+          {
+            "node": "Prepare Feedback Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Feedback Response": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
             "type": "main",
             "index": 0
           }

@@ -155,7 +155,7 @@ case "$url" in
     jq -e --arg operation "$operation" --arg run_id "${TEST_RUN_ID:?}" \
       '. == {operation: $operation, runId: $run_id}' "$body_path" >/dev/null || exit 77
     case "$operation" in
-      structure|grants|cleanup) event="acceptance-${operation}"; response="acceptance-${operation}.json" ;;
+      structure|grants|cleanup|feedback) event="acceptance-${operation}"; response="acceptance-${operation}.json" ;;
       probe)
         probe_number="$(($(rg -c '^acceptance-probe$' "${NOCODB_ACCESS_EVENT_LOG:?}" || true) + 1))"
         event='acceptance-probe'
@@ -197,6 +197,9 @@ cat >"$fixture/responses/acceptance-grants.json" <<EOF
 EOF
 cat >"$fixture/responses/acceptance-cleanup.json" <<EOF
 {"ok":true,"operation":"cleanup","runId":"$run_id","domain":"issue334_acceptance","removedCount":2}
+EOF
+cat >"$fixture/responses/acceptance-feedback.json" <<EOF
+{"ok":true,"operation":"feedback","runId":"$run_id","domain":"issue334_acceptance","factId":7000000011,"feedback":{"initialFact":"original","operatorDecision":"corrected","effectiveBeforeRefresh":"corrected","refreshedFact":"refreshed","effectiveAfterRefresh":"corrected"}}
 EOF
 cat >"$fixture/responses/signup-denial.json" <<'EOF'
 {"error":"signup_disabled"}
@@ -257,46 +260,8 @@ jq -n --argjson reader "$reader_current" --argjson operator "$operator_created" 
 jq -n --argjson reader "$reader_current" --argjson operator "$operator_current" '{ok:true,domain:"issue334_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-3.json"
 jq -n --argjson reader "$reader_current" --argjson operator "$operator_rotated" '{ok:true,domain:"issue334_acceptance",operation:"rotate",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-rotate.json"
 
-producer_probe_code="$(jq -r '.nodes[] | select(.name == "Evaluate Reader Insert Denial") | .parameters.jsCode' kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json)"
-producer_reader_insert_evidence="$(sed -n "s/.*readerInsertEvidence: '\([^']*\)'.*/\1/p" <<<"$producer_probe_code")"
-producer_canary_inspect="$(jq -r '.nodes[] | select(.name == "Inspect Recovery Canary Row") | .parameters.jsCode' kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json)"
-producer_canary_download="$(jq -r '.nodes[] | select(.name == "Require Recovery Canary Download") | .parameters.jsCode' kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json)"
-producer_saved_view="$(jq -r '.nodes[] | select(.name == "Require Recovery Saved View") | .parameters.jsCode' kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json)"
-producer_canary_title="$(sed -n "s/.*attachment.title !== '\([^']*\)'.*/\1/p" <<<"$producer_canary_inspect")"
-producer_canary_mimetype="$(sed -n "s/.*attachment.mimetype !== '\([^']*\)'.*/\1/p" <<<"$producer_canary_inspect")"
-producer_canary_size="$(sed -n 's/.*attachment.size !== \([0-9][0-9]*\).*/\1/p' <<<"$producer_canary_inspect")"
-producer_canary_sha256="$(sed -n "s/.*attachment.sha256 !== '\([^']*\)'.*/\1/p" <<<"$producer_canary_inspect")"
-producer_canary_path_regex="$(sed -n 's@.*!/\^\(.*\)\$/.test(attachment.path).*@^\1$@p' \
-  <<<"$producer_canary_inspect" | sed 's@\\/@/@g')"
-producer_saved_view_title="$(sed -n "s/.*view.title !== '\([^']*\)'.*/\1/p" <<<"$producer_saved_view")"
-producer_saved_view_type="$(sed -n 's/.*view.type !== \([0-9][0-9]*\).*/\1/p' <<<"$producer_saved_view")"
-producer_canary_literal="$(sed -n 's/.*attachmentCanary: { \(.*\) } } }\];/\1/p' <<<"$producer_canary_download")"
-producer_canary_fields="$(tr ',' '\n' <<<"$producer_canary_literal" | sed 's/^ *//;s/:.*//' | paste -sd, -)"
-consumer_canary_path_regex='^download/issue334_acceptance/recovery-canary-v1/issue334-recovery-canary-v1_[A-Za-z0-9_-]{5}\.txt$'
-fixture_canary_path='download/issue334_acceptance/recovery-canary-v1/issue334-recovery-canary-v1_abcD1.txt'
-[[ "$producer_reader_insert_evidence" =~ ^[a-z0-9_]+$ ]] || {
-  echo 'Could not derive reader-insert denial evidence from the committed acceptance producer.' >&2
-  exit 1
-}
-[[ "$producer_canary_title" =~ ^[A-Za-z0-9._-]+$ &&
-  "$producer_canary_mimetype" =~ ^[a-z0-9.+-]+/[a-z0-9.+-]+$ &&
-  "$producer_canary_size" =~ ^[0-9]+$ &&
-  "$producer_canary_sha256" =~ ^[a-f0-9]{64}$ &&
-  "$producer_canary_path_regex" == "$consumer_canary_path_regex" &&
-  "$fixture_canary_path" =~ $consumer_canary_path_regex &&
-  "$producer_saved_view_title" =~ ^[A-Za-z0-9_-]+$ &&
-  "$producer_saved_view_type" =~ ^[0-9]+$ &&
-  "$producer_canary_fields" == 'state,rowId,savedViewId,savedViewTableId,savedViewTitle,savedViewType,commentId,attachmentId,path,title,mimetype,size,sha256' ]] || {
-  echo 'Could not derive the attachment-canary contract from the committed acceptance producer.' >&2
-  exit 1
-}
-
 probe_response() {
-  jq -n --arg run_id "$run_id" --arg reader_insert_evidence "$producer_reader_insert_evidence" \
-    --arg canary_title "$producer_canary_title" --arg canary_mimetype "$producer_canary_mimetype" \
-    --arg canary_sha256 "$producer_canary_sha256" --arg canary_path "$fixture_canary_path" \
-    --arg saved_view_title "$producer_saved_view_title" \
-    --argjson canary_size "$producer_canary_size" --argjson saved_view_type "$producer_saved_view_type" '{
+  jq -n --arg run_id "$run_id" '{
     ok: true,
     operation: "probe",
     runId: $run_id,
@@ -313,26 +278,21 @@ probe_response() {
       {id:"table-facts",title:"acceptance_facts",tableName:"acceptance_facts",sourceId:"source-reader",schema:"read_model"}
     ],
     publicSharing: {basePublicShareUuid:null,views:[{title:"acceptance_facts",publicShareUuid:null},{title:"acceptance_decision",publicShareUuid:null}]},
-    attachmentCanary: {
-      state:"ready",rowId:"41",savedViewId:"view-facts",savedViewTableId:"table-facts",
-      savedViewTitle:$saved_view_title,savedViewType:$saved_view_type,
-      commentId:"comment-canary",attachmentId:"attachment-canary",
-      path:$canary_path,
-      title:$canary_title,mimetype:$canary_mimetype,size:$canary_size,sha256:$canary_sha256
+    recoveryCanary: {
+      version:2,state:"ready",baseId:"base-acceptance",readerSourceId:"source-reader",
+      operatorSourceId:"source-operator",factTableId:"table-facts",decisionTableId:"table-decision",
+      viewId:"view-facts",rowId:"41",factId:-334,
+      artifact:{id:"issue334-artifact-v1",uri:"https://artifacts.example.invalid/issue334/artifact-v1",
+        mediaType:"text/plain",sizeBytes:37,sha256:"09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3"}
     },
     forbiddenOperations: {
       protectedUpdateDenied:true,protectedUpdateStatus:400,protectedUpdateEvidence:"postgresql_42501",
-      readerInsertDenied:true,readerInsertStatus:403,readerInsertEvidence:$reader_insert_evidence
+      readerInsertDenied:true,readerInsertStatus:403,readerInsertEvidence:"source_read_only"
     }
   }'
 }
 probe_response >"$fixture/responses/acceptance-probe-1.json"
 probe_response >"$fixture/responses/acceptance-probe-2.json"
-[[ "$(jq -r '.attachmentCanary | keys_unsorted | join(",")' "$fixture/responses/acceptance-probe-1.json")" == \
-  "$producer_canary_fields" ]] || {
-  echo 'The command fake attachment canary drifted from the committed producer field contract.' >&2
-  exit 1
-}
 
 case_name=''
 OUT=''
@@ -341,11 +301,11 @@ run_dir=''
 fail() { echo "FAIL [$case_name]: $1" >&2; exit 1; }
 file_mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
 
-run_scenario() { # [confirmation|-] [bad-runtime-kind] [signup-status] [oversize-event] [lose-lease-on-cleanup] [omit-binding-confirm]
+run_scenario() { # [confirmation|-] [bad-runtime-kind] [signup-status] [oversize-event] [lose-lease-on-cleanup] [omit-binding-confirm] [binding-confirm]
   local confirmation="${1:--}" bad_runtime_kind="${2:-none}" signup_status="${3:-403}"
   local oversize_event="${4:-}" lose_lease_on_cleanup="${5:-false}"
   local omit_binding_confirm="${6:-false}"
-  local binding_confirm='bound:issue334_acceptance:credential-migrator'
+  local binding_confirm="${7:-bound:issue334_acceptance:credential-migrator:credential-runtime}"
   local result_root="$fixture/run-$RANDOM-$RANDOM"
   mkdir -p "$result_root/logs" "$result_root/diagnostics"
   run_dir="$result_root/$run_id"
@@ -404,6 +364,16 @@ assert_status 1
 [[ ! -s "$fixture/events.log" ]] || fail 'missing confirmation reached kubectl or curl'
 assert_no_secret_output
 
+case_name='paired binding guard rejects a missing runtime credential identity'
+run_scenario test:nocodb:access none 403 '' false false \
+  'bound:issue334_acceptance:credential-migrator:'
+assert_status 1
+[[ "$(cat "$fixture/events.log")" == $'kubectl\nkubectl\nkubectl\nkubectl\nprovision' ]] ||
+  fail 'incomplete paired binding reached the acceptance workflow'
+[[ "$OUT" == *'Generated runtime credential ID: credential-runtime'* ]] ||
+  fail 'paired binding rejection did not report the expected non-secret runtime ID'
+assert_no_secret_output
+
 case_name='first run provisions the synthetic domain before explicit acceptance binding'
 run_scenario test:nocodb:access none 403 '' false true
 assert_status 1
@@ -411,7 +381,9 @@ assert_status 1
   fail "first-run onboarding reached acceptance before binding: $(tr '\n' ' ' <"$fixture/events.log")"
 [[ "$OUT" == *'Generated migrator credential ID: credential-migrator'* ]] ||
   fail 'first-run onboarding omitted the generated migrator credential ID'
-[[ "$OUT" == *"NOCODB_ACCEPTANCE_BINDING_CONFIRM='bound:issue334_acceptance:credential-migrator'"* ]] ||
+[[ "$OUT" == *'Generated runtime credential ID: credential-runtime'* ]] ||
+  fail 'first-run onboarding omitted the generated runtime credential ID'
+[[ "$OUT" == *"NOCODB_ACCEPTANCE_BINDING_CONFIRM='bound:issue334_acceptance:credential-migrator:credential-runtime'"* ]] ||
   fail 'first-run onboarding omitted the explicit rerun confirmation'
 yq -e '.status == "failed"' "$run_dir/assertion.json" >/dev/null ||
   fail 'binding stop was not recorded as an incomplete acceptance run'
@@ -422,28 +394,31 @@ assert_no_secret_output
 case_name='successful acceptance follows the exact lifecycle and writes separate phase evidence'
 run_scenario test:nocodb:access
 assert_status 0
-expected_order=$'kubectl\nkubectl\nkubectl\nkubectl\nprovision\nkubectl\nacceptance-structure\nkubectl\nsource-sync\nkubectl\nacceptance-grants\nkubectl\nsource-sync\nkubectl\nsignup-denial\nkubectl\nacceptance-probe\nkubectl\nsource-sync\nkubectl\nsource-rotate\nkubectl\nacceptance-probe\nkubectl\nacceptance-cleanup'
+expected_order=$'kubectl\nkubectl\nkubectl\nkubectl\nprovision\nkubectl\nacceptance-structure\nkubectl\nsource-sync\nkubectl\nacceptance-grants\nkubectl\nsource-sync\nkubectl\nsignup-denial\nkubectl\nacceptance-probe\nkubectl\nacceptance-feedback\nkubectl\nsource-sync\nkubectl\nsource-rotate\nkubectl\nacceptance-probe\nkubectl\nacceptance-cleanup'
 [[ "$(cat "$fixture/events.log")" == "$expected_order" ]] || fail "unexpected lifecycle order: $(tr '\n' ' ' <"$fixture/events.log")"
 yq -e '.status == "passed" and .reason == "the fixed NocoDB access contract passed"' "$run_dir/assertion.json" >/dev/null || fail 'assertion evidence is not passed'
-yq -e '.status == "passed" and .reason == "current-run rows were removed; domain, base, sources, and reserved attachment canary were retained"' "$run_dir/cleanup.json" >/dev/null || fail 'cleanup evidence is not passed'
+yq -e '.status == "passed" and .reason == "current-run rows were removed; domain, base, sources, and reserved record canary were retained"' "$run_dir/cleanup.json" >/dev/null || fail 'cleanup evidence is not passed'
 yq -e '.status == "not-required"' "$run_dir/recovery.json" >/dev/null || fail 'recovery evidence is not separate'
 jq -e '
-  (keys | sort) == ["afterRotation","baseId","beforeRotation","domain","tableId"] and
+  (keys | sort) == ["afterRotation","baseId","beforeRotation","domain","factTableId"] and
   .domain == "issue334_acceptance" and .baseId == "base-acceptance" and
-  .tableId == "table-facts" and .beforeRotation == .afterRotation and
-  .beforeRotation.state == "ready" and .beforeRotation.rowId == "41" and
-  .beforeRotation.savedViewId == "view-facts" and
-  .beforeRotation.savedViewTableId == .tableId and
-  .beforeRotation.savedViewTitle == "acceptance_facts" and
-  .beforeRotation.savedViewType == 3 and
-  .beforeRotation.commentId == "comment-canary" and
-  .beforeRotation.attachmentId == "attachment-canary" and
-  .beforeRotation.path == "download/issue334_acceptance/recovery-canary-v1/issue334-recovery-canary-v1_abcD1.txt" and
-  .beforeRotation.title == "issue334-recovery-canary-v1.txt" and
-  .beforeRotation.mimetype == "text/plain" and .beforeRotation.size == 37 and
-  .beforeRotation.sha256 == "09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3"
-' "$run_dir/diagnostics/attachment-canary.json" >/dev/null || fail 'durable attachment-canary evidence is absent or incomplete'
-[[ "$(file_mode "$run_dir/diagnostics/attachment-canary.json")" == 600 ]] || fail 'durable attachment-canary evidence is not mode 0600'
+  .factTableId == "table-facts" and .beforeRotation == .afterRotation and
+  .beforeRotation == {
+    version:2,state:"ready",baseId:"base-acceptance",readerSourceId:"source-reader",
+    operatorSourceId:"source-operator",factTableId:"table-facts",decisionTableId:"table-decision",
+    viewId:"view-facts",rowId:"41",factId:-334,
+    artifact:{id:"issue334-artifact-v1",uri:"https://artifacts.example.invalid/issue334/artifact-v1",
+      mediaType:"text/plain",sizeBytes:37,sha256:"09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3"}
+  }
+' "$run_dir/diagnostics/recovery-canary.json" >/dev/null || fail 'durable record-canary evidence is absent or incomplete'
+[[ "$(file_mode "$run_dir/diagnostics/recovery-canary.json")" == 600 ]] || fail 'durable record-canary evidence is not mode 0600'
+plugin_feedback="$run_dir/diagnostics/feedback.json"
+jq -e '
+  . == {runId:"20260904T120000Z-34b7165a210e-operator-1234abcd",factId:7000000011,
+    feedback:{initialFact:"original",operatorDecision:"corrected",effectiveBeforeRefresh:"corrected",
+      refreshedFact:"refreshed",effectiveAfterRefresh:"corrected"}}
+' "$plugin_feedback" >/dev/null || fail 'feedback evidence is absent or incomplete'
+[[ "$(file_mode "$plugin_feedback")" == 600 ]] || fail 'feedback evidence is not mode 0600'
 assert_no_secret_output
 
 case_name='probe reflection must contain exactly the two approved tables'
@@ -456,34 +431,31 @@ yq -e '.status == "passed"' "$run_dir/cleanup.json" >/dev/null || fail 'extra re
 mv "$fixture/responses/probe.valid.json" "$fixture/responses/acceptance-probe-1.json"
 assert_no_secret_output
 
-case_name='each successful probe must return the complete attachment canary'
+case_name='each successful probe must return the complete record canary'
 cp "$fixture/responses/acceptance-probe-1.json" "$fixture/responses/probe.valid.json"
-jq 'del(.attachmentCanary)' "$fixture/responses/probe.valid.json" >"$fixture/responses/acceptance-probe-1.json"
+jq 'del(.recoveryCanary)' "$fixture/responses/probe.valid.json" >"$fixture/responses/acceptance-probe-1.json"
 run_scenario test:nocodb:access
 assert_status 1
 yq -e '.status == "passed"' "$run_dir/cleanup.json" >/dev/null || fail 'missing canary did not clean current-run rows'
 mv "$fixture/responses/probe.valid.json" "$fixture/responses/acceptance-probe-1.json"
 assert_no_secret_output
 
-case_name='operator rotation must not replace the durable attachment canary'
+case_name='operator rotation must not replace the durable record canary'
 cp "$fixture/responses/acceptance-probe-2.json" "$fixture/responses/probe.valid.json"
-jq '.attachmentCanary.attachmentId = "replacement-attachment" |
-  .attachmentCanary.path = "download/issue334_acceptance/recovery-canary-v1/issue334-recovery-canary-v1_ZyxW2.txt"' \
+jq '.recoveryCanary.rowId = "42"' \
   "$fixture/responses/probe.valid.json" >"$fixture/responses/acceptance-probe-2.json"
 run_scenario test:nocodb:access
 assert_status 1
 yq -e '.status == "passed"' "$run_dir/cleanup.json" >/dev/null || fail 'canary drift did not clean current-run rows'
-jq -e '.beforeRotation.attachmentId == "attachment-canary" and
-  .afterRotation.attachmentId == "replacement-attachment" and
-  .beforeRotation.path != .afterRotation.path' \
-  "$run_dir/diagnostics/attachment-canary.json" >/dev/null || fail 'canary drift was not recorded before rejection'
+jq -e '.beforeRotation.rowId == "41" and .afterRotation.rowId == "42"' \
+  "$run_dir/diagnostics/recovery-canary.json" >/dev/null || fail 'canary drift was not recorded before rejection'
 mv "$fixture/responses/probe.valid.json" "$fixture/responses/acceptance-probe-2.json"
 assert_no_secret_output
 
-for forbidden_canary_field in signedUrl rawBytes author credentials; do
-  case_name="attachment canary rejects forbidden $forbidden_canary_field evidence"
+for forbidden_canary_field in attachmentCanary signedUrl rawBytes author credentials; do
+  case_name="record canary rejects forbidden $forbidden_canary_field evidence"
   cp "$fixture/responses/acceptance-probe-1.json" "$fixture/responses/probe.valid.json"
-  jq --arg field "$forbidden_canary_field" '.attachmentCanary[$field] = "fixture-forbidden-value"' \
+  jq --arg field "$forbidden_canary_field" '.recoveryCanary[$field] = "fixture-forbidden-value"' \
     "$fixture/responses/probe.valid.json" >"$fixture/responses/acceptance-probe-1.json"
   run_scenario test:nocodb:access
   assert_status 1
@@ -519,6 +491,16 @@ assert_status 1
 yq -e '.status == "failed"' "$run_dir/assertion.json" >/dev/null || fail 'failed assertion was not classified'
 yq -e '.status == "passed"' "$run_dir/cleanup.json" >/dev/null || fail 'failure did not clean current-run rows'
 mv "$fixture/responses/probe.valid.json" "$fixture/responses/acceptance-probe-1.json"
+assert_no_secret_output
+
+case_name='feedback must prove the corrected decision survives fact refresh'
+cp "$fixture/responses/acceptance-feedback.json" "$fixture/responses/feedback.valid.json"
+jq '.feedback.effectiveAfterRefresh = "refreshed"' \
+  "$fixture/responses/feedback.valid.json" >"$fixture/responses/acceptance-feedback.json"
+run_scenario test:nocodb:access
+assert_status 1
+yq -e '.status == "passed"' "$run_dir/cleanup.json" >/dev/null || fail 'invalid feedback did not clean current-run rows'
+mv "$fixture/responses/feedback.valid.json" "$fixture/responses/acceptance-feedback.json"
 assert_no_secret_output
 
 case_name='an accepted HTTP error is not treated as authorization evidence'

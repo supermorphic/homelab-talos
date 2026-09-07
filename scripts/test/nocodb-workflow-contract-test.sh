@@ -924,11 +924,10 @@ for (const name of [
 JS
 
 python - "$acceptance_workflow" <<'PY'
-import base64
-import hashlib
 import json
 import re
 import sys
+from collections import deque
 from pathlib import Path
 
 
@@ -942,18 +941,6 @@ def require(condition, message):
         raise SystemExit(message)
 
 
-canary_bytes = base64.b64decode(
-    "bm9jb2RiLWlzc3VlMzM0LWF0dGFjaG1lbnQtY2FuYXJ5LXYxCg==", validate=True
-)
-require(
-    canary_bytes == b"nocodb-issue334-attachment-canary-v1\n"
-    and len(canary_bytes) == 37
-    and hashlib.sha256(canary_bytes).hexdigest()
-    == "09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3",
-    "Recovery canary bytes, size, and checksum constants differ.",
-)
-
-
 require(len(by_name) == len(nodes), "Acceptance workflow node names must be unique.")
 require(workflow.get("name") == "NocoDB Acceptance Domain", "Unexpected acceptance workflow name.")
 require(workflow.get("active") is False, "The acceptance workflow template must be inactive.")
@@ -965,7 +952,7 @@ require(
         "saveManualExecutions": False,
         "saveExecutionProgress": False,
     },
-    "The acceptance workflow must use execution order v1 and disable all execution persistence.",
+    "The acceptance workflow must disable all execution persistence.",
 )
 
 webhook = by_name.get("Acceptance Webhook", {}).get("parameters", {})
@@ -977,318 +964,129 @@ require(
     "The acceptance webhook contract is not exact.",
 )
 normalize = by_name.get("Normalize Acceptance Request", {}).get("parameters", {}).get("jsCode", "")
-for marker in ("operation", "runId", "structure", "grants", "probe", "cleanup", "Object.keys", "allowedFields", "recovery-canary-v1"):
+for marker in ("structure", "grants", "probe", "cleanup", "feedback", "recovery-canary-v1", "recovery-canary-v2"):
     require(marker in normalize, f"Acceptance request validation omits {marker}.")
 for forbidden in ("domain", "sql"):
     require(not re.search(rf"['\"]{forbidden}['\"]", normalize), f"Acceptance accepts forbidden field {forbidden}.")
 
 structure_sql = by_name.get("Create Acceptance Structure", {}).get("parameters", {}).get("query", "")
-required_structure = (
-    "CREATE SCHEMA IF NOT EXISTS read_model AUTHORIZATION issue334_acceptance_owner;",
-    "CREATE SCHEMA IF NOT EXISTS operator AUTHORIZATION issue334_acceptance_owner;",
-    "CREATE TABLE IF NOT EXISTS app.acceptance_fact (",
-    "id bigint PRIMARY KEY,",
-    "fact text NOT NULL",
-    "CREATE OR REPLACE VIEW read_model.acceptance_facts AS",
-    "SELECT id, fact FROM app.acceptance_fact;",
-    "CREATE TABLE IF NOT EXISTS operator.acceptance_decision (",
-    "id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,",
-    "run_id text NOT NULL,",
-    "decision text NOT NULL,",
-    "protected_created_at timestamptz NOT NULL DEFAULT clock_timestamp()",
-    "CREATE UNIQUE INDEX IF NOT EXISTS issue334_acceptance_recovery_canary_one",
-    "WHERE run_id = 'recovery-canary-v1';",
-)
-for marker in required_structure:
-    require(marker in structure_sql, f"Acceptance structure SQL omits {marker}")
-require("SET LOCAL ROLE issue334_acceptance_owner;" in structure_sql, "Acceptance DDL must run as the owner role.")
-
-grant_sql = by_name.get("Grant Acceptance Operator Access", {}).get("parameters", {}).get("query", "")
 for marker in (
-    "IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'issue334_acceptance_operator') THEN",
-    "RAISE EXCEPTION 'operator_candidate_missing';",
-    "GRANT USAGE ON SCHEMA operator TO issue334_acceptance_operator;",
-    "GRANT SELECT, INSERT, DELETE ON TABLE operator.acceptance_decision TO issue334_acceptance_operator;",
+    "CREATE TABLE IF NOT EXISTS app.acceptance_fact (",
+    "run_id text,",
+    "artifact_id text,",
+    "artifact_uri text,",
+    "artifact_media_type text,",
+    "artifact_size_bytes bigint,",
+    "artifact_sha256 text",
+    "CREATE OR REPLACE VIEW read_model.acceptance_facts AS",
+    "SELECT id, fact, run_id, artifact_id, artifact_uri, artifact_media_type,",
+    "-334, 'recovery-canary-v2', 'artifact-available'",
+    "'issue334-artifact-v1', 'https://artifacts.example.invalid/issue334/artifact-v1'",
+    "'text/plain', 37,",
+    "'09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3'",
+    "VALUES ('recovery-canary-v2', 'retain')",
+    "ON CONFLICT DO NOTHING;",
+    "RAISE EXCEPTION 'recovery_canary_incompatible';",
+    'SELECT current_user AS "credentialRole";',
+):
+    require(marker in structure_sql, f"Acceptance structure SQL omits {marker}")
+require("UPDATE operator.acceptance_decision" not in structure_sql, "Structure must not overwrite an old native canary.")
+
+grant_sql = by_name.get("Grant Acceptance Access", {}).get("parameters", {}).get("query", "")
+for marker in (
+    "issue334_acceptance_operator",
+    "issue334_acceptance_runtime",
+    "GRANT USAGE ON SCHEMA read_model, operator TO issue334_acceptance_runtime;",
+    "GRANT SELECT ON TABLE read_model.acceptance_facts TO issue334_acceptance_runtime;",
+    "GRANT SELECT ON TABLE operator.acceptance_decision TO issue334_acceptance_runtime;",
     "GRANT UPDATE (decision) ON TABLE operator.acceptance_decision TO issue334_acceptance_operator;",
-    "GRANT USAGE ON SEQUENCE operator.acceptance_decision_id_seq TO issue334_acceptance_operator;",
 ):
     require(marker in grant_sql, f"Acceptance grant SQL omits {marker}")
+require(
+    "GRANT" not in grant_sql.split("issue334_acceptance_runtime;")[-1]
+    and "REVOKE" not in grant_sql.upper(),
+    "Acceptance grants must preserve the runtime role's existing app rights.",
+)
 
+migrator_names = {
+    "Create Acceptance Structure",
+    "Grant Acceptance Access",
+    "Clear Reader Negative Residue",
+    "Cleanup Unexpected Reader Insert",
+    "Clear Feedback Residue",
+    "Cleanup Feedback Fact",
+}
+runtime_names = {
+    "Publish Initial Feedback Fact",
+    "Consume Feedback Before Refresh",
+    "Refresh Feedback Fact",
+    "Consume Feedback After Refresh",
+}
 postgres_nodes = [node for node in nodes if node.get("type") == "n8n-nodes-base.postgres"]
-require(len(postgres_nodes) == 6, "Acceptance must have exactly six fixed migrator operations.")
-cleanup_sql = "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nDELETE FROM app.acceptance_fact WHERE id = $1 AND fact = $2;\nCOMMIT;"
-for name in ("Clear Reader Negative Residue", "Cleanup Unexpected Reader Insert"):
-    parameters = by_name.get(name, {}).get("parameters", {})
-    require(
-        parameters.get("operation") == "executeQuery"
-        and parameters.get("query") == cleanup_sql
-        and parameters.get("options", {}).get("queryReplacement")
-        == "={{ [$json.readerProbeId, $json.readerProbeFact] }}",
-        f"{name} must use the fixed owner-authority cleanup transaction.",
-    )
-claim = by_name.get("Claim Recovery Canary Upload", {}).get("parameters", {})
-claim_sql = claim.get("query", "")
-for marker in (
-    "BEGIN;",
-    "SET LOCAL ROLE issue334_acceptance_owner;",
-    "UPDATE operator.acceptance_decision",
-    "WHERE id = $1",
-    "AND run_id = 'recovery-canary-v1'",
-    'AND decision = \'{"kind":"nocodb-attachment-recovery-canary","version":1,"state":"pending"}\'',
-    "RETURNING id AS \"rowId\";",
-    "COMMIT;",
-):
-    require(marker in claim_sql, f"Recovery canary upload claim omits {marker}")
-require(
-    claim.get("operation") == "executeQuery"
-    and claim.get("options", {}).get("queryReplacement") == "={{ [$json.rowId] }}",
-    "Recovery canary upload claim must bind only the validated row ID.",
-)
-initialize = by_name.get("Initialize Recovery Canary Row", {})
-initialize_sql = initialize.get("parameters", {}).get("query", "")
-for marker in (
-    "BEGIN;",
-    "SET LOCAL ROLE issue334_acceptance_owner;",
-    "INSERT INTO operator.acceptance_decision (run_id, decision)",
-    "VALUES ('recovery-canary-v1', '{\"kind\":\"nocodb-attachment-recovery-canary\",\"version\":1,\"state\":\"pending\"}')",
-    "ON CONFLICT DO NOTHING;",
-    "COMMIT;",
-):
-    require(marker in initialize_sql, f"Recovery canary initialization omits {marker}")
-require(
-    initialize.get("alwaysOutputData") is True,
-    "Recovery canary conflict initialization must always continue to the row re-list.",
-)
-require(
-    by_name["Claim Recovery Canary Upload"].get("alwaysOutputData") is True,
-    "A losing recovery canary upload claim must still reach the fail-closed guard.",
-)
+require({node["name"] for node in postgres_nodes} == migrator_names | runtime_names, "Acceptance PostgreSQL node set is not exact.")
 for node in postgres_nodes:
     query = node.get("parameters", {}).get("query", "")
-    require(
-        re.findall(r"SET LOCAL ROLE ([a-z0-9_]+);", query) == ["issue334_acceptance_owner"],
-        f"{node['name']} must assume only the fixed owner role.",
-    )
-    require(
-        "{{$json" not in query and "EXECUTE " not in query.upper() and "format(" not in query.lower(),
-        f"{node['name']} accepts dynamic SQL or a dynamic role.",
-    )
+    require("{{$json" not in query and "EXECUTE " not in query.upper(), f"{node['name']} contains dynamic SQL.")
+    require(not node.get("credentials"), f"{node['name']} embeds a credential ID.")
+    if node["name"] in migrator_names:
+        require(
+            re.findall(r"SET LOCAL ROLE ([a-z0-9_]+);", query) == ["issue334_acceptance_owner"],
+            f"{node['name']} must use only the reviewed owner role.",
+        )
+    else:
+        require("SET ROLE" not in query.upper() and "current_user" in query, f"{node['name']} must prove the runtime login directly.")
+    if node["name"] in {"Clear Feedback Residue", "Cleanup Feedback Fact"} | runtime_names:
+        require(node.get("alwaysOutputData") is True, f"{node['name']} must fail closed through a zero-row result.")
+
+notes = by_name.get("Acceptance Setup", {}).get("parameters", {}).get("content", "")
+for label in (
+    "automation-data/issue334_acceptance/migrator",
+    "automation-data/issue334_acceptance/runtime",
+    "NocoDB Operator API",
+    "NocoDB Acceptance Header",
+):
+    require(label in notes, f"The acceptance setup note omits {label}.")
+for name in sorted(migrator_names | runtime_names):
+    require(name in notes, f"The acceptance setup note omits the binding for {name}.")
 
 http_nodes = [node for node in nodes if node.get("type") == "n8n-nodes-base.httpRequest"]
-require(http_nodes, "The acceptance workflow must use the NocoDB data API.")
-methods = [node.get("parameters", {}).get("method", "GET") for node in http_nodes]
-for method in ("POST", "GET", "PATCH", "DELETE"):
-    require(method in methods, f"Acceptance probe omits {method} data behavior.")
+require(http_nodes, "The acceptance workflow must use the NocoDB Operator API.")
 for node in http_nodes:
     parameters = node.get("parameters", {})
     require(
         parameters.get("authentication") == "genericCredentialType"
         and parameters.get("genericAuthType") == "httpHeaderAuth",
-        f"{node['name']} must use the NocoDB API Header Auth credential.",
+        f"{node['name']} must use Header Auth.",
     )
-    url = parameters.get("url", "")
-    require("http://nocodb.automation-data.svc.cluster.local:8080/" in url, f"{node['name']} has an unapproved API host.")
     require(
-        "/tables/" in url
-        or url.endswith("/api/v2/meta/bases")
-        or ("/api/v2/meta/bases/" in url and ("/sources" in url or "/tables" in url or "/shared" in url))
-        or url.endswith("/api/v2/meta/comments")
-        or url.endswith("/api/v2/storage/upload")
-        or url.startswith("={{ 'http://nocodb.automation-data.svc.cluster.local:8080/' + $json.attachment.path }}"),
-        f"{node['name']} has an unapproved acceptance API path.",
+        "http://nocodb.automation-data.svc.cluster.local:8080/" in parameters.get("url", ""),
+        f"{node['name']} has an unapproved API host.",
     )
-
-canary_http = {name: by_name.get(name, {}).get("parameters", {}) for name in (
-    "Get Recovery Saved View",
-    "List Recovery Canary Rows",
-    "Upload Recovery Canary",
-    "Record Uploaded Recovery Canary",
-    "List Recovery Canary Comments",
-    "Create Recovery Canary Comment",
-    "Record Ready Recovery Canary",
-    "Download Recovery Canary",
-)}
-require(all(canary_http.values()), "Acceptance recovery canary HTTP graph is incomplete.")
-require("Create Pending Recovery Canary" not in by_name, "Recovery canary initialization must not use a NocoDB create race.")
-require(
-    canary_http["Get Recovery Saved View"].get("method", "GET") == "GET"
-    and "/api/v2/meta/tables/" in canary_http["Get Recovery Saved View"].get("url", "")
-    and canary_http["Get Recovery Saved View"].get("url", "").endswith("/views' }}"),
-    "Recovery canary must read the exact reflected facts-table views endpoint.",
-)
-upload = canary_http["Upload Recovery Canary"]
-upload_query = {item.get("name"): item.get("value") for item in upload.get("queryParameters", {}).get("parameters", [])}
-require(
-    upload.get("method") == "POST"
-    and upload.get("url", "").endswith("/api/v2/storage/upload")
-    and upload.get("contentType") == "multipart-form-data"
-    and upload_query == {"path": "issue334_acceptance/recovery-canary-v1"}
-    and upload.get("bodyParameters", {}).get("parameters") == [{
-        "parameterType": "formBinaryData",
-        "name": "file",
-        "inputDataFieldName": "canaryFile",
-    }],
-    "Recovery canary upload must use one fixed multipart file and storage path.",
-)
-comment_lists = [canary_http["List Recovery Canary Comments"]]
-for parameters in comment_lists:
-    query = {item.get("name"): item.get("value") for item in parameters.get("queryParameters", {}).get("parameters", [])}
-    require(
-        parameters.get("method", "GET") == "GET"
-        and parameters.get("url", "").endswith("/api/v2/meta/comments")
-        and set(query) == {"fk_model_id", "row_id"},
-        "Recovery canary comment discovery must use only exact model and row query parameters.",
-    )
-require(
-    canary_http["Create Recovery Canary Comment"].get("method") == "POST"
-    and canary_http["Create Recovery Canary Comment"].get("url", "").endswith("/api/v2/meta/comments"),
-    "Recovery canary association must use the pinned comment-create endpoint.",
-)
-download = canary_http["Download Recovery Canary"]
-require(
-    download.get("method", "GET") == "GET"
-    and download.get("options", {}).get("response", {}).get("response", {}) == {
-        "responseFormat": "file",
-        "outputPropertyName": "canaryDownload",
-    },
-    "Recovery canary download must return one bounded binary property for exact verification.",
-)
-prepare_binary_code = by_name.get("Prepare Recovery Canary Binary", {}).get("parameters", {}).get("jsCode", "")
-verify_binary_code = by_name.get("Require Recovery Canary Download", {}).get("parameters", {}).get("jsCode", "")
-require(
-    "await helpers.prepareBinaryData(buffer, 'issue334-recovery-canary-v1.txt', 'text/plain')" in prepare_binary_code,
-    "Recovery canary upload binary must use the configured n8n binary manager.",
-)
-require(
-    "await helpers.getBinaryDataBuffer(0, 'canaryDownload')" in verify_binary_code
-    and "$binary" not in verify_binary_code,
-    "Recovery canary verification must resolve filesystem binary data through the Code helper.",
-)
-for name, parameters in canary_http.items():
-    method = parameters.get("method", "GET")
-    url = parameters.get("url", "")
-    if "comment" in url or "/download/" in url or "attachment.path" in url:
-        require(method in {"GET", "POST"}, f"{name} uses a forbidden canary association or download mutation.")
-
-share_nodes = {
-    node["name"]: node.get("parameters", {})
-    for node in http_nodes
-    if "/shared" in node.get("parameters", {}).get("url", "")
-    or "/share" in node.get("parameters", {}).get("url", "")
-}
-require(
-    set(share_nodes) == {"Get Acceptance Base Share", "Get Reader Shared Views", "Get Operator Shared Views"},
-    "Acceptance must make exactly one base-share and two exact table-share reads.",
-)
-require(
-    all(parameters.get("method", "GET") == "GET" for parameters in share_nodes.values()),
-    "Acceptance public-share checks must be GET-only.",
-)
-require(
-    "/api/v2/meta/bases/" in share_nodes["Get Acceptance Base Share"].get("url", "")
-    and "/shared" in share_nodes["Get Acceptance Base Share"].get("url", "")
-    and "/api/v2/meta/tables/" in share_nodes["Get Reader Shared Views"].get("url", "")
-    and "/share" in share_nodes["Get Reader Shared Views"].get("url", "")
-    and "/api/v2/meta/tables/" in share_nodes["Get Operator Shared Views"].get("url", "")
-    and "/share" in share_nodes["Get Operator Shared Views"].get("url", ""),
-    "Acceptance public-share checks use the wrong NocoDB endpoints.",
-)
-
-reader_read = by_name.get("Read Acceptance Facts", {}).get("parameters", {})
-require(
-    reader_read.get("method") == "GET"
-    and "/api/v2/tables/" in reader_read.get("url", "")
-    and {item.get("name"): str(item.get("value")) for item in reader_read.get("queryParameters", {}).get("parameters", [])}.get("limit") == "1",
-    "The acceptance probe must perform a bounded reader GET of acceptance_facts.",
-)
+    require(not node.get("credentials"), f"{node['name']} embeds a credential ID.")
 
 serialized = json.dumps(workflow)
-require("issue334_acceptance" in serialized, "The acceptance domain must be fixed.")
-require(not any("credentials" in node for node in nodes), "The acceptance template must not embed credential IDs.")
-require("DROP " not in serialized.upper() and "TRUNCATE " not in serialized.upper(), "Acceptance must not expose broad destructive SQL.")
-response_predecessors = {
-    source
-    for source, outputs in workflow.get("connections", {}).items()
-    if any(
-        edge.get("node") == "Respond"
-        for output in outputs.get("main", [])
-        for edge in output
-    )
-}
+for forbidden in ("storage/upload", "/meta/comments", "/download/", "multipart-form-data", "prepareBinaryData", "getBinaryDataBuffer", "attachmentCanary"):
+    require(forbidden.lower() not in serialized.lower(), f"Dead native attachment behavior remains: {forbidden}")
+require("DROP " not in serialized.upper() and "TRUNCATE " not in serialized.upper(), "Acceptance exposes broad destructive SQL.")
+
+recovery_fact = by_name.get("Read Recovery Fact", {}).get("parameters", {})
+recovery_decision = by_name.get("Read Recovery Decision", {}).get("parameters", {})
 require(
-    response_predecessors
-    == {"Structure Result", "Grant Result", "Require Cleanup Absent", "Prepare Acceptance Response", "Prepare Acceptance Error Response"},
-    "The acceptance response must use only the bounded response builders.",
+    recovery_fact.get("method") == "GET"
+    and {item.get("name"): str(item.get("value")) for item in recovery_fact.get("queryParameters", {}).get("parameters", [])}
+    == {"where": "(id,eq,-334)", "limit": "2"},
+    "Recovery fact must use one exact bounded reader query.",
 )
-for name in response_predecessors:
-    code = by_name.get(name, {}).get("parameters", {}).get("jsCode", "")
-    for forbidden in ("password", "token", "header", "credentialId"):
-        require(forbidden.lower() not in code.lower(), f"{name} exposes secret-bearing field {forbidden}.")
+require(
+    recovery_decision.get("method") == "GET"
+    and {item.get("name"): str(item.get("value")) for item in recovery_decision.get("queryParameters", {}).get("parameters", [])}
+    == {"where": "(run_id,eq,recovery-canary-v2)", "limit": "2"},
+    "Recovery decision must use one exact bounded operator query.",
+)
 
 connections = workflow.get("connections", {})
-pending = ["Acceptance Webhook"]
-reachable = {"Acceptance Webhook"}
-while pending:
-    source = pending.pop()
-    for output in connections.get(source, {}).get("main", []):
-        for edge in output:
-            if edge["node"] not in reachable:
-                reachable.add(edge["node"])
-                pending.append(edge["node"])
-executable_nodes = {node["name"] for node in nodes if node.get("type") != "n8n-nodes-base.stickyNote"}
-require(executable_nodes <= reachable, "Every acceptance executable node must be reachable from the webhook.")
-require(
-    "Require Reader Facts Read" in reachable
-    and "Insert Acceptance Decision" in {
-        edge["node"]
-        for output in connections.get("Require Reader Facts Read", {}).get("main", [])
-        for edge in output
-    },
-    "The successful reader GET must be verified before the acceptance write probes.",
-)
-require(
-    "Cleanup Unexpected Reader Insert" in reachable
-    and "Fail Unexpected Reader Insert" in {
-        edge["node"]
-        for output in connections.get("Cleanup Unexpected Reader Insert", {}).get("main", [])
-        for edge in output
-    },
-    "An unexpectedly permitted reader insert must be cleaned before failure.",
-)
-require(
-    "List Cleanup Decisions" in {
-        edge["node"]
-        for output in connections.get("Continue Cleanup", {}).get("main", [])
-        for edge in output
-    }
-    and "Require Cleanup Absent" in reachable,
-    "Cleanup must page within its bound and re-read to prove runId absence.",
-)
-require(
-    "Get Acceptance Reader Source" in {
-        edge["node"] for output in connections.get("Keep Acceptance Sources", {}).get("main", []) for edge in output
-    }
-    and "Get Acceptance Operator Source" in reachable
-    and "List Acceptance Tables" in {
-        edge["node"] for output in connections.get("Capture Acceptance Operator Source", {}).get("main", []) for edge in output
-    },
-    "Acceptance must read both exact source configurations before resolving reflected tables.",
-)
-require(
-    "Get Acceptance Base Share" in {
-        edge["node"] for output in connections.get("Resolve Acceptance Tables", {}).get("main", []) for edge in output
-    }
-    and "Get Reader Shared Views" in {
-        edge["node"] for output in connections.get("Require Acceptance Base Private", {}).get("main", []) for edge in output
-    }
-    and "Get Operator Shared Views" in {
-        edge["node"] for output in connections.get("Require Reader Shares Empty", {}).get("main", []) for edge in output
-    }
-    and "Cleanup Only" in {
-        edge["node"] for output in connections.get("Require Operator Shares Empty", {}).get("main", []) for edge in output
-    },
-    "Acceptance must validate the base and both exact table share surfaces before probing or cleanup.",
-)
+
+
 def outgoing(name):
     return {
         edge["node"]
@@ -1296,74 +1094,77 @@ def outgoing(name):
         for edge in output
     }
 
+
 def ordered_outputs(name):
-    return [
-        [edge["node"] for edge in output]
-        for output in connections.get(name, {}).get("main", [])
-    ]
+    return [[edge["node"] for edge in output] for output in connections.get(name, {}).get("main", [])]
+
 
 require(
-    ordered_outputs("Select Recovery Canary State") == [
-        ["Initialize Recovery Canary Row"],
-        ["Claim Recovery Canary Upload"],
-        ["List Recovery Canary Comments"],
-        ["List Recovery Canary Comments"],
-        ["Wait Recovery Canary Join"],
+    ordered_outputs("Select Acceptance Operation") == [
+        ["Create Acceptance Structure"], ["Grant Acceptance Access"],
+        ["List Acceptance Bases"], ["List Acceptance Bases"], ["List Acceptance Bases"],
     ],
-    "Recovery canary states do not route to the exact initialize/upload/associate/verify/join paths.",
+    "Acceptance operation routing is not exact.",
 )
-require(
-    ordered_outputs("Recovery Canary Upload Claimed") == [
-        ["Prepare Recovery Canary Binary"],
-        ["Wait Recovery Canary Join"],
-    ],
-    "A losing recovery canary claim can reach the upload path.",
-)
-
+require(ordered_outputs("Cleanup Only") == [["Initialize Cleanup"], ["Feedback Only"]], "Cleanup routing is not exact.")
+require(ordered_outputs("Feedback Only") == [["Prepare Feedback Fact"], ["Read Acceptance Facts"]], "Feedback routing is not exact.")
 for source, target in (
-    ("Confirm Probe Cleanup", "Get Recovery Saved View"),
-    ("Get Recovery Saved View", "Require Recovery Saved View"),
-    ("Require Recovery Saved View", "List Recovery Canary Rows"),
-    ("List Recovery Canary Rows", "Inspect Recovery Canary Row"),
-    ("Initialize Recovery Canary Row", "List Recovery Canary Rows"),
-    ("Wait Recovery Canary Join", "Increment Recovery Canary Poll"),
-    ("Increment Recovery Canary Poll", "List Recovery Canary Rows"),
-    ("Require Recovery Canary Claim", "Recovery Canary Upload Claimed"),
-    ("Prepare Recovery Canary Binary", "Upload Recovery Canary"),
-    ("Upload Recovery Canary", "Require Recovery Canary Upload"),
-    ("Require Recovery Canary Upload", "Record Uploaded Recovery Canary"),
-    ("Record Uploaded Recovery Canary", "Require Uploaded Recovery Canary"),
-    ("Require Uploaded Recovery Canary", "List Recovery Canary Comments"),
-    ("Create Recovery Canary Comment", "List Recovery Canary Comments"),
-    ("Record Ready Recovery Canary", "Require Ready Recovery Canary"),
-    ("Require Ready Recovery Canary", "Download Recovery Canary"),
-    ("Download Recovery Canary", "Require Recovery Canary Download"),
-    ("Require Recovery Canary Download", "Prepare Acceptance Response"),
+    ("Require Recovery Saved View", "Read Recovery Fact"),
+    ("Read Recovery Fact", "Require Recovery Fact"),
+    ("Require Recovery Fact", "Read Recovery Decision"),
+    ("Read Recovery Decision", "Require Recovery Decision"),
+    ("Require Recovery Decision", "Prepare Acceptance Response"),
+    ("Prepare Feedback Fact", "Clear Feedback Residue"),
+    ("Clear Feedback Residue", "Publish Initial Feedback Fact"),
+    ("Publish Initial Feedback Fact", "Require Initial Runtime Fact"),
+    ("Require Initial Runtime Fact", "Insert Feedback Decision"),
+    ("Insert Feedback Decision", "Normalize Feedback Decision"),
+    ("Normalize Feedback Decision", "Consume Feedback Before Refresh"),
+    ("Consume Feedback Before Refresh", "Require Feedback Before Refresh"),
+    ("Require Feedback Before Refresh", "Refresh Feedback Fact"),
+    ("Refresh Feedback Fact", "Require Refreshed Runtime Fact"),
+    ("Require Refreshed Runtime Fact", "Read Refreshed Fact"),
+    ("Read Refreshed Fact", "Require Refreshed Reader Fact"),
+    ("Require Refreshed Reader Fact", "Consume Feedback After Refresh"),
+    ("Consume Feedback After Refresh", "Prepare Feedback Response"),
+    ("Prepare Feedback Response", "Respond"),
+    ("Require Cleanup Absent", "Prepare Cleanup Fact"),
+    ("Prepare Cleanup Fact", "Cleanup Feedback Fact"),
+    ("Cleanup Feedback Fact", "Require Cleanup Fact"),
+    ("Require Cleanup Fact", "Respond"),
 ):
-    require(target in outgoing(source), f"Recovery canary graph must route {source} to {target}.")
-notes = by_name.get("Acceptance Setup", {}).get("parameters", {}).get("content", "")
-for label in ("automation-data/issue334_acceptance/migrator", "NocoDB Operator API", "NocoDB Acceptance Header"):
-    require(label in notes, f"The acceptance setup note omits {label}.")
-require("all six Postgres nodes" in notes, "The acceptance setup must bind the migrator credential to all six Postgres nodes.")
-wait = by_name.get("Wait Recovery Canary Join", {})
+    require(target in outgoing(source), f"Acceptance graph must route {source} to {target}.")
+
+response_predecessors = {
+    source
+    for source, outputs in connections.items()
+    if any(edge.get("node") == "Respond" for output in outputs.get("main", []) for edge in output)
+}
 require(
-    wait.get("type") == "n8n-nodes-base.wait"
-    and wait.get("parameters") == {"amount": 5, "unit": "seconds"},
-    "Recovery canary join polling must use exact five-second waits.",
+    response_predecessors == {
+        "Structure Result", "Grant Result", "Require Cleanup Fact", "Prepare Acceptance Response",
+        "Prepare Feedback Response", "Prepare Acceptance Error Response",
+    },
+    "Acceptance responses must use only bounded response builders.",
 )
-increment_code = by_name.get("Increment Recovery Canary Poll", {}).get("parameters", {}).get("jsCode", "")
-inspect_code = by_name.get("Inspect Recovery Canary Row", {}).get("parameters", {}).get("jsCode", "")
-require(
-    "canaryPollCount > 12" in increment_code and "canaryPollCount >= 12" in inspect_code,
-    "Recovery canary join polling must stop after exactly twelve waits.",
-)
+
+pending = deque(["Acceptance Webhook"])
+reachable = {"Acceptance Webhook"}
+while pending:
+    source = pending.popleft()
+    for target in outgoing(source):
+        if target not in reachable:
+            reachable.add(target)
+            pending.append(target)
+executable = {node["name"] for node in nodes if node.get("type") != "n8n-nodes-base.stickyNote"}
+require(executable <= reachable, "Every acceptance executable node must be reachable from the webhook.")
 PY
 
 node - "$acceptance_workflow" <<'JS'
 const fs = require('fs');
 const workflow = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const byName = Object.fromEntries(workflow.nodes.map((node) => [node.name, node]));
-const execute = (name, input, lookup = {}, itemInputs = [input], binary = {}) => {
+const execute = (name, input, lookup = {}, itemInputs = [input]) => {
   const code = byName[name]?.parameters?.jsCode;
   if (!code) throw new Error(`missing Code node ${name}`);
   return new Function('$json', '$input', '$', '$binary', code)(
@@ -1374,525 +1175,198 @@ const execute = (name, input, lookup = {}, itemInputs = [input], binary = {}) =>
       first: () => ({ json: lookup[nodeName] || input }),
       last: () => ({ json: lookup[nodeName] || input }),
     }),
-    binary,
+    {},
   );
 };
-const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-const executeAsync = async (name, input, lookup = {}, itemInputs = [input], binary = {}, helpers = {}) => {
-  const code = byName[name]?.parameters?.jsCode;
-  if (!code) throw new Error(`missing Code node ${name}`);
-  return await new AsyncFunction('$json', '$input', '$', '$binary', 'helpers', code)(
-    input,
-    { all: () => itemInputs.map((json) => ({ json })) },
-    (nodeName) => ({
-      isExecuted: Object.prototype.hasOwnProperty.call(lookup, nodeName),
-      first: () => ({ json: lookup[nodeName] || input }),
-      last: () => ({ json: lookup[nodeName] || input }),
-    }),
-    binary,
-    helpers,
-  );
+const rejects = (name, input, lookup, pattern) => {
+  try { execute(name, input, lookup); } catch (error) { return pattern.test(error.message); }
+  return false;
 };
 
-(async () => {
+const feedbackRequest = execute('Normalize Acceptance Request', {
+  body: { operation: 'feedback', runId: 'feedback-run-one' },
+})[0].json;
+if (feedbackRequest.operation !== 'feedback' || feedbackRequest.runId !== 'feedback-run-one') {
+  throw new Error('the fixed feedback operation was not accepted');
+}
+for (const reserved of ['recovery-canary-v1', 'recovery-canary-v2']) {
+  if (!rejects('Normalize Acceptance Request', { body: { operation: 'cleanup', runId: reserved } }, {}, /reserved_run_id/)) {
+    throw new Error(`reserved ID ${reserved} was accepted`);
+  }
+}
 
-let reservedRunIdRejected = false;
-try {
-  execute('Normalize Acceptance Request', { body: { operation: 'probe', runId: 'recovery-canary-v1' } });
-} catch (error) { reservedRunIdRejected = /reserved_run_id/.test(error.message); }
-if (!reservedRunIdRejected) throw new Error('the persistent recovery canary row can be targeted by an incoming cleanup/probe run ID');
-
-const reflection = {
-  operation: 'probe',
-  runId: 'run-one',
-  readerSourceId: 'source-reader',
-  operatorSourceId: 'source-operator',
+const sourceContext = {
+  operation: 'probe', runId: 'run-one', baseId: 'base-acceptance',
+  readerSourceId: 'source-reader', operatorSourceId: 'source-operator',
 };
-const readerSourceMetadata = execute(
+const reader = execute(
   'Capture Acceptance Reader Source',
-  { id: 'source-reader', base_id: 'base-1', alias: 'Read Model', config: { searchPath: ['read_model'] } },
-  { 'Keep Acceptance Sources': { ...reflection, baseId: 'base-1' } },
+  { id: 'source-reader', base_id: 'base-acceptance', alias: 'Read Model', config: { searchPath: ['read_model'] } },
+  { 'Keep Acceptance Sources': sourceContext },
 )[0].json;
-const reflectedContext = execute(
+const sources = execute(
   'Capture Acceptance Operator Source',
-  { id: 'source-operator', base_id: 'base-1', alias: 'Operator', config: { searchPath: ['operator'] } },
-  { 'Capture Acceptance Reader Source': readerSourceMetadata },
+  { id: 'source-operator', base_id: 'base-acceptance', alias: 'Operator', config: { searchPath: ['operator'] } },
+  { 'Capture Acceptance Reader Source': reader },
 )[0].json;
-if (reflectedContext.readerSchema !== 'read_model' || reflectedContext.operatorSchema !== 'operator') {
-  throw new Error('source GET metadata did not derive the exact reflected schemas');
-}
-for (const [label, node, source, lookup, pattern] of [
-  [
-    'public reader schema',
-    'Capture Acceptance Reader Source',
-    { id: 'source-reader', base_id: 'base-1', alias: 'Read Model', config: { searchPath: ['public'] } },
-    { 'Keep Acceptance Sources': { ...reflection, baseId: 'base-1' } },
-    /acceptance_reader_source_invalid/,
-  ],
-  [
-    'missing reader schema',
-    'Capture Acceptance Reader Source',
-    { id: 'source-reader', base_id: 'base-1', alias: 'Read Model', config: {} },
-    { 'Keep Acceptance Sources': { ...reflection, baseId: 'base-1' } },
-    /acceptance_reader_source_invalid/,
-  ],
-  [
-    'wrong operator schema',
-    'Capture Acceptance Operator Source',
-    { id: 'source-operator', base_id: 'base-1', alias: 'Operator', config: { searchPath: ['public'] } },
-    { 'Capture Acceptance Reader Source': readerSourceMetadata },
-    /acceptance_operator_source_invalid/,
-  ],
-]) {
-  let rejected = false;
-  try { execute(node, source, lookup); } catch (error) { rejected = pattern.test(error.message); }
-  if (!rejected) throw new Error(`${label} was accepted`);
-}
+if (sources.readerSchema !== 'read_model' || sources.operatorSchema !== 'operator') throw new Error('source search paths were not retained');
 const exactTables = [
   { id: 'table-facts', title: 'acceptance_facts', table_name: 'acceptance_facts', source_id: 'source-reader', schema: null },
   { id: 'table-decisions', title: 'acceptance_decision', table_name: 'acceptance_decision', source_id: 'source-operator', schema: null },
 ];
-const completePage = { totalRows: 2, page: 1, pageSize: 25, isFirstPage: true, isLastPage: true };
-const resolved = execute('Resolve Acceptance Tables', { ...reflectedContext, tables: exactTables, pageInfo: completePage })[0].json;
-if (
-  resolved.factsTableId !== 'table-facts'
-  || resolved.decisionTableId !== 'table-decisions'
-  || JSON.stringify(resolved.reflectedSchemas) !== JSON.stringify(['operator', 'read_model'])
-  || resolved.reflectedTables.find((table) => table.id === 'table-facts')?.schema !== 'read_model'
-  || resolved.reflectedTables.find((table) => table.id === 'table-decisions')?.schema !== 'operator'
-) throw new Error('exact reflected schemas and tables were not derived');
-const canaryContext = {
-  ...resolved,
-  inserted: true,
-  read: true,
-  readerRead: true,
-  decisionUpdated: true,
-  protectedUpdateDenied: true,
-  protectedUpdateStatus: 400,
-  protectedUpdateEvidence: 'postgresql_42501',
-  readerInsertDenied: true,
-  readerInsertStatus: 403,
-  readerInsertEvidence: 'nocodb_readonly_source',
+const resolved = execute('Resolve Acceptance Tables', {
+  ...sources,
+  tables: exactTables,
+  pageInfo: { totalRows: 2, page: 1, pageSize: 25, isLastPage: true },
+})[0].json;
+if (resolved.reflectedTables[0].schema !== 'operator' || resolved.reflectedTables[1].schema !== 'read_model') {
+  throw new Error('null table schemas were not resolved from validated source search paths');
+}
+for (const mutate of [
+  (tables) => { tables[0].schema = 'read_model'; },
+  (tables) => { tables[0].source_id = 'source-operator'; },
+  (tables) => { tables[1].source_id = 'source-reader'; },
+]) {
+  const tables = exactTables.map((table) => ({ ...table }));
+  mutate(tables);
+  if (!rejects('Resolve Acceptance Tables', { ...sources, tables }, {}, /acceptance_reflection_invalid/)) {
+    throw new Error('mismatched table/source identity was accepted');
+  }
+}
+
+const probeContext = {
+  ...resolved, inserted: true, read: true, readerRead: true, decisionUpdated: true,
+  protectedUpdateDenied: true, protectedUpdateStatus: 400, protectedUpdateEvidence: 'postgresql_42501',
+  readerInsertDenied: true, readerInsertStatus: 403, readerInsertEvidence: 'source_read_only',
+  publicSharing: {
+    basePublicShareUuid: null,
+    views: [
+      { title: 'acceptance_facts', publicShareUuid: null },
+      { title: 'acceptance_decision', publicShareUuid: null },
+    ],
+  },
 };
 const savedView = execute(
   'Require Recovery Saved View',
-  {
-    list: [{ id: 'view-facts', fk_model_id: 'table-facts', title: 'acceptance_facts', type: 3, uuid: null }],
-  },
-  { 'Confirm Probe Cleanup': { list: [] }, 'Evaluate Reader Insert Denial': canaryContext },
+  { list: [{ id: 'view-facts', fk_model_id: 'table-facts', title: 'acceptance_facts', type: 3, uuid: null }] },
+  { 'Evaluate Reader Insert Denial': probeContext, 'Confirm Probe Cleanup': { list: [] } },
 )[0].json;
-if (JSON.stringify(savedView.savedView) !== JSON.stringify({ id: 'view-facts', tableId: 'table-facts', title: 'acceptance_facts', type: 3 })) {
-  throw new Error('recovery canary did not preserve exact observed default-view identity');
-}
-for (const body of [
-  { list: [] },
-  { list: [{ id: 'view-facts', fk_model_id: 'table-decisions', title: 'acceptance_facts', type: 3, uuid: null }] },
-  { list: [{ id: 'view-facts', fk_model_id: 'table-facts', title: 'acceptance_facts', type: 2, uuid: null }] },
-  { list: [{ id: 'view-facts', fk_model_id: 'table-facts', title: 'acceptance_facts', type: 3, uuid: 'public' }] },
-  { list: [
-    { id: 'view-facts', fk_model_id: 'table-facts', title: 'acceptance_facts', type: 3, uuid: null },
-    { id: 'view-extra', fk_model_id: 'table-facts', title: 'extra', type: 3, uuid: null },
-  ] },
+for (const view of [
+  { id: 'view-other', fk_model_id: 'table-facts', title: 'Grid', type: 3, uuid: null },
+  { id: 'view-facts', fk_model_id: 'table-decisions', title: 'acceptance_facts', type: 3, uuid: null },
 ]) {
-  let rejected = false;
-  try { execute('Require Recovery Saved View', body, { 'Confirm Probe Cleanup': { list: [] }, 'Evaluate Reader Insert Denial': canaryContext }); }
-  catch (error) { rejected = /recovery_saved_view_invalid/.test(error.message); }
-  if (!rejected) throw new Error('invalid or incomplete saved-view identity was accepted');
+  if (!rejects('Require Recovery Saved View', { list: [view] }, { 'Evaluate Reader Insert Denial': probeContext, 'Confirm Probe Cleanup': { list: [] } }, /recovery_saved_view_invalid/)) {
+    throw new Error('mismatched recovery view identity was accepted');
+  }
 }
 
-const emptyCanary = execute(
-  'Inspect Recovery Canary Row',
-  { list: [], pageInfo: { totalRows: 0 } },
-  { 'Require Recovery Saved View': savedView },
-)[0].json;
-if (emptyCanary.canaryAction !== 'create' || emptyCanary.canaryRow !== null) throw new Error('missing recovery canary row did not select create');
-const pendingDecision = { kind: 'nocodb-attachment-recovery-canary', version: 1, state: 'pending' };
-const pendingCanary = execute(
-  'Inspect Recovery Canary Row',
-  { list: [{ id: 41, run_id: 'recovery-canary-v1', decision: JSON.stringify(pendingDecision) }], pageInfo: { totalRows: 1 } },
-  { 'Require Recovery Saved View': savedView },
-)[0].json;
-if (pendingCanary.canaryAction !== 'upload' || pendingCanary.rowId !== 41) throw new Error('pending recovery canary did not select one upload');
-const observedUploading = execute(
-  'Inspect Recovery Canary Row',
-  { list: [{ id: 41, run_id: 'recovery-canary-v1', decision: JSON.stringify({ ...pendingDecision, state: 'uploading' }) }], pageInfo: { totalRows: 1 } },
-  { 'Require Recovery Saved View': savedView },
-)[0].json;
-if (observedUploading.canaryAction !== 'wait' || observedUploading.canaryPollCount !== 0) {
-  throw new Error('an in-progress recovery canary did not join with a bounded poll');
-}
-let missingDuringJoinRejected = false;
-try {
-  execute(
-    'Inspect Recovery Canary Row',
-    { list: [], pageInfo: { totalRows: 0 } },
-    { 'Require Recovery Saved View': savedView, 'Increment Recovery Canary Poll': { canaryPollCount: 1 } },
-  );
-} catch (error) { missingDuringJoinRejected = /recovery_canary_row_invalid/.test(error.message); }
-if (!missingDuringJoinRejected) throw new Error('a canary row that disappeared during join was reinitialized');
-const losingClaim = execute(
-  'Require Recovery Canary Claim',
-  {},
-  { 'Inspect Recovery Canary Row': pendingCanary },
-)[0].json;
-if (losingClaim.claimWon !== false || losingClaim.canaryAction !== 'wait') {
-  throw new Error('a losing upload claim did not join without uploading');
-}
-const winningClaim = execute(
-  'Require Recovery Canary Claim',
-  { rowId: 41 },
-  { 'Inspect Recovery Canary Row': pendingCanary },
-)[0].json;
-if (winningClaim.claimWon !== true || winningClaim.canaryAction !== 'upload') {
-  throw new Error('the exact winning upload claim was not selected');
-}
-let ambiguousUploadRejected = false;
-try {
-  execute(
-    'Inspect Recovery Canary Row',
-    { list: [{ id: 41, run_id: 'recovery-canary-v1', decision: JSON.stringify({ ...pendingDecision, state: 'uploading' }) }], pageInfo: { totalRows: 1 } },
-    { 'Require Recovery Saved View': savedView, 'Increment Recovery Canary Poll': { canaryPollCount: 12 } },
-  );
-} catch (error) { ambiguousUploadRejected = /attachment_upload_ambiguous/.test(error.message); }
-if (!ambiguousUploadRejected) throw new Error('stale uploading state exceeded the join bound without failing');
-for (const rows of [
-  [{ id: 41, run_id: 'recovery-canary-v1', decision: '{bad-json' }],
-  [{ id: 41, run_id: 'recovery-canary-v1', decision: JSON.stringify(pendingDecision) }, { id: 42, run_id: 'recovery-canary-v1', decision: JSON.stringify(pendingDecision) }],
-]) {
-  let rejected = false;
-  try { execute('Inspect Recovery Canary Row', { list: rows, pageInfo: { totalRows: rows.length } }, { 'Require Recovery Saved View': savedView }); }
-  catch (error) { rejected = /recovery_canary_row_invalid/.test(error.message); }
-  if (!rejected) throw new Error('malformed or duplicate recovery canary rows were accepted');
-}
-
-let preparedBytes = null;
-const preparedBinary = (await executeAsync(
-  'Prepare Recovery Canary Binary',
-  pendingCanary,
-  {},
-  [pendingCanary],
-  {},
-  {
-    prepareBinaryData: async (buffer, fileName, mimeType) => {
-      preparedBytes = Buffer.from(buffer);
-      return { data: 'filesystem-v2', id: 'filesystem-v2:prepared-canary', fileName, mimeType };
-    },
-  },
-))[0];
-if (
-  preparedBinary.binary?.canaryFile?.data !== 'filesystem-v2'
-  || preparedBinary.binary?.canaryFile?.id !== 'filesystem-v2:prepared-canary'
-  || preparedBinary.binary?.canaryFile?.fileName !== 'issue334-recovery-canary-v1.txt'
-  || preparedBinary.binary?.canaryFile?.mimeType !== 'text/plain'
-  || preparedBytes?.toString('base64') !== 'bm9jb2RiLWlzc3VlMzM0LWF0dGFjaG1lbnQtY2FuYXJ5LXYxCg=='
-) throw new Error('recovery canary binary bytes or metadata are not exact');
-const uploaded = execute(
-  'Require Recovery Canary Upload',
-  [{
-    path: 'download/issue334_acceptance/recovery-canary-v1/issue334-recovery-canary-v1_Ab-9_.txt',
-    title: 'issue334-recovery-canary-v1.txt',
-    mimetype: 'text/plain',
-    size: 37,
-    signedPath: 'transient-must-not-persist',
-  }],
-  { 'Prepare Recovery Canary Binary': pendingCanary },
-)[0].json;
-if (
-  uploaded.canaryDecision.state !== 'uploaded'
-  || uploaded.canaryDecision.attachment.sha256 !== '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3'
-  || JSON.stringify(uploaded.canaryDecision).includes('signedPath')
-) throw new Error('uploaded recovery canary metadata was not bounded and persisted exactly');
-for (const attachment of [
-  { path: 'download/other/file.txt', title: 'issue334-recovery-canary-v1.txt', mimetype: 'text/plain', size: 37 },
-  { path: 'download/issue334_acceptance/recovery-canary-v1/issue334-recovery-canary-v1_Ab-9_.txt', title: 'wrong.txt', mimetype: 'text/plain', size: 37 },
-  { path: 'download/issue334_acceptance/recovery-canary-v1/issue334-recovery-canary-v1_Ab-9_.txt', title: 'issue334-recovery-canary-v1.txt', mimetype: 'text/plain', size: 38 },
-]) {
-  let rejected = false;
-  try { execute('Require Recovery Canary Upload', [attachment], { 'Prepare Recovery Canary Binary': pendingCanary }); }
-  catch (error) { rejected = /recovery_canary_upload_invalid/.test(error.message); }
-  if (!rejected) throw new Error('untrusted recovery canary upload metadata was accepted');
-}
-
-const canonicalComment = {
-  id: 'comment-canary',
-  base_id: 'base-1',
-  source_id: 'source-operator',
-  fk_model_id: 'table-decisions',
-  row_id: '41',
-  comment: 'issue334-recovery-canary-v1',
-  attachments: [{
-    id: 'attachment-canary',
-    path: uploaded.canaryDecision.attachment.path,
-    title: 'issue334-recovery-canary-v1.txt',
-    mimetype: 'text/plain',
-    size: 37,
-  }],
+const factFixture = {
+  id: -334,
+  run_id: 'recovery-canary-v2',
+  fact: 'artifact-available',
+  artifact_id: 'issue334-artifact-v1',
+  artifact_uri: 'https://artifacts.example.invalid/issue334/artifact-v1',
+  artifact_media_type: 'text/plain',
+  artifact_size_bytes: 37,
+  artifact_sha256: '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3',
 };
-const missingComment = execute(
-  'Inspect Recovery Canary Comments',
-  { list: [] },
-  { 'Require Uploaded Recovery Canary': uploaded },
-)[0].json;
-if (missingComment.createComment !== true) throw new Error('uploaded canary without a comment did not select association');
-const associated = execute(
-  'Inspect Recovery Canary Comments',
-  { list: [canonicalComment] },
-  { 'Require Uploaded Recovery Canary': uploaded },
-)[0].json;
-if (
-  associated.createComment !== false
-  || associated.canaryDecision.state !== 'ready'
-  || associated.canaryDecision.commentId !== 'comment-canary'
-  || associated.canaryDecision.attachment.id !== 'attachment-canary'
-) throw new Error('exact durable comment association did not produce ready canary metadata');
-for (const comments of [
-  [canonicalComment, { ...canonicalComment, id: 'comment-duplicate' }],
-  [{ ...canonicalComment, row_id: '42' }],
-  [{ ...canonicalComment, attachments: [{ ...canonicalComment.attachments[0], path: 'download/other/file.txt' }] }],
+const fact = execute('Require Recovery Fact', { list: [factFixture] }, { 'Require Recovery Saved View': savedView })[0].json;
+for (const [label, patch] of [
+  ['artifact metadata', { artifact_media_type: 'application/json' }],
+  ['artifact URI', { artifact_uri: 'https://other.example.invalid/issue334/artifact-v1' }],
+  ['reserved fact ID', { id: -335 }],
+  ['legacy attachment shape', { attachment: [{ path: 'download/legacy' }] }],
 ]) {
-  let rejected = false;
-  try { execute('Inspect Recovery Canary Comments', { list: comments }, { 'Require Uploaded Recovery Canary': uploaded }); }
-  catch (error) { rejected = /recovery_canary_comment_invalid/.test(error.message); }
-  if (!rejected) throw new Error('duplicate or mismatched recovery canary comment association was accepted');
-}
-const readyCanary = execute(
-  'Inspect Recovery Canary Row',
-  { list: [{ id: 41, run_id: 'recovery-canary-v1', decision: JSON.stringify(associated.canaryDecision) }], pageInfo: { totalRows: 1 } },
-  { 'Require Recovery Saved View': savedView },
-)[0].json;
-if (readyCanary.canaryAction !== 'verify') throw new Error('ready recovery canary rerun selected a write path');
-const losingExecutionActions = [emptyCanary.canaryAction, losingClaim.canaryAction, observedUploading.canaryAction, readyCanary.canaryAction];
-if (losingExecutionActions.includes('upload') || losingExecutionActions.at(-1) !== 'verify') {
-  throw new Error('the losing concurrent execution uploaded instead of joining the ready canary');
-}
-let downloadHelperCalled = false;
-const verifiedDownload = (await executeAsync(
-  'Require Recovery Canary Download',
-  {},
-  { 'Inspect Recovery Canary Comments': associated },
-  [{}],
-  { canaryDownload: { data: 'filesystem-v2', id: 'filesystem-v2:downloaded-canary', fileSize: '37' } },
-  { getBinaryDataBuffer: async (index, property) => {
-    if (index !== 0 || property !== 'canaryDownload') throw new Error('wrong binary helper arguments');
-    downloadHelperCalled = true;
-    return Buffer.from('bm9jb2RiLWlzc3VlMzM0LWF0dGFjaG1lbnQtY2FuYXJ5LXYxCg==', 'base64');
-  } },
-))[0].json;
-if (!downloadHelperCalled || verifiedDownload.attachmentCanary?.state !== 'ready' || verifiedDownload.attachmentCanary?.sha256 !== '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3') {
-  throw new Error('exact downloaded canary bytes were not retained as bounded evidence');
-}
-let wrongDownloadRejected = false;
-try {
-  await executeAsync(
-    'Require Recovery Canary Download',
-    {},
-    { 'Inspect Recovery Canary Comments': associated },
-    [{}],
-    { canaryDownload: { data: 'filesystem-v2', id: 'filesystem-v2:wrong-canary' } },
-    { getBinaryDataBuffer: async () => Buffer.from('wrong\n') },
-  );
-} catch (error) { wrongDownloadRejected = /recovery_canary_download_invalid/.test(error.message); }
-if (!wrongDownloadRejected) throw new Error('wrong recovery canary download bytes were accepted');
-const privateBase = execute(
-  'Require Acceptance Base Private',
-  { uuid: null, roles: null, fk_custom_url_id: null },
-  { 'Resolve Acceptance Tables': resolved },
-)[0].json;
-if (privateBase.publicSharing.basePublicShareUuid !== null) throw new Error('null base share UUID was not retained as evidence');
-for (const body of [{ roles: null }, { uuid: 'public-base-uuid', roles: 'viewer' }]) {
-  let rejected = false;
-  try { execute('Require Acceptance Base Private', body, { 'Resolve Acceptance Tables': resolved }); }
-  catch (error) { rejected = /acceptance_base_share_invalid/.test(error.message); }
-  if (!rejected) throw new Error('missing or non-null base share UUID was accepted');
-}
-const noReaderShares = execute(
-  'Require Reader Shares Empty', { list: [] }, { 'Require Acceptance Base Private': privateBase },
-)[0].json;
-const noOperatorShares = execute(
-  'Require Operator Shares Empty', { list: [] }, { 'Require Reader Shares Empty': noReaderShares },
-)[0].json;
-if (
-  noOperatorShares.publicSharing.views.length !== 2
-  || noOperatorShares.publicSharing.views.some((view) => view.publicShareUuid !== null)
-) throw new Error('empty exact table share collections were not retained as bounded evidence');
-for (const [name, lookup] of [
-  ['Require Reader Shares Empty', { 'Require Acceptance Base Private': privateBase }],
-  ['Require Operator Shares Empty', { 'Require Reader Shares Empty': noReaderShares }],
-]) {
-  for (const body of [{ list: [{ id: 'view-one', uuid: 'shared-view' }] }, { unexpected: [] }]) {
-    let rejected = false;
-    try { execute(name, body, lookup); } catch (error) { rejected = /acceptance_table_share_invalid/.test(error.message); }
-    if (!rejected) throw new Error(`${name} accepted a public or malformed share collection`);
+  if (!rejects('Require Recovery Fact', { list: [{ ...factFixture, ...patch }] }, { 'Require Recovery Saved View': savedView }, /recovery_fact_invalid/)) {
+    throw new Error(`${label} mismatch was accepted`);
   }
 }
-let untrustedSchemaRejected = false;
-try {
-  execute('Resolve Acceptance Tables', { ...reflectedContext, readerSchema: 'public', tables: exactTables, pageInfo: completePage });
-} catch (error) { untrustedSchemaRejected = /acceptance_reflection_invalid/.test(error.message); }
-if (!untrustedSchemaRejected) throw new Error('Resolve Acceptance Tables reported a hard-coded schema instead of validating source metadata');
-for (const [label, mutate] of [
-  ['public table schema', (input) => { input.tables[0].schema = 'public'; }],
-  ['missing table schema', (input) => { delete input.tables[0].schema; }],
-  ['cross-source table identity', (input) => {
-    [input.tables[0].source_id, input.tables[1].source_id] = [input.tables[1].source_id, input.tables[0].source_id];
-  }],
-  ['unreturned later-page table', (input) => { input.pageInfo.totalRows = 3; }],
-  ['nonterminal table page', (input) => { input.pageInfo.isLastPage = false; }],
+
+const decisionFixture = { id: 41, run_id: 'recovery-canary-v2', decision: 'retain' };
+const canaryContext = execute('Require Recovery Decision', { list: [decisionFixture] }, { 'Require Recovery Fact': fact })[0].json;
+for (const row of [
+  { ...decisionFixture, run_id: 'recovery-canary-v1' },
+  { ...decisionFixture, decision: 'corrected' },
+  { ...decisionFixture, attachment: { path: 'download/legacy' } },
 ]) {
-  const input = {
-    ...reflectedContext,
-    tables: exactTables.map((table) => ({ ...table })),
-    pageInfo: { ...completePage },
-  };
-  mutate(input);
-  let rejected = false;
-  try { execute('Resolve Acceptance Tables', input); }
-  catch (error) { rejected = /acceptance_reflection_invalid/.test(error.message); }
-  if (!rejected) throw new Error(`${label} was accepted as an exact reflected surface`);
-}
-let unexpectedTableRejected = false;
-try {
-  execute('Resolve Acceptance Tables', {
-    ...reflection,
-    readerSchema: 'read_model',
-    operatorSchema: 'operator',
-    tables: [...exactTables, { id: 'extra', title: 'other', table_name: 'other', source_id: 'source-reader', schema: 'read_model' }],
-    pageInfo: { ...completePage, totalRows: 3 },
-  });
-} catch (error) { unexpectedTableRejected = /acceptance_reflection_invalid/.test(error.message); }
-if (!unexpectedTableRejected) throw new Error('unexpected reflected table was accepted');
-
-const readContext = { ...resolved, factsTableId: 'table-facts' };
-const readerRead = execute('Require Reader Facts Read', {
-  statusCode: 200,
-  body: { list: [{ id: 1, fact: 'fixture' }], pageInfo: { totalRows: 1 } },
-  context: readContext,
-})[0].json;
-if (readerRead.readerRead !== true || readerRead.factsTableId !== 'table-facts') {
-  throw new Error('successful acceptance reader GET was not verified');
-}
-let malformedReadRejected = false;
-try { execute('Require Reader Facts Read', { statusCode: 200, body: {}, context: readContext }); }
-catch (error) { malformedReadRejected = /reader_read_invalid/.test(error.message); }
-if (!malformedReadRejected) throw new Error('malformed reader GET was accepted');
-
-const protectedContext = { runId: 'run-one', recordId: 7 };
-const protectedDenial = execute('Capture Protected Update Denial', {
-  statusCode: 400,
-  body: {
-    error: 'ERR_DATABASE_OP_FAILED',
-    code: '42501',
-    message: "The database user does not have permission to access 'acceptance_decision'.",
-  },
-  context: protectedContext,
-})[0].json;
-if (protectedDenial.protectedUpdateDenied !== true) throw new Error('PostgreSQL 42501 denial was not accepted');
-for (const response of [
-  { statusCode: 500, body: { message: 'network failure' }, context: protectedContext },
-  { statusCode: 400, body: { error: 'ERR_DATABASE_OP_FAILED', code: '23505', message: 'duplicate' }, context: protectedContext },
-]) {
-  let rejected = false;
-  try { execute('Capture Protected Update Denial', response); } catch (error) { rejected = /protected_update_denial_invalid/.test(error.message); }
-  if (!rejected) throw new Error('non-authorization protected-update error was accepted');
-}
-
-const negativeOne = execute('Prepare Reader Negative Probe', { ...readerRead, runId: 'run-one' })[0].json;
-const negativeTwo = execute('Prepare Reader Negative Probe', { ...readerRead, runId: 'run-two' })[0].json;
-if (
-  negativeOne.readerProbeId === negativeTwo.readerProbeId
-  || negativeOne.readerProbeFact !== 'forbidden:run-one'
-  || negativeTwo.readerProbeFact !== 'forbidden:run-two'
-) throw new Error('reader negative probe is not unique and run-bound');
-const readerDenial = execute('Evaluate Reader Insert Denial', {
-  statusCode: 403,
-  body: { error: 'ERR_FORBIDDEN', message: "Forbidden - Source 'Read Model' is read-only" },
-  context: negativeOne,
-})[0].json;
-if (readerDenial.readerInsertDenied !== true || readerDenial.unexpectedlyPermitted !== false) {
-  throw new Error('exact read-only source denial was not accepted');
-}
-const readerUnexpected = execute('Evaluate Reader Insert Denial', {
-  statusCode: 200,
-  body: { id: negativeOne.readerProbeId },
-  context: negativeOne,
-})[0].json;
-if (readerUnexpected.unexpectedlyPermitted !== true) throw new Error('unexpected reader insert did not route to cleanup');
-let duplicateNotDenial = false;
-try {
-  execute('Evaluate Reader Insert Denial', {
-    statusCode: 400,
-    body: { error: 'ERR_DUPLICATE_RECORD', message: 'duplicate key' },
-    context: negativeOne,
-  });
-} catch (error) { duplicateNotDenial = /reader_insert_denial_invalid/.test(error.message); }
-if (!duplicateNotDenial) throw new Error('duplicate-key residue created a false reader-denial pass');
-
-const cleanupContext = { operation: 'cleanup', runId: 'run-one', cleanupPageCount: 0, removedCount: 0 };
-const cleanupPage = execute('Prepare Cleanup Page', {
-  ...cleanupContext,
-  rows: [{ id: 1, run_id: 'run-one' }, { id: 2, run_id: 'run-one' }],
-})[0].json;
-if (!cleanupPage.hasRows || cleanupPage.cleanupPageCount !== 1 || cleanupPage.deleteRows.length !== 2) {
-  throw new Error('cleanup page was not bounded and prepared');
-}
-const cleanupDone = execute('Prepare Cleanup Page', { ...cleanupPage, rows: [] })[0].json;
-if (cleanupDone.hasRows !== false || cleanupDone.removedCount !== 2) throw new Error('cleanup did not retain its exact removed count');
-let cleanupBoundRejected = false;
-try {
-  execute('Prepare Cleanup Page', {
-    ...cleanupContext,
-    cleanupPageCount: 10,
-    rows: [{ id: 3, run_id: 'run-one' }],
-  });
-} catch (error) { cleanupBoundRejected = /cleanup_page_bound_exceeded/.test(error.message); }
-if (!cleanupBoundRejected) throw new Error('cleanup accepted rows beyond its page bound');
-const absent = execute('Require Cleanup Absent', {
-  statusCode: 200,
-  body: { list: [], pageInfo: { totalRows: 0 } },
-  context: cleanupDone,
-})[0].json;
-if (absent.ok !== true || absent.removedCount !== 2) throw new Error('cleanup absence was not verified');
-
-const acceptanceResponse = execute(
-  'Prepare Acceptance Response',
-  { list: [] },
-  {
-    'Evaluate Reader Insert Denial': {
-      ...noOperatorShares,
-      inserted: true,
-      read: true,
-      readerRead: true,
-      decisionUpdated: true,
-      removed: true,
-      protectedUpdateDenied: true,
-      protectedUpdateStatus: 400,
-      protectedUpdateEvidence: 'postgresql_42501',
-      readerInsertDenied: true,
-      readerInsertStatus: 403,
-      readerInsertEvidence: 'nocodb_readonly_source',
-    },
-    'Require Recovery Canary Download': { ...verifiedDownload, ...noOperatorShares },
-  },
-)[0].json;
-if (
-  acceptanceResponse.credentialProof?.throughN8n !== true
-  || acceptanceResponse.credentialProof?.credentialName !== 'NocoDB Operator API'
-  || acceptanceResponse.publicSharing?.basePublicShareUuid !== null
-  || acceptanceResponse.publicSharing?.views?.length !== 2
-  || acceptanceResponse.attachmentCanary?.state !== 'ready'
-  || acceptanceResponse.attachmentCanary?.savedViewId !== 'view-facts'
-  || acceptanceResponse.attachmentCanary?.commentId !== 'comment-canary'
-  || acceptanceResponse.attachmentCanary?.attachmentId !== 'attachment-canary'
-) throw new Error('successful HTTP probe omitted credential-path or public-sharing evidence');
-for (const forbidden of ['password', 'token', 'header', 'credentialId', 'created_by', 'signedPath', 'signedUrl', 'bm9jb2ri']) {
-  if (JSON.stringify(acceptanceResponse).toLowerCase().includes(forbidden.toLowerCase())) {
-    throw new Error(`acceptance response exposed secret-bearing field ${forbidden}`);
+  if (!rejects('Require Recovery Decision', { list: [row] }, { 'Require Recovery Fact': fact }, /recovery_decision_invalid/)) {
+    throw new Error('mismatched or legacy recovery decision was accepted');
   }
 }
-})().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+const expectedCanary = {
+  version: 2,
+  state: 'ready',
+  baseId: 'base-acceptance',
+  readerSourceId: 'source-reader',
+  operatorSourceId: 'source-operator',
+  factTableId: 'table-facts',
+  decisionTableId: 'table-decisions',
+  viewId: 'view-facts',
+  rowId: '41',
+  factId: -334,
+  artifact: {
+    id: 'issue334-artifact-v1',
+    uri: 'https://artifacts.example.invalid/issue334/artifact-v1',
+    mediaType: 'text/plain',
+    sizeBytes: 37,
+    sha256: '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3',
+  },
+};
+if (JSON.stringify(canaryContext.recoveryCanary) !== JSON.stringify(expectedCanary)) {
+  throw new Error('record recovery canary output is not exact');
+}
+const response = execute('Prepare Acceptance Response', {}, { 'Require Recovery Decision': canaryContext })[0].json;
+if (JSON.stringify(response.recoveryCanary) !== JSON.stringify(expectedCanary) || response.attachmentCanary !== undefined) {
+  throw new Error('probe response did not expose only the record recovery canary');
+}
+
+const prepared = execute('Prepare Feedback Fact', {}, { 'Feedback Only': { ...resolved, operation: 'feedback', runId: 'feedback-run-one' } })[0].json;
+if (!Number.isSafeInteger(prepared.factId) || prepared.factId === -334) throw new Error('feedback fact ID is not safe and run-bound');
+const otherPrepared = execute('Prepare Feedback Fact', {}, { 'Feedback Only': { ...resolved, operation: 'feedback', runId: 'feedback-run-two' } })[0].json;
+if (prepared.factId === otherPrepared.factId) throw new Error('distinct feedback runs reused a fact ID');
+if (!rejects('Require Initial Runtime Fact', {
+  factId: prepared.factId, runId: prepared.runId, fact: 'original',
+}, { 'Prepare Feedback Fact': prepared }, /feedback_initial_fact_invalid/)) {
+  throw new Error('missing runtime binding proof was accepted');
+}
+const initial = execute('Require Initial Runtime Fact', {
+  factId: prepared.factId, runId: prepared.runId, fact: 'original', runtimeRole: 'issue334_acceptance_runtime',
+}, { 'Prepare Feedback Fact': prepared })[0].json;
+const normalizedDecision = execute('Normalize Feedback Decision', { id: 73 }, { 'Require Initial Runtime Fact': initial })[0].json;
+const before = execute('Require Feedback Before Refresh', {
+  factId: prepared.factId, runId: prepared.runId, initialFact: 'original', operatorDecision: 'corrected',
+  effectiveBeforeRefresh: 'corrected', runtimeRole: 'issue334_acceptance_runtime',
+}, { 'Normalize Feedback Decision': normalizedDecision })[0].json;
+const refreshed = execute('Require Refreshed Runtime Fact', {
+  factId: prepared.factId, runId: prepared.runId, fact: 'refreshed', runtimeRole: 'issue334_acceptance_runtime',
+}, { 'Require Feedback Before Refresh': before })[0].json;
+const observed = execute('Require Refreshed Reader Fact', {
+  list: [{ id: prepared.factId, run_id: prepared.runId, fact: 'refreshed' }],
+}, { 'Require Refreshed Runtime Fact': refreshed })[0].json;
+const feedback = execute('Prepare Feedback Response', {
+  factId: prepared.factId, runId: prepared.runId, refreshedFact: 'refreshed', operatorDecision: 'corrected',
+  effectiveAfterRefresh: 'corrected', runtimeRole: 'issue334_acceptance_runtime',
+}, { 'Require Refreshed Reader Fact': observed })[0].json;
+const expectedFeedback = {
+  initialFact: 'original',
+  operatorDecision: 'corrected',
+  effectiveBeforeRefresh: 'corrected',
+  refreshedFact: 'refreshed',
+  effectiveAfterRefresh: 'corrected',
+};
+if (
+  feedback.ok !== true || feedback.operation !== 'feedback' || feedback.runId !== 'feedback-run-one' ||
+  feedback.domain !== 'issue334_acceptance' || feedback.factId !== prepared.factId ||
+  JSON.stringify(feedback.feedback) !== JSON.stringify(expectedFeedback)
+) throw new Error('feedback response is not exact');
+for (const invalid of [
+  { factId: prepared.factId, runId: prepared.runId, refreshedFact: 'refreshed', operatorDecision: 'corrected', effectiveAfterRefresh: 'original', runtimeRole: 'issue334_acceptance_runtime' },
+  { factId: prepared.factId, runId: prepared.runId, refreshedFact: 'refreshed', operatorDecision: 'corrected', effectiveAfterRefresh: 'corrected' },
+]) {
+  if (!rejects('Prepare Feedback Response', invalid, { 'Require Refreshed Reader Fact': observed }, /feedback_after_refresh_invalid/)) {
+    throw new Error('unobserved or losing feedback result was accepted');
+  }
+}
 JS
 
 mapfile -t packaged_workflows < <(

@@ -321,17 +321,18 @@ credentials, or perform a positive authorization probe.
 
 Import
 `kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json`. Do not bind
-a PostgreSQL credential or publish this workflow yet: the first provisioning call must
-create `issue334_acceptance` and its generated migrator credential. Bind **NocoDB
-Operator API** to every HTTP Request node and **NocoDB Acceptance Header** to
-**Acceptance Webhook**. Generate and retain a separate token with at
+a PostgreSQL credential or publish this workflow yet. The first provisioning call must
+create `issue334_acceptance` and its generated migrator and runtime credentials. Bind
+**NocoDB Operator API** to every HTTP Request node and **NocoDB Acceptance Header** to
+**Acceptance Webhook**. NocoDB receives neither PostgreSQL credential. Generate and
+retain a separate token with at
 least 32 URL-safe characters from `A-Z`, `a-z`, `0-9`, `_`, and `-`. Create the
 **NocoDB Acceptance Header** Header Auth credential with header name `Authorization`
 and value `Bearer <token>`. Keep the bare token outside Git as
 `NOCODB_ACCEPTANCE_TOKEN`. Keep execution persistence disabled. Do not publish the
-workflow until the generated PostgreSQL credential is bound after the first pass.
+workflow until both generated PostgreSQL credentials are bound after the first pass.
 
-The access script requires these six exact endpoint and token environment variables.
+The access script requires these exact endpoint and token environment variables.
 The completed pass also requires the non-secret binding confirmation printed by the
 first pass:
 
@@ -343,18 +344,27 @@ first pass:
 | `AUTOMATION_DATA_PROVISIONING_TOKEN` | Bare retained token for **Automation Data Provisioning Header** |
 | `NOCODB_SOURCE_PROVISIONING_TOKEN` | Bare retained token used by **NocoDB Source Provisioning Header** |
 | `NOCODB_ACCEPTANCE_TOKEN` | Bare retained token used by **NocoDB Acceptance Header** |
-| `NOCODB_ACCEPTANCE_BINDING_CONFIRM` | `bound:issue334_acceptance:<generated-migrator-credential-id>` |
+| `NOCODB_ACCEPTANCE_BINDING_CONFIRM` | `bound:issue334_acceptance:<generated-migrator-credential-id>:<generated-runtime-credential-id>` |
 
 Each token must contain at least 32 URL-safe characters from the set above. Load all
 three tokens through an approved secret-input method and export the exact URLs. Run the
 command first without `NOCODB_ACCEPTANCE_BINDING_CONFIRM`. It provisions
-`issue334_acceptance`, prints only the generated non-secret migrator credential ID, and
-stops before it calls the unpublished acceptance workflow. The catalog records this
-intentional first pass as incomplete.
+`issue334_acceptance`, prints only the two generated non-secret credential IDs, then
+stops before it calls the
+unpublished acceptance workflow. The catalog records this intentional first pass as
+incomplete.
 
-In n8n, bind that exact generated credential to all six Postgres nodes in **NocoDB
-Acceptance Domain**, check the other bindings, and publish the workflow. Do not add its
-credential ID to the Git template. Then rerun the same shell block with the exact
+In n8n, bind the generated credentials to these exact PostgreSQL nodes:
+
+| Credential | Nodes |
+| --- | --- |
+| `automation-data/issue334_acceptance/migrator` | **Create Acceptance Structure**, **Grant Acceptance Access**, **Clear Reader Negative Residue**, **Cleanup Unexpected Reader Insert**, **Clear Feedback Residue**, **Cleanup Feedback Fact** |
+| `automation-data/issue334_acceptance/runtime` | **Publish Initial Feedback Fact**, **Consume Feedback Before Refresh**, **Refresh Feedback Fact**, **Consume Feedback After Refresh** |
+
+The migrator nodes perform only reviewed DDL, grants, and bounded residue cleanup. The
+runtime nodes publish facts and consume the exact operator decision. Do not bind either
+credential to an HTTP Request node. Check all bindings, then publish the workflow. Do not
+add either credential ID to the Git template. Rerun the same shell block with the exact
 confirmation printed by the first pass:
 
 ```bash
@@ -371,7 +381,7 @@ confirmation printed by the first pass:
   printf '\n' >&2
   export AUTOMATION_DATA_PROVISIONING_TOKEN NOCODB_SOURCE_PROVISIONING_TOKEN
   export NOCODB_ACCEPTANCE_TOKEN
-  export NOCODB_ACCEPTANCE_BINDING_CONFIRM='bound:issue334_acceptance:<generated-migrator-credential-id>'
+  export NOCODB_ACCEPTANCE_BINDING_CONFIRM='bound:issue334_acceptance:<generated-migrator-credential-id>:<generated-runtime-credential-id>'
   NOCODB_ACCESS_TEST_CONFIRM='test:nocodb:access' \
     mise exec -- just kube nocodb-access-test
   unset AUTOMATION_DATA_PROVISIONING_TOKEN NOCODB_SOURCE_PROVISIONING_TOKEN
@@ -380,20 +390,34 @@ confirmation printed by the first pass:
 )
 ```
 
-The confirmation guards execution intent; the idempotent provisioning response must
-still return the same valid domain and credential identity before the command invokes
-acceptance. The command does not bind or publish an n8n workflow.
+The confirmation guards execution intent. The idempotent provisioning response must
+still return the same valid domain and both credential identities before the command
+invokes acceptance. The command does not bind, rebind, or publish an n8n workflow.
 
 The completed run provisions the synthetic domain, runs the two-phase source adoption,
 proves read and controlled-edit behavior plus PostgreSQL denials, rotates only the
-operator source login, and establishes or verifies a persistent attachment recovery canary.
-Run-owned data rows are removed, but the synthetic domain, base, sources, registry rows,
-saved view, and recovery canary remain for restore evidence.
+operator source login, demonstrates the complete fact/decision/refresh feedback loop,
+and establishes or verifies a persistent record recovery canary. The canary retains fact
+ID `-334`, operator `run_id=recovery-canary-v2`, the exact saved-view and source
+identities, and this workflow-owned external artifact reference:
+
+```json
+{"id":"issue334-artifact-v1","uri":"https://artifacts.example.invalid/issue334/artifact-v1","mediaType":"text/plain","sizeBytes":37,"sha256":"09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3"}
+```
+
+The URI is synthetic and is never fetched. Run-owned data rows are removed, but the
+synthetic domain, base, sources, registry rows, saved view, and record canary remain for
+restore evidence. The workflow never unlocks source schema editing or uses NocoDB-native
+uploads, Attachment fields, or comment attachments.
 
 **Expected result:** Both source jobs complete and are discovered and read back; reader
 writes and forbidden operator changes are denied by PostgreSQL; unchanged sync is
-idempotent; targeted rotation changes only the operator credential generation; and the
-persistent attachment canary downloads with its expected identity and checksum.
+idempotent; targeted rotation changes only the operator credential generation; the
+record canary has exact PostgreSQL, source, table, view, decision-row, and artifact
+identity; and feedback reports `original`, `corrected`, `corrected`, `refreshed`, and
+`corrected` in sequence. Perform the attended browser check after the API pass: confirm
+that the reader is visibly read-only and that the operator can make the intended small
+edit.
 
 ### 8. Wait for paired backups and run the restore drill
 
