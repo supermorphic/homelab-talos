@@ -74,8 +74,8 @@ jobs:
           include-hidden-files: true
           retention-days: 90
 
-  plan-shadow:
-    name: plan-shadow
+  plan:
+    name: plan
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -100,10 +100,10 @@ jobs:
           git cat-file -e "${{ github.event.pull_request.base.sha }}^{commit}" ||
             git fetch --no-tags origin "${{ github.event.pull_request.base.sha }}"
 
-      - name: Plan pull request validation
+      - name: Plan complete pull request validation
         if: github.event_name == 'pull_request'
         run: |
-          mise exec -- just test ci-plan \
+          mise exec -- just test ci-plan-full \
             "${{ github.event.pull_request.base.sha }}" \
             "${{ github.event.pull_request.head.sha }}" \
             "$RUNNER_TEMP/ci-plan.json"
@@ -116,11 +116,171 @@ jobs:
             "${{ github.sha }}" \
             "$RUNNER_TEMP/ci-plan.json"
 
-      - name: Upload shadow validation plan
+      - name: Upload validation plan
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ci-plan-shadow-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ci-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-plan.json
           if-no-files-found: warn
           retention-days: 30
+
+  groups:
+    name: ci-group (${{ matrix.group }})
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        group:
+          - core
+          - observability
+          - automation
+          - ci-framework
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install mise and repository tools
+        uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
+        with:
+          version: 2026.9.2
+          install: true
+          cache: true
+
+      - name: Download validation plan
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-plan
+
+      - name: Run validation group
+        env:
+          TEST_EXECUTION_ORIGIN: github-actions
+        run: |
+          mise exec -- just test ci-group \
+            "${{ matrix.group }}" \
+            "$RUNNER_TEMP/ci-plan/ci-plan.json"
+
+      - name: Generate Allure Awesome report
+        id: allure_report
+        if: always()
+        continue-on-error: true
+        run: mise exec -- just test report-latest
+
+      - name: Write test job summary
+        if: always()
+        continue-on-error: true
+        run: mise exec -- just test summary-latest >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload canonical group results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-group-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .test-results/
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 90
+
+      - name: Upload static group report
+        if: always() && steps.allure_report.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: allure-group-report-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .test-reports/
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 90
+
+  merge-gate:
+    name: merge-gate
+    needs:
+      - plan
+      - groups
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact candidate
+        if: always()
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install mise and repository tools
+        if: always()
+        uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
+        with:
+          version: 2026.9.2
+          install: true
+          cache: true
+
+      - name: Download validation plan
+        if: always()
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/merge-gate-plan
+
+      - name: Download canonical group results
+        if: always()
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ci-group-?*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-results
+          merge-multiple: false
+
+      - name: Reconcile canonical group results
+        id: reconcile
+        if: always()
+        continue-on-error: true
+        run: |
+          mise exec -- just test ci-reconcile \
+            "$RUNNER_TEMP/merge-gate-plan/ci-plan.json" \
+            "$RUNNER_TEMP/ci-results" \
+            "$RUNNER_TEMP/merge-gate-output"
+
+      - name: Write merge-gate summary
+        if: always()
+        continue-on-error: true
+        run: |
+          summary="$RUNNER_TEMP/merge-gate-output/merge-gate.md"
+          [[ ! -f "$summary" ]] || cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload merge-gate result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: merge-gate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/merge-gate-output/
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Enforce provider and reconciliation results
+        if: always()
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          GROUP_RESULT: ${{ needs.groups.result }}
+          RECONCILE_OUTCOME: ${{ steps.reconcile.outcome }}
+        run: |
+          [[ "$PLAN_RESULT" == success ]] || {
+            echo "Validation plan job concluded: $PLAN_RESULT" >&2
+            exit 1
+          }
+          [[ "$GROUP_RESULT" == success ]] || {
+            echo "Validation group matrix concluded: $GROUP_RESULT" >&2
+            exit 1
+          }
+          [[ "$RECONCILE_OUTCOME" == success ]] || {
+            echo "Canonical reconciliation concluded: $RECONCILE_OUTCOME" >&2
+            exit 1
+          }

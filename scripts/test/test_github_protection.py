@@ -81,6 +81,17 @@ class RecordingAPI:
 
 
 class GitHubProtectionTests(unittest.TestCase):
+    def test_desired_status_check_is_static_merge_gate(self):
+        status_rule = next(
+            rule
+            for rule in github_protection.expected_rules(INTEGRATION_ID)
+            if rule["type"] == "required_status_checks"
+        )
+        self.assertEqual(
+            status_rule["parameters"]["required_status_checks"],
+            [{"context": "merge-gate", "integration_id": INTEGRATION_ID}],
+        )
+
     def test_expected_contract_matches_protected_state(self):
         state = protected_state()
         self.assertEqual(github_protection.drift(state), [])
@@ -169,7 +180,7 @@ class GitHubProtectionTests(unittest.TestCase):
             ],
         )
 
-    def test_actions_integration_comes_from_recent_successful_ci_check(self):
+    def test_actions_integration_comes_from_recent_successful_merge_gate_check(self):
         runs_path = (
             f"repos/{github_protection.REPOSITORY}/actions/workflows/"
             f"{github_protection.WORKFLOW}/runs?per_page=20"
@@ -189,7 +200,7 @@ class GitHubProtectionTests(unittest.TestCase):
                 checks_path: {
                     "check_runs": [
                         {
-                            "name": "ci",
+                            "name": "merge-gate",
                             "app": {"id": INTEGRATION_ID, "slug": "github-actions"},
                         }
                     ]

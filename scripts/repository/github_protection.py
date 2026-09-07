@@ -13,7 +13,7 @@ REPOSITORY = "supermorphic/homelab-talos"
 RULESET_NAME = "Protect main"
 TARGET_REF = "refs/heads/main"
 WORKFLOW = "ci.yml"
-CHECK_NAME = "ci"
+CHECK_NAME = "merge-gate"
 API_VERSION = "2026-03-10"
 CONFIRMATION = f"apply:github-protection:{REPOSITORY}"
 
@@ -322,7 +322,10 @@ def run_check(api: GitHubAPI) -> int:
             print(f"- {finding}")
         return 1
     print("GitHub protection check: PASS")
-    print("main accepts squash-merged pull requests only after strict GitHub Actions ci.")
+    print(
+        "main accepts squash-merged pull requests only after strict GitHub Actions "
+        "merge-gate."
+    )
     return 0
 
 
