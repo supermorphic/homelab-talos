@@ -5,7 +5,7 @@
 Deploy an initially empty, self-hosted n8n service for
 [issue 316](https://github.com/supermorphic/homelab-talos/issues/316). The service is a
 general-purpose workflow orchestration platform. Its first planned consumer is a later
-career-operations workflow that receives TheirStack job events, persists career-domain
+career-operations workflow that receives external job events, persists career-domain
 state outside n8n, invokes deterministic and agent-driven processing, and sends
 notifications.
 
@@ -76,7 +76,7 @@ invalidate the infrastructure pattern.
 
 ## Non-goals
 
-- The TheirStack `job.new` or `job.closed` workflow.
+- Provider-specific workflows and event contracts.
 - Career-domain tables, scoring, tailoring, artifact generation, or application tracking.
 - Redis, n8n queue mode, worker pools, or separate webhook processors.
 - A reusable cluster database platform, PostgreSQL operator, streaming replica, or
@@ -227,7 +227,7 @@ Unmatched paths have no backend route.
 TLS and route matching authenticate neither the sender nor the event. Every production
 webhook workflow must enforce an integration-appropriate secret, signature, or token.
 The synthetic canary uses n8n header authentication. Provider-specific authentication
-and acceptance requirements belong in the operations guide's integration checkpoints.
+and acceptance requirements belong in each integration's owning repository.
 
 The cluster's internal DNS answer for `hooks.lab.supermorphic.com` resolves to the
 dedicated public Envoy LoadBalancer, not the internal Gateway. The always-active public
@@ -277,7 +277,7 @@ policy in `gatus` selects only the run-labeled request Job and permits only DNS 
 run-owned n8n endpoint on TCP/5678. Cleanup must remove and prove absence of both exact
 policies.
 
-Inbound TheirStack webhooks do not themselves require n8n to pull data from TheirStack.
+Inbound webhooks do not themselves require n8n to pull data from the provider.
 Outbound HTTPS remains part of the initial platform because later workflows must call
 APIs and external processing services.
 
@@ -461,8 +461,8 @@ bounds. Prometheus alerts on platform failure patterns; the UI remains the detai
 execution-debugging surface.
 
 Provider retry behavior, event idempotency keys, dead-letter handling, and reconciliation
-are properties of the later TheirStack workflow. The public edge does not invent those
-semantics before the provider contract and career-domain store exist.
+belong to each integration's owning repository. The public edge only routes approved
+paths; it does not define application processing semantics.
 
 ## Capacity
 
@@ -637,7 +637,7 @@ Combined read-only and attended live acceptance verifies:
 2. The n8n UI works through the private hostname and has no public route.
 3. The public hostname serves only the HTTPRoute's approved exact paths after their
    activation checkpoints; all other paths have no public backend route. Each
-   integration completes its acceptance procedure in the operations guide.
+   integration completes the acceptance procedure in its owning repository.
 4. An authenticated canary request returns its correlation value and execution ID only
    after a matching successful execution is immediately retrievable from n8n history;
    invalid authentication fails without a successful execution.
