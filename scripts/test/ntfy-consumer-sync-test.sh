@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 # Offline unit tests for scripts/secrets/ntfy-consumer-sync.sh. A PATH-stubbed curl
-# serves and captures Seerr API calls; a PATH-stubbed sops provides the fixture
-# credentials. Proves: test-before-save ordering, drift detection, preservation of
-# operator-owned settings, staged-rotation token selection, and that API responses
-# containing secrets never reach output.
+# serves and captures Seerr and n8n API calls; a PATH-stubbed sops provides fixture
+# credentials. No real application state, credentials, or age identity is used.
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
@@ -25,19 +23,37 @@ out=''
 method='GET'
 url=''
 data=''
+cursor_arg=''
+declare -a headers=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -o) out="$2"; shift 2 ;;
     -w) shift 2 ;;
     --max-time) shift 2 ;;
     -X) method="$2"; shift 2 ;;
-    -H) shift 2 ;;
+    -H) headers+=("$2"); shift 2 ;;
     --data-binary) data="${2#@}"; shift 2 ;;
+    --data-urlencode)
+      if [[ "$2" == cursor=* ]]; then
+        cursor_arg="${2#cursor=}"
+      fi
+      shift 2
+      ;;
+    --get) shift ;;
+    --data) shift 2 ;;
     -sS) shift ;;
     http*) url="$1"; shift ;;
     *) shift ;;
   esac
 done
+if [[ -n "$cursor_arg" ]]; then
+  encoded_cursor="${cursor_arg//=/\%3D}"
+  encoded_cursor="${encoded_cursor//+/\%2B}"
+  encoded_cursor="${encoded_cursor//\//\%2F}"
+  url+="?limit=250&cursor=$encoded_cursor"
+elif [[ "$url" == 'https://n8n.lab.supermorphic.com/api/v1/credentials' && "$method" == 'GET' ]]; then
+  url+='?limit=250'
+fi
 printf '%s %s\n' "$method" "$url" >>"$STUB_DIR/calls.log"
 case "$method $url" in
   GET\ */api/v1/settings/notifications/ntfy)
@@ -53,6 +69,33 @@ case "$method $url" in
     cp -- "$data" "$STUB_DIR/saved-body.json"
     printf '{}' >"$out"
     printf '200'
+    ;;
+  GET\ https://n8n.lab.supermorphic.com/api/v1/credentials/cred-existing | \
+  GET\ https://n8n.lab.supermorphic.com/api/v1/credentials/cred-created)
+    [[ " ${headers[*]} " == *" X-N8N-API-KEY: $STUB_N8N_API_KEY "* ]] || exit 91
+    cat "$STUB_N8N_READ" >"$out"
+    printf '%s' "$STUB_N8N_READ_CODE"
+    ;;
+  GET\ https://n8n.lab.supermorphic.com/api/v1/credentials*)
+    [[ " ${headers[*]} " == *" X-N8N-API-KEY: $STUB_N8N_API_KEY "* ]] || exit 91
+    if [[ "$url" == *'cursor=Y3Vyc29yOjI%3D' && -f "$STUB_N8N_LIST_NEXT" ]]; then
+      cat "$STUB_N8N_LIST_NEXT" >"$out"
+    else
+      cat "$STUB_N8N_LIST" >"$out"
+    fi
+    printf '%s' "$STUB_N8N_LIST_CODE"
+    ;;
+  POST\ https://n8n.lab.supermorphic.com/api/v1/credentials)
+    [[ " ${headers[*]} " == *" X-N8N-API-KEY: $STUB_N8N_API_KEY "* ]] || exit 91
+    cp -- "$data" "$STUB_DIR/n8n-create-body.json"
+    cat "$STUB_N8N_WRITE" >"$out"
+    printf '%s' "$STUB_N8N_WRITE_CODE"
+    ;;
+  PATCH\ https://n8n.lab.supermorphic.com/api/v1/credentials/cred-existing)
+    [[ " ${headers[*]} " == *" X-N8N-API-KEY: $STUB_N8N_API_KEY "* ]] || exit 91
+    cp -- "$data" "$STUB_DIR/n8n-update-body.json"
+    cat "$STUB_N8N_WRITE" >"$out"
+    printf '%s' "$STUB_N8N_WRITE_CODE"
     ;;
   *)
     printf '404'
@@ -95,6 +138,19 @@ EOF
   export STUB_DIR="$case_dir"
   export STUB_SEERR_GET="$case_dir/get.json"
   export STUB_SEERR_TEST_CODE='204'
+  export STUB_N8N_API_KEY='test-n8n-key'
+  export STUB_N8N_LIST="$case_dir/n8n-list.json"
+  export STUB_N8N_READ="$case_dir/n8n-read.json"
+  export STUB_N8N_WRITE="$case_dir/n8n-write.json"
+  export STUB_N8N_LIST_NEXT="$case_dir/n8n-list-next.json"
+  export STUB_N8N_LIST_CODE='200'
+  export STUB_N8N_READ_CODE='200'
+  export STUB_N8N_WRITE_CODE='200'
+  export N8N_API_KEY="$STUB_N8N_API_KEY"
+  printf '{"data":[],"nextCursor":null}\n' >"$STUB_N8N_LIST"
+  printf '{"id":"cred-created","name":"Platform Failure ntfy","type":"httpHeaderAuth"}\n' \
+    >"$STUB_N8N_READ"
+  cp -- "$STUB_N8N_READ" "$STUB_N8N_WRITE"
   : >"$case_dir/calls.log"
 }
 
@@ -149,6 +205,17 @@ run_sync() { # <confirm|->
   set -e
 }
 
+run_n8n() { # <confirm|->
+  set +e
+  if [[ "$1" == '-' ]]; then
+    OUT="$(env -u NTFY_CONSUMER_SYNC_CONFIRM scripts/secrets/ntfy-consumer-sync.sh n8n 2>&1)"
+  else
+    OUT="$(NTFY_CONSUMER_SYNC_CONFIRM="$1" scripts/secrets/ntfy-consumer-sync.sh n8n 2>&1)"
+  fi
+  STATUS=$?
+  set -e
+}
+
 assert_status() { [[ "$STATUS" -eq "$1" ]] || fail "expected status $1, got $STATUS: $OUT"; }
 assert_ok() { assert_status 0; }
 assert_contains() { rg -Fq -- "$1" <<<"$OUT" || fail "output missing '$1': $OUT"; }
@@ -163,6 +230,11 @@ count_calls() { # <pattern> — ripgrep prints nothing (and exits 1) on zero mat
 assert_no_secret_echo() {
   assert_not_contains "$ntfy_fixture_seerr_token"
   assert_not_contains 'fixture-seerr-api-key'
+}
+
+assert_no_n8n_secret_echo() {
+  assert_not_contains "$ntfy_fixture_n8n_token"
+  assert_not_contains 'test-n8n-key'
 }
 
 # --- Guard + argument handling ------------------------------------------------
@@ -260,4 +332,144 @@ assert_saved '.options.token == "tk_wwwwwwwwwwwwwwwwwwwwwwwwwwww1"'
 assert_not_contains 'tk_wwwwwwwwwwwwwwwwwwwwwwwwwwww1'
 assert_no_secret_echo
 
-echo 'ntfy-consumer-sync unit tests passed (guard, drift enforcement, preservation, test-before-save ordering, idempotency, test-failure safety, staged rotation, leak guards).'
+# --- n8n create: exact private API, name, type, and Header Auth data -------------
+new_case n8n-create
+run_n8n 'sync:automation:n8n:ntfy'
+assert_ok
+assert_contains "Created n8n credential 'Platform Failure ntfy'"
+[[ "$(count_calls '^POST https://n8n.lab.supermorphic.com/api/v1/credentials$')" == '1' ]] ||
+  fail "expected one n8n credential create: $(cat "$STUB_DIR/calls.log")"
+[[ "$(count_calls '^GET https://n8n.lab.supermorphic.com/api/v1/credentials/cred-created$')" == '1' ]] ||
+  fail 'created credential metadata was not read back'
+yq -e \
+  '.name == "Platform Failure ntfy" and .type == "httpHeaderAuth" and
+   .data.name == "Authorization" and
+   .data.value == "Bearer tk_nnnnnnnnnnnnnnnnnnnnnnnnnnnn1"' \
+  "$STUB_DIR/n8n-create-body.json" >/dev/null || fail 'n8n create body is wrong'
+assert_no_n8n_secret_echo
+
+# --- n8n update: exact name/type preserves the credential ID --------------------
+new_case n8n-update
+cat >"$STUB_N8N_LIST" <<'EOF'
+{"data":[{"id":"cred-existing","name":"Platform Failure ntfy","type":"httpHeaderAuth","createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z","shared":[]}],"nextCursor":null}
+EOF
+cat >"$STUB_N8N_READ" <<'EOF'
+{"id":"cred-existing","name":"Platform Failure ntfy","type":"httpHeaderAuth"}
+EOF
+cp -- "$STUB_N8N_READ" "$STUB_N8N_WRITE"
+run_n8n 'sync:automation:n8n:ntfy'
+assert_ok
+assert_contains "Updated n8n credential 'Platform Failure ntfy' (ID preserved)."
+[[ "$(count_calls '^PATCH https://n8n.lab.supermorphic.com/api/v1/credentials/cred-existing$')" == '1' ]] ||
+  fail 'n8n credential was not updated by its existing ID'
+[[ ! -e "$STUB_DIR/n8n-create-body.json" ]] || fail 'update path created another credential'
+yq -e '.data.name == "Authorization" and .data.value == "Bearer tk_nnnnnnnnnnnnnnnnnnnnnnnnnnnn1"' \
+  "$STUB_DIR/n8n-update-body.json" >/dev/null || fail 'n8n update body is wrong'
+assert_no_n8n_secret_echo
+
+# --- n8n pagination: exact-name matching spans the full collection ---------------
+new_case n8n-paginated-update
+cat >"$STUB_N8N_LIST" <<'EOF'
+{"data":[{"id":"unrelated","name":"Another credential","type":"httpHeaderAuth"}],"nextCursor":"Y3Vyc29yOjI="}
+EOF
+cat >"$STUB_N8N_LIST_NEXT" <<'EOF'
+{"data":[{"id":"cred-existing","name":"Platform Failure ntfy","type":"httpHeaderAuth"}],"nextCursor":null}
+EOF
+cat >"$STUB_N8N_READ" <<'EOF'
+{"id":"cred-existing","name":"Platform Failure ntfy","type":"httpHeaderAuth"}
+EOF
+cp -- "$STUB_N8N_READ" "$STUB_N8N_WRITE"
+run_n8n 'sync:automation:n8n:ntfy'
+assert_ok
+[[ "$(count_calls '^GET https://n8n\.lab\.supermorphic\.com/api/v1/credentials\?')" == '2' ]] ||
+  fail 'n8n credential list pagination was incomplete'
+[[ "$(count_calls '^PATCH https://n8n.lab.supermorphic.com/api/v1/credentials/cred-existing$')" == '1' ]] ||
+  fail 'paginated exact match was not updated'
+assert_no_n8n_secret_echo
+
+new_case n8n-invalid-id
+cat >"$STUB_N8N_LIST" <<'EOF'
+{"data":[{"id":"../../workflows","name":"Platform Failure ntfy","type":"httpHeaderAuth"}],"nextCursor":null}
+EOF
+run_n8n 'sync:automation:n8n:ntfy'
+assert_status 1
+assert_contains 'invalid credential ID'
+[[ "$(count_calls '^(POST|PATCH) ')" == '0' ]] || fail 'invalid credential ID caused mutation'
+assert_no_n8n_secret_echo
+
+# --- n8n staged rotation: pending token wins ------------------------------------
+new_case n8n-staged
+yq -i ".stringData.NTFY_AUTH_TOKENS += \",n8n:tk_pppppppppppppppppppppppppppp1:pending\"" \
+  "$case_dir/plain.yaml"
+ntfy_stub_encrypt "$case_dir/plain.yaml" "$NTFY_SECRET_FILE" "$NTFY_SOPS_POLICY_FILE"
+run_n8n 'sync:automation:n8n:ntfy'
+assert_ok
+yq -e '.data.value == "Bearer tk_pppppppppppppppppppppppppppp1"' \
+  "$STUB_DIR/n8n-create-body.json" >/dev/null || fail 'n8n sync did not select pending token'
+assert_contains 'finalize n8n'
+assert_not_contains 'tk_pppppppppppppppppppppppppppp1'
+assert_no_n8n_secret_echo
+
+# --- n8n safety: guard, API key, duplicate, wrong type, and malformed metadata ---
+new_case n8n-guard
+run_n8n -
+assert_status 1
+assert_contains "Set NTFY_CONSUMER_SYNC_CONFIRM='sync:automation:n8n:ntfy'"
+[[ "$(count_calls .)" == '0' ]] || fail 'guard refusal contacted n8n'
+
+new_case n8n-api-key
+set +e
+OUT="$(env -u N8N_API_KEY NTFY_CONSUMER_SYNC_CONFIRM='sync:automation:n8n:ntfy' \
+  scripts/secrets/ntfy-consumer-sync.sh n8n 2>&1)"
+STATUS=$?
+set -e
+assert_status 1
+assert_contains 'N8N_API_KEY'
+[[ "$(count_calls .)" == '0' ]] || fail 'missing API key contacted n8n'
+
+new_case n8n-duplicate
+cat >"$STUB_N8N_LIST" <<'EOF'
+{"data":[{"id":"cred-1","name":"Platform Failure ntfy","type":"httpHeaderAuth"},{"id":"cred-2","name":"Platform Failure ntfy","type":"httpHeaderAuth"}],"nextCursor":null}
+EOF
+run_n8n 'sync:automation:n8n:ntfy'
+assert_status 1
+assert_contains 'multiple credentials named'
+[[ "$(count_calls '^(POST|PATCH) ')" == '0' ]] || fail 'duplicate metadata caused mutation'
+assert_no_n8n_secret_echo
+
+new_case n8n-wrong-type
+cat >"$STUB_N8N_LIST" <<'EOF'
+{"data":[{"id":"cred-existing","name":"Platform Failure ntfy","type":"httpBasicAuth"}],"nextCursor":null}
+EOF
+run_n8n 'sync:automation:n8n:ntfy'
+assert_status 1
+assert_contains "has type 'httpBasicAuth', expected 'httpHeaderAuth'"
+[[ "$(count_calls '^(POST|PATCH) ')" == '0' ]] || fail 'wrong type caused mutation'
+assert_no_n8n_secret_echo
+
+new_case n8n-malformed
+printf '{"data":{},"nextCursor":null}\n' >"$STUB_N8N_LIST"
+run_n8n 'sync:automation:n8n:ntfy'
+assert_status 1
+assert_contains 'malformed credential metadata'
+[[ "$(count_calls '^(POST|PATCH) ')" == '0' ]] || fail 'malformed metadata caused mutation'
+assert_no_n8n_secret_echo
+
+new_case n8n-list-failure
+export STUB_N8N_LIST_CODE='503'
+run_n8n 'sync:automation:n8n:ntfy'
+assert_status 1
+assert_contains 'HTTP 503'
+[[ "$(count_calls '^(POST|PATCH) ')" == '0' ]] || fail 'failed list caused mutation'
+assert_no_n8n_secret_echo
+
+new_case n8n-write-failure
+export STUB_N8N_WRITE_CODE='500'
+run_n8n 'sync:automation:n8n:ntfy'
+assert_status 1
+assert_contains 'HTTP 500'
+[[ "$(count_calls '^GET https://n8n.lab.supermorphic.com/api/v1/credentials/cred-created$')" == '0' ]] ||
+  fail 'failed create was read back as if successful'
+assert_no_n8n_secret_echo
+
+echo 'ntfy-consumer-sync unit tests passed (Seerr settings sync and n8n credential create/update, staged rotation, malformed metadata, API failures, and leak guards).'

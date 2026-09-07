@@ -11,7 +11,8 @@
 #   reconcile all         Authoritative: apply the whole registry, remove retired
 #                         identities, fail on Secret drift that is not tombstoned.
 #   rotate <identity>     New token. Git-managed consumers switch immediately;
-#                         API-managed consumers (seerr-api) stage a pending token.
+#                         API-managed consumers (seerr-api and n8n-api) stage a pending
+#                         token.
 #   finalize <identity>   Promote a staged pending token, revoking the previous one.
 set -euo pipefail
 
@@ -70,7 +71,7 @@ for id in "${registry_ids[@]}"; do
       consumer="$(yq -r ".identities[\"$id\"].consumer // \"\"" "$registry_file")"
       [[ "$credential" =~ ^(password|token)$ ]] ||
         fail "Refusing: identity '$id' has invalid credential '$credential' (password|token)."
-      [[ "$consumer" =~ ^(none|alertmanager-auth|seerr-api|homepage-secret)$ ]] ||
+      [[ "$consumer" =~ ^(none|alertmanager-auth|seerr-api|n8n-api|homepage-secret)$ ]] ||
         fail "Refusing: identity '$id' has invalid consumer '$consumer'."
       if [[ "$credential" == 'password' ]]; then
         [[ "$consumer" == 'none' ]] ||
@@ -126,7 +127,7 @@ case "$action" in
       fail "Refusing: '$identity_arg' is the human password identity; use 'just repo ntfy-subscriber-password' instead."
     ;;
   finalize)
-    [[ "${reg_consumer[$identity_arg]}" == 'seerr-api' ]] ||
+    [[ "${reg_consumer[$identity_arg]}" =~ ^(seerr-api|n8n-api)$ ]] ||
       fail 'Refusing: finalize only applies to API-managed (staged rotation) consumers.'
     ;;
 esac
@@ -321,14 +322,14 @@ for id in "${touched_ids[@]}"; do
   # Token entries.
   if [[ "${reg_credential[$id]}" == 'token' ]]; then
     if [[ "$action" == 'rotate' && "$id" == "$identity_arg" ]]; then
-      if [[ "${reg_consumer[$id]}" == 'seerr-api' ]]; then
+      if [[ "${reg_consumer[$id]}" =~ ^(seerr-api|n8n-api)$ ]]; then
         while IFS= read -r entry; do
           [[ "$entry" != *':pending' ]] ||
             fail "Refusing: identity '$id' already has a pending token. Synchronize it with 'just kube ntfy-consumer-sync $id', then run 'just repo ntfy-identity finalize $id' before rotating again."
         done <<<"${cur_token_entries[$id]:-}"
       fi
       new_token="$(generate_token)"
-      if [[ "${reg_consumer[$id]}" == 'seerr-api' ]]; then
+      if [[ "${reg_consumer[$id]}" =~ ^(seerr-api|n8n-api)$ ]]; then
         # Staged rotation: keep the current token valid, stage the pending one.
         while IFS= read -r entry; do
           [[ -n "$entry" && "$entry" != *':pending' ]] || continue
@@ -657,8 +658,17 @@ elif [[ "$changed_homepage_stamp" == true ]]; then
 fi
 
 case "$action" in
+  ensure)
+    if [[ "${reg_consumer[$identity_arg]}" =~ ^(seerr-api|n8n-api)$ ]]; then
+      echo "Provisioned '$identity_arg'; publish the encrypted state, let Flux reconcile, then run 'just kube ntfy-consumer-sync $identity_arg'."
+    else
+      echo "ntfy identity lifecycle '$action' completed for '$identity_arg'."
+    fi
+    ;;
   rotate)
-    if [[ "${reg_consumer[$identity_arg]}" == 'seerr-api' ]]; then
+    if [[ "${reg_consumer[$identity_arg]}" == 'n8n-api' ]]; then
+      echo "Staged a pending token for '$identity_arg'; publish it and let Flux reconcile, run 'just kube ntfy-consumer-sync $identity_arg', collect synthetic delivery proof from both approved failures, then run 'just repo ntfy-identity finalize $identity_arg' to revoke the previous token."
+    elif [[ "${reg_consumer[$identity_arg]}" == 'seerr-api' ]]; then
       echo "Staged a pending token for '$identity_arg'; run 'just kube ntfy-consumer-sync $identity_arg' to test and synchronize it, then 'just repo ntfy-identity finalize $identity_arg' to revoke the previous token."
     else
       echo "Rotated the '$identity_arg' token; commit and let Flux reconcile to roll every credential consumer."

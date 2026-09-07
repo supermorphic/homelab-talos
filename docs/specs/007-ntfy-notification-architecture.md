@@ -34,6 +34,7 @@ The active roles are deliberately separate:
 | `alertmanager` | Write `critical` and `homelab` |
 | `seerr` | Write `media` |
 | `homepage` | Read `critical` |
+| `n8n` | Write `homelab` for shared workflow failure notifications |
 
 Topics describe notification semantics rather than applications: `critical` is for
 rare infrastructure failures that require prompt attention, `homelab` is for warnings
@@ -42,6 +43,12 @@ keeps severity routing meaningful, lets Seerr publish the few selected media eve
 directly, and avoids creating a separate notification path for Plex, qBittorrent, each
 `*arr` application, or Tautulli. A new topic should represent a new notification class,
 not merely mirror another application name.
+
+The n8n publisher uses the shared handler described in
+[specification 023](023-n8n-workflow-automation-platform.md#shared-workflow-failure-notifications).
+It publishes bounded operational metadata directly to `homelab`; consumer workflows
+select that handler without new topics or platform configuration. Its n8n credential
+is API-managed, with staged token rotation and delivery acceptance before finalization.
 
 Credentials can rotate or retire independently without widening another consumer. ntfy
 receives only its explicit authentication environment keys. The alert bridge mounts
@@ -75,9 +82,10 @@ sends the upstream service the message identifier and hashed topic needed for AP
 wake the client; message bodies remain on the self-hosted instance. Network policy
 therefore allows world HTTPS egress for this wake-up path. On inbound port `80`, it
 permits the internal Gateway, Tailscale proxies, Gatus, every endpoint in the `media`
-namespace, Homepage, the alert bridge, and node probes. This grants network reachability,
-not topic-write authority. Required authentication and the token ACLs make Seerr the
-only media workload authorized to write the `media` topic.
+namespace, Homepage, the alert bridge, the `automation/n8n` workload, and node probes.
+This grants network reachability, not topic-write authority. Required authentication
+and the token ACLs make Seerr the only media workload authorized to write `media`, and
+limit the n8n publisher to write-only access on `homelab`.
 
 The `world:443` rule is a known policy limit. The cluster has no established
 FQDN-egress baseline that can prove a stable ntfy.sh-only rule, so the design prefers a

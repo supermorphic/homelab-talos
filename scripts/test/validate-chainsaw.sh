@@ -131,6 +131,8 @@ register_harness_shell_case cilium-validator scripts/test/cilium-validator-test.
 register_harness_shell_case n8n-secrets scripts/test/n8n-secrets-test.sh
 register_harness_shell_case n8n-backup scripts/test/n8n-backup-test.sh
 register_harness_shell_case n8n-persistence-query scripts/test/n8n-persistence-query-test.sh
+register_harness_shell_case n8n-failure-notifications \
+	scripts/test/n8n-failure-notifications-test.sh
 register_harness_shell_case monitoring-flux-exporter \
 	scripts/test/monitoring-flux-exporter-test.sh
 register_harness_shell_case monitoring-verifier \

@@ -9,10 +9,12 @@ ntfy_fixture_am_hash="\$2b\$10\$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL1
 ntfy_fixture_seerr_hash="\$2b\$10\$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhW0"
 ntfy_fixture_automation_hash="\$2b\$10\$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhW1"
 ntfy_fixture_homepage_hash="\$2b\$10\$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhW2"
+ntfy_fixture_n8n_hash="\$2b\$10\$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhW3"
 ntfy_fixture_am_token='tk_aaaaaaaaaaaaaaaaaaaaaaaaaaaa1'
 ntfy_fixture_seerr_token='tk_ssssssssssssssssssssssssssss1'
 ntfy_fixture_automation_token='tk_uuuuuuuuuuuuuuuuuuuuuuuuuuuu1'
 ntfy_fixture_homepage_token='tk_hhhhhhhhhhhhhhhhhhhhhhhhhhhh1'
+ntfy_fixture_n8n_token='tk_nnnnnnnnnnnnnnnnnnnnnnnnnnnn1'
 
 # Registry matching the production identities.yaml shape.
 ntfy_write_registry() { # <file>
@@ -45,17 +47,31 @@ identities:
     access:
       - { topic: critical, permission: ro }
     consumer: homepage-secret
+  n8n:
+    status: active
+    credential: token
+    access:
+      - { topic: homelab, permission: wo }
+    consumer: n8n-api
   automation:
     status: retired
 EOF
 }
 
 # Plaintext (pre-"encryption") canonical Secret fixture. Variant `main` mirrors the
-# current production state (homepage present, no auth.yml); variant `legacy` predates
-# the homepage identity.
-ntfy_write_secret_plain() { # <file> <main|legacy>
+# projected state after explicit n8n identity generation; variant `pre-n8n` mirrors the
+# current production state; variant `legacy` predates the homepage and n8n identities.
+ntfy_write_secret_plain() { # <file> <main|pre-n8n|legacy>
   local homepage_users='' homepage_access='' homepage_tokens=''
+  local n8n_users='' n8n_access='' n8n_tokens=''
   if [[ "$2" == 'main' ]]; then
+    homepage_users=",homepage:$ntfy_fixture_homepage_hash:user"
+    homepage_access=',homepage:critical:ro'
+    homepage_tokens=",homepage:$ntfy_fixture_homepage_token"
+    n8n_users=",n8n:$ntfy_fixture_n8n_hash:user"
+    n8n_access=',n8n:homelab:wo'
+    n8n_tokens=",n8n:$ntfy_fixture_n8n_token"
+  elif [[ "$2" == 'pre-n8n' ]]; then
     homepage_users=",homepage:$ntfy_fixture_homepage_hash:user"
     homepage_access=',homepage:critical:ro'
     homepage_tokens=",homepage:$ntfy_fixture_homepage_token"
@@ -68,9 +84,9 @@ metadata:
   namespace: ntfy
 type: Opaque
 stringData:
-  NTFY_AUTH_USERS: "subscriber:$ntfy_fixture_sub_hash:user,alertmanager:$ntfy_fixture_am_hash:user,seerr:$ntfy_fixture_seerr_hash:user,automation:$ntfy_fixture_automation_hash:user$homepage_users"
-  NTFY_AUTH_ACCESS: "subscriber:critical:ro,subscriber:homelab:ro,subscriber:media:ro,alertmanager:critical:wo,alertmanager:homelab:wo,seerr:media:wo,automation:homelab:wo$homepage_access"
-  NTFY_AUTH_TOKENS: "alertmanager:$ntfy_fixture_am_token,seerr:$ntfy_fixture_seerr_token,automation:$ntfy_fixture_automation_token$homepage_tokens"
+  NTFY_AUTH_USERS: "subscriber:$ntfy_fixture_sub_hash:user,alertmanager:$ntfy_fixture_am_hash:user,seerr:$ntfy_fixture_seerr_hash:user,automation:$ntfy_fixture_automation_hash:user$homepage_users$n8n_users"
+  NTFY_AUTH_ACCESS: "subscriber:critical:ro,subscriber:homelab:ro,subscriber:media:ro,alertmanager:critical:wo,alertmanager:homelab:wo,seerr:media:wo,automation:homelab:wo$homepage_access$n8n_access"
+  NTFY_AUTH_TOKENS: "alertmanager:$ntfy_fixture_am_token,seerr:$ntfy_fixture_seerr_token,automation:$ntfy_fixture_automation_token$homepage_tokens$n8n_tokens"
 EOF
 }
 

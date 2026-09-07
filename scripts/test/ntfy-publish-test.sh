@@ -22,10 +22,12 @@ mkdir -p "$stub_bin"
 touch "$kubeconfig"
 
 seerr_token='tk_fixture_seerr_not_a_live_secret'
+n8n_token='tk_fixture_n8n_not_a_live_secret'
 alertmanager_token='tk_fixture_alertmanager_not_a_live_secret'
 homepage_token='tk_fixture_homepage_not_a_live_secret'
 export NTFY_TEST_EVENT_LOG="$event_log"
 export NTFY_TEST_SEERR_TOKEN="$seerr_token"
+export NTFY_TEST_N8N_TOKEN="$n8n_token"
 export NTFY_TEST_ALERTMANAGER_TOKEN="$alertmanager_token"
 export NTFY_TEST_HOMEPAGE_TOKEN="$homepage_token"
 
@@ -47,8 +49,9 @@ case " $* " in
       '- read-only access to topic media (server config)'
     ;;
   *' --namespace ntfy exec deployment/ntfy -c app -- sh -c '*)
-    printf 'alertmanager:%s,seerr:%s,homepage:%s' \
-      "$NTFY_TEST_ALERTMANAGER_TOKEN" "$NTFY_TEST_SEERR_TOKEN" "$NTFY_TEST_HOMEPAGE_TOKEN"
+    printf 'alertmanager:%s,seerr:%s,n8n:%s,homepage:%s' \
+      "$NTFY_TEST_ALERTMANAGER_TOKEN" "$NTFY_TEST_SEERR_TOKEN" "$NTFY_TEST_N8N_TOKEN" \
+      "$NTFY_TEST_HOMEPAGE_TOKEN"
     ;;
   *' --namespace homepage exec deployment/homepage -c homepage -- sh -c '*)
     printf '%s' "$NTFY_TEST_HOMEPAGE_TOKEN"
@@ -129,6 +132,7 @@ assert_no_sensitive_output() {
   local sensitive
   for sensitive in \
     "$seerr_token" \
+    "$n8n_token" \
     "$alertmanager_token" \
     "$homepage_token" \
     'seerr->media positive ACL test' \

@@ -21,20 +21,23 @@ Prometheus / Alertmanager
                        │
 Seerr → media ─────────┤→ ntfy → iPhone / web
                        │
+n8n → homelab ─────────┤
+                       │
 Homepage ← critical ───┘
 ```
 
 Alertmanager still owns alert grouping, silences, inhibition, repeat intervals, and
 resolved notifications. The `alertmanager-ntfy` adapter converts Alertmanager webhooks
 into ntfy messages. Seerr publishes selected media events directly. Homepage is a
-read-only view of the latest cached critical message.
+read-only view of the latest cached critical message. The shared n8n error workflow
+publishes bounded execution-failure notifications directly to `homelab`.
 
 Three topics separate the notification purposes:
 
 | Topic | Purpose | Publisher |
 | --- | --- | --- |
 | `critical` | Failures needing prompt attention | Alertmanager |
-| `homelab` | Warnings, degraded state, and operator events | Alertmanager |
+| `homelab` | Warnings, degraded state, and operator events | Alertmanager, shared n8n failure handler |
 | `media` | Selected Seerr availability, request, and issue events | Seerr |
 
 Each client has a separate identity with only the access it needs:
@@ -45,6 +48,7 @@ Each client has a separate identity with only the access it needs:
 | `alertmanager` | The alert bridge publisher | Write `critical` and `homelab` |
 | `seerr` | The Seerr publisher | Write `media` |
 | `homepage` | The Homepage widget | Read `critical` |
+| `n8n` | The shared workflow failure handler | Write `homelab` |
 
 Network reachability does not grant topic access. ntfy requires authentication and
 denies anonymous access. Do not disable authentication or open anonymous topics as a
@@ -59,8 +63,9 @@ reconciles that state after it reaches `main`.
 The retained ntfy PVC stores the message cache and ntfy's runtime authentication
 database. ntfy rebuilds its authorization state from the encrypted declarative Secret
 when it starts. Seerr is different: its ntfy notification settings live in Seerr's own
-PVC-backed database and must be synchronized through the Seerr API. The iPhone's server,
-login, topic subscriptions, and notification permissions are also client-managed state.
+PVC-backed database and must be synchronized through the Seerr API. The n8n publisher credential also lives in application-owned PostgreSQL state and
+is synchronized through the private n8n credential API. The iPhone's server, login, topic
+subscriptions, and notification permissions are also client-managed state.
 
 A green ntfy Pod therefore does not prove phone delivery, Alertmanager delivery, or
 Seerr delivery. Those paths have separate checks and acceptance steps below.
@@ -116,6 +121,7 @@ the action.
 | `ntfy-publish-test` | Runs `ntfy-verify`, then publishes three real positive ACL test messages | Operator-run mutating test; exact confirmation acknowledges that clients will receive messages |
 | `alertmanager-ntfy-verify` | Uses observer access to check the adapter and Alertmanager's loaded receiver/route | Agent-autonomous when an approved task needs scoped verification; sends no notification |
 | `ntfy-consumer-sync seerr` | Decrypts repository credentials, sends a Seerr test notification, then changes Seerr's stored ntfy settings | Operator-run: requires the age identity and changes application-owned state |
+| `ntfy-consumer-sync n8n` | Synchronizes only the named n8n publisher credential; workflow adoption remains explicit | Operator-run: requires the age identity and a private n8n API key |
 | `flux-alert-delivery-test` | Creates and removes a temporary failing Flux object; checks alert lifecycle and reports delivery evidence limits | Operator-run unless an agent is explicitly authorized for that invocation and its required elevated credential |
 | `bootstrap ntfy` | Resumes and verifies an intentionally suspended Flux deployment | Operator-run live mutation using the administrator path |
 
@@ -344,6 +350,57 @@ and ntfy do not duplicate the same availability event.
 
 Do not add direct Plex, qBittorrent, `*arr`, or Tautulli ntfy integrations. Selected media
 events belong to Seerr; platform health belongs to Prometheus and Alertmanager.
+
+### n8n workflow failures
+
+The shared `Platform Workflow Failure Handler` uses the dedicated `n8n` publisher,
+which can write only `homelab`. Keep the retired `automation` identity tombstoned.
+Consumers select this one handler; they do not receive the publisher token or require
+new ntfy identities. Only the handler's HTTP Request node binds `Platform Failure ntfy`.
+
+Generate the identity through the existing operator-held SOPS workflow on the reviewed
+feature branch containing this implementation, before merging. In that isolated worktree, run:
+
+```bash
+NTFY_IDENTITY_CONFIRM='ensure:monitoring:ntfy:n8n:sops' \
+  mise exec -- just repo ntfy-identity ensure n8n
+mise exec -- just ci
+```
+
+Include the encrypted change and rollout stamp with the source change in the feature PR.
+Obtain explicit merge authorization and wait for Flux to reconcile ntfy at the merged
+revision. The live ntfy verifier requires the new identity, so merging only the source
+would leave that verification failing until the encrypted identity is deployed.
+Do not copy another producer token, print a generated token, or change ntfy access live.
+Then synchronize the named credential through the private n8n API using the command below.
+The API key is an operator credential used only for this setup; it is not put in the
+handler template or added as a new persistent platform Secret.
+
+```bash
+(
+  printf '%s' 'Private n8n API key: ' >&2
+  IFS= read -r -s N8N_API_KEY
+  printf '\n' >&2
+  export N8N_API_KEY
+  NTFY_CONSUMER_SYNC_CONFIRM='sync:automation:n8n:ntfy' \
+    mise exec -- just kube ntfy-consumer-sync n8n
+  unset N8N_API_KEY
+)
+```
+
+The sync targets the exact `Platform Failure ntfy` Header Auth credential. It rejects
+ambiguous names or the wrong credential type and preserves its ID on updates. Credential
+synchronization does not import, publish, bind, or reconcile workflows and does not prove
+end-to-end delivery. Complete [handler setup and synthetic acceptance](n8n-operations.md#shared-workflow-failure-notifications)
+before consumer adoption.
+
+For rotation, run `ntfy-identity rotate n8n` with its exact confirmation, review and deploy
+the encrypted change, and run `ntfy-consumer-sync n8n`. Rotation stages a new token while
+retaining the old token; synchronization prefers the pending token. Prove positive
+synthetic delivery through the shared handler, then run `ntfy-identity finalize n8n` with
+its exact confirmation and deploy that encrypted change to revoke the old token. If sync
+or delivery fails, keep the old token valid, correct the failure, and repeat sync and
+acceptance. Do not finalize solely because the API accepted a credential update.
 
 ## Prove end-to-end delivery
 

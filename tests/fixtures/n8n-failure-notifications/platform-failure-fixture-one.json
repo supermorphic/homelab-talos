@@ -1,0 +1,50 @@
+{
+  "name": "Platform Failure Fixture One",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "platform-failure-fixture-one",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-180, 0],
+      "id": "20000000-0000-4000-8000-000000000001",
+      "name": "Synthetic Failure Webhook"
+    },
+    {
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "SYNTHETIC_SENSITIVE_MARKER_ONE_DO_NOT_PUBLISH"
+      },
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [100, 0],
+      "id": "20000000-0000-4000-8000-000000000002",
+      "name": "Raise Synthetic Failure"
+    }
+  ],
+  "connections": {
+    "Synthetic Failure Webhook": {
+      "main": [[{"node": "Raise Synthetic Failure", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false,
+    "saveExecutionProgress": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "20000000-0000-4000-8000-000000000003",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
