@@ -50,7 +50,7 @@ runs full validation. Split jobs and selective enforcement are later rollout ste
 | `tests/catalog.yaml` | Commands and suite membership for each execution group. |
 | `scripts/test/validate-chainsaw.sh` | Run or list the actual harness work in each group. |
 | `scripts/test/core/test_public_webhook_routes.py` and `test_internal_dns_endpoints.py` | Core-owned production-validator regressions, discovered separately from framework tests. |
-| `tests/fixtures/ci-impact/ownership.yaml` | Test-only examples connecting changed inputs to required evidence; no expected groups. |
+| `tests/fixtures/ci-impact/ownership.yaml` | Test-only examples connecting changed inputs to required catalog or harness evidence; no expected groups. |
 | `scripts/test/test_ci_plan.py` | Test the real selector against rules and independent coverage examples. |
 | `scripts/test/validate-harness-groups-test.sh` | Check exact-once harness membership and full/group equality. |
 | `scripts/test/ci_plan.py` | Create a deterministic plan bound to base and candidate commits. |
@@ -59,10 +59,12 @@ runs full validation. Split jobs and selective enforcement are later rollout ste
 | `.github/workflows/ci.yml` | Provider checkout, execution, and artifact handling. |
 
 The ownership fixture does not schedule CI. It checks that the actual selected groups
-contain the evidence reviewers know is required:
+contain the catalog suites and harness evidence reviewers know are required. Catalog
+suite identities use `catalog:<suite-id>`; shell and Python identities come from the
+real harness listings and discovery:
 
 ```text
-reviewed changed input -> real classifier -> selected groups -> real harness listings
+reviewed changed input -> real classifier -> selected groups -> catalog + harness listings
 reviewed required tests --------------------------------------> membership assertion
 ```
 

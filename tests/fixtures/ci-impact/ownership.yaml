@@ -25,6 +25,19 @@ contracts:
       - kubernetes/apps/automation/n8n-postgresql/app/scripts/backup.sh
     required_tests:
       - shell:n8n-backup
+  nocodb-validation:
+    changed_inputs:
+      - kubernetes/apps/automation-data/nocodb/app/helmrelease.yaml
+      - kubernetes/apps/automation/n8n/app/workflows/nocodb-source-provisioner.json
+      - kubernetes/apps/monitoring/alerts/app/nocodb.yaml
+      - kubernetes/apps/monitoring/gatus/app/nocodb-activation.values.yaml
+      - scripts/nocodb/bootstrap.sh
+      - scripts/test/nocodb-bootstrap-test.sh
+      - scripts/upgrade/automation-data.sh
+      - scripts/validate/nocodb.sh
+      - scripts/verify/nocodb.sh
+    required_tests:
+      - catalog:validation.nocodb
   ci-framework-runner:
     changed_inputs:
       - scripts/test/run-ci.sh

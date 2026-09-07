@@ -152,9 +152,10 @@ the same module to multiple groups.
 changed-input-to-required-evidence examples. It stores no expected groups and is never
 read by the runtime planner.
 
-Planner tests classify each input separately, obtain actual group listings and Python
-discovery, and require the named evidence. Stale input paths and missing evidence fail.
-Separate inventory assertions check full/group equality and unique ownership.
+Planner tests classify each input separately, obtain actual catalog group memberships,
+harness listings, and Python discovery, and require the named evidence. Stale input paths
+and missing evidence fail. Separate inventory assertions check full/group equality and
+unique ownership.
 
 The examples cover core validator regressions, the conditional boundaries, and real
 cross-directory consumers. Reviewers derive them from actual scripts, imported helpers,
