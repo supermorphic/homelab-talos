@@ -37,6 +37,15 @@ rg -Fq -- "scripts/nocodb/bootstrap.sh '.kube/config'" <<<"$bootstrap_recipe" ||
   echo 'NocoDB bootstrap lets reconcile re-resolve a mutable source.' >&2
   exit 1
 }
+rg -Fq 'kubernetes/apps/automation/n8n/app/workflows/automation-data-canary.json' \
+  "$bootstrap" || {
+  echo 'NocoDB bootstrap does not bind restore evidence to the current automation-data canary.' >&2
+  exit 1
+}
+! rg -Fq 'automation-data-recovery-canary.json' "$bootstrap" || {
+  echo 'NocoDB bootstrap still binds restore evidence to the removed canary path.' >&2
+  exit 1
+}
 
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/homelab-nocodb-bootstrap-test.XXXXXX")"
 trap 'rm -rf -- "$fixture"' EXIT

@@ -448,7 +448,7 @@ require_attended_evidence() {
           suite_evidence_paths=(
             scripts/test/scenarios/automation-data-restore-drill.sh
             scripts/test/lib/automation-data-restore-command.sh
-            kubernetes/apps/automation/n8n/app/workflows/automation-data-recovery-canary.json
+            kubernetes/apps/automation/n8n/app/workflows/automation-data-canary.json
           )
           ;;
         *)

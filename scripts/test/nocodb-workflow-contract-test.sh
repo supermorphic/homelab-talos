@@ -1733,8 +1733,8 @@ mapfile -t packaged_workflows < <(
     "$kustomization" | LC_ALL=C sort
 )
 expected_workflows=(
+  'automation-data-canary.json=workflows/automation-data-canary.json'
   'automation-data-provisioner.json=workflows/automation-data-provisioner.json'
-  'automation-data-recovery-canary.json=workflows/automation-data-recovery-canary.json'
   'nocodb-acceptance-domain.json=workflows/nocodb-acceptance-domain.json'
   'nocodb-source-provisioner.json=workflows/nocodb-source-provisioner.json'
   'platform-canary.json=workflows/platform-canary.json'
