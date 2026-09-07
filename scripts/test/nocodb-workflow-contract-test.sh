@@ -364,6 +364,21 @@ const operatorRotateRequest = execute('Normalize Source Request', {
 if (operatorRotateRequest.requestedAccessKind !== 'operator' || operatorRotateRequest.accessKind !== 'operator') {
   throw new Error('Normalize Source Request did not preserve the explicit rotation target separately');
 }
+const readerRotateRequest = execute('Normalize Source Request', {
+  body: { domain: 'domain_one', operation: 'rotate', accessKind: 'reader' },
+})[0].json;
+const readerRotationOperatorGate = execute(
+  'Start Operator',
+  { result: { domain: 'domain_one', accessKind: 'reader', state: 'ready', baseId: 'base-1' } },
+  {
+    'Normalize Source Request': readerRotateRequest,
+    'Keep Access Plan': { plan: { operatorRequested: true, operatorEligible: true } },
+    'Start Reader': { workspaceId: 'workspace-1' },
+  },
+)[0].json;
+if (readerRotationOperatorGate.operatorRequired !== true || readerRotationOperatorGate.reader.accessKind !== 'reader') {
+  throw new Error('reader-only rotation did not route the ready operator through current validation');
+}
 
 const base = { domain: 'domain_one', accessKind: 'reader', baseId: 'base-1', sourceCreateJobId: 'job-1', pollCount: 3 };
 const readerValidation = {

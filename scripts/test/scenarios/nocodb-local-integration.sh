@@ -33,6 +33,7 @@ fi
 
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
+source scripts/test/lib/nocodb-restore-command.sh
 
 postgres_image_expected='postgres:17.11-alpine3.24'
 n8n_image_expected='docker.n8n.io/n8nio/n8n:2.36.7'
@@ -101,9 +102,12 @@ fi
 	fail "NocoDB image must be exactly $nocodb_image_expected."
 
 require_loopback_url() {
-	local label="$1" value="$2"
-	[[ "$value" =~ ^http://(127\.0\.0\.1|localhost|\[::1\]):[0-9]{1,5}$ ]] ||
+	local label="$1" value="$2" port
+	[[ "$value" =~ ^http://(127\.0\.0\.1|localhost|\[::1\]):([0-9]{1,5})$ ]] ||
 		fail "$label must be an HTTP loopback URL with an explicit port."
+	port="${BASH_REMATCH[2]}"
+	((10#$port >= 1 && 10#$port <= 65535)) ||
+		fail "$label must use a port from 1 through 65535."
 }
 require_loopback_url NOCODB_LOCAL_NOCODB_URL "$nocodb_url"
 require_loopback_url NOCODB_LOCAL_N8N_URL "$n8n_url"
@@ -150,6 +154,7 @@ for resource in "${volumes[@]}"; do require_absent_or_owned volume "$resource"; 
 	exit 0
 }
 
+mkdir -p "$repo_root/.tmp"
 integration_root="$(mktemp -d "$repo_root/.tmp/nocodb-local-integration.XXXXXX")"
 chmod 700 "$integration_root"
 umask 077
@@ -753,9 +758,26 @@ prove_aged_jobs_rotation_and_restart() { # <ready source response>
 	' "$integration_root/source-restarted-sync.json" >/dev/null ||
 		fail 'restart changed ready source identity or historical-job behavior.'
 
+	phase='reader-rotation-with-aged-job'
+	source_call rotate reader "$integration_root/source-reader-rotation.json"
+	jq -e --slurpfile before "$integration_root/source-restarted-sync.json" '
+		.reader.sourceCreateJobState == null and .operator.sourceCreateJobState == null and
+		.reader.sourceId == $before[0].reader.sourceId and
+		.reader.integrationId == $before[0].reader.integrationId and
+		.reader.sourceCreateJobId == $before[0].reader.sourceCreateJobId and
+		.reader.generation > $before[0].reader.generation and
+		.reader.credentialGeneration == ($before[0].reader.credentialGeneration + 1) and
+		.operator.sourceId == $before[0].operator.sourceId and
+		.operator.integrationId == $before[0].operator.integrationId and
+		.operator.sourceCreateJobId == $before[0].operator.sourceCreateJobId and
+		.operator.generation == $before[0].operator.generation and
+		.operator.credentialGeneration == $before[0].operator.credentialGeneration
+	' "$integration_root/source-reader-rotation.json" >/dev/null ||
+		fail 'reader-only rotation changed identity or the wrong credential generation.'
+
 	phase='operator-rotation-with-aged-job'
 	source_call rotate operator "$integration_root/source-operator-rotation.json"
-	jq -e --slurpfile before "$integration_root/source-restarted-sync.json" '
+	jq -e --slurpfile before "$integration_root/source-reader-rotation.json" '
 		.reader.sourceCreateJobState == null and .operator.sourceCreateJobState == null and
 		.reader.sourceId == $before[0].reader.sourceId and
 		.reader.integrationId == $before[0].reader.integrationId and
@@ -960,7 +982,7 @@ prove_additive_metadata_refresh() { # <ready-source-response> <probe-response>
 prove_logical_restore() { # <ready-source-response> <probe-response>
 	local ready_before="$1" probe_before="$2" bundle_name bundle_host globals_filtered fresh_bundle
 	local record encoded dump_path database_name restore_ip restore_url='http://127.0.0.1:18081'
-	local original_session restored_session reader_status operator_status
+	local original_session restored_session reader_status operator_status source_registry request_script
 	phase='complete-logical-backup'
 	"$podman_bin" exec "$postgres_name" mkdir -p /tmp/task7-backups
 	"$podman_bin" exec --env BACKUP_DIR=/tmp/task7-backups --env PGDATABASE=automation_data_control \
@@ -1022,7 +1044,7 @@ prove_logical_restore() { # <ready-source-response> <probe-response>
 	[[ "$("$podman_bin" inspect --format '{{.State.Running}}' "$postgres_name")" == false ]] ||
 		fail 'original PostgreSQL remained available during isolated restore validation.'
 	start_nocodb_container "$restore_nocodb_name" "$integration_root/restore-nocodb.env" \
-		restore-nocodb 18081 "$restore_ip"
+		restore-nocodb.automation-data.svc.cluster.local 18081 "$restore_ip"
 	created_containers+=("$restore_nocodb_name")
 	wait_http "$restore_url/api/v1/health" 'fresh restored NocoDB' '.message == "OK"'
 	"$podman_bin" exec "$restore_nocodb_name" getent hosts \
@@ -1070,6 +1092,38 @@ prove_logical_restore() { # <ready-source-response> <probe-response>
 			"SELECT (platform_operations.validate_nocodb_access('issue334_acceptance','$access_kind')->>'valid')::boolean;" |
 			rg -qx t || fail "restored PostgreSQL $access_kind authority validation failed."
 	done
+	source_registry="$("$podman_bin" exec "$restore_postgres_name" psql --no-psqlrc --tuples-only --no-align \
+		--set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_control --command "
+SELECT jsonb_build_object(
+  'items', COALESCE(jsonb_agg(jsonb_build_object(
+    'domain', source.domain,
+    'accessKind', source.access_kind,
+    'state', source.state,
+    'baseId', source.base_id,
+    'sourceId', source.source_id,
+    'integrationId', source.integration_id,
+    'valid', (platform_operations.validate_nocodb_access(source.domain, source.access_kind)->>'valid')::boolean
+  ) ORDER BY source.access_kind), '[]'::jsonb)
+)
+FROM platform_operations.managed_nocodb_sources AS source
+WHERE source.domain = 'issue334_acceptance';")" ||
+		fail 'could not capture the restored source registry for the production request helper.'
+	nocodb_restore_validate_source_registry <(printf '%s\n' "$source_registry") ||
+		fail 'restored source registry did not satisfy the production request contract.'
+	{
+		printf 'APP_SERVICE=restore-nocodb\n'
+		printf 'RUN_HASH=%s\n' "$run_id"
+		printf 'SOURCE_REGISTRY=%s\n' "$(jq -c . <<<"$source_registry")"
+		printf 'ADMIN_EMAIL=local-admin@example.invalid\n'
+		printf 'ADMIN_PASSWORD=%s\n' "$nocodb_admin_password"
+	} >"$integration_root/restore-request.env"
+	chmod 600 "$integration_root/restore-request.env"
+	request_script="$(nocodb_restore_request_script)"
+	printf '%s\n' "$request_script" | "$podman_bin" exec --interactive \
+		--env-file "$integration_root/restore-request.env" "$restore_nocodb_name" \
+		node --input-type=module - >"$integration_root/restore-request-output"
+	rg -Fxq 'nocodb_restore_assertions=passed' "$integration_root/restore-request-output" ||
+		fail 'production restore request helper did not pass against the actual restored NocoDB.'
 	"$podman_bin" exec "$restore_postgres_name" mkdir -p /tmp/task7-fresh-backup
 	"$podman_bin" exec --env BACKUP_DIR=/tmp/task7-fresh-backup --env PGDATABASE=automation_data_control \
 		--env PGUSER=postgres "$restore_postgres_name" /bin/sh /scripts/backup.sh >/dev/null

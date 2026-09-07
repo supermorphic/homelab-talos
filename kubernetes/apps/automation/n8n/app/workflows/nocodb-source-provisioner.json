@@ -1149,7 +1149,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const request = $('Normalize Source Request').first().json;\nconst plan = $('Keep Access Plan').first().json.plan;\nconst reader = $json.result || $json;\nif (request.operation === 'rotate' && request.requestedAccessKind === 'operator' && (plan.operatorRequested !== true || plan.operatorEligible !== true)) {\n  throw new Error('operator_not_eligible');\n}\nconst required = request.operation === 'rotate' ? request.requestedAccessKind === 'operator' : plan.operatorRequested === true && plan.operatorEligible === true;\nreturn [{ json: { ...request, plan, baseId: reader.baseId, workspaceId: $('Start Reader').first().json.workspaceId, reader, operatorRequired: required } }];"
+        "jsCode": "const request = $('Normalize Source Request').first().json;\nconst plan = $('Keep Access Plan').first().json.plan;\nconst reader = $json.result || $json;\nif (request.operation === 'rotate' && request.requestedAccessKind === 'operator' && (plan.operatorRequested !== true || plan.operatorEligible !== true)) {\n  throw new Error('operator_not_eligible');\n}\nconst required = plan.operatorRequested === true && plan.operatorEligible === true;\nreturn [{ json: { ...request, plan, baseId: reader.baseId, workspaceId: $('Start Reader').first().json.workspaceId, reader, operatorRequired: required } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,

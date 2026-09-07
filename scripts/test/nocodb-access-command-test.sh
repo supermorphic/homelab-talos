@@ -139,7 +139,12 @@ case "$url" in
     if [[ "$operation" == sync ]]; then
       sync_number="$(($(rg -c '^source-sync$' "${NOCODB_ACCESS_EVENT_LOG:?}" || true) + 1))"
       event='source-sync'
-      response="source-sync-${sync_number}.json"
+      case "${NOCODB_ACCESS_START_STATE:-initial}:$sync_number" in
+        retained:1) response='source-sync-retained.json' ;;
+        retained:2) response='source-sync-retained.json' ;;
+        partial:1) response='source-sync-partial.json' ;;
+        *) response="source-sync-${sync_number}.json" ;;
+      esac
       jq -e '. == {domain: "issue334_acceptance", operation: "sync"}' "$body_path" >/dev/null || exit 73
     elif [[ "$operation" == rotate ]]; then
       event='source-rotate'
@@ -244,20 +249,22 @@ source_record() {
 }
 
 reader_created="$(source_record reader ready source-reader integration-reader job-reader 1 1 \
-  2026-09-04T12:01:00Z 2026-09-04T12:02:00Z 2026-09-04T12:02:00Z)"
+  2026-09-04T12:01:00.100000Z 2026-09-04T12:02:00.500000Z 2026-09-04T12:02:00.400000Z)"
 reader_current="$(jq -c '.sourceCreateJobState = null' <<<"$reader_created")"
 operator_waiting="$(source_record operator awaiting_grants '' '' '' 1 0 \
-  2026-09-04T12:02:01Z 2026-09-04T12:02:01Z '')"
+  2026-09-04T12:02:01.100000Z 2026-09-04T12:02:01.200000Z '')"
 operator_created="$(source_record operator ready source-operator integration-operator job-operator 1 1 \
-  2026-09-04T12:03:00Z 2026-09-04T12:04:00Z 2026-09-04T12:04:00Z)"
+  2026-09-04T12:03:00.100000Z 2026-09-04T12:04:00.500000Z 2026-09-04T12:04:00.400000Z)"
 operator_current="$(jq -c '.sourceCreateJobState = null' <<<"$operator_created")"
 operator_rotated="$(source_record operator ready source-operator integration-operator job-operator 2 2 \
-  2026-09-04T12:05:00Z 2026-09-04T12:06:00Z 2026-09-04T12:06:00Z)"
+  2026-09-04T12:05:00.100000Z 2026-09-04T12:06:00.500000Z 2026-09-04T12:06:00.400000Z)"
 operator_rotated="$(jq -c '.sourceCreateJobState = null' <<<"$operator_rotated")"
 
 jq -n --argjson reader "$reader_created" --argjson operator "$operator_waiting" '{ok:true,domain:"issue334_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-1.json"
 jq -n --argjson reader "$reader_current" --argjson operator "$operator_created" '{ok:true,domain:"issue334_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-2.json"
 jq -n --argjson reader "$reader_current" --argjson operator "$operator_current" '{ok:true,domain:"issue334_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-3.json"
+jq -n --argjson reader "$reader_current" --argjson operator "$operator_current" '{ok:true,domain:"issue334_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-retained.json"
+jq -n --argjson reader "$reader_current" --argjson operator "$operator_waiting" '{ok:true,domain:"issue334_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-partial.json"
 jq -n --argjson reader "$reader_current" --argjson operator "$operator_rotated" '{ok:true,domain:"issue334_acceptance",operation:"rotate",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-rotate.json"
 
 probe_response() {
@@ -301,11 +308,12 @@ run_dir=''
 fail() { echo "FAIL [$case_name]: $1" >&2; exit 1; }
 file_mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
 
-run_scenario() { # [confirmation|-] [bad-runtime-kind] [signup-status] [oversize-event] [lose-lease-on-cleanup] [omit-binding-confirm] [binding-confirm]
+run_scenario() { # [confirmation|-] [bad-runtime-kind] [signup-status] [oversize-event] [lose-lease-on-cleanup] [omit-binding-confirm] [binding-confirm] [start-state]
   local confirmation="${1:--}" bad_runtime_kind="${2:-none}" signup_status="${3:-403}"
   local oversize_event="${4:-}" lose_lease_on_cleanup="${5:-false}"
   local omit_binding_confirm="${6:-false}"
   local binding_confirm="${7:-bound:issue334_acceptance:credential-migrator:credential-runtime}"
+  local start_state="${8:-initial}"
   local result_root="$fixture/run-$RANDOM-$RANDOM"
   mkdir -p "$result_root/logs" "$result_root/diagnostics"
   run_dir="$result_root/$run_id"
@@ -321,6 +329,7 @@ run_scenario() { # [confirmation|-] [bad-runtime-kind] [signup-status] [oversize
       NOCODB_ACCESS_PROVISION_TOKEN="$token_provision" NOCODB_ACCESS_SOURCE_TOKEN="$token_source" NOCODB_ACCESS_ACCEPTANCE_TOKEN="$token_acceptance" \
       NOCODB_ACCESS_BAD_RUNTIME_KIND="$bad_runtime_kind" NOCODB_ACCESS_SIGNUP_STATUS="$signup_status" \
       NOCODB_ACCESS_OVERSIZE_RESPONSE="$oversize_event" NOCODB_ACCESS_LOSE_LEASE_ON_CLEANUP="$lose_lease_on_cleanup" \
+      NOCODB_ACCESS_START_STATE="$start_state" \
       TEST_RUN_ID="$run_id" HOMELAB_TEST_RUN_DIR="$run_dir" HOMELAB_REPO_ROOT="$repo_root" \
       AUTOMATION_DATA_PROVISIONING_URL='https://n8n.lab.supermorphic.com/webhook/automation-data-provision' \
       AUTOMATION_DATA_PROVISIONING_TOKEN="$token_provision" \
@@ -336,6 +345,7 @@ run_scenario() { # [confirmation|-] [bad-runtime-kind] [signup-status] [oversize
       NOCODB_ACCESS_PROVISION_TOKEN="$token_provision" NOCODB_ACCESS_SOURCE_TOKEN="$token_source" NOCODB_ACCESS_ACCEPTANCE_TOKEN="$token_acceptance" \
       NOCODB_ACCESS_BAD_RUNTIME_KIND="$bad_runtime_kind" NOCODB_ACCESS_SIGNUP_STATUS="$signup_status" \
       NOCODB_ACCESS_OVERSIZE_RESPONSE="$oversize_event" NOCODB_ACCESS_LOSE_LEASE_ON_CLEANUP="$lose_lease_on_cleanup" \
+      NOCODB_ACCESS_START_STATE="$start_state" \
       TEST_RUN_ID="$run_id" HOMELAB_TEST_RUN_DIR="$run_dir" HOMELAB_REPO_ROOT="$repo_root" \
       AUTOMATION_DATA_PROVISIONING_URL='https://n8n.lab.supermorphic.com/webhook/automation-data-provision' \
       AUTOMATION_DATA_PROVISIONING_TOKEN="$token_provision" \
@@ -419,6 +429,22 @@ jq -e '
       refreshedFact:"refreshed",effectiveAfterRefresh:"corrected"}}
 ' "$plugin_feedback" >/dev/null || fail 'feedback evidence is absent or incomplete'
 [[ "$(file_mode "$plugin_feedback")" == 600 ]] || fail 'feedback evidence is not mode 0600'
+assert_no_secret_output
+
+case_name='fully ready rerun validates retained identities without requiring creation jobs'
+run_scenario test:nocodb:access none 403 '' false false \
+  'bound:issue334_acceptance:credential-migrator:credential-runtime' retained
+assert_status 0
+expected_order=$'kubectl\nkubectl\nkubectl\nkubectl\nprovision\nkubectl\nacceptance-structure\nkubectl\nsource-sync\nkubectl\nsignup-denial\nkubectl\nacceptance-probe\nkubectl\nacceptance-feedback\nkubectl\nsource-sync\nkubectl\nsource-rotate\nkubectl\nacceptance-probe\nkubectl\nacceptance-cleanup'
+[[ "$(cat "$fixture/events.log")" == "$expected_order" ]] || fail "retained rerun used initial-creation routing: $(tr '\n' ' ' <"$fixture/events.log")"
+assert_no_secret_output
+
+case_name='reader-ready operator-pending retry retains the reader and completes operator creation'
+run_scenario test:nocodb:access none 403 '' false false \
+  'bound:issue334_acceptance:credential-migrator:credential-runtime' partial
+assert_status 0
+expected_order=$'kubectl\nkubectl\nkubectl\nkubectl\nprovision\nkubectl\nacceptance-structure\nkubectl\nsource-sync\nkubectl\nacceptance-grants\nkubectl\nsource-sync\nkubectl\nsignup-denial\nkubectl\nacceptance-probe\nkubectl\nacceptance-feedback\nkubectl\nsource-sync\nkubectl\nsource-rotate\nkubectl\nacceptance-probe\nkubectl\nacceptance-cleanup'
+[[ "$(cat "$fixture/events.log")" == "$expected_order" ]] || fail "partial retry did not resume operator adoption: $(tr '\n' ' ' <"$fixture/events.log")"
 assert_no_secret_output
 
 case_name='probe reflection must contain exactly the two approved tables'

@@ -351,7 +351,7 @@ validate_ready_source() { # <response> <kind> <completed|null>
     (.operationStartedAt | type == "string" and length > 0) and
     (.updatedAt | type == "string" and length > 0) and
     (.validatedAt | type == "string" and length > 0) and
-    .operationStartedAt <= .updatedAt and .updatedAt <= .validatedAt and
+    .operationStartedAt <= .validatedAt and .validatedAt <= .updatedAt and
     (.dataEditAllowed == (env.KIND == "operator")) and
     .schemaEditAllowed == false and
     .postgresqlValidation.valid == true and
@@ -379,47 +379,66 @@ validate_source_envelope() { # <response> <operation>
 
 first_sync="$temp_dir/source-sync-first.json"
 source_request sync "$first_sync"
-if ! validate_source_envelope "$first_sync" sync ||
-  ! validate_ready_source "$first_sync" reader completed; then
-  echo 'Initial source sync omitted completed reader job, discovery, read-back, or timing evidence.' >&2
+validate_source_envelope "$first_sync" sync || {
+  echo 'Initial source sync omitted its bounded response envelope.' >&2
+  exit 1
+}
+reader_transition="$(jq -r '.reader.sourceCreateJobState | if . == "completed" then "created" elif . == null then "retained" else "invalid" end' "$first_sync")"
+if [[ "$reader_transition" == invalid ]] ||
+  ! validate_ready_source "$first_sync" reader "$(jq -r '.reader.sourceCreateJobState // "null"' "$first_sync")"; then
+  echo 'Source sync omitted valid initial or retained reader evidence.' >&2
   exit 1
 fi
-jq -e '
-  .operator.accessKind == "operator" and
-  .operator.state == "awaiting_grants" and
-  .operator.sourceId == null and .operator.integrationId == null and
-  .operator.sourceCreateJobId == null and .operator.sourceCreateJobState == null and
-  .operator.sourceDiscovered == false and .operator.sourceReadBack == false and
-  .operator.credentialGeneration == 0
-' "$first_sync" >/dev/null || {
-  echo 'Initial source sync did not leave the operator awaiting reviewed grants.' >&2
-  exit 1
-}
-
-grants_response="$temp_dir/grants-response.json"
-acceptance_request grants "$grants_response"
-RUN_ID="$run_id" jq -e '
-  . == {ok:true,operation:"grants",runId:env.RUN_ID,domain:"issue334_acceptance",grantsReady:true}
-' "$grants_response" >/dev/null || {
-  echo 'The fixed acceptance grants operation did not complete.' >&2
-  exit 1
-}
 
 ready_sync="$temp_dir/source-sync-ready.json"
-source_request sync "$ready_sync"
-if ! validate_source_envelope "$ready_sync" sync ||
-  ! validate_ready_source "$ready_sync" reader null ||
-  ! validate_ready_source "$ready_sync" operator completed; then
-  echo 'Ready source sync omitted current source evidence or initial operator creation evidence.' >&2
-  exit 1
+case "$(jq -r '.operator.state // "absent"' "$first_sync")" in
+  awaiting_grants)
+    jq -e '
+      .operator.accessKind == "operator" and
+      .operator.sourceId == null and .operator.integrationId == null and
+      .operator.sourceCreateJobId == null and .operator.sourceCreateJobState == null and
+      .operator.sourceDiscovered == false and .operator.sourceReadBack == false and
+      .operator.credentialGeneration == 0
+    ' "$first_sync" >/dev/null || {
+      echo 'Pending operator state was not a valid reviewed-grants boundary.' >&2
+      exit 1
+    }
+    grants_response="$temp_dir/grants-response.json"
+    acceptance_request grants "$grants_response"
+    RUN_ID="$run_id" jq -e '
+      . == {ok:true,operation:"grants",runId:env.RUN_ID,domain:"issue334_acceptance",grantsReady:true}
+    ' "$grants_response" >/dev/null || {
+      echo 'The fixed acceptance grants operation did not complete.' >&2
+      exit 1
+    }
+    source_request sync "$ready_sync"
+    if ! validate_source_envelope "$ready_sync" sync ||
+      ! validate_ready_source "$ready_sync" reader null ||
+      ! validate_ready_source "$ready_sync" operator completed; then
+      echo 'Operator adoption omitted current reader evidence or completed operator creation evidence.' >&2
+      exit 1
+    fi
+    ;;
+  ready)
+    if [[ "$reader_transition" != retained ]] ||
+      ! validate_ready_source "$first_sync" operator null; then
+      echo 'Retained ready sources omitted current identity, data-read, or PostgreSQL evidence.' >&2
+      exit 1
+    fi
+    cp "$first_sync" "$ready_sync"
+    ;;
+  *)
+    echo 'Source sync returned neither a pending nor ready operator contract.' >&2
+    exit 1
+    ;;
+esac
+
+if [[ "$reader_transition" == created ]]; then
+  jq -e '.reader.updatedAt < .operator.operationStartedAt' "$ready_sync" >/dev/null || {
+    echo 'Initial reader completion did not precede operator creation.' >&2
+    exit 1
+  }
 fi
-jq -e '
-  .reader.validatedAt < .operator.operationStartedAt and
-  .reader.updatedAt < .operator.updatedAt
-' "$ready_sync" >/dev/null || {
-  echo 'Reader completion did not precede operator creation.' >&2
-  exit 1
-}
 reader_source_signature() {
   jq -cS '[.baseId, (.reader | {sourceId,integrationId,sourceCreateJobId,generation,credentialGeneration})]' "$1"
 }

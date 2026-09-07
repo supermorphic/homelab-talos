@@ -74,25 +74,31 @@ try {
   jwt = readFileSync(tokenFile, 'utf8');
   const headers = {'xc-auth':jwt};
 
-  const workspaces = list((await bounded('/api/v2/meta/workspaces', {headers})).json);
-  const workspaceMatches = workspaces.filter((item) => item?.title === 'Automation Data');
-  if (workspaceMatches.length !== 1 || !workspaceMatches[0].id) throw new Error('workspace_contract_failed');
-  const bases = list((await bounded('/api/v2/meta/bases', {headers})).json);
-  const baseMatches = bases.filter((item) => item?.title === 'issue334_acceptance' && (item.fk_workspace_id || item.workspace_id) === workspaceMatches[0].id);
-  if (baseMatches.length !== 1 || !baseMatches[0].id) throw new Error('base_contract_failed');
-  const base = baseMatches[0];
   const registry = JSON.parse(process.env.SOURCE_REGISTRY);
   const retained = registry.items.filter((item) => item.domain === 'issue334_acceptance');
-  if (retained.length !== 2 || retained.some((item) => item.baseId !== base.id || item.state !== 'ready' || item.valid !== true)) throw new Error('registry_base_mismatch');
-  const integrations = list((await bounded(`/api/v2/meta/workspaces/${workspaceMatches[0].id}/integrations`, {headers})).json);
+  const registryBaseIds = [...new Set(retained.map((item) => item.baseId))];
+  if (retained.length !== 2 || registryBaseIds.length !== 1 || typeof registryBaseIds[0] !== 'string' || !registryBaseIds[0] ||
+      retained.some((item) => item.state !== 'ready' || item.valid !== true)) throw new Error('registry_base_mismatch');
+  const bases = list((await bounded('/api/v2/meta/bases', {headers})).json);
+  const baseMatches = bases.filter((item) => item?.id === registryBaseIds[0] && item?.title === 'issue334_acceptance');
+  if (baseMatches.length !== 1) throw new Error('base_contract_failed');
+  const base = baseMatches[0];
+  const workspaceId = base.fk_workspace_id || base.workspace_id;
+  if (typeof workspaceId !== 'string' || !workspaceId) throw new Error('base_workspace_identity_failed');
+  const workspaces = list((await bounded('/api/v2/meta/workspaces', {headers})).json);
+  const workspaceMatches = workspaces.filter((item) => item?.id === workspaceId);
+  if (workspaceMatches.length !== 1) throw new Error('workspace_contract_failed');
+  const integrations = list((await bounded(`/api/v2/meta/workspaces/${workspaceId}/integrations`, {headers})).json);
 
 
   const sources = list((await bounded(`/api/v2/meta/bases/${base.id}/sources`, {headers})).json);
-  if (sources.length !== 2) throw new Error('source_count_failed');
   const sourceObjects = [];
   for (const summary of sources) sourceObjects.push((await bounded(`/api/v2/meta/bases/${base.id}/sources/${summary.id}`, {headers})).json);
-  const reader = sourceObjects.find((item) => item?.alias === 'Read Model');
-  const operator = sourceObjects.find((item) => item?.alias === 'Operator');
+  const readers = sourceObjects.filter((item) => item?.alias === 'Read Model');
+  const operators = sourceObjects.filter((item) => item?.alias === 'Operator');
+  if (readers.length !== 1 || operators.length !== 1) throw new Error('managed_source_count_failed');
+  const reader = readers[0];
+  const operator = operators[0];
   const pathOf = (source) => source?.config?.searchPath || source?.config?.search_path;
   if (!reader || JSON.stringify(pathOf(reader)) !== JSON.stringify(['read_model']) || reader.is_data_readonly !== true || reader.is_schema_readonly !== true) throw new Error('reader_source_failed');
   if (!operator || JSON.stringify(pathOf(operator)) !== JSON.stringify(['operator']) || operator.is_data_readonly !== false || operator.is_schema_readonly !== true) throw new Error('operator_source_failed');

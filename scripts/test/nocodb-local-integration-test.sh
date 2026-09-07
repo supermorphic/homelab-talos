@@ -51,6 +51,10 @@ rg -Fq 'aged-job-api-response.json' "$runner" || {
 	echo 'NocoDB local integration guard test failed: aged-job API absence readback is missing' >&2
 	exit 1
 }
+rg -Fq 'source-reader-rotation.json' "$runner" || {
+	echo 'NocoDB local integration guard test failed: actual reader-only rotation is missing' >&2
+	exit 1
+}
 rg -Fq 'prove_interrupted_initial_creation()' "$runner" || {
 	echo 'NocoDB local integration guard test failed: interrupted initial creation proof is missing' >&2
 	exit 1
@@ -73,6 +77,14 @@ rg -Fq 'prove_logical_restore()' "$runner" || {
 }
 rg -Fq 'fresh logical bundle failed checksum validation.' "$runner" || {
 	echo 'NocoDB local integration guard test failed: restored backup checksum proof is missing' >&2
+	exit 1
+}
+rg -Fq 'nocodb_restore_request_script' "$runner" || {
+	echo 'NocoDB local integration guard test failed: production restore request helper is not executed' >&2
+	exit 1
+}
+rg -Fq 'nocodb_restore_assertions=passed' "$runner" || {
+	echo 'NocoDB local integration guard test failed: restore helper success is not asserted' >&2
 	exit 1
 }
 rg -Fq -- '--tmpfs /usr/app/data' "$runner" || {
@@ -205,6 +217,16 @@ if NOCODB_LOCAL_N8N_URL='http://0.0.0.0:5678' run_preflight; then
 fi
 rg -Fq 'loopback' "$fixture/output" || fail 'wildcard endpoint refusal did not name the loopback boundary'
 
+for invalid_port in 0 99999; do
+	: >"$event_log"
+	if NOCODB_LOCAL_NOCODB_URL="http://127.0.0.1:$invalid_port" run_preflight; then
+		fail "invalid loopback port $invalid_port was accepted"
+	fi
+	rg -Fq 'port from 1 through 65535' "$fixture/output" ||
+		fail "invalid loopback port $invalid_port refusal was unclear"
+	[[ ! -s "$event_log" ]] || fail "invalid loopback port $invalid_port reached Podman"
+done
+
 : >"$event_log"
 if NOCODB_LOCAL_RUN_ID='guardcollision' NOCODB_LOCAL_GUARD_COLLISION=true run_preflight; then
 	fail 'a foreign resource collision was accepted'
@@ -215,9 +237,14 @@ rg -Fq 'not owned by this run' "$fixture/output" || fail 'foreign collision refu
 cleanup_state="$fixture/cleanup-state"
 export NOCODB_LOCAL_GUARD_CLEANUP_STATE="$cleanup_state"
 : >"$event_log"
+fresh_repo="$fixture/fresh-repo"
+mkdir -p "$fresh_repo/scripts/test/scenarios" "$fresh_repo/scripts/test/lib"
+git -C "$fresh_repo" init --quiet
+cp "$runner" "$fresh_repo/$runner"
+cp scripts/test/lib/nocodb-restore-command.sh "$fresh_repo/scripts/test/lib/"
 set +e
-PATH="$fixture/bin:$PATH" NOCODB_LOCAL_RUN_ID=cleanupguard \
-	NOCODB_LOCAL_GUARD_CLEANUP=true "$runner" --cleanup-test >"$fixture/output" 2>&1
+(cd "$fresh_repo" && PATH="$fixture/bin:$PATH" NOCODB_LOCAL_RUN_ID=cleanupguard \
+	NOCODB_LOCAL_GUARD_CLEANUP=true "$runner" --cleanup-test) >"$fixture/output" 2>&1
 cleanup_status=$?
 set -e
 [[ "$cleanup_status" -eq 1 ]] || fail 'cleanup failure did not override the scenario exit status'
