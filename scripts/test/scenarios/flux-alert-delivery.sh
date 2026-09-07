@@ -38,10 +38,14 @@ write_phase() {
 }
 
 run_owned_kustomization_absent() {
-  assert_command_finds_nothing \
-    "Run-owned Kustomization $namespace/$test_name still exists after cleanup." \
-    kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" \
-    get kustomization "$test_name" >/dev/null
+  local resource
+  resource="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" \
+    get kustomization "$test_name" --ignore-not-found --output=name)" || {
+    echo "Could not confirm absence of run-owned Kustomization $namespace/$test_name." >&2
+    return 1
+  }
+  assert_empty "$resource" \
+    "Run-owned Kustomization $namespace/$test_name still exists after cleanup."
 }
 
 delete_run_owned_kustomization() {

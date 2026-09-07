@@ -85,12 +85,25 @@ set -euo pipefail
 printf '%s\n' "$*" >>"$KUBECTL_LOG"
 case " $* " in
   *' get kustomization flux-alert-e2e-'*)
-    [[ -e "$RUN_RESOURCE_CREATED" ]] && exit 0
+    if [[ -e "$RUN_RESOURCE_CREATED" ]]; then
+      [[ " $* " == *' --output=name '* ]] && echo "kustomization.kustomize.toolkit.fluxcd.io/$test_name"
+      exit 0
+    fi
+    if [[ -e "$DELETE_ATTEMPTED" ]]; then
+      if [[ "${POST_DELETE_GET_ERROR:-false}" == 'true' ]]; then
+        echo 'Error from server (Forbidden): cleanup lookup denied' >&2
+        exit 1
+      fi
+      if [[ " $* " == *' --ignore-not-found '* && " $* " == *' --output=name '* ]]; then
+        exit 0
+      fi
+    fi
     exit 1
     ;;
   *' get gitrepository flux-alert-e2e-'*) exit 1 ;;
   *' create --filename '*) touch "$RUN_RESOURCE_CREATED" ;;
   *' delete kustomization flux-alert-e2e-'*)
+    touch "$DELETE_ATTEMPTED"
     [[ "${KEEP_RUN_RESOURCE:-false}" == 'true' ]] || rm -f -- "$RUN_RESOURCE_CREATED"
     ;;
   *) echo "Unexpected kubectl request: $*" >&2; exit 64 ;;
@@ -158,6 +171,7 @@ EOF
     PATH="$fixture/bin:$PATH" \
     KUBECTL_LOG="$fixture/kubectl.log" \
     RUN_RESOURCE_CREATED="$fixture/run-resource-created" \
+    DELETE_ATTEMPTED="$fixture/delete-attempted" \
     ALERT_GROUP_CALLS="$fixture/alert-group-calls" \
     NOTIFICATION_TOTAL_CALLS="$fixture/notification-total-calls" \
     HOMELAB_TEST_RUN_DIR="$fixture/run" \
@@ -197,14 +211,15 @@ EOF
     exit 1
   }
 
-  rm -f -- "$fixture/run-resource-created" "$fixture/alert-group-calls" \
-    "$fixture/notification-total-calls"
+  rm -f -- "$fixture/run-resource-created" "$fixture/delete-attempted" \
+    "$fixture/alert-group-calls" "$fixture/notification-total-calls"
   : >"$fixture/kubectl.log"
   set +e
   output="$(
     PATH="$fixture/bin:$PATH" \
     KUBECTL_LOG="$fixture/kubectl.log" \
     RUN_RESOURCE_CREATED="$fixture/run-resource-created" \
+    DELETE_ATTEMPTED="$fixture/delete-attempted" \
     ALERT_GROUP_CALLS="$fixture/alert-group-calls" \
     NOTIFICATION_TOTAL_CALLS="$fixture/notification-total-calls" \
     HOMELAB_TEST_RUN_DIR="$fixture/run" \
@@ -224,6 +239,37 @@ EOF
   }
   [[ "$(yq -r '.status' "$fixture/run/cleanup.json")" == 'failed' ]] || {
     echo 'Scenario did not record wrapper-compatible cleanup failure status.' >&2
+    exit 1
+  }
+
+  rm -f -- "$fixture/run-resource-created" "$fixture/delete-attempted" \
+    "$fixture/alert-group-calls" "$fixture/notification-total-calls"
+  : >"$fixture/kubectl.log"
+  set +e
+  output="$(
+    PATH="$fixture/bin:$PATH" \
+    KUBECTL_LOG="$fixture/kubectl.log" \
+    RUN_RESOURCE_CREATED="$fixture/run-resource-created" \
+    DELETE_ATTEMPTED="$fixture/delete-attempted" \
+    ALERT_GROUP_CALLS="$fixture/alert-group-calls" \
+    NOTIFICATION_TOTAL_CALLS="$fixture/notification-total-calls" \
+    HOMELAB_TEST_RUN_DIR="$fixture/run" \
+    POST_DELETE_GET_ERROR=true \
+    FLUX_ALERT_E2E_CONFIRM='test:flux-alert:firing-resolved' \
+      "$scenario" "$fixture/kubeconfig" 2>&1
+  )"
+  exit_code="$?"
+  set -e
+  [[ "$exit_code" -ne 0 ]] || {
+    echo 'Scenario accepted an API-error cleanup lookup.' >&2
+    exit 1
+  }
+  rg -q 'Flux alert delivery cleanup failed' <<<"$output" || {
+    echo 'Scenario did not report cleanup failure after an API-error lookup.' >&2
+    exit 1
+  }
+  [[ "$(yq -r '.status' "$fixture/run/cleanup.json")" == 'failed' ]] || {
+    echo 'Scenario recorded successful cleanup after an API-error lookup.' >&2
     exit 1
   }
 }
