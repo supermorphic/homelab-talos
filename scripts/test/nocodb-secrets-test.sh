@@ -3,6 +3,7 @@
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+export NOCODB_TEST_PERMISSIONS_LIB="$repo_root/scripts/test/lib/nocodb-permissions.sh"
 just_bin="$(mise exec -- bash -c 'command -v just')"
 yq_bin="$(mise exec -- bash -c 'command -v yq')"
 test_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-nocodb-secrets-test.XXXXXX")"
@@ -60,7 +61,8 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 created="$("$REAL_MKTEMP_BIN" "$@")"
-mode="$(stat -f '%Lp' "$created" 2>/dev/null || stat -c '%a' "$created")"
+source "${NOCODB_TEST_PERMISSIONS_LIB:?}"
+mode="$(nocodb_test_mode "$created")"
 [[ -z "${WRITER_MKTEMP_LOG:-}" ]] || \
   printf '%s\t%s\n' "$*" "$mode" >>"$WRITER_MKTEMP_LOG"
 printf '%s\n' "$created"

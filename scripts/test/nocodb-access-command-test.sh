@@ -4,6 +4,9 @@ set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
+export NOCODB_TEST_PERMISSIONS_LIB="$repo_root/scripts/test/lib/nocodb-permissions.sh"
+# shellcheck source=scripts/test/lib/nocodb-permissions.sh
+source "$NOCODB_TEST_PERMISSIONS_LIB"
 
 scenario='scripts/test/scenarios/nocodb-access.sh'
 [[ -x "$scenario" ]] || {
@@ -115,13 +118,13 @@ set -euo pipefail
 [[ "$#" -eq 2 && "$1" == '--config' && -f "$2" ]] || exit 64
 config="$2"
 config_dir="$(dirname -- "$config")"
-mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
-[[ "$(mode "$config_dir")" == 700 && "$(mode "$config")" == 600 ]] || exit 65
+source "${NOCODB_TEST_PERMISSIONS_LIB:?}"
+[[ "$(nocodb_test_mode "$config_dir")" == 700 && "$(nocodb_test_mode "$config")" == 600 ]] || exit 65
 url="$(awk -F'"' '/^url = / {print $2; exit}' "$config")"
 output="$(awk -F'"' '/^output = / {print $2; exit}' "$config")"
 body_path="$(awk -F'"' '/^data-binary = / {value=$2; sub(/^@/, "", value); print value; exit}' "$config")"
 [[ -n "$url" && -n "$output" && -f "$body_path" && "$(dirname -- "$body_path")" == "$config_dir" ]] || exit 66
-[[ "$(mode "$body_path")" == 600 ]] || exit 67
+[[ "$(nocodb_test_mode "$body_path")" == 600 ]] || exit 67
 rg -Fxq 'request = "POST"' "$config" || exit 68
 rg -Fxq 'header = "Content-Type: application/json"' "$config" || exit 69
 rg -Fxq 'max-filesize = 65536' "$config" || exit 81
@@ -306,7 +309,7 @@ OUT=''
 STATUS=0
 run_dir=''
 fail() { echo "FAIL [$case_name]: $1" >&2; exit 1; }
-file_mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+file_mode() { nocodb_test_mode "$1"; }
 
 run_scenario() { # [confirmation|-] [bad-runtime-kind] [signup-status] [oversize-event] [lose-lease-on-cleanup] [omit-binding-confirm] [binding-confirm] [start-state]
   local confirmation="${1:--}" bad_runtime_kind="${2:-none}" signup_status="${3:-403}"

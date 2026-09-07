@@ -4,6 +4,7 @@ set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
+export NOCODB_TEST_PERMISSIONS_LIB="$repo_root/scripts/test/lib/nocodb-permissions.sh"
 
 bootstrap='scripts/nocodb/bootstrap.sh'
 platform_preflight='scripts/nocodb/platform-preflight.sh'
@@ -337,15 +338,15 @@ set -euo pipefail
 [[ "$#" -eq 2 && "$1" == '--config' && -f "$2" ]] || exit 64
 config="$2"
 config_dir="$(dirname -- "$config")"
-mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
-[[ "$(mode "$config_dir")" == 700 && "$(mode "$config")" == 600 ]] || exit 65
+source "${NOCODB_TEST_PERMISSIONS_LIB:?}"
+[[ "$(nocodb_test_mode "$config_dir")" == 700 && "$(nocodb_test_mode "$config")" == 600 ]] || exit 65
 
 url="$(awk -F'"' '/^url = / { print $2; exit }' "$config")"
 method="$(awk -F'"' '/^request = / { print $2; exit }' "$config")"
 output="$(awk -F'"' '/^output = / { print $2; exit }' "$config")"
 body="$(awk -F'"' '/^data-binary = / { value=$2; sub(/^@/, "", value); print value; exit }' "$config")"
 [[ -n "$url" && -n "$method" && -n "$output" && "$output" == "$config_dir"/* ]] || exit 66
-[[ -z "$body" || (-f "$body" && "$(mode "$body")" == 600) ]] || exit 66
+[[ -z "$body" || (-f "$body" && "$(nocodb_test_mode "$body")" == 600) ]] || exit 66
 rg -Fxq -- 'silent' "$config" && rg -Fxq -- 'show-error' "$config" &&
   rg -Fxq -- 'fail-with-body' "$config" && rg -Fxq -- 'location = false' "$config" &&
   rg -Fxq -- 'max-filesize = 65536' "$config" || exit 67

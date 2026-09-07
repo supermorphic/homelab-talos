@@ -5,6 +5,7 @@ set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
+export NOCODB_TEST_PERMISSIONS_LIB="$repo_root/scripts/test/lib/nocodb-permissions.sh"
 
 command='scripts/nocodb/source-operation.sh'
 [[ -x "$command" ]] || {
@@ -15,12 +16,42 @@ command='scripts/nocodb/source-operation.sh'
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/homelab-nocodb-source-operation-test.XXXXXX")"
 trap 'rm -rf -- "$fixture"' EXIT
 stub_bin="$fixture/bin"
+linux_bin="$fixture/linux-bin"
 event_log="$fixture/events.log"
-mkdir -p "$stub_bin"
+mkdir -p "$stub_bin" "$linux_bin"
 
 token='fixture_nocodb_source_provisioning_header_0123456789'
 export NOCODB_SOURCE_OPERATION_EVENT_LOG="$event_log"
 export NOCODB_SOURCE_OPERATION_TOKEN="$token"
+
+cat >"$linux_bin/uname" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$#" -eq 1 && "$1" == -s ]] || exit 64
+printf '%s\n' Linux
+EOF
+
+cat >"$linux_bin/stat" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$#" -eq 3 ]] || exit 64
+case "$1:$2" in
+  '-f:%Lp')
+    printf 'gnu-stat-filesystem-output\n'
+    exit 1
+    ;;
+  '-c:%a')
+    if [[ -n "${NOCODB_TEST_STAT_MODE:-}" ]]; then
+      printf '%s\n' "$NOCODB_TEST_STAT_MODE"
+    elif [[ -d "$3" ]]; then
+      printf '%s\n' 700
+    else
+      printf '%s\n' 600
+    fi
+    ;;
+  *) exit 64 ;;
+esac
+EOF
 
 cat >"$stub_bin/git" <<'EOF'
 #!/usr/bin/env bash
@@ -45,9 +76,9 @@ set -euo pipefail
 [[ "$#" -eq 2 && "$1" == '--config' && -f "$2" ]] || exit 64
 config="$2"
 config_dir="$(dirname -- "$config")"
-mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
-[[ "$(mode "$config_dir")" == 700 ]] || exit 65
-[[ "$(mode "$config")" == 600 ]] || exit 66
+source "${NOCODB_TEST_PERMISSIONS_LIB:?}"
+[[ "$(nocodb_test_mode "$config_dir")" == 700 ]] || exit 65
+[[ "$(nocodb_test_mode "$config")" == 600 ]] || exit 66
 
 url="$(awk -F'"' '/^url = / { print $2; exit }' "$config")"
 [[ "$url" == 'https://n8n.lab.supermorphic.com/webhook/automation-data-nocodb-source' ]] || exit 67
@@ -69,7 +100,7 @@ if [[ "${NOCODB_SOURCE_OPERATION_CURL_EXIT:-0}" != 0 ]]; then
 fi
 printf '%s\n' "${NOCODB_SOURCE_OPERATION_RESPONSE:?}"
 EOF
-chmod 700 "$stub_bin/git" "$stub_bin/curl"
+chmod 700 "$stub_bin/git" "$stub_bin/curl" "$linux_bin/uname" "$linux_bin/stat"
 
 case_name=''
 OUT=''
@@ -88,14 +119,14 @@ run_operation() { # <sync|rotate> <domain> [kind] [confirmation|-] [token] [resp
   set +e
   if [[ "$operation" == sync ]]; then
     if [[ "$confirmation" == '-' ]]; then
-      OUT="$(PATH="$stub_bin:$PATH" \
+      OUT="$(PATH="$stub_bin:$linux_bin:$PATH" \
         NOCODB_SOURCE_OPERATION_EXPECTED_BODY="$(jq -cn --arg domain "$domain" '{domain: $domain, operation: "sync"}')" \
         NOCODB_SOURCE_OPERATION_RESPONSE="$response" \
         NOCODB_SOURCE_OPERATION_CURL_EXIT="$curl_exit" \
         NOCODB_SOURCE_PROVISIONING_HEADER="$supplied_token" \
         env -u NOCODB_SOURCE_SYNC_CONFIRM "$command" "${args[@]}" 2>&1)"
     else
-      OUT="$(PATH="$stub_bin:$PATH" \
+      OUT="$(PATH="$stub_bin:$linux_bin:$PATH" \
         NOCODB_SOURCE_OPERATION_EXPECTED_BODY="$(jq -cn --arg domain "$domain" '{domain: $domain, operation: "sync"}')" \
         NOCODB_SOURCE_OPERATION_RESPONSE="$response" \
         NOCODB_SOURCE_OPERATION_CURL_EXIT="$curl_exit" \
@@ -104,14 +135,14 @@ run_operation() { # <sync|rotate> <domain> [kind] [confirmation|-] [token] [resp
     fi
   else
     if [[ "$confirmation" == '-' ]]; then
-      OUT="$(PATH="$stub_bin:$PATH" \
+      OUT="$(PATH="$stub_bin:$linux_bin:$PATH" \
         NOCODB_SOURCE_OPERATION_EXPECTED_BODY="$(jq -cn --arg domain "$domain" --arg kind "$kind" '{domain: $domain, operation: "rotate", accessKind: $kind}')" \
         NOCODB_SOURCE_OPERATION_RESPONSE="$response" \
         NOCODB_SOURCE_OPERATION_CURL_EXIT="$curl_exit" \
         NOCODB_SOURCE_PROVISIONING_HEADER="$supplied_token" \
         env -u NOCODB_SOURCE_ROTATE_CONFIRM "$command" "${args[@]}" 2>&1)"
     else
-      OUT="$(PATH="$stub_bin:$PATH" \
+      OUT="$(PATH="$stub_bin:$linux_bin:$PATH" \
         NOCODB_SOURCE_OPERATION_EXPECTED_BODY="$(jq -cn --arg domain "$domain" --arg kind "$kind" '{domain: $domain, operation: "rotate", accessKind: $kind}')" \
         NOCODB_SOURCE_OPERATION_RESPONSE="$response" \
         NOCODB_SOURCE_OPERATION_CURL_EXIT="$curl_exit" \
@@ -189,6 +220,13 @@ assert_status 0
   fail 'curl ran before deployed-source parity'
 assert_no_secret_output
 
+case_name='invalid temporary-file modes remain rejected'
+export NOCODB_TEST_STAT_MODE=755
+run_operation sync domain_one '' 'sync:nocodb:domain_one' "$token" "$valid_sync_response"
+unset NOCODB_TEST_STAT_MODE
+assert_status 65
+assert_no_secret_output
+
 case_name='rotate uses the exact target body and bounded private request'
 run_operation rotate domain_one operator 'rotate:nocodb:domain_one:operator' "$token" "$valid_rotate_response"
 assert_status 0
@@ -198,7 +236,7 @@ assert_no_secret_output
 case_name='the Just sync recipe preserves the guarded command contract'
 : >"$event_log"
 set +e
-OUT="$(PATH="$stub_bin:$PATH" \
+OUT="$(PATH="$stub_bin:$linux_bin:$PATH" \
   NOCODB_SOURCE_OPERATION_EXPECTED_BODY='{"domain":"domain_one","operation":"sync"}' \
   NOCODB_SOURCE_OPERATION_RESPONSE="$valid_sync_response" \
   NOCODB_SOURCE_PROVISIONING_HEADER="$token" \
@@ -213,7 +251,7 @@ assert_no_secret_output
 case_name='the Just rotate recipe preserves the guarded command contract'
 : >"$event_log"
 set +e
-OUT="$(PATH="$stub_bin:$PATH" \
+OUT="$(PATH="$stub_bin:$linux_bin:$PATH" \
   NOCODB_SOURCE_OPERATION_EXPECTED_BODY='{"domain":"domain_one","operation":"rotate","accessKind":"operator"}' \
   NOCODB_SOURCE_OPERATION_RESPONSE="$valid_rotate_response" \
   NOCODB_SOURCE_PROVISIONING_HEADER="$token" \

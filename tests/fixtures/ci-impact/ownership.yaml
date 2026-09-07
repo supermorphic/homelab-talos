@@ -33,6 +33,8 @@ contracts:
       - kubernetes/apps/monitoring/gatus/app/nocodb-activation.values.yaml
       - scripts/nocodb/bootstrap.sh
       - scripts/test/nocodb-bootstrap-test.sh
+      - scripts/test/lib/nocodb-permissions.sh
+      - scripts/test/lib/nocodb-permissions-test.sh
       - scripts/upgrade/automation-data.sh
       - scripts/validate/nocodb.sh
       - scripts/verify/nocodb.sh
