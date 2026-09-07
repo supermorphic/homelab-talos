@@ -29,10 +29,6 @@ for k in kube-prometheus-stack kube-prometheus-stack-config; do
     exit 1
   }
 done
-[[ "$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get helmrelease kube-prometheus-stack --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
-  echo 'kube-prometheus-stack HelmRelease is not Ready.' >&2
-  exit 1
-}
 [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get helmrelease "$exporter_release" --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
   echo 'kube-prometheus-stack HelmRelease is not Ready.' >&2
   exit 1

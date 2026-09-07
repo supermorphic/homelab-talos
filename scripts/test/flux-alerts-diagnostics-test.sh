@@ -28,6 +28,8 @@ assert_eq kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml \
 assert_eq '."kube-state-metrics"' "$flux_alerts_values_root" 'production values root'
 assert_eq 'gotk_resource_info{service="kube-prometheus-stack-kube-state-metrics",namespace="monitoring"}' \
   "$(flux_alerts_metric_selector)" 'production metric selector'
+assert_eq 'app.kubernetes.io/name=kube-state-metrics,app.kubernetes.io/instance=kube-prometheus-stack' \
+  "$(flux_alerts_workload_selector)" 'bundled workload selector'
 assert_eq $'helm.toolkit.fluxcd.io\tv2\tHelmRelease\nkustomize.toolkit.fluxcd.io\tv1\tKustomization\nsource.toolkit.fluxcd.io\tv1\tGitRepository\nsource.toolkit.fluxcd.io\tv1\tHelmRepository\nsource.toolkit.fluxcd.io\tv1\tOCIRepository' \
   "$(flux_alerts_configured_gvks "$flux_alerts_values" "$flux_alerts_values_root" | sort)" \
   'dedicated configured GVKs'
@@ -57,12 +59,12 @@ targets_json='{
         }
       },
       {
-        "scrapePool": "serviceMonitor/monitoring/flux-kube-state-metrics-candidate/0",
+        "scrapePool": "serviceMonitor/monitoring/flux-kube-state-metrics/0",
         "health": "up",
         "lastError": "",
         "discoveredLabels": {
           "__meta_kubernetes_namespace": "monitoring",
-          "__meta_kubernetes_service_name": "flux-kube-state-metrics-candidate"
+          "__meta_kubernetes_service_name": "flux-kube-state-metrics"
         }
       },
       {
@@ -143,15 +145,81 @@ assert_eq 1 \
   "$(flux_alerts_active_alertmanager_count <<<"$alertmanagers_json")" \
   'active Alertmanager count'
 
+bundled_rules_json='{
+  "data": {"groups": [{"rules": [
+    {"name": "FluxReconciliationFailure", "query": "gotk_resource_info{service=\"kube-prometheus-stack-kube-state-metrics\",namespace=\"monitoring\"}"},
+    {"name": "FluxResourceMetricsMissing", "query": "absent(gotk_resource_info{service=\"kube-prometheus-stack-kube-state-metrics\",namespace=\"monitoring\"})"}
+  ]}]}
+}'
+assert_eq true "$(flux_alerts_rules_select_production_source <<<"$bundled_rules_json")" \
+  'decoded bundled rules satisfy production source validation'
+
 fallback_rules_json='{
   "data": {"groups": [{"rules": [
-    {"name": "FluxReconciliationFailure", "query": "gotk_resource_info{service=\\\"flux-kube-state-metrics\\\",namespace=\\\"monitoring\\\"}"},
-    {"name": "FluxResourceMetricsMissing", "query": "absent(gotk_resource_info{service=\\\"flux-kube-state-metrics\\\",namespace=\\\"monitoring\\\"})"}
+    {"name": "FluxReconciliationFailure", "query": "gotk_resource_info{service=\"flux-kube-state-metrics\",namespace=\"monitoring\"}"},
+    {"name": "FluxResourceMetricsMissing", "query": "absent(gotk_resource_info{service=\"flux-kube-state-metrics\",namespace=\"monitoring\"})"}
   ]}]}
 }'
 assert_eq false "$(flux_alerts_rules_select_production_source <<<"$fallback_rules_json")" \
   'fallback rules cannot satisfy bundled production source validation'
+mixed_rules_json='{
+  "data": {"groups": [{"rules": [
+    {"name": "FluxReconciliationFailure", "query": "gotk_resource_info{service=\"kube-prometheus-stack-kube-state-metrics\",namespace=\"monitoring\"} or gotk_resource_info{service=\"flux-kube-state-metrics\",namespace=\"monitoring\"}"},
+    {"name": "FluxResourceMetricsMissing", "query": "absent(gotk_resource_info{service=\"kube-prometheus-stack-kube-state-metrics\",namespace=\"monitoring\"}) or absent(gotk_resource_info{service=\"flux-kube-state-metrics\",namespace=\"monitoring\"})"}
+  ]}]}
+}'
+assert_eq false "$(flux_alerts_rules_select_production_source <<<"$mixed_rules_json")" \
+  'mixed bundled and fallback rules cannot satisfy production source validation'
+other_source_rules_json='{
+  "data": {"groups": [{"rules": [
+    {"name": "FluxReconciliationFailure", "query": "gotk_resource_info{service=\"kube-prometheus-stack-kube-state-metrics\",namespace=\"monitoring\"} or gotk_resource_info{service=\"other\",namespace=\"monitoring\"}"},
+    {"name": "FluxResourceMetricsMissing", "query": "absent(gotk_resource_info{service=\"kube-prometheus-stack-kube-state-metrics\",namespace=\"monitoring\"}) or absent(gotk_resource_info{service=\"other\",namespace=\"monitoring\"})"}
+  ]}]}
+}'
+assert_eq false "$(flux_alerts_rules_select_production_source <<<"$other_source_rules_json")" \
+  'other service cannot satisfy production source validation'
+unscoped_rules_json='{
+  "data": {"groups": [{"rules": [
+    {"name": "FluxReconciliationFailure", "query": "gotk_resource_info{service=\"kube-prometheus-stack-kube-state-metrics\",namespace=\"monitoring\"} or gotk_resource_info{customresource_kind=\"Kustomization\"}"},
+    {"name": "FluxResourceMetricsMissing", "query": "absent(gotk_resource_info{service=\"kube-prometheus-stack-kube-state-metrics\",namespace=\"monitoring\"}) or absent(gotk_resource_info{customresource_kind=\"Kustomization\"})"}
+  ]}]}
+}'
+assert_eq false "$(flux_alerts_rules_select_production_source <<<"$unscoped_rules_json")" \
+  'unscoped selector cannot satisfy production source validation'
 rg -Fq 'get helmrelease "$exporter_release"' scripts/diagnose/flux-alerts.sh
+
+kubectl() {
+  case "$*" in
+  *'get kustomization kube-prometheus-stack'*) printf 'True' ;;
+  *'get helmrelease kube-prometheus-stack'*) printf 'True' ;;
+  *'get deployment kube-prometheus-stack-kube-state-metrics'*)
+    printf '%s\n' '{"spec":{"replicas":1},"status":{"readyReplicas":1}}'
+    ;;
+  *'get pods --selector '*)
+    if [[ "$*" == *'app.kubernetes.io/name=kube-state-metrics,app.kubernetes.io/instance=kube-prometheus-stack'* ]]; then
+      printf '%s\n' 'kube-state-metrics-a Running true 0'
+    else
+      printf '%s\n' 'grafana-a Running true 0'
+      printf '%s\n' 'kube-state-metrics-a Running true 0'
+    fi
+    ;;
+  *'logs deployment/kube-prometheus-stack-kube-state-metrics'*) printf '%s\n' 'metrics configured' ;;
+  *'/pods/kube-state-metrics-a:8080/proxy/metrics'*)
+    printf '%s\n' 'gotk_resource_info{customresource_kind="Kustomization"} 1'
+    ;;
+  *)
+    echo "Unexpected kubectl request: $*" >&2
+    return 64
+    ;;
+  esac
+}
+exporter_pod=''
+kubeconfig='/tmp/fixture-kubeconfig'
+temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-flux-alerts-diagnostics-test.XXXXXX")"
+trap 'rm -rf -- "$temp_dir"' EXIT
+stage_exporter_workload
+assert_eq kube-state-metrics-a "$exporter_pod" 'diagnostics selects the bundled kube-state-metrics pod'
+stage_exporter_raw_metric
 
 stage_labels=()
 stage_results=()

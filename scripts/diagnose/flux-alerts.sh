@@ -11,7 +11,8 @@ readonly suite_id='diagnostics.flux-alerts'
 readonly namespace='monitoring'
 readonly exporter_name="$flux_alerts_service"
 readonly exporter_release="$flux_alerts_release"
-readonly exporter_workload_instance="$flux_alerts_workload_instance"
+exporter_workload_selector="$(flux_alerts_workload_selector)"
+readonly exporter_workload_selector
 readonly exporter_subject="system:serviceaccount:monitoring:${flux_alerts_serviceaccount}"
 readonly exporter_values="$flux_alerts_values"
 readonly exporter_values_root="$flux_alerts_values_root"
@@ -204,7 +205,7 @@ stage_exporter_workload() {
 
   pod_rows="$(
     kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" \
-      get pods --selector "app.kubernetes.io/instance=${exporter_workload_instance}" \
+      get pods --selector "$exporter_workload_selector" \
       --output custom-columns='NAME:.metadata.name,PHASE:.status.phase,READY:.status.containerStatuses[0].ready,RESTARTS:.status.containerStatuses[0].restartCount' \
       --no-headers 2>&1
   )" || {
@@ -264,7 +265,7 @@ stage_exporter_raw_metric() {
   if [[ -z "$exporter_pod" ]]; then
     exporter_pod="$(
       kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" \
-        get pods --selector "app.kubernetes.io/instance=${exporter_workload_instance}" \
+        get pods --selector "$exporter_workload_selector" \
         --output jsonpath='{.items[0].metadata.name}' 2>/dev/null || true
     )"
   fi
