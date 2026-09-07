@@ -1032,7 +1032,7 @@ or build system. The execution groups are:
 | `full` | Selects the exact union of `core`, `observability`, `automation`, and `ci-framework`. It is a fallback plan, not another implementation of the tests. |
 
 The repository owns one small category-level impact map, initially `tests/impact.yaml`.
-It records category input paths, catalog members, and paths that require `full`. It does
+It records category input paths and paths that require `full`. It does
 not add path metadata to every test. `tests/catalog.yaml` remains authoritative for
 commands, execution ownership, safety guards, and result contracts.
 
@@ -1041,12 +1041,12 @@ breakout. Missing optimization metadata must cause extra work, never missing evi
 
 ### General-harness decomposition
 
-`validation.test-harness` is one mixed suite inside the current 40-suite CI flow; it is
-not the complete CI flow. Its `scripts/test/validate-chainsaw.sh` entry point currently
-owns Chainsaw and Conftest setup, repository-shell result consumption, approximately 60
-shell cases, Python groups, and Ruff checks spanning multiple subsystems.
+Before Stage 2, `validation.test-harness` was one mixed suite inside the 40-suite CI
+flow, not the complete CI flow. Its `scripts/test/validate-chainsaw.sh` entry point
+combined Chainsaw and Conftest setup, repository-shell result consumption, shell cases,
+Python groups, and Ruff checks spanning multiple subsystems.
 
-Stage 2 splits that mixed content into category-selectable catalog identities:
+Stage 2 has split that content into four category-selectable catalog identities:
 
 - `validation.test-harness-core`;
 - `validation.test-harness-observability`;
@@ -1100,6 +1100,27 @@ existing files receive explicit group ownership during decomposition. New shared
 unmapped test infrastructure selects `full`. The implementation does not require a bulk
 directory move.
 
+### Independent coverage ownership contracts
+
+Path-rule tests alone cannot prove that a selected group executes the necessary tests.
+The test-only `tests/fixtures/ci-impact/ownership.yaml` therefore records a small set of
+reviewed relationships: changed input paths and required harness work identities. It
+does not record expected groups and is not an input to the runtime planner.
+
+Planner regression tests classify those inputs with the actual impact map, obtain the
+selected groups' actual non-executing harness listings, and require the named evidence.
+Group-union tests separately establish that full execution retains each work identity
+exactly once. Input and evidence identities must exist so stale examples cannot pass
+silently. The initial examples cover production-validator regressions, each conditional
+boundary, and cross-directory consumers; this is not a per-application registry.
+
+Reviewers derive these relationships from scripts, imported helpers, fixtures, and
+configuration actually consumed. Directory placement alone is not proof of ownership.
+In particular, public webhook and internal DNS validator regression tests belong in
+`core` alongside the always-running production checks, not in `ci-framework` merely
+because they are Python tests. This guard checks agreement between reviewed intent,
+classification, and execution; it does not automatically discover every dependency.
+
 ### Plan and execution flow
 
 For each fresh pull-request synchronization or rebase:
@@ -1134,9 +1155,11 @@ candidate can affect, then obtains that evidence in the current run.
 
 ### Merge enforcement and trust
 
-The required branch-protection name remains a static `merge-gate`. It fails when any
+After the approved protection transition, the required branch-protection name is the
+static `merge-gate`. Until then, `ci` remains required. The new gate fails when any
 planned target is missing, unexpectedly skipped, cancelled, failed, or bound to another
-plan identity.
+plan identity. Provider reconciliation also checks that required planning and execution
+jobs succeeded; apparently passing artifacts cannot override a failed provider job.
 
 Reconciliation resolves `tests/catalog.yaml` from the immutable Git commit recorded in
 the plan's `head_sha` and validates it through the established catalog validator. The
@@ -1149,12 +1172,13 @@ groups, including unexpected groups, use the complete canonical group order.
 The required workflow cannot use top-level path filters. Provider workflow files remain
 thin wrappers around repository-owned planning, execution, and reconciliation commands.
 
-The present single-operator, private-repository threat model does not require a protected
+The present single-operator, trusted-contributor threat model does not require a protected
 base-owned planner or hostile-pull-request bootstrap architecture. Branch and review policy
 protect CI and planner changes, those changes select `full`, and the static required check
 is sufficient. The design accepts that a trusted repository administrator can weaken
 their own validation policy. Repository commands and result contracts remain compatible
-with a later base-owned planner if the contributor trust model changes.
+with a later base-owned planner if the contributor trust model changes. This contributor
+trust boundary does not relax the repository's public-artifact and secret-handling rules.
 
 No LLM, author label, Renovate identity, or declarative risk claim can reduce the plan.
 An operator or agent can request full or deep validation as an escalation.
@@ -1171,9 +1195,13 @@ Stage 2 earns trust before it skips validation:
    present in natural pull requests.
 3. **Split-all execution:** all four groups run as separate jobs regardless of the plan.
    This proves concurrency, complete test identity, result publication, and reconciliation
-   without relying on reduced selection.
+   without relying on reduced selection. The existing full `ci` job remains required for
+   this bounded parity rollout. Provider evidence is collected after publication, before
+   requesting merge. The merged workflow is then explicitly dispatched for gate proof;
+   protection changes require exact operator authorization and successful readback.
 4. **Selective enforcement:** conditional execution is enabled and the static
-   `merge-gate` becomes the required branch check. Any uncertainty selects `full`.
+   `merge-gate` is already the required branch check. Only then is the temporary full
+   `ci` job removed. Any uncertainty selects `full`.
 5. **Post-enable review:** measurements cover selected groups, validation wall time,
    setup and reconciliation overhead, runner consumption, failures, variance, and
    three-to-five-pull-request drain time.
@@ -1184,12 +1212,17 @@ plans from the exact pull-request base and head SHAs, or requests a full plan fo
 manual-dispatch SHA, and uploads its plan for review. It does not select, skip, approve, or
 reduce required validation.
 
-At this rollout boundary, the general harness contains 61 unique shell identities: 22
-`core`, 17 `observability`, three `automation`, and 19 `ci-framework`. The original 60
-identities are unchanged, and `ci-workflow-contract` is the one new permanent identity.
-The complete harness list also contains six setup identities, three Python discovery
-identities, and two Ruff identities, for 72 listed work identities. The catalog contains
-120 unique suite identities. Its full `ci` execution contains 43 suite identities: 32
+PR #370's shadow implementation and full gate passed on candidate `1d341847c2be`.
+The PR is not yet merged at this checkpoint; post-merge shadow observations, split-all
+execution, and selective enforcement remain pending. Local correctness fixtures can
+cover change classes absent from natural PRs without creating synthetic public PRs.
+
+After integrating current main, the general harness retains 64 unique shell identities:
+22 `core`, 20 `observability`, three `automation`, and 19 `ci-framework`. These include
+the original 60 cases, the CI workflow contract, and three newly merged Flux exporter
+cases. Core production-validator Python regressions have their own discovery directory
+instead of sharing the framework-only root discovery. The catalog contains 121 unique
+suite identities. Its full `ci` execution contains 43 suite identities: 32
 `core`, seven `observability`, three `automation`, and one `ci-framework`.
 
 The permanent tests prove that every tracked path resolves to `core`, one or more
@@ -1203,11 +1236,46 @@ filter on the required workflow.
 Rollback forces the selector to return `full`. This restores complete validation without
 undoing the useful harness decomposition.
 
-The current planning estimates, excluding checkout, are about 122 seconds for `core`, 115
-seconds for `observability`, 88 seconds for `ci-framework`, and 25 seconds for
-`automation`. A full concurrent gate should approach the slowest selected lane plus setup
-and reconciliation rather than their sum. These figures guide measurement; they are not
-acceptance thresholds and must be replaced or qualified by controlled execution results.
+### Measurement checkpoint and protocol
+
+GitHub run `33982635175` on 2026-09-05 completed validation in 337 seconds (canonical
+duration 336 seconds), with 43 suites and 812 passing tests. Its whole `ci` job took
+365 seconds. These replace the earlier planning allocation as observed historical data:
+
+| Group | Sum of suite durations within full CI |
+| --- | ---: |
+| `core` | 92.0s |
+| `observability` | 97.5s |
+| `automation` | 21.8s |
+| `ci-framework` | 117.4s |
+
+These sums are not independently measured parallel-job runtimes. The full job checked
+out synthetic merge commit `2c8977a6606d`; shadow planning used PR head `1d341847c2be`.
+Future full-versus-split comparisons must record both identities and establish candidate
+tree equivalence. The earlier Stage 1 hosted validation took 323 seconds, but revisions
+and test counts differ; the 14-second difference is not a controlled regression result.
+The 2026-09-07 rebase adds new main coverage, so these timings are not a new-head baseline.
+
+Parallel execution can reduce the critical path toward the slowest selected group plus
+planning, setup, and reconciliation. Measure that result rather than claiming savings
+from these sums. Intrinsic optimization remains relevant: the hosted `catalog-negative`
+case took 46.2 seconds and is a focused audit candidate even if its group can be skipped.
+
+Keep comparable samples tied to exact source, toolchain, runner, and cache conditions.
+Advancing main requires fresh evidence for a new merge candidate; it does not invalidate
+older fixed-commit benchmark samples. Do not combine different revisions into a controlled
+distribution. Small samples are reported as count, median, and range; five observations
+do not establish a dependable p95. Natural runs can extend the distribution without a
+fixed sample quota or freezing other worktrees to complete the rollout.
+
+Report concurrent three/five-job batch completion as capacity evidence, separately from
+serialized merge-drain latency. Drain evidence follows actual merge, rebase, and fresh CI
+sequences, or is explicitly labeled as a sum-of-gate-times model with stated assumptions.
+Keep runner minutes alongside wall time so splitting does not hide increased total work.
+
+The current root policy still requires full local CI before PR publication. After the
+remote selected gate is proven, adopting the same selection locally is a separate
+operator-approved policy decision; this stage does not silently change that requirement.
 
 ## Stage 3: Forgejo Runner and NUC #4
 
@@ -1233,18 +1301,22 @@ unnecessary host access.
 
 ### Comparison scope
 
-NUC #4 runs the same repository-owned offline commands for the same commits. The default
-automated experiment includes approximately:
+NUC #4 runs the same repository-owned offline commands for the same commits. Begin with
+a bounded compatibility and cold/warm pilot. Expand only when pilot results justify the
+cost and safe concurrency limits are established. The previously proposed expanded
+experiment is an upper planning envelope, not a Stage 2 prerequisite or mandatory quota:
 
 - one or two compatibility runs per executor;
 - three cold-cache runs per executor;
 - ten warm or normal runs per executor;
-- three drain trials with three simultaneous jobs per executor; and
-- three drain trials with five simultaneous jobs per executor.
+- three capacity trials with three simultaneous jobs per executor; and
+- three capacity trials with five simultaneous jobs per executor.
 
 This is about 75--80 full CI-equivalent executions across GitHub and NUC #4, plus focused
 repetitions only when full-run data cannot distinguish CPU, I/O, OCI, or setup costs.
-Natural pull-request history can continue strengthening p95 estimates.
+Natural pull-request history can continue strengthening p95 estimates. Simultaneous-job
+trials measure capacity and batch completion, not serialized merge/rebase drain; record
+the latter separately from observed workflows or a clearly labeled latency model.
 
 The comparison records:
 
