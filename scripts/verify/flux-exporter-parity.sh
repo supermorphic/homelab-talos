@@ -19,8 +19,10 @@ kubeconfig="$1"
 
 flux_alerts_source
 readonly namespace='monitoring'
-readonly dedicated_service="$flux_alerts_service"
-readonly candidate_service='kube-prometheus-stack-kube-state-metrics'
+# Rollback parity keeps the fallback identity explicit; do not derive it from
+# the production helper after production moves to the bundled source.
+readonly fallback_service='flux-kube-state-metrics'
+readonly bundled_service="$flux_alerts_service"
 readonly prometheus_base_url='https://prometheus.lab.supermorphic.com'
 readonly prometheus_resolve="prometheus.lab.supermorphic.com:443:${HOMELAB_GATEWAY_VIP}"
 
@@ -94,33 +96,33 @@ EOF
 consecutive_matches=0
 for attempt in {1..12}; do
   targets_json="$(flux_alerts_prometheus_get "$prometheus_base_url" "$prometheus_resolve" '/api/v1/targets?state=active')" || targets_json=''
-  dedicated_transport="$(SERVICE_NAME="$dedicated_service" NAMESPACE="$namespace" yq -r '[.data.activeTargets[] | select(.discoveredLabels.__meta_kubernetes_service_name == strenv(SERVICE_NAME) and .discoveredLabels.__meta_kubernetes_namespace == strenv(NAMESPACE)) | .labels | [has("job"), has("instance"), has("pod"), has("service"), has("endpoint"), has("namespace"), has("container")] | all] | all' <<<"$targets_json" 2>/dev/null)" || dedicated_transport=''
-  candidate_transport="$(SERVICE_NAME="$candidate_service" NAMESPACE="$namespace" yq -r '[.data.activeTargets[] | select(.discoveredLabels.__meta_kubernetes_service_name == strenv(SERVICE_NAME) and .discoveredLabels.__meta_kubernetes_namespace == strenv(NAMESPACE)) | .labels | [has("job"), has("instance"), has("pod"), has("service"), has("endpoint"), has("namespace"), has("container")] | all] | all' <<<"$targets_json" 2>/dev/null)" || candidate_transport=''
-  dedicated_json="$(flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" "gotk_resource_info{service=\"${dedicated_service}\",namespace=\"${namespace}\"}")" || dedicated_json=''
-  candidate_json="$(flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" "gotk_candidate_resource_info{service=\"${candidate_service}\",namespace=\"${namespace}\"}")" || candidate_json=''
-  node_json="$(flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" "kube_node_info{service=\"${candidate_service}\",namespace=\"${namespace}\"}")" || node_json=''
-  pod_json="$(flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" "kube_pod_info{service=\"${candidate_service}\",namespace=\"${namespace}\"}")" || pod_json=''
+  fallback_transport="$(SERVICE_NAME="$fallback_service" NAMESPACE="$namespace" yq -r '[.data.activeTargets[] | select(.discoveredLabels.__meta_kubernetes_service_name == strenv(SERVICE_NAME) and .discoveredLabels.__meta_kubernetes_namespace == strenv(NAMESPACE)) | .labels | [has("job"), has("instance"), has("pod"), has("service"), has("endpoint"), has("namespace"), has("container")] | all] | all' <<<"$targets_json" 2>/dev/null)" || fallback_transport=''
+  bundled_transport="$(SERVICE_NAME="$bundled_service" NAMESPACE="$namespace" yq -r '[.data.activeTargets[] | select(.discoveredLabels.__meta_kubernetes_service_name == strenv(SERVICE_NAME) and .discoveredLabels.__meta_kubernetes_namespace == strenv(NAMESPACE)) | .labels | [has("job"), has("instance"), has("pod"), has("service"), has("endpoint"), has("namespace"), has("container")] | all] | all' <<<"$targets_json" 2>/dev/null)" || bundled_transport=''
+  fallback_json="$(flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" "gotk_resource_info{service=\"${fallback_service}\",namespace=\"${namespace}\"}")" || fallback_json=''
+  bundled_json="$(flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" "gotk_resource_info{service=\"${bundled_service}\",namespace=\"${namespace}\"}")" || bundled_json=''
+  node_json="$(flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" "kube_node_info{service=\"${bundled_service}\",namespace=\"${namespace}\"}")" || node_json=''
+  pod_json="$(flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" "kube_pod_info{service=\"${bundled_service}\",namespace=\"${namespace}\"}")" || pod_json=''
   inventory="$(gather_inventory)" || inventory=''
   comparison=''
   if [[ "$(yq -r '.status // ""' <<<"$targets_json")" != 'success' ]] ||
-    [[ "$(flux_alerts_target_count "$dedicated_service" "$namespace" <<<"$targets_json")" -le 0 ]] ||
-    [[ "$(flux_alerts_target_healths "$dedicated_service" "$namespace" <<<"$targets_json")" != 'up' ]] ||
-    [[ "$(flux_alerts_target_count "$candidate_service" "$namespace" <<<"$targets_json")" -le 0 ]] ||
-    [[ "$(flux_alerts_target_healths "$candidate_service" "$namespace" <<<"$targets_json")" != 'up' ]] ||
-    [[ "$dedicated_transport" != 'true' || "$candidate_transport" != 'true' ]]; then
+    [[ "$(flux_alerts_target_count "$fallback_service" "$namespace" <<<"$targets_json")" -le 0 ]] ||
+    [[ "$(flux_alerts_target_healths "$fallback_service" "$namespace" <<<"$targets_json")" != 'up' ]] ||
+    [[ "$(flux_alerts_target_count "$bundled_service" "$namespace" <<<"$targets_json")" -le 0 ]] ||
+    [[ "$(flux_alerts_target_healths "$bundled_service" "$namespace" <<<"$targets_json")" != 'up' ]] ||
+    [[ "$fallback_transport" != 'true' || "$bundled_transport" != 'true' ]]; then
     write_summary "attempt-${attempt}: target-acceptance-failed"
     consecutive_matches=0
   else
-    if [[ -n "$dedicated_json" && -n "$candidate_json" && -n "$node_json" && -n "$pod_json" && -n "$inventory" &&
-      "$(yq -r '.status // ""' <<<"$dedicated_json")" == 'success' && "$(yq -r '.data.result | length' <<<"$dedicated_json")" -gt 0 &&
-      "$(yq -r '.status // ""' <<<"$candidate_json")" == 'success' && "$(yq -r '.data.result | length' <<<"$candidate_json")" -gt 0 &&
+    if [[ -n "$fallback_json" && -n "$bundled_json" && -n "$node_json" && -n "$pod_json" && -n "$inventory" &&
+      "$(yq -r '.status // ""' <<<"$fallback_json")" == 'success' && "$(yq -r '.data.result | length' <<<"$fallback_json")" -gt 0 &&
+      "$(yq -r '.status // ""' <<<"$bundled_json")" == 'success' && "$(yq -r '.data.result | length' <<<"$bundled_json")" -gt 0 &&
       "$(yq -r '.status // ""' <<<"$node_json")" == 'success' && "$(yq -r '.data.result | length' <<<"$node_json")" -gt 0 &&
       "$(yq -r '.status // ""' <<<"$pod_json")" == 'success' && "$(yq -r '.data.result | length' <<<"$pod_json")" -gt 0 ]] &&
-      comparison="$(flux_exporter_compare "$dedicated_json" "$candidate_json" "$inventory" 2>&1)"; then
+      comparison="$(flux_exporter_compare "$fallback_json" "$bundled_json" "$inventory" 2>&1)"; then
       consecutive_matches=$((consecutive_matches + 1))
       write_summary "attempt-${attempt}: parity-match-${consecutive_matches}-of-2"
       [[ "$consecutive_matches" -ge 2 ]] && {
-        write_summary 'Flux exporter parity acceptance passed: two consecutive API-inventory matches; dedicated and bundled sources are healthy and bundled standard metrics are present.'
+        write_summary 'Flux exporter parity acceptance passed: two consecutive API-inventory matches; fallback and bundled canonical sources are healthy and bundled standard metrics are present.'
         exit 0
       }
     else

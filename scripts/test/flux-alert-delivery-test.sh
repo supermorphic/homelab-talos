@@ -90,6 +90,8 @@ rg -Fq 'ntfy is not the only loaded Alertmanager webhook' "$scenario"
 rg -Fq 'notification_total_series_query=' "$scenario"
 rg -Fq 'notification_failed_series_query=' "$scenario"
 rg -Fq 'notification metric series are absent' "$scenario"
+rg -Fq 'production_metric_selector="$(flux_alerts_metric_selector)"' "$scenario"
+rg -Fq '${production_metric_selector%?},customresource_kind=' "$scenario"
 rg -q 'delete kustomization "\$test_name"' "$scenario"
 rg -q 'created=false' "$scenario"
 

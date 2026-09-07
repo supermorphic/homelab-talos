@@ -5,14 +5,15 @@
 
 # shellcheck disable=SC2034 # This source interface deliberately initializes caller-owned variables.
 flux_alerts_source() {
-  # Production remains on the dedicated exporter during shadow collection. Do not
-  # infer these identities from target health or chart-generated name fragments.
-  flux_alerts_service='flux-kube-state-metrics'
-  flux_alerts_deployment='flux-kube-state-metrics'
-  flux_alerts_serviceaccount='flux-kube-state-metrics'
-  flux_alerts_release='flux-kube-state-metrics'
-  flux_alerts_values='kubernetes/apps/monitoring/flux-kube-state-metrics/app/values.yaml'
-  flux_alerts_values_root='.'
+  # Production selects the verified bundled KPS resources. Do not infer these
+  # identities from target health or chart-generated name fragments.
+  flux_alerts_service='kube-prometheus-stack-kube-state-metrics'
+  flux_alerts_deployment='kube-prometheus-stack-kube-state-metrics'
+  flux_alerts_serviceaccount='kube-prometheus-stack-kube-state-metrics'
+  flux_alerts_release='kube-prometheus-stack'
+  flux_alerts_workload_instance='kube-prometheus-stack'
+  flux_alerts_values='kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml'
+  flux_alerts_values_root='."kube-state-metrics"'
 }
 
 flux_alerts_metric_selector() {
@@ -131,6 +132,26 @@ flux_alerts_rule_rows() {
       (.lastError // "")
     ] |
     @tsv
+  '
+}
+
+flux_alerts_rules_select_production_source() {
+  flux_alerts_source
+  SERVICE_NAME="$flux_alerts_service" yq -r '
+    [
+      .data.groups[]?.rules[]? |
+      select(
+        .name == "FluxReconciliationFailure" or
+        .name == "FluxResourceMetricsMissing"
+      ) |
+      (.query // "") |
+      (
+        contains("gotk_resource_info") and
+        contains("service=\\\"" + strenv(SERVICE_NAME) + "\\\"") and
+        contains("namespace=\\\"monitoring\\\"")
+      )
+    ] |
+    (length == 2 and all)
   '
 }
 

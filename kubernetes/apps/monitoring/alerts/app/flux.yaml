@@ -1,6 +1,6 @@
 ---
 # Flux reconciliation alerting. Readiness comes from gotk_resource_info, exported by the
-# dedicated flux-kube-state-metrics instance — Flux v2.9.2 no longer exposes the per-object
+# bundled kube-prometheus-stack kube-state-metrics instance — Flux v2.9.2 no longer exposes the per-object
 # gotk_reconcile_condition controller metric, so it must not be used. Controller/target
 # scrape failure is covered by the active KPS general.rules "TargetDown" alert, so no
 # controller-down rule is defined here. Severity "warning" routes to the ntfy "homelab"
@@ -19,7 +19,7 @@ spec:
         - alert: FluxReconciliationFailure
           expr: >-
             gotk_resource_info{
-              service="flux-kube-state-metrics",
+              service="kube-prometheus-stack-kube-state-metrics",
               namespace="monitoring",
               customresource_kind=~"Kustomization|HelmRelease|GitRepository|OCIRepository|HelmRepository",
               ready!="True",
@@ -41,11 +41,11 @@ spec:
               excluded.
         - alert: FluxResourceMetricsMissing
           expr: >-
-            absent(gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="Kustomization"})
-            or absent(gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="HelmRelease"})
-            or absent(gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="GitRepository"})
-            or absent(gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="OCIRepository"})
-            or absent(gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring",customresource_kind="HelmRepository"})
+            absent(gotk_resource_info{service="kube-prometheus-stack-kube-state-metrics",namespace="monitoring",customresource_kind="Kustomization"})
+            or absent(gotk_resource_info{service="kube-prometheus-stack-kube-state-metrics",namespace="monitoring",customresource_kind="HelmRelease"})
+            or absent(gotk_resource_info{service="kube-prometheus-stack-kube-state-metrics",namespace="monitoring",customresource_kind="GitRepository"})
+            or absent(gotk_resource_info{service="kube-prometheus-stack-kube-state-metrics",namespace="monitoring",customresource_kind="OCIRepository"})
+            or absent(gotk_resource_info{service="kube-prometheus-stack-kube-state-metrics",namespace="monitoring",customresource_kind="HelmRepository"})
           for: 15m
           labels:
             severity: warning
@@ -55,6 +55,6 @@ spec:
             description: >-
               gotk_resource_info has contained no {{ $labels.customresource_kind }} series for
               more than 15 minutes, so reconciliation failures for that resource kind are
-              undetectable. Check the flux-kube-state-metrics Deployment, its ServiceMonitor,
+              undetectable. Check the kube-prometheus-stack-kube-state-metrics Deployment, its ServiceMonitor,
               custom-resource configuration, and its RBAC (CRD discovery plus list/watch on
               the Flux APIs).

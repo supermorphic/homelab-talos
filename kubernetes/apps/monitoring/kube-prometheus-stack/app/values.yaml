@@ -259,16 +259,6 @@ kube-state-metrics:
       - apiGroups: ["source.toolkit.fluxcd.io"]
         resources: ["gitrepositories", "ocirepositories", "helmrepositories"]
         verbs: ["list", "watch"]
-  prometheus:
-    monitor:
-      http:
-        metricRelabelings:
-          - action: replace
-            sourceLabels: [__name__]
-            regex: gotk_resource_info
-            targetLabel: __name__
-            replacement: gotk_candidate_resource_info
-
 prometheus-node-exporter:
   resources:
     requests:

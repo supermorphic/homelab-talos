@@ -13,6 +13,20 @@ validator=(scripts/validate/monitoring.sh flux-exporter)
 
 monitoring_fixture_prepare "$repo_root" "$template" "$tree"
 
+[[ "$(yq -r '."kube-state-metrics".prometheus.monitor.http.metricRelabelings | length' \
+  "$tree/kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml")" == '0' ]] || {
+  echo 'bundled production metrics must retain the canonical gotk_resource_info name.' >&2
+  exit 1
+}
+for rule in FluxReconciliationFailure FluxResourceMetricsMissing; do
+  yq -r ".spec.groups[].rules[] | select(.alert == \"$rule\") | .expr" \
+    "$tree/kubernetes/apps/monitoring/alerts/app/flux.yaml" |
+    rg -Fq 'service="kube-prometheus-stack-kube-state-metrics"' || {
+      echo "$rule must select the bundled production source." >&2
+      exit 1
+    }
+done
+
 reset_tree() {
   rm -rf -- "$tree"
   cp -R "$template/." "$tree"
@@ -63,12 +77,8 @@ yq -i '."kube-state-metrics".collectors = []' "$tree/kubernetes/apps/monitoring/
 expect_rejected 'disabled bundled standard collectors' 'standard collectors must remain enabled'
 
 reset_tree
-yq -i 'del(."kube-state-metrics".prometheus.monitor.http.metricRelabelings)' "$tree/kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml"
-expect_rejected 'missing candidate metric rename' 'must rename only gotk_resource_info'
-
-reset_tree
-yq -i '."kube-state-metrics".prometheus.monitor.http.metricRelabelings[0].regex = "gotk_.*"' "$tree/kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml"
-expect_rejected 'overly broad candidate metric rename' 'must rename only gotk_resource_info'
+yq -i '."kube-state-metrics".prometheus.monitor.http.metricRelabelings = [{"action":"replace", "sourceLabels":["__name__"], "regex":"gotk_resource_info", "targetLabel":"__name__", "replacement":"gotk_candidate_resource_info"}]' "$tree/kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml"
+expect_rejected 'candidate metric rename remains configured' 'must not rename gotk_resource_info'
 
 reset_tree
 yq -i '.grafana.deploymentStrategy.type = "RollingUpdate"' "$tree/kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml"

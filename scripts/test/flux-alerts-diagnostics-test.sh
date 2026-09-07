@@ -19,14 +19,14 @@ assert_eq() {
 }
 
 flux_alerts_source
-assert_eq flux-kube-state-metrics "$flux_alerts_service" 'production service identity'
-assert_eq flux-kube-state-metrics "$flux_alerts_deployment" 'production deployment identity'
-assert_eq flux-kube-state-metrics "$flux_alerts_serviceaccount" 'production ServiceAccount identity'
-assert_eq flux-kube-state-metrics "$flux_alerts_release" 'production release identity'
-assert_eq kubernetes/apps/monitoring/flux-kube-state-metrics/app/values.yaml \
+assert_eq kube-prometheus-stack-kube-state-metrics "$flux_alerts_service" 'production service identity'
+assert_eq kube-prometheus-stack-kube-state-metrics "$flux_alerts_deployment" 'production deployment identity'
+assert_eq kube-prometheus-stack-kube-state-metrics "$flux_alerts_serviceaccount" 'production ServiceAccount identity'
+assert_eq kube-prometheus-stack "$flux_alerts_release" 'production release identity'
+assert_eq kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml \
   "$flux_alerts_values" 'production values identity'
-assert_eq . "$flux_alerts_values_root" 'production values root'
-assert_eq 'gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring"}' \
+assert_eq '."kube-state-metrics"' "$flux_alerts_values_root" 'production values root'
+assert_eq 'gotk_resource_info{service="kube-prometheus-stack-kube-state-metrics",namespace="monitoring"}' \
   "$(flux_alerts_metric_selector)" 'production metric selector'
 assert_eq $'helm.toolkit.fluxcd.io\tv2\tHelmRelease\nkustomize.toolkit.fluxcd.io\tv1\tKustomization\nsource.toolkit.fluxcd.io\tv1\tGitRepository\nsource.toolkit.fluxcd.io\tv1\tHelmRepository\nsource.toolkit.fluxcd.io\tv1\tOCIRepository' \
   "$(flux_alerts_configured_gvks "$flux_alerts_values" "$flux_alerts_values_root" | sort)" \
@@ -40,12 +40,12 @@ targets_json='{
   "data": {
     "activeTargets": [
       {
-        "scrapePool": "serviceMonitor/monitoring/flux-kube-state-metrics/0",
-        "health": "up",
-        "lastError": "",
+        "scrapePool": "serviceMonitor/monitoring/kube-prometheus-stack-kube-state-metrics/0",
+        "health": "down",
+        "lastError": "bundled target failed",
         "discoveredLabels": {
           "__meta_kubernetes_namespace": "monitoring",
-          "__meta_kubernetes_service_name": "flux-kube-state-metrics"
+          "__meta_kubernetes_service_name": "kube-prometheus-stack-kube-state-metrics"
         }
       },
       {
@@ -77,12 +77,12 @@ targets_json='{
     ]
   }
 }'
-assert_eq 1 "$(flux_alerts_target_count flux-kube-state-metrics monitoring <<<"$targets_json")" \
+assert_eq 1 "$(flux_alerts_target_count "$flux_alerts_service" monitoring <<<"$targets_json")" \
   'target count'
-assert_eq up "$(flux_alerts_target_healths flux-kube-state-metrics monitoring <<<"$targets_json")" \
-  'target health'
-assert_eq '' "$(flux_alerts_target_errors flux-kube-state-metrics monitoring <<<"$targets_json")" \
-  'target errors'
+assert_eq down "$(flux_alerts_target_healths "$flux_alerts_service" monitoring <<<"$targets_json")" \
+  'bundled target health ignores healthy fallback'
+assert_eq 'bundled target failed' "$(flux_alerts_target_errors "$flux_alerts_service" monitoring <<<"$targets_json")" \
+  'bundled target errors ignore healthy fallback'
 
 metric_json='{
   "status": "success",
@@ -142,6 +142,16 @@ alertmanagers_json='{
 assert_eq 1 \
   "$(flux_alerts_active_alertmanager_count <<<"$alertmanagers_json")" \
   'active Alertmanager count'
+
+fallback_rules_json='{
+  "data": {"groups": [{"rules": [
+    {"name": "FluxReconciliationFailure", "query": "gotk_resource_info{service=\\\"flux-kube-state-metrics\\\",namespace=\\\"monitoring\\\"}"},
+    {"name": "FluxResourceMetricsMissing", "query": "absent(gotk_resource_info{service=\\\"flux-kube-state-metrics\\\",namespace=\\\"monitoring\\\"})"}
+  ]}]}
+}'
+assert_eq false "$(flux_alerts_rules_select_production_source <<<"$fallback_rules_json")" \
+  'fallback rules cannot satisfy bundled production source validation'
+rg -Fq 'get helmrelease "$exporter_release"' scripts/diagnose/flux-alerts.sh
 
 stage_labels=()
 stage_results=()
