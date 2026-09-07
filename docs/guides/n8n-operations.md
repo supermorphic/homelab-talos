@@ -585,7 +585,9 @@ queue. An ntfy outage can lose notifications. Keep existing platform monitoring 
    including the dedicated write-only identity and `Platform Failure ntfy` credential.
 2. Import the secret-free
    [handler template](../../kubernetes/apps/automation/n8n/app/workflows/platform-workflow-failure.json)
-   into the private n8n editor. Check for an existing workflow with the exact name first;
+   into the private n8n editor, or have the connected n8n MCP tools prepare it using
+   [the handoff below](#mcp-preparation-and-credential-handoff).
+   Check for an existing workflow with the exact name first;
    update that workflow in place on later changes so consumers retain its ID. Stop on
    duplicate names. Flux does not import or reconcile workflows.
 3. Before binding a credential, require the HTTP Request node to use exactly **POST**
@@ -606,6 +608,73 @@ loads the published workflow version and rejects a missing active version. Gener
 says publication is unnecessary. Follow the pinned implementation and prove it with an
 automatic failure on this installation; recheck save/publish behavior after upgrades.
 Manual editor executions do not prove Error Trigger delivery.
+
+### MCP preparation and credential handoff
+
+Use the connected n8n MCP tools for supported workflow creation, inspection, binding,
+publication, and execution-history checks. The operator fills secret values in n8n's
+credential editor from the password manager. Do not put tokens in chat, workflow
+parameters, Git, or acceptance notes. The publisher credential still comes from
+`ntfy-consumer-sync n8n`; do not manually replace its token as part of fixture setup.
+
+Before asking the operator to enter values, prepare the workflows from the repository
+templates in the same trusted project as the shared handler. Check for existing names
+and record the exact IDs locally; stop on duplicates or uncertain ownership. Keep the
+temporary workflows unpublished and disable their credential-dependent nodes until
+their bindings are verified. Apply the template's workflow settings explicitly and
+read them back; creating the graph alone does not prove retention or caller settings.
+
+| Workflow | Node awaiting a credential | Required credential title |
+| --- | --- | --- |
+| `Platform Failure Fixture One` | `Synthetic Failure Webhook` | `Platform Failure Test Header` |
+| `Platform Failure Fixture Two` | `Synthetic Failure Webhook` | The same `Platform Failure Test Header` credential |
+| `Platform Failure Delivery Test Handler` (temporary copy of the shared handler) | `Publish Failure Notification` | `Platform Failure Invalid ntfy` |
+
+Select the published shared handler as both fixtures' Error Workflow. Leave the test
+handler's own Error Workflow unset. Unlike the shared handler, the temporary handler
+copy saves failed execution data for the synthetic delivery-failure check.
+
+Inspect the available MCP capabilities before handing off. A named SDK credential
+placeholder is not proof that a stored credential was created. The current connection
+can list and bind existing credentials, but has no credential-creation tool. Verify that
+the prepared drafts have no unintended credential bindings before handoff. If a future
+connection can create empty credentials, create those too and verify their metadata;
+otherwise the operator creates them from the node's credential selector as follows:
+
+1. Open `Platform Failure Fixture One`, then `Synthetic Failure Webhook`. Keep
+   **Authentication** set to **Header Auth**. In its credential selector, create a new
+   Header Auth credential, or open the prepared credential if one exists. The title at
+   the top of the credential editor is separate from the header **Name** field.
+2. Fill the fields below and save. Generate the test token once in the password manager:
+   use at least 32 characters from `A-Z`, `a-z`, `0-9`, `_`, and `-`. This is a temporary
+   webhook token, not the ntfy publisher token or an existing production secret.
+3. Open `Platform Failure Delivery Test Handler`, then `Publish Failure Notification`.
+   Keep **Authentication** set to **Generic Credential Type** and **Generic Auth Type**
+   set to **Header Auth**. Create or open its separate credential and fill the second row.
+   The invalid bearer value is deliberately synthetic; it needs no password-manager secret.
+
+| Credential title | Connection → Name | Connection → Value |
+| --- | --- | --- |
+| `Platform Failure Test Header` | `X-Platform-Failure-Test` | Paste the temporary token from the password manager |
+| `Platform Failure Invalid ntfy` | `Authorization` | Enter exactly `Bearer synthetic-invalid` |
+
+Report only that the credentials are saved. The agent then resolves exactly one of each
+title with type `httpHeaderAuth`, binds the same test credential to both fixture webhooks,
+and binds only the invalid credential to the temporary handler copy. It reads back the
+graph, settings, and credential IDs before enabling the prepared nodes. Publish each
+workflow only when its step in synthetic acceptance requires it. Keep production
+consumers unchanged until acceptance passes.
+
+For the remaining handoffs, the operator sends the authenticated private requests below
+when the agent has checked each phase's bindings, and inspects `homelab` using the
+subscriber account. The agent checks matching execution metadata and the bounded fields
+needed for acceptance; do not copy raw webhook headers into chat or artifacts. It
+performs supported unpublication and cleanup operations. The current MCP connection
+supports workflow archiving, but has no deletion tool for workflows, credentials, or
+executions and no ntfy inbox reader. The operator completes those deletions in the UI
+for the recorded test objects only. Archiving alone does not complete the cleanup step.
+Report each remaining action with its workflow/node or credential title and the guide
+step, so setup and acceptance do not depend on chat-only instructions.
 
 ### Consumer adoption and notification contract
 
@@ -656,10 +725,15 @@ cannot read messages.
    `platform-failure-fixture-two`. Bind both to the same handler ID and a temporary
    private Header Auth
    credential whose header **Name** is `X-Platform-Failure-Test` and whose **Value** is
-   a fresh temporary token. Use unique private webhook paths if a previous test occupies
-   the fixture paths. Do not add public routes. Publish both fixtures.
+   a fresh temporary token, using the
+   [credential handoff](#mcp-preparation-and-credential-handoff). Reuse the prepared
+   drafts when MCP has already created them. Use unique private webhook paths if a
+   previous test occupies the fixture paths. Do not add public routes. After verifying
+   both bindings, enable their webhook nodes if preparation disabled them, and publish
+   both fixtures.
 3. Send one authenticated POST to each fixture's **production webhook path through the
-   private editor origin**. The Stop And Error node must fail each automatic execution.
+   private editor origin**, using [the request block below](#send-one-private-fixture-request)
+   once for each fixture. The Stop And Error node must fail each automatic execution.
    Do not use the editor's Execute Workflow button or `/webhook-test/`. Record the two
    failed execution IDs and time of each request from n8n. These fixtures acknowledge
    receipt before failing, so an HTTP success response does not prove execution success.
@@ -672,15 +746,25 @@ cannot read messages.
    with no Error Workflow and the same retry, redirect, and timeout settings. For this
    synthetic-only copy, temporarily save failed execution data to obtain test evidence;
    never make this retention change on the shared handler or bind a production workflow
-   to the copy. Bind an invalid synthetic bearer credential, then bind one fixture to
-   that copy. Save/publish the changed test workflows and send one automatic request. Require the delivery attempt to end with authentication
+   to the copy. Use the prepared `Platform Failure Delivery Test Handler` when present.
+   Bind `Platform Failure Invalid ntfy`, verify the binding, and enable its HTTP node
+   if preparation disabled it. Publish the copy, then bind Fixture One to that copy.
+   Save/publish the changed fixture and send one automatic request with the same private
+   request block. Require the delivery attempt to end with authentication
    failure, zero ntfy messages for that execution, and no recursive handler executions
    during a 60-second observation window. Inspect the copy's retained synthetic failure
    and execution list. The shared handler has no retained execution records by design.
-   Restore and publish the fixture's binding to the shared handler and prove delivery again.
-6. In a `finally`-style cleanup, unpublish and remove only the two recorded fixture IDs
-   and the temporary handler copy and its retained synthetic execution, then remove only
-   their temporary credentials. Verify the temporary workflows are inactive/absent and their private production webhooks no
+   Restore and publish the fixture's binding to the shared handler and prove delivery
+   again with one more private request. Record both additional fixture execution IDs
+   and the temporary handler's failed execution ID, including any extra attempts needed
+   to diagnose a failed check.
+6. In a `finally`-style cleanup, unpublish the two recorded fixture IDs and the temporary
+   handler copy. Delete all recorded fixture and temporary-handler executions, then
+   remove those three test workflows and only their temporary credentials. The fixture
+   records can include the temporary authentication header; include all four fixture
+   requests from a successful acceptance session and any extra attempts. If deleting a
+   workflow also removes its executions, verify their absence. Verify the temporary
+   workflows are absent and their private production webhooks no
    longer execute. Keep the shared handler and its publisher credential. Cleanup failure
    means acceptance is incomplete even if notifications arrived.
 
@@ -689,10 +773,58 @@ token. For upgrades, also confirm the handler executes the intended saved/publis
 and caller permissions still permit both fixtures. Do not broaden permissions as a test
 workaround.
 
-**Activation status:** source implementation is prepared for operator activation. Live
-shared-handler delivery acceptance is pending until the dedicated identity is generated,
-deployed, synchronized, and the synthetic procedure passes. Do not treat offline CI as
-proof of ntfy or phone delivery.
+### Send one private fixture request
+
+Run this attended block only when the current acceptance step requires a request. For
+positive acceptance, run it once with each fixture path. For the bounded-failure check
+and the recovery check, run it once with Fixture One after its Error Workflow binding
+has been checked and published for that phase. If setup required a different private
+path, substitute that recorded path in the allowlist before running.
+
+The block prompts without echo for the temporary token. It sends the token through
+curl's standard input, does not follow redirects, and prints only the HTTP status. Use
+the private editor origin even if n8n displays a production URL on the public hooks
+origin; these fixture paths are intentionally absent from the public allowlist.
+
+```bash
+(
+  printf '%s' 'Fixture path (platform-failure-fixture-one or platform-failure-fixture-two): ' >&2
+  IFS= read -r fixture_path
+  case "$fixture_path" in
+    platform-failure-fixture-one|platform-failure-fixture-two) ;;
+    *) echo 'Unrecognized fixture path.' >&2; exit 1 ;;
+  esac
+  printf '%s' 'Temporary failure-test token from password manager: ' >&2
+  IFS= read -r -s failure_test_token
+  printf '\n' >&2
+  [[ "$failure_test_token" =~ ^[A-Za-z0-9_-]{32,}$ ]] || {
+    echo 'The test token must contain at least 32 base64url-safe characters.' >&2
+    exit 1
+  }
+  {
+    printf '%s\n' 'silent' 'show-error' 'fail' 'connect-timeout = 10' \
+      'max-time = 30' 'request = "POST"' 'header = "Content-Type: application/json"'
+    printf 'header = "X-Platform-Failure-Test: %s"\n' "$failure_test_token"
+    printf '%s\n' 'data = "{}"'
+    printf 'url = "https://n8n.lab.supermorphic.com/webhook/%s"\n' "$fixture_path"
+  } | curl --disable --config - --output /dev/null --write-out 'HTTP %{http_code}\n'
+)
+```
+
+An HTTP success is only an acknowledgement. Give the agent the fixture label, request
+time, and HTTP status to match the failed automatic execution. Inspect the corresponding
+ntfy message and report the content/link checks from acceptance step 4; keep tokens and
+instance IDs out of public artifacts. After cleanup, repeat the request for each recorded
+path and require `404` plus no new fixture execution. A response or execution indicating
+that a fixture still runs means cleanup is incomplete. After these checks, remove the
+temporary test token from the password manager.
+
+**Activation status (2026-09-07):** the merged identity and workload changes are deployed;
+live n8n, ntfy, and Alertmanager adapter verification passed. The operator reported
+credential synchronization complete, and MCP confirmed the publisher credential and
+published shared handler. The temporary test workflows are prepared but unpublished.
+Automatic delivery, bounded-failure behavior, and test cleanup remain pending. Do not
+treat handler publication or offline CI as proof of ntfy or phone delivery.
 
 ## Day-2 operation and controlled assurance
 
