@@ -68,6 +68,7 @@ CI_HARNESS_GROUPS = (
 )
 STANDALONE_SUITES = {
     "test.automation-data-provisioning",
+    "test.nocodb-local-integration",
     "test.resilience.node-abrupt-loss",
 }
 METADATA_FIELDS = (

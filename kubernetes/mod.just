@@ -45,6 +45,11 @@ nocodb-source-rotate domain access_kind: require-bash
 nocodb-access-test: require-bash
     @scripts/test/run-catalog-suite.sh test.nocodb-access -- scripts/test/scenarios/nocodb-access.sh {{quote(kubeconfig)}}
 
+# Run the registered disposable Podman integration. It binds loopback ports only and
+# never uses cluster credentials or production endpoints.
+nocodb-local-integration-test: require-bash
+    @scripts/test/run-catalog-suite.sh test.nocodb-local-integration -- scripts/test/scenarios/nocodb-local-integration.sh
+
 # Restore one complete NocoDB logical bundle into isolated PostgreSQL with fresh
 # application scratch. Guard: NOCODB_RESTORE_CONFIRM='restore:nocodb:metadata'.
 nocodb-restore-drill: require-bash

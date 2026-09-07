@@ -95,6 +95,7 @@ scripts/test/nocodb-access-command-test.sh
 scripts/test/nocodb-restore-command-test.sh
 scripts/test/nocodb-restore-request-test.sh
 scripts/test/nocodb-restore-scenario-test.sh
+scripts/test/nocodb-local-integration-test.sh
 
 just --dry-run kube nocodb-verify 2>&1 | rg -Fq \
   'run-catalog-suite.sh verification.nocodb -- scripts/verify/nocodb.sh'
@@ -102,5 +103,7 @@ just --dry-run kube nocodb-access-test 2>&1 | rg -Fq \
   'run-catalog-suite.sh test.nocodb-access -- scripts/test/scenarios/nocodb-access.sh'
 just --dry-run kube nocodb-restore-drill 2>&1 | rg -Fq \
   'run-catalog-suite.sh test.nocodb-restore-drill -- scripts/test/scenarios/nocodb-restore-drill.sh'
+just --dry-run kube nocodb-local-integration-test 2>&1 | rg -Fq \
+  'run-catalog-suite.sh test.nocodb-local-integration -- scripts/test/scenarios/nocodb-local-integration.sh'
 
 echo 'NocoDB source, pinned chart render, manifest, workflow, lifecycle, bootstrap, monitoring, verification, access, and restore contracts passed validation.'
