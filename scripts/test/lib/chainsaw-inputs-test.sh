@@ -262,8 +262,8 @@ if rg -q 'chainsaw-test\.ya?ml' "$yq_log"; then
 	echo 'Chainsaw test documents were reparsed with yq.' >&2
 	exit 1
 fi
-[[ "$(wc -l <"$shell_case_log" | tr -d ' ')" -eq 63 ]]
-rg -Fx 'Harness shell cases passed: cases=63 parallel_jobs=4.' "$passing_output" || {
+[[ "$(wc -l <"$shell_case_log" | tr -d ' ')" -eq 64 ]]
+rg -Fx 'Harness shell cases passed: cases=64 parallel_jobs=4.' "$passing_output" || {
 	cat "$passing_output" >&2
 	exit 1
 }

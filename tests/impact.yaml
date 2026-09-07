@@ -147,6 +147,7 @@ conditional_paths:
     - scripts/test/lib/automation-data-*
     - scripts/test/scenarios/n8n-*
     - scripts/test/scenarios/automation-data-*
+    - tests/fixtures/n8n-failure-notifications/**
 core_paths:
   - .gitignore
   - .sops.yaml
