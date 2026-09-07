@@ -1,9 +1,10 @@
 # flux-kube-state-metrics
 
 A dedicated, single-purpose [kube-state-metrics](https://github.com/kubernetes/kube-state-metrics)
-instance that exports **only** Flux custom-resource state as `gotk_resource_info`. It is the
-metrics source for the `FluxReconciliationFailure` / `FluxResourceMetricsMissing` alerts in
-`../alerts/app/flux.yaml`.
+instance that exports **only** Flux custom-resource state as `gotk_resource_info`. It is
+retained for rollback and parity comparison. The `FluxReconciliationFailure` and
+`FluxResourceMetricsMissing` alerts in `../alerts/app/flux.yaml` select the bundled
+`kube-prometheus-stack-kube-state-metrics` source.
 
 ## Why a separate exporter instead of the bundled KSM?
 
@@ -21,16 +22,15 @@ cached status; it does not establish an admission-webhook failure. The original 
 cause remains unproven. See [specification 005](../../../../docs/specs/005-flux-reconciliation-alerting.md)
 for the evidence and staged validation boundary.
 
-This instance remains its own HelmRelease and is the explicit production source
-for Flux alerts. It runs CRS-only (`collectors: []` +
+This instance remains its own HelmRelease. It runs CRS-only (`collectors: []` +
 `--custom-resource-state-only=true`) so it emits no `kube_*` metrics and does
 not duplicate the bundled KSM's standard metrics.
 
-The bundled KPS exporter now shadow-collects the same five Flux kinds. Its
-ServiceMonitor renames only `gotk_resource_info` to
-`gotk_candidate_resource_info`, so the candidate cannot match production
-rules. It retains standard collectors and receives only the CRD-discovery and
-Flux list/watch additions required for custom-resource collection.
+The bundled KPS exporter collects the same five Flux kinds as `gotk_resource_info`,
+with no shadow metric rename. Production rules and checks select its exact Service
+and namespace so the fallback cannot hide missing bundled metrics. It retains standard
+collectors and receives only the CRD-discovery and Flux list/watch additions required
+for custom-resource collection.
 
 ## Scope
 
@@ -46,7 +46,7 @@ Flux list/watch additions required for custom-resource collection.
 ## Runtime verification and diagnostics
 
 `mise exec -- just kube monitoring-verify` is the fail-fast acceptance gate. It requires
-Prometheus to discover an up exporter target, ingest `gotk_resource_info` for every
+Prometheus to discover an up bundled exporter target, ingest its `gotk_resource_info` for every
 configured Flux kind, load both Flux alert rules without evaluation errors, and maintain an
 active Alertmanager connection with the expected ntfy route. It does not send a notification.
 The PrometheusRule treats every unsuspended resource without `Ready=True` as failed and
@@ -61,8 +61,10 @@ sanitized canonical evidence under `.test-results/`.
 A synthetic notification is intentionally outside both commands. It must remain a separate
 explicit, confirmation-guarded E2E test because it delivers an external ntfy message.
 
-## Future consolidation
+## Rollback window
 
-The next stage validates candidate parity and alert behavior while production
-continues to use this exporter. Only a later accepted cutover may select the
-candidate metric and remove this application (`ks.yaml` entry + directory).
+`mise exec -- just kube flux-exporter-parity-verify` compares canonical metrics from
+both explicit sources against the Flux API inventory. Removal of this application
+(`ks.yaml` entry + directory) waits for post-cutover monitoring and firing-and-resolved
+acceptance. Restore the dedicated source selectors and bundled shadow rename through
+Git if cutover acceptance fails.

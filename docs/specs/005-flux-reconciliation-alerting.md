@@ -20,10 +20,11 @@ The existing Flux PodMonitor remains responsible for controller-runtime and scra
 health. The kube-prometheus-stack general target-down rules cover loss of those scrape
 targets.
 
-Per-resource readiness comes from a dedicated `flux-kube-state-metrics` Helm release in
-the `monitoring` namespace. It disables all standard collectors and runs in
-custom-resource-state-only mode, so it emits `gotk_resource_info` without duplicating
-the bundled exporter's `kube_*` metrics. It collects these Flux kinds:
+Per-resource readiness uses `gotk_resource_info` from the kube-state-metrics exporter
+bundled with kube-prometheus-stack in `monitoring`. Production consumers select that
+source explicitly. The dedicated `flux-kube-state-metrics` release remains available
+for rollback and comparison; it disables standard collectors, so it does not duplicate
+the bundled exporter's `kube_*` metrics. Both collect these Flux kinds:
 
 - Kustomization;
 - HelmRelease;
@@ -42,10 +43,13 @@ values changes. Reported upgrade failures on July 22, 2026 motivated this separa
 The September 5 investigation below revises the original assumption that all values
 changes fail; it does not yet establish a validated exporter migration.
 
-The exporter has only `list` and `watch` access to the five Flux resource kinds and to
-CustomResourceDefinitions needed for collector discovery. It cannot read Secrets or
+The dedicated exporter has only `list` and `watch` access to the five Flux resource kinds
+and to CustomResourceDefinitions needed for collector discovery. It cannot read Secrets or
 mutate cluster state. The chart's broad RBAC generation is disabled and the repository
 owns the focused ClusterRole and binding.
+
+Bundled collection adds the same Flux and CRD-discovery permissions to the shared
+exporter's existing role. Its standard Kubernetes collection permissions remain in place.
 
 This last permission came from a useful failure. The exporter target was healthy, its
 configuration was loaded, and its service account could list and watch each configured
@@ -116,9 +120,9 @@ deduplication, inhibition, repeat, and resolution semantics.
 
 ## Consequences
 
-Flux object failures are visible independently of changes to the shared monitoring
-release. The extra exporter consumes a small amount of CPU and memory and introduces
-one additional component to operate, but it has a narrow read-only authority surface
+The original dedicated design made Flux object failures visible independently of changes
+to the shared monitoring release. The retained exporter consumes a small amount of CPU
+and memory and introduces one additional component to operate, but it has a narrow read-only authority surface
 and produces no duplicate standard Kubernetes metrics.
 
 ## September 2026 upgrade debrief
@@ -145,12 +149,12 @@ five Flux kinds, both alert rules, and the Alertmanager route. This establishes 
 bounded upgrade prerequisite for consolidation, not exporter migration or external
 firing-and-resolved delivery.
 
-## Proposed exporter consolidation
+## Exporter consolidation
 
-Consolidation is not implemented yet. The intended approach is to compare bundled
-collection with the dedicated exporter before moving production alerts, then remove
-the dedicated exporter only after monitoring and firing-and-resolved acceptance.
-Preserve standard Kubernetes metrics and existing alert semantics; parallel collection
-must neither duplicate alerts nor conceal loss of the selected production source.
-Keep the dedicated exporter available for rollback until cutover is accepted.
-Detailed rollout sequencing and test procedures belong in the implementation plan.
+Shadow collection passed live comparison against the independent Flux API inventory for
+all five kinds. Production consumers now select the bundled source, with standard
+Kubernetes metrics and existing alert semantics preserved. Explicit source selection
+prevents parallel collection from duplicating alerts or concealing loss of production
+metrics. Post-cutover monitoring and firing-and-resolved acceptance remain pending;
+the dedicated exporter stays available until those gates permit removal. Detailed rollout
+sequencing and test procedures belong in the implementation plan.
