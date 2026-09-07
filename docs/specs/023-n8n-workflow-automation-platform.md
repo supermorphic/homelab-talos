@@ -5,7 +5,7 @@
 Deploy an initially empty, self-hosted n8n service for
 [issue 316](https://github.com/supermorphic/homelab-talos/issues/316). The service is a
 general-purpose workflow orchestration platform. Its first planned consumer is a later
-career-operations workflow that receives TheirStack job events, persists career-domain
+career-operations workflow that receives external job events, persists career-domain
 state outside n8n, invokes deterministic and agent-driven processing, and sends
 notifications.
 
@@ -13,7 +13,9 @@ This initiative establishes the platform and its operational foundation. It does
 implement the career workflow, career-specific database schemas, browser automation, or
 an embedded Codex or Santifer runtime.
 
-The target request path is:
+The Platform Canary illustrates the request path. See the
+[public HTTPRoute](../../kubernetes/apps/networking/public-webhook-gateway/route/httproute.yaml)
+for the current allowlist.
 
 ```text
 Internet sender
@@ -74,7 +76,7 @@ invalidate the infrastructure pattern.
 
 ## Non-goals
 
-- The TheirStack `job.new` or `job.closed` workflow.
+- Provider-specific workflows and event contracts.
 - Career-domain tables, scoring, tailoring, artifact generation, or application tracking.
 - Redis, n8n queue mode, worker pools, or separate webhook processors.
 - A reusable cluster database platform, PostgreSQL operator, streaming replica, or
@@ -207,11 +209,15 @@ Gateway accepts explicitly attached routes and does not expose an n8n administra
 path. Its listener accepts routes only from the dedicated public routing namespace, so an
 application namespace cannot attach another backend directly.
 
-The initial HTTPRoute uses an `Exact` path match for `/webhook/platform-canary`. It does
-not expose `/webhook/*`, `/webhook-test/*`, or another prefix. Each later production n8n
-integration, including TheirStack, requires its own exact path to be added through
-Git/Flux. Publishing an n8n workflow alone therefore does not make its webhook Internet
-reachable.
+The initial HTTPRoute uses an `Exact` match for `/webhook/platform-canary`, targeting
+the `automation/n8n:5678` Service through a narrow ReferenceGrant. Later integrations
+add non-overlapping exact paths through Git/Flux, following the
+[integration activation procedure](../guides/n8n-operations.md#add-a-public-webhook-integration).
+The HTTPRoute is the source of truth for the allowlist; this specification retains
+the canary as its example. The source validator, live route verifier, and smoke
+assertions enforce the approved inventory. The route does not expose `/webhook/*`,
+`/webhook-test/*`, or another prefix. Publishing an n8n workflow alone does not make
+its webhook Internet reachable.
 
 Future applications may reuse the same hostname only through separately reviewed,
 non-overlapping exact paths or top-level prefixes. Adding a Service does not make it
@@ -220,9 +226,8 @@ Unmatched paths have no backend route.
 
 TLS and route matching authenticate neither the sender nor the event. Every production
 webhook workflow must enforce an integration-appropriate secret, signature, or token.
-The synthetic canary uses n8n header authentication. The later TheirStack integration
-must use the provider's verified signing or authentication contract once that contract is
-confirmed.
+The synthetic canary uses n8n header authentication. Provider-specific authentication
+and acceptance requirements belong in each integration's owning repository.
 
 The cluster's internal DNS answer for `hooks.lab.supermorphic.com` resolves to the
 dedicated public Envoy LoadBalancer, not the internal Gateway. The always-active public
@@ -272,7 +277,7 @@ policy in `gatus` selects only the run-labeled request Job and permits only DNS 
 run-owned n8n endpoint on TCP/5678. Cleanup must remove and prove absence of both exact
 policies.
 
-Inbound TheirStack webhooks do not themselves require n8n to pull data from TheirStack.
+Inbound webhooks do not themselves require n8n to pull data from the provider.
 Outbound HTTPS remains part of the initial platform because later workflows must call
 APIs and external processing services.
 
@@ -456,8 +461,8 @@ bounds. Prometheus alerts on platform failure patterns; the UI remains the detai
 execution-debugging surface.
 
 Provider retry behavior, event idempotency keys, dead-letter handling, and reconciliation
-are properties of the later TheirStack workflow. The public edge does not invent those
-semantics before the provider contract and career-domain store exist.
+belong to each integration's owning repository. The public edge only routes approved
+paths; it does not define application processing semantics.
 
 ## Capacity
 
@@ -598,7 +603,7 @@ Focused tests and rendered-manifest assertions verify:
   deprecated `WEBHOOK_URL`;
 - a Deployment mounting the n8n `ReadWriteOnce` claim uses `Recreate`;
 - all three claims are Longhorn-backed and carry Flux prune protection;
-- the only initial public route is an `Exact` match for `/webhook/platform-canary`, with
+- the public route has only approved `Exact` matches, with
   no editor, API, metrics, PostgreSQL, test-webhook, prefix, or catch-all route;
 - only the public routing namespace receives the cross-namespace Service grant;
 - network policies implement the approved ingress and egress boundaries;
@@ -630,7 +635,9 @@ Combined read-only and attended live acceptance verifies:
 
 1. Flux reports the public Gateway, PostgreSQL, n8n, and monitoring resources ready.
 2. The n8n UI works through the private hostname and has no public route.
-3. The public hostname serves only the exact `/webhook/platform-canary` path.
+3. The public hostname serves only the HTTPRoute's approved exact paths after their
+   activation checkpoints; all other paths have no public backend route. Each
+   integration completes the acceptance procedure in its owning repository.
 4. An authenticated canary request returns its correlation value and execution ID only
    after a matching successful execution is immediately retrievable from n8n history;
    invalid authentication fails without a successful execution.

@@ -345,6 +345,9 @@ public = expected(
     {"name": "public-webhooks", "sectionName": "https"},
     "Exact", "/webhook/platform-canary",
 )
+public["rules"][0]["matches"].append(
+    route_match({"path": {"type": "Exact", "value": "/webhook/theirstack-jobs"}})
+)
 expected_routes = [private] if mode == "private" else [private, public] if mode == "full" else []
 raise SystemExit(0 if actual == expected_routes else 1)
 PY

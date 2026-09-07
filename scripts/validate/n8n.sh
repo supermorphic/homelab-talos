@@ -898,15 +898,17 @@ mapfile -t internal_dns_endpoint_sources < <(
   "$(yq -r '.spec.rules | length' "$public_route")" == '1' && \
   "$(yq -r '.spec.rules[0] | keys | sort | join(",")' "$public_route")" == \
     'backendRefs,matches' && \
-  "$(yq -r '.spec.rules[0].matches | length' "$public_route")" == '1' && \
+  "$(yq -r '.spec.rules[0].matches | length' "$public_route")" == '2' && \
   "$(yq -r '.spec.rules[0].matches[0] | keys | sort | join(",")' "$public_route")" == \
     'path' && \
   "$(yq -r '.spec.rules[0].matches[0].path | [.type, .value] | join(",")' "$public_route")" == 'Exact,/webhook/platform-canary' && \
+  "$(yq -r '.spec.rules[0].matches[1] | keys | sort | join(",")' "$public_route")" == 'path' && \
+  "$(yq -r '.spec.rules[0].matches[1].path | [.type, .value] | join(",")' "$public_route")" == 'Exact,/webhook/theirstack-jobs' && \
   "$(yq -r '.spec.rules[0].backendRefs | length' "$public_route")" == '1' && \
   "$(yq -r '.spec.rules[0].backendRefs[0] | keys | sort | join(",")' "$public_route")" == \
     'group,kind,name,namespace,port' && \
   "$(yq -r '.spec.rules[0].backendRefs[0] | [.group, .kind, .namespace, .name, .port] | join(",")' "$public_route")" == ',Service,automation,n8n,5678' ]] || {
-  echo 'The public webhook route must be the exact platform-canary path to automation/n8n:5678.' >&2
+  echo 'The public webhook route must contain only the exact platform-canary and theirstack-jobs paths to automation/n8n:5678.' >&2
   exit 1
 }
 [[ "$(yq -r '.annotationFilter' "$external_dns")" == 'external-dns.k8s.io/audience=internal' && \
@@ -1338,7 +1340,7 @@ actual_canary_fields="$(jq -c '
 }
 workflow_path="$(jq -r '.nodes[] | select(.type == "n8n-nodes-base.webhook") | .parameters.path' \
   "$n8n_workflow")"
-expected_public_route_contract='{"metadata":{"name":"n8n-platform-canary","namespace":"networking-public"},"parentRefs":[{"group":"gateway.networking.k8s.io","kind":"Gateway","name":"public-webhooks","namespace":"networking-public","sectionName":"https"}],"rules":[{"backendRefs":[{"group":"","kind":"Service","name":"n8n","namespace":"automation","port":5678}],"matches":[{"path":{"type":"Exact","value":"/webhook/platform-canary"}}]}]}'
+expected_public_route_contract='{"metadata":{"name":"n8n-platform-canary","namespace":"networking-public"},"parentRefs":[{"group":"gateway.networking.k8s.io","kind":"Gateway","name":"public-webhooks","namespace":"networking-public","sectionName":"https"}],"rules":[{"backendRefs":[{"group":"","kind":"Service","name":"n8n","namespace":"automation","port":5678}],"matches":[{"path":{"type":"Exact","value":"/webhook/platform-canary"}},{"path":{"type":"Exact","value":"/webhook/theirstack-jobs"}}]}]}'
 mapfile -t public_route_contracts < <(
   while IFS= read -r -d '' manifest; do
     # shellcheck disable=SC2016 # yq evaluates $route_namespace, not the shell.
@@ -1365,7 +1367,7 @@ mapfile -t public_route_contracts < <(
 )
 [[ "${#public_route_contracts[@]}" == '1' && \
   "${public_route_contracts[0]}" == "$expected_public_route_contract" ]] || {
-  echo 'The public Gateway must have exactly one complete Platform Canary HTTPRoute contract.' >&2
+  echo 'The public Gateway must have exactly one complete HTTPRoute contract for Platform Canary and TheirStack.' >&2
   exit 1
 }
 [[ "$(yq -r '.spec.rules[0].matches[0].path.value' "$public_route")" == \
