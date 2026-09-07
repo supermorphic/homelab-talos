@@ -1738,6 +1738,7 @@ expected_workflows=(
   'nocodb-acceptance-domain.json=workflows/nocodb-acceptance-domain.json'
   'nocodb-source-provisioner.json=workflows/nocodb-source-provisioner.json'
   'platform-canary.json=workflows/platform-canary.json'
+  'platform-workflow-failure.json=workflows/platform-workflow-failure.json'
 )
 [[ "${packaged_workflows[*]}" == "${expected_workflows[*]}" ]] || {
   echo 'The n8n workflow ConfigMap must package the complete exact workflow template set.' >&2
