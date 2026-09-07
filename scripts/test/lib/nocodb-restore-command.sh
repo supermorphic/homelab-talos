@@ -99,6 +99,16 @@ try {
   if (readers.length !== 1 || operators.length !== 1) throw new Error('managed_source_count_failed');
   const reader = readers[0];
   const operator = operators[0];
+  const intrinsicSources = sourceObjects.filter((item) => item?.alias !== 'Read Model' && item?.alias !== 'Operator');
+  if (intrinsicSources.length !== 1) throw new Error('intrinsic_source_count_failed');
+  const intrinsic = intrinsicSources[0];
+  if (typeof intrinsic.id !== 'string' || !/^[A-Za-z0-9_-]+$/.test(intrinsic.id) ||
+      intrinsic.base_id !== base.id || intrinsic.fk_workspace_id !== workspaceId || intrinsic.alias !== null ||
+      intrinsic.type !== 'pg' || intrinsic.fk_integration_id !== null || intrinsic.fk_sql_executor_id !== null ||
+      intrinsic.is_local !== true || intrinsic.is_meta !== false || intrinsic.enabled !== true || intrinsic.deleted !== false ||
+      intrinsic.is_encrypted !== true || intrinsic.is_data_readonly !== false || intrinsic.is_schema_readonly !== false ||
+      intrinsic.config !== null || intrinsic.meta !== null || intrinsic.description !== null || intrinsic.order !== 1 ||
+      !Array.isArray(intrinsic.upgraderQueries)) throw new Error('intrinsic_source_contract_failed');
   const pathOf = (source) => source?.config?.searchPath || source?.config?.search_path;
   if (!reader || JSON.stringify(pathOf(reader)) !== JSON.stringify(['read_model']) || reader.is_data_readonly !== true || reader.is_schema_readonly !== true) throw new Error('reader_source_failed');
   if (!operator || JSON.stringify(pathOf(operator)) !== JSON.stringify(['operator']) || operator.is_data_readonly !== false || operator.is_schema_readonly !== true) throw new Error('operator_source_failed');

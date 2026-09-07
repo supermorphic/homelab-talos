@@ -43,9 +43,21 @@ globalThis.fetch = async (input, options = {}) => {
   ]});
   if (url.pathname === '/api/v2/meta/bases/base-acceptance/sources' && method === 'GET') return json({list:[
     {id:'source-default'},{id:'source-reader'},{id:'source-operator'},
-    ...(fixtureCase === 'duplicate-managed-source' ? [{id:'source-reader-duplicate'}] : [])
+    ...(fixtureCase === 'duplicate-managed-source' ? [{id:'source-reader-duplicate'}] : []),
+    ...(fixtureCase === 'extra-unmanaged-source' ? [{id:'source-extra'}] : [])
   ]});
-  if (url.pathname === '/api/v2/meta/bases/base-acceptance/sources/source-default' && method === 'GET') return json({id:'source-default',alias:'Default',config:{},is_data_readonly:false,is_schema_readonly:false});
+  if (url.pathname === '/api/v2/meta/bases/base-acceptance/sources/source-default' && method === 'GET') return json({
+    id:'source-default',base_id:'base-acceptance',fk_workspace_id:'workspace-1',alias:null,type:'pg',
+    fk_integration_id:null,fk_sql_executor_id:null,is_local:true,
+    is_meta:fixtureCase === 'malformed-intrinsic-source',enabled:true,deleted:false,is_encrypted:true,
+    is_data_readonly:false,is_schema_readonly:false,config:null,meta:null,description:null,order:1,upgraderQueries:[]
+  });
+  if (url.pathname === '/api/v2/meta/bases/base-acceptance/sources/source-extra' && method === 'GET') return json({
+    id:'source-extra',base_id:'base-acceptance',fk_workspace_id:'workspace-1',alias:null,type:'pg',
+    fk_integration_id:null,fk_sql_executor_id:null,is_local:true,is_meta:false,enabled:true,deleted:false,
+    is_encrypted:true,is_data_readonly:false,is_schema_readonly:false,config:null,meta:null,
+    description:null,order:2,upgraderQueries:[]
+  });
   if (url.pathname === '/api/v2/meta/bases/base-acceptance/sources/source-reader-duplicate' && method === 'GET') return json({id:'source-reader-duplicate',fk_integration_id:'integration-reader',alias:'Read Model',config:{searchPath:['read_model']},is_data_readonly:true,is_schema_readonly:true});
   if (url.pathname === '/api/v2/meta/bases/base-acceptance/sources/source-reader' && method === 'GET') return json({id:'source-reader',fk_integration_id:'integration-reader',alias:'Read Model',config:{searchPath:[fixtureCase === 'wrong-search-path' ? 'operator' : 'read_model']},is_data_readonly:true,is_schema_readonly:true});
   if (url.pathname === '/api/v2/meta/bases/base-acceptance/sources/source-operator' && method === 'GET') return json({id:'source-operator',fk_integration_id:fixtureCase === 'wrong-integration' ? 'replacement' : 'integration-operator',alias:'Operator',config:{searchPath:['operator']},is_data_readonly:false,is_schema_readonly:true});
@@ -136,6 +148,11 @@ for rejected_case in missing-canary-fact duplicate-canary-fact wrong-artifact-ur
 	  wrong-integration-type wrong-search-path wrong-table-source duplicate-managed-source; do
 	IFS=$'\t' read -r case_name status output events < <(run_case "$rejected_case")
 	[[ "$status" -ne 0 ]] || record_failure "$case_name producer-contract violation was accepted"
+done
+
+for rejected_case in extra-unmanaged-source malformed-intrinsic-source; do
+	IFS=$'\t' read -r case_name status output events < <(run_case "$rejected_case")
+	[[ "$status" -ne 0 ]] || record_failure "$case_name unexpected intrinsic-source remainder was accepted"
 done
 
 for rejected_case in wrong-base-id wrong-base-workspace; do
