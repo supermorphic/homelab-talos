@@ -267,6 +267,25 @@ Source sync never accepts a hostname, database, schema, table, column, grant, or
 fragment. More than one deterministic source is a hard stop. An unchanged sync keeps
 ready passwords, integrations, source IDs, job IDs, and generations unchanged.
 
+#### Refresh metadata after reviewed additive DDL
+
+After a reviewed domain migration adds a reflected table or column, validate its grants
+before opening NocoDB. In the affected base:
+
+1. Open the base settings and select **Data Sources**.
+2. Select the exact source alias, then select **Meta Sync**.
+3. Select **Reload** and confirm the expected table and additive change. Stop if the
+   page reports an unrelated rename, removal, or source.
+4. Select **Sync Now**. Wait for **Table metadata recreated successfully**, select
+   **Back**, and require **Tables metadata is in Sync**.
+5. Run the same `nocodb-source-sync` command again. Require the same base, integration,
+   source, credential generation, schema-read-only flag, and saved views.
+
+These labels and the asynchronous metadata-diff behavior are from pinned NocoDB
+`2026.08.2`. Disposable API integration proved one additive column with unchanged table,
+source, integration, credential, and saved-view identities. An operator must still
+perform the attended browser check before this UI procedure counts as live acceptance.
+
 ### 5. Rotate one source login
 
 Rotate only the selected PostgreSQL reader or operator login and its matching NocoDB

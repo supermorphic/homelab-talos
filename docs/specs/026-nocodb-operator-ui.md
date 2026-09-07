@@ -1076,10 +1076,21 @@ bundle with isolated 20 GiB PostgreSQL and fresh NocoDB scratch. The drill retai
 source routing, credential, view, record, bundle, ownership, and cleanup checks. It does
 not select an attachment backup or fetch external artifact bytes.
 
-The disposable full-stack integration pass and attended acceptance remain outstanding.
-No native attachment workaround or live activation has been performed. The transient
-execution plan remains under `.tmp/plans/026-nocodb-operator-ui.md`; it is not a committed
-design artifact.
+On 2026-09-07, the disposable full-stack integration passed twice against the pinned
+PostgreSQL, n8n, and NocoDB images. It imported and bound the actual workflows, exercised
+the complete feedback loop, aged completed jobs, resumed an interrupted initial source
+creation, retained source and saved-view identity through additive metadata refresh,
+replaced the NocoDB container and scratch, and restored a checksum-valid complete logical
+bundle into separate PostgreSQL and fresh NocoDB instances. The restored source was
+forced to the separate PostgreSQL address while the original PostgreSQL was stopped;
+retained credentials, denials, records, views, references, and a new checksum-valid
+backup passed. Run-owned resources were absent after each run.
+
+This local evidence does not establish live Gateway or Cilium behavior, Longhorn
+recovery, or browser usability. Attended cluster acceptance and activation remain
+outstanding. No native attachment workaround or live activation has been performed. The
+transient execution plan remains under `.tmp/plans/026-nocodb-operator-ui.md`; it is not
+a committed design artifact.
 
 ## Rejected alternatives
 
