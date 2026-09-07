@@ -927,6 +927,7 @@ for (const name of [
 JS
 
 python - "$acceptance_workflow" <<'PY'
+import copy
 import json
 import re
 import sys
@@ -1069,73 +1070,77 @@ for name in sorted(migrator_names | runtime_names):
 
 http_nodes = [node for node in nodes if node.get("type") == "n8n-nodes-base.httpRequest"]
 require(http_nodes, "The acceptance workflow must use the NocoDB Operator API.")
-host = "http://nocodb.automation-data.svc.cluster.local:8080"
-
-
-def normalized_path(url):
-    require(host in url, f"NocoDB URL does not use the fixed service host: {url}")
-    suffix = url.split(host, 1)[1]
-    if suffix.endswith("/views' }}"):
-        return "/api/v2/meta/tables/:tableId/views"
-    if suffix.endswith("/share' }}"):
-        return "/api/v2/meta/tables/:tableId/share"
-    if suffix.endswith("/shared' }}"):
-        return "/api/v2/meta/bases/:baseId/shared"
-    if "/sources/" in suffix:
-        return "/api/v2/meta/bases/:baseId/sources/:sourceId"
-    if suffix.endswith("/sources' }}"):
-        return "/api/v2/meta/bases/:baseId/sources"
-    if suffix.endswith("/tables' }}"):
-        return "/api/v2/meta/bases/:baseId/tables"
-    if suffix.endswith("/records' }}"):
-        return "/api/v2/tables/:tableId/records"
-    return suffix.rstrip("/")
-
-
 expected_http = {
-    "List Acceptance Bases": ("GET", "/api/v2/meta/bases"),
-    "List Acceptance Sources": ("GET", "/api/v2/meta/bases/:baseId/sources"),
-    "Get Acceptance Reader Source": ("GET", "/api/v2/meta/bases/:baseId/sources/:sourceId"),
-    "Get Acceptance Operator Source": ("GET", "/api/v2/meta/bases/:baseId/sources/:sourceId"),
-    "List Acceptance Tables": ("GET", "/api/v2/meta/bases/:baseId/tables"),
-    "Get Acceptance Base Share": ("GET", "/api/v2/meta/bases/:baseId/shared"),
-    "Get Reader Shared Views": ("GET", "/api/v2/meta/tables/:tableId/share"),
-    "Get Operator Shared Views": ("GET", "/api/v2/meta/tables/:tableId/share"),
-    "List Cleanup Decisions": ("GET", "/api/v2/tables/:tableId/records"),
-    "Delete Cleanup Page": ("DELETE", "/api/v2/tables/:tableId/records"),
-    "Insert Acceptance Decision": ("POST", "/api/v2/tables/:tableId/records"),
-    "Read Inserted Decision": ("GET", "/api/v2/tables/:tableId/records"),
-    "Update Acceptance Decision": ("PATCH", "/api/v2/tables/:tableId/records"),
-    "Read Updated Decision": ("GET", "/api/v2/tables/:tableId/records"),
-    "Try Protected Column Update": ("PATCH", "/api/v2/tables/:tableId/records"),
-    "Try Reader Insert": ("POST", "/api/v2/tables/:tableId/records"),
-    "Delete Probe Decision": ("DELETE", "/api/v2/tables/:tableId/records"),
-    "Confirm Probe Cleanup": ("GET", "/api/v2/tables/:tableId/records"),
-    "Confirm Cleanup Absence": ("GET", "/api/v2/tables/:tableId/records"),
-    "Read Acceptance Facts": ("GET", "/api/v2/tables/:tableId/records"),
-    "Get Recovery Saved View": ("GET", "/api/v2/meta/tables/:tableId/views"),
-    "Read Recovery Fact": ("GET", "/api/v2/tables/:tableId/records"),
-    "Read Recovery Decision": ("GET", "/api/v2/tables/:tableId/records"),
-    "List Feedback Residue": ("GET", "/api/v2/tables/:tableId/records"),
-    "Insert Feedback Decision": ("POST", "/api/v2/tables/:tableId/records"),
-    "Read Refreshed Fact": ("GET", "/api/v2/tables/:tableId/records"),
-    "Read Cleanup Fact": ("GET", "/api/v2/tables/:tableId/records"),
-    "Read Retained Recovery Fact": ("GET", "/api/v2/tables/:tableId/records"),
+    "List Acceptance Bases": ("GET", "http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases"),
+    "List Acceptance Sources": ("GET", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/sources' }}"),
+    "Get Acceptance Reader Source": ("GET", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/sources/' + $json.readerSourceId }}"),
+    "Get Acceptance Operator Source": ("GET", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/sources/' + $json.operatorSourceId }}"),
+    "List Acceptance Tables": ("GET", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/tables' }}"),
+    "Get Acceptance Base Share": ("GET", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/shared' }}"),
+    "Get Reader Shared Views": ("GET", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/tables/' + $json.factsTableId + '/share' }}"),
+    "Get Operator Shared Views": ("GET", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/tables/' + $json.decisionTableId + '/share' }}"),
+    "List Cleanup Decisions": ("GET", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}"),
+    "Delete Cleanup Page": ("DELETE", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}"),
+    "Insert Acceptance Decision": ("POST", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}"),
+    "Read Inserted Decision": ("GET", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}"),
+    "Update Acceptance Decision": ("PATCH", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}"),
+    "Read Updated Decision": ("GET", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $('Require Inserted Decision').first().json.decisionTableId + '/records' }}"),
+    "Try Protected Column Update": ("PATCH", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}"),
+    "Try Reader Insert": ("POST", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $('Prepare Reader Negative Probe').first().json.factsTableId + '/records' }}"),
+    "Delete Probe Decision": ("DELETE", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}"),
+    "Confirm Probe Cleanup": ("GET", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $('Evaluate Reader Insert Denial').first().json.decisionTableId + '/records' }}"),
+    "Confirm Cleanup Absence": ("GET", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}"),
+    "Read Acceptance Facts": ("GET", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.factsTableId + '/records' }}"),
+    "Get Recovery Saved View": ("GET", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/tables/' + $('Evaluate Reader Insert Denial').first().json.factsTableId + '/views' }}"),
+    "Read Recovery Fact": ("GET", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.factsTableId + '/records' }}"),
+    "Read Recovery Decision": ("GET", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}"),
+    "List Feedback Residue": ("GET", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}"),
+    "Insert Feedback Decision": ("POST", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}"),
+    "Read Refreshed Fact": ("GET", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.factsTableId + '/records' }}"),
+    "Read Cleanup Fact": ("GET", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $('Prepare Cleanup Fact').first().json.factsTableId + '/records' }}"),
+    "Read Retained Recovery Fact": ("GET", "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.factsTableId + '/records' }}"),
 }
-require({node["name"] for node in http_nodes} == set(expected_http), "Acceptance HTTP node set is not exact.")
-for node in http_nodes:
-    parameters = node.get("parameters", {})
-    require(
-        parameters.get("authentication") == "genericCredentialType"
-        and parameters.get("genericAuthType") == "httpHeaderAuth",
-        f"{node['name']} must use Header Auth.",
-    )
-    require(
-        (parameters.get("method", "GET"), normalized_path(parameters.get("url", "")))
-        == expected_http[node["name"]],
-        f"{node['name']} has an unapproved HTTP method or API path.",
-    )
-    require(not node.get("credentials"), f"{node['name']} embeds a credential ID.")
+
+
+def validate_http_contract(candidate_nodes):
+    require({node["name"] for node in candidate_nodes} == set(expected_http), "Acceptance HTTP node set is not exact.")
+    for node in candidate_nodes:
+        parameters = node.get("parameters", {})
+        require(
+            parameters.get("authentication") == "genericCredentialType"
+            and parameters.get("genericAuthType") == "httpHeaderAuth",
+            f"{node['name']} must use Header Auth.",
+        )
+        require(
+            (parameters.get("method", "GET"), parameters.get("url", ""))
+            == expected_http[node["name"]],
+            f"{node['name']} has an unapproved HTTP method or API path.",
+        )
+        require(not node.get("credentials"), f"{node['name']} embeds a credential ID.")
+
+
+validate_http_contract(http_nodes)
+
+
+def require_url_mutation_rejected(url, label):
+    mutated_nodes = copy.deepcopy(http_nodes)
+    target = next(node for node in mutated_nodes if node["name"] == "List Cleanup Decisions")
+    target["parameters"]["url"] = url
+    try:
+        validate_http_contract(mutated_nodes)
+    except SystemExit:
+        return
+    raise SystemExit(f"Acceptance HTTP contract accepted {label}.")
+
+
+require_url_mutation_rejected(
+    "={{ 'http://off-host.invalid/proxy/http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+    "an off-host URL containing the approved host later",
+)
+require_url_mutation_rejected(
+    "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/unapproved/' + $json.decisionTableId + '/records' }}",
+    "an unapproved path sharing the approved records suffix",
+)
 
 serialized = json.dumps(workflow)
 for forbidden in ("storage/upload", "/meta/comments", "/download/", "multipart-form-data", "prepareBinaryData", "getBinaryDataBuffer", "attachmentCanary"):
