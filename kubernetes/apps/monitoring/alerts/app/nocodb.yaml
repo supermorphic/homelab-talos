@@ -1,0 +1,68 @@
+---
+# NocoDB has no supported Prometheus endpoint. Gatus covers the private user path;
+# kube-state-metrics covers workload, Job, and retained-claim state.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: nocodb
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: nocodb
+spec:
+  groups:
+    - name: nocodb
+      rules:
+        - alert: NocoDBDown
+          expr: gatus_results_endpoint_success{name="nocodb", group="Platform"} == 0
+          for: 5m
+          labels: {severity: critical}
+          annotations: {summary: NocoDB is unavailable through the internal gateway}
+        - alert: NocoDBProbeMissing
+          expr: absent(gatus_results_endpoint_success{name="nocodb", group="Platform"})
+          for: 15m
+          labels: {severity: warning}
+          annotations: {summary: NocoDB black-box probe data is missing}
+        - alert: NocoDBWorkloadUnavailable
+          expr: >-
+            kube_deployment_status_replicas_available{namespace="automation-data",deployment="nocodb"} == 0
+            or absent(kube_deployment_status_replicas_available{namespace="automation-data",deployment="nocodb"})
+          for: 5m
+          labels: {severity: critical}
+          annotations: {summary: NocoDB Deployment has no available replica}
+        - alert: NocoDBContainerRestarting
+          expr: >-
+            increase(kube_pod_container_status_restarts_total{namespace="automation-data",container="nocodb"}[15m]) > 2
+          for: 5m
+          labels: {severity: warning}
+          annotations: {summary: NocoDB container is restarting repeatedly}
+        - alert: NocoDBContainerOomKilled
+          expr: >-
+            increase(kube_pod_container_status_restarts_total{namespace="automation-data",container="nocodb"}[15m]) > 0
+            and on (namespace, pod, container)
+            kube_pod_container_status_last_terminated_reason{namespace="automation-data",container="nocodb",reason="OOMKilled"} == 1
+          labels: {severity: critical}
+          annotations: {summary: NocoDB container was OOM killed}
+        - alert: NocoDBMetadataBootstrapJobFailed
+          expr: kube_job_failed{namespace="automation-data",job_name="nocodb-metadata-bootstrap",condition="true"} == 1
+          for: 5m
+          labels: {severity: warning}
+          annotations: {summary: NocoDB metadata bootstrap Job failed}
+        - alert: NocoDBMetadataBootstrapJobOverdue
+          expr: >-
+            time() - kube_job_status_start_time{namespace="automation-data",job_name="nocodb-metadata-bootstrap"} > 30 * 60
+            unless on (namespace, job_name) kube_job_status_completion_time{namespace="automation-data",job_name="nocodb-metadata-bootstrap"}
+          for: 5m
+          labels: {severity: warning}
+          annotations: {summary: NocoDB metadata bootstrap Job is overdue}
+        - alert: NocoDBAcceptanceJobFailed
+          expr: kube_job_failed{namespace="automation-data",job_name=~"nocodb-acceptance-.*",condition="true"} == 1
+          for: 5m
+          labels: {severity: warning}
+          annotations: {summary: NocoDB acceptance Job failed}
+        - alert: NocoDBAcceptanceJobOverdue
+          expr: >-
+            time() - kube_job_status_start_time{namespace="automation-data",job_name=~"nocodb-acceptance-.*"} > 30 * 60
+            unless on (namespace, job_name) kube_job_status_completion_time{namespace="automation-data",job_name=~"nocodb-acceptance-.*"}
+          for: 5m
+          labels: {severity: warning}
+          annotations: {summary: NocoDB acceptance Job is overdue}

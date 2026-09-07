@@ -46,6 +46,7 @@ executions:
     - validation.test-harness-automation
     - validation.n8n
     - validation.automation-data
+    - validation.nocodb
     - validation.test-harness-ci-framework
   ci-core:
     - validation.repo-lint
@@ -92,6 +93,7 @@ executions:
     - validation.test-harness-automation
     - validation.n8n
     - validation.automation-data
+    - validation.nocodb
   ci-framework:
     - validation.test-harness-ci-framework
 
@@ -237,6 +239,8 @@ campaigns:
       - test.storage-provisioning
       - test.flux-canary
       - test.n8n-restore-drill
+      - test.nocodb-access
+      - test.nocodb-restore-drill
       - test.automation-data-restore-drill
       - test.integration.media-hardlink
       - test.plex-network-policy
@@ -352,6 +356,10 @@ suites:
   - metadata: {id: validation.cilium, source: validation, framework: bash, suite: ci, tier: offline, target: cilium, scenario: source, scope: network, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube cilium-validate", implementation: scripts/validate/cilium.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.nocodb, source: validation, framework: bash, suite: ci, tier: offline, target: nocodb, scenario: source, scope: system, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube nocodb-validate", implementation: scripts/validate/nocodb.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: validation.n8n, source: validation, framework: bash, suite: ci, tier: offline, target: n8n, scenario: source, scope: system, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
@@ -516,6 +524,11 @@ suites:
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube automation-data-verify", implementation: scripts/verify/automation-data.sh}
     native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.nocodb, source: verification, framework: bash, suite: platform, tier: verification, target: nocodb, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube nocodb-verify", implementation: scripts/verify/nocodb.sh}
+    native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.storage, source: verification, framework: bash, suite: platform, tier: verification, target: storage, scenario: null, scope: storage, intent: acceptance, mutates_cluster: false, execution_owner: human}
     access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
@@ -675,6 +688,21 @@ suites:
     runner: {command: "AUTOMATION_DATA_PROVISIONING_CONFIRM=test:automation-data:provisioning mise exec -- just kube automation-data-provisioning-test", implementation: scripts/test/scenarios/automation-data-provisioning.sh}
     native_results: {strategy: wrapper-junit}
     dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/automation-data-provisioning.sh, args: [.kube/config], selector: null}
+  - metadata: {id: test.nocodb-access, source: test, framework: bash, suite: platform, tier: integration, target: nocodb, scenario: access, scope: system, intent: acceptance, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: NOCODB_ACCESS_TEST_CONFIRM, expected: "test:nocodb:access"}
+    runner: {command: "NOCODB_ACCESS_TEST_CONFIRM=test:nocodb:access mise exec -- just kube nocodb-access-test", implementation: scripts/test/scenarios/nocodb-access.sh}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/nocodb-access.sh, args: [.kube/config], selector: null}
+  - metadata: {id: test.nocodb-local-integration, source: test, framework: bash, suite: platform, tier: integration, target: nocodb-local, scenario: disposable-podman, scope: system, intent: acceptance, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube nocodb-local-integration-test", implementation: scripts/test/scenarios/nocodb-local-integration.sh}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/nocodb-local-integration.sh, args: [], selector: null}
+  - metadata: {id: test.nocodb-restore-drill, source: test, framework: bash, suite: platform, tier: integration, target: nocodb, scenario: metadata-record-restore, scope: system, intent: resilience, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: exact, variable: NOCODB_RESTORE_CONFIRM, expected: "restore:nocodb:metadata"}
+    runner: {command: "NOCODB_RESTORE_CONFIRM=restore:nocodb:metadata mise exec -- just kube nocodb-restore-drill", implementation: scripts/test/scenarios/nocodb-restore-drill.sh}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/nocodb-restore-drill.sh, args: [.kube/config], selector: null}
   - metadata: {id: test.automation-data-restore-drill, source: test, framework: bash, suite: platform, tier: integration, target: automation-data-restore-drill, scenario: full-chain, scope: system, intent: resilience, mutates_cluster: true, execution_owner: human}
     confirmation: {type: exact, variable: AUTOMATION_DATA_RESTORE_CONFIRM, expected: "restore:automation-data:full-chain"}
     runner: {command: "AUTOMATION_DATA_RESTORE_CONFIRM=restore:automation-data:full-chain mise exec -- just kube automation-data-restore-drill", implementation: scripts/test/scenarios/automation-data-restore-drill.sh}

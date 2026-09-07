@@ -1,0 +1,18 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: automation-data
+resources:
+  - ./ciliumnetworkpolicy.yaml
+  - ./helmrelease.yaml
+  - ./httproute.yaml
+  - ./metadata-bootstrap-job.yaml
+  - ./ocirepository.yaml
+configMapGenerator:
+  - name: nocodb-values
+    files:
+      - values.yaml=values.yaml
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    reconcile.fluxcd.io/watch: Enabled

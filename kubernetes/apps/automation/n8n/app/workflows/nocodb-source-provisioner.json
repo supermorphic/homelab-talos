@@ -1,0 +1,4604 @@
+{
+  "name": "NocoDB Source Provisioner",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## One-time operator setup\n\nImport this inactive template through the private n8n editor. Bind **Automation Data Provisioner** to every Postgres node, **NocoDB Operator API** to every HTTP Request node, and **NocoDB Source Provisioning Header** to **Source Webhook**. Publish only after the bindings are verified. Keep execution persistence disabled.",
+        "height": 360,
+        "width": 520
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -900,
+        -700
+      ],
+      "id": "10000000-0000-4000-8000-000000000001",
+      "name": "Source Setup"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "automation-data-nocodb-source",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -840,
+        0
+      ],
+      "id": "10000000-0000-4000-8000-000000000002",
+      "name": "Source Webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['domain', 'operation', 'accessKind']);\nif (Object.keys(body).some((key) => !allowedFields.has(key))) throw new Error('unexpected_request_field');\nconst { domain, operation, accessKind } = body;\nif (typeof domain !== 'string' || !/^[a-z][a-z0-9_]{0,47}$/.test(domain)) throw new Error('invalid_domain');\nif (!['sync', 'rotate'].includes(operation)) throw new Error('invalid_operation');\nif (operation === 'rotate') {\n  if (!['reader', 'operator'].includes(accessKind)) throw new Error('invalid_access_kind');\n} else if (accessKind !== undefined) {\n  throw new Error('access_kind_only_allowed_for_rotation');\n}\nreturn [{ json: { domain, operation, requestedAccessKind: accessKind || null, ...(accessKind ? { accessKind } : {}) } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -600,
+        0
+      ],
+      "id": "10000000-0000-4000-8000-000000000003",
+      "name": "Normalize Source Request",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.validate_domain($1) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -360,
+        0
+      ],
+      "id": "10000000-0000-4000-8000-000000000004",
+      "name": "Validate Managed Domain",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Normalize Source Request').first().json;\nconst result = $json.result;\nif (!result || result.domain !== request.domain || result.state !== 'ready') throw new Error('managed_domain_not_ready');\nreturn [{ json: request }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -120,
+        0
+      ],
+      "id": "10000000-0000-4000-8000-000000000005",
+      "name": "Require Ready Managed Domain",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.prepare_nocodb_access($1) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        120,
+        0
+      ],
+      "id": "10000000-0000-4000-8000-000000000006",
+      "name": "Prepare NocoDB Access",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Normalize Source Request').first().json;\nconst plan = $json.result;\nif (!plan || plan.domain !== request.domain || plan.readerEligible !== true) throw new Error('reader_not_eligible');\nreturn [{ json: { ...request, plan } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        360,
+        0
+      ],
+      "id": "10000000-0000-4000-8000-000000000007",
+      "name": "Keep Access Plan",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        600,
+        0
+      ],
+      "id": "10000000-0000-4000-8000-000000000008",
+      "name": "List Domain Bases",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Keep Access Plan').first().json;\nconst bases = Array.isArray($json) ? $json : ($json.list || $json.data || []);\nconst matches = bases.filter((base) => base && base.title === request.domain);\nif (matches.length > 1) throw new Error('duplicate_domain_base');\nif (matches.length === 1) {\n  const base = matches[0];\n  if (!base.id || !base.fk_workspace_id) throw new Error('invalid_domain_base');\n  return [{ json: { ...request, baseId: base.id, workspaceId: base.fk_workspace_id, createBase: false } }];\n}\nreturn [{ json: { ...request, createBase: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        0
+      ],
+      "id": "10000000-0000-4000-8000-000000000009",
+      "name": "Resolve Domain Base",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ !$json.createBase }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1080,
+        0
+      ],
+      "id": "10000000-0000-4000-8000-000000000010",
+      "name": "Domain Base Exists"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: $json }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        -100
+      ],
+      "id": "10000000-0000-4000-8000-000000000011",
+      "name": "Use Domain Base",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ title: $('Normalize Source Request').first().json.domain }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        100
+      ],
+      "id": "10000000-0000-4000-8000-000000000012",
+      "name": "Create Domain Base",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Keep Access Plan').first().json;\nif (!$json.id || !$json.fk_workspace_id || $json.title !== request.domain) throw new Error('invalid_created_base');\nreturn [{ json: { ...request, baseId: $json.id, workspaceId: $json.fk_workspace_id } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        100
+      ],
+      "id": "10000000-0000-4000-8000-000000000013",
+      "name": "Normalize Domain Base",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json;\nreturn [{ json: { ...context, accessKind: 'reader', alias: 'Read Model', schema: 'read_model', dataReadonly: true, schemaReadonly: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        0
+      ],
+      "id": "10000000-0000-4000-8000-000000000014",
+      "name": "Start Reader",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.read_nocodb_source_state($1, $2) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain, $json.accessKind] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2040,
+        0
+      ],
+      "id": "10000000-0000-4000-8000-000000000015",
+      "name": "Read Reader State",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Start Reader').first().json;\nconst state = $json.result;\nreturn [{ json: { ...context, ...(state || {}), baseId: state?.baseId ?? context.baseId, operation: context.operation, registryOperation: state?.operation || null, accessKind: 'reader', alias: 'Read Model', schema: 'read_model', dataReadonly: true, schemaReadonly: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2280,
+        0
+      ],
+      "id": "10000000-0000-4000-8000-000000000016",
+      "name": "Merge Reader State",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.state === 'waiting_for_source' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2520,
+        0
+      ],
+      "id": "10000000-0000-4000-8000-000000000017",
+      "name": "Reader Waiting"
+    },
+    {
+      "parameters": {
+        "jsCode": "if ($json.state !== 'waiting_for_source' || !$json.sourceCreateJobId) throw new Error('missing_stored_job');\nreturn [{ json: { ...$json, pollCount: 0 } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2760,
+        -180
+      ],
+      "id": "10000000-0000-4000-8000-000000000018",
+      "name": "Resume Reader Job",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/sources' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2760,
+        100
+      ],
+      "id": "10000000-0000-4000-8000-000000000019",
+      "name": "List Reader Sources",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.state !== undefined ? $json : $('Merge Reader State').first().json;\nconst payload = $json.sources !== undefined ? $json.sources : $json;\nconst items = $input.all().map((item) => item.json);\nconst sources = Array.isArray(payload) ? payload : (payload.list || payload.data || (items.every((item) => item && item.id) ? items : []));\nconst aliasMatches = sources.filter((source) => source && source.alias === context.alias);\nconst matches = aliasMatches.filter((source) => source.fk_integration_id === context.integrationId);\nif (matches.length > 1 || aliasMatches.length > 1) throw new Error('duplicate_source');\nconst retainedRotation = context.registryOperation === 'rotate' && context.state === 'error';\nif (context.operation === 'rotate' && retainedRotation && context.requestedAccessKind !== 'reader') throw new Error('rotation_target_mismatch');\nconst retryRotation = context.operation === 'rotate' && retainedRotation && context.requestedAccessKind === 'reader' && context.accessKind === 'reader';\nif (retryRotation) {\n  if (!context.sourceId || !context.integrationId) throw new Error('rotation_identity_missing');\n  if (matches.length !== 1 || matches[0].id !== context.sourceId) throw new Error('rotation_source_identity_mismatch');\n  return [{ json: { ...context, sources, action: 'existing' } }];\n}\nif (context.operation === 'rotate' && context.state === 'error') throw new Error('rotation_retry_invalid');\nif (context.state === 'error' && aliasMatches.length !== 0) throw new Error('error_retry_requires_zero_sources');\nif (context.state === 'ready' && (matches.length !== 1 || matches[0].id !== context.sourceId)) throw new Error('ready_source_missing');\nif (matches.length === 1) return [{ json: { ...context, sources, action: 'existing' } }];\nif (context.state && !['error', 'awaiting_grants'].includes(context.state)) throw new Error('source_state_not_creatable');\nreturn [{ json: { ...context, sources, action: 'create' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3000,
+        100
+      ],
+      "id": "10000000-0000-4000-8000-000000000020",
+      "name": "Inspect Reader Sources",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "existing",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "existing"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "create",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "create"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        3240,
+        100
+      ],
+      "id": "10000000-0000-4000-8000-000000000021",
+      "name": "Select Reader Source Action"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json;\nconst sources = Array.isArray($json.sources) ? $json.sources : [];\nconst aliasMatches = sources.filter((source) => source && source.alias === context.alias);\nconst matches = aliasMatches.filter((source) => source.fk_integration_id === context.integrationId);\nif (aliasMatches.length > 1 || matches.length > 1) throw new Error('duplicate_source');\nif (matches.length === 0) throw new Error(aliasMatches.length ? 'source_integration_mismatch' : 'missing_source');\nif (!matches[0].id || (context.sourceId && matches[0].id !== context.sourceId)) throw new Error('source_identity_mismatch');\nreturn [{ json: { ...context, sourceId: matches[0].id, selectedIntegrationId: matches[0].fk_integration_id } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3480,
+        -20
+      ],
+      "id": "10000000-0000-4000-8000-000000000022",
+      "name": "Discover Reader Source",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "action": "generate",
+        "dataPropertyName": "generatedValue",
+        "encodingType": "base64",
+        "stringLength": 48
+      },
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        3480,
+        220
+      ],
+      "id": "10000000-0000-4000-8000-000000000023",
+      "name": "Generate Reader Password",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Inspect Reader Sources').first().json;\nif (!$json.generatedValue) throw new Error('generation_failed');\nreturn [{ json: { ...context, generatedValue: $json.generatedValue } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3720,
+        220
+      ],
+      "id": "10000000-0000-4000-8000-000000000024",
+      "name": "Prepare Reader Begin",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.begin_nocodb_source($1, $2, $3, $4) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain, $json.accessKind, $json.baseId, $json.generatedValue] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        3960,
+        220
+      ],
+      "id": "10000000-0000-4000-8000-000000000025",
+      "name": "Begin Reader Source",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/workspaces/' + $('Start Reader').first().json.workspaceId + '/integrations' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "type",
+              "value": "db"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4200,
+        220
+      ],
+      "id": "10000000-0000-4000-8000-000000000026",
+      "name": "List Reader Integrations",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+      "jsCode": "const context = $('Prepare Reader Begin').first().json;\nconst state = $('Begin Reader Source').first().json.result;\nconst integrations = Array.isArray($json) ? $json : ($json.list || $json.data || []);\nconst title = `automation-data/${context.domain}/reader`;\nconst named = integrations.filter((item) => item && item.title === title);\nif (named.length > 1) throw new Error('duplicate_integration');\nlet existing = null;\nif (state.integrationId) {\n  existing = integrations.find((item) => item.id === state.integrationId);\n  if (!existing || existing.title !== title) throw new Error('integration_identity_mismatch');\n} else if (named.length === 1) {\n  existing = named[0];\n}\nconst payload = {\n  title,\n  type: 'database',\n  sub_type: 'pg',\n  is_private: true,\n  config: {\n    client: 'pg',\n    connection: {\n      host: 'automation-data-postgresql.automation-data.svc.cluster.local',\n      port: 5432,\n      user: state.role,\n      password: context.generatedValue,\n      database: context.domain,\n      ssl: false\n    },\n    searchPath: ['read_model']\n  }\n};\nreturn [{ json: { ...context, ...state, integrationId: existing?.id || null, integrationExists: Boolean(existing), payload } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4440,
+        220
+      ],
+      "id": "10000000-0000-4000-8000-000000000027",
+      "name": "Prepare Reader Integration",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.integrationExists }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4680,
+        220
+      ],
+      "id": "10000000-0000-4000-8000-000000000028",
+      "name": "Reader Integration Exists"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/integrations/' + $json.integrationId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4920,
+        120
+      ],
+      "id": "10000000-0000-4000-8000-000000000029",
+      "name": "Patch Reader Integration",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/workspaces/' + $json.workspaceId + '/integrations' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4920,
+        320
+      ],
+      "id": "10000000-0000-4000-8000-000000000030",
+      "name": "Create Reader Integration",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Prepare Reader Integration').first().json;\nif (!$json.id || (context.integrationId && $json.id !== context.integrationId)) throw new Error('invalid_integration_response');\nreturn [{ json: { ...context, integrationId: $json.id } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5160,
+        220
+      ],
+      "id": "10000000-0000-4000-8000-000000000031",
+      "name": "Normalize Reader Integration",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.record_nocodb_integration($1, $2, $3) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain, $json.accessKind, $json.integrationId] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        5400,
+        220
+      ],
+      "id": "10000000-0000-4000-8000-000000000032",
+      "name": "Record Reader Integration",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Reader Queue Slot').first().json;\nreturn [{ json: { ...context, sourcePayload: {\n  fk_integration_id: context.integrationId,\n  alias: 'Read Model',\n  type: 'pg',\n  config: { client: 'pg', searchPath: ['read_model'] },\n  inflection_column: 'none',\n  inflection_table: 'none',\n  is_schema_readonly: true,\n  is_data_readonly: true\n} } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5640,
+        220
+      ],
+      "id": "10000000-0000-4000-8000-000000000033",
+      "name": "Prepare Reader Source Create",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/sources' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.sourcePayload) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": false
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5880,
+        220
+      ],
+      "id": "10000000-0000-4000-8000-000000000034",
+      "name": "Create Reader Source",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Prepare Reader Source Create').first().json;\nconst statusCode = $json.statusCode;\nconst body = $json.body;\nif (statusCode !== 200 || !body || typeof body.id !== 'string' || !body.id || Object.keys(body).length !== 1) throw new Error('invalid_source_create_response');\nreturn [{ json: { ...context, sourceCreateJobId: body.id } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6120,
+        220
+      ],
+      "id": "10000000-0000-4000-8000-000000000035",
+      "name": "Store Reader Job ID",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.record_nocodb_source_job($1, $2, $3) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain, $json.accessKind, $json.sourceCreateJobId] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        6360,
+        220
+      ],
+      "id": "10000000-0000-4000-8000-000000000036",
+      "name": "Record Reader Job",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Store Reader Job ID').first().json;\nconst state = $json.result;\nif (!state || state.state !== 'waiting_for_source' || state.sourceCreateJobId !== context.sourceCreateJobId) throw new Error('stored_job_mismatch');\nreturn [{ json: { ...context, ...state, pollCount: 0 } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6600,
+        220
+      ],
+      "id": "10000000-0000-4000-8000-000000000037",
+      "name": "Initialize Reader Poll",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "amount": 5,
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        6840,
+        -80
+      ],
+      "id": "10000000-0000-4000-8000-000000000038",
+      "name": "Wait Reader Job"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/jobs/' + $json.baseId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ job: 'source-create' }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        7080,
+        -80
+      ],
+      "id": "10000000-0000-4000-8000-000000000039",
+      "name": "Poll Reader Jobs",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.sourceCreateJobId ? $json : ($('Wait Reader Job').first().json || {});\nconst raw = $json.jobs !== undefined ? $json.jobs : $json;\nconst items = $input.all().map((item) => item.json);\nconst jobs = Array.isArray(raw) ? raw : (raw.list || raw.data || (items.every((item) => item && item.id && item.job) ? items : []));\nif (!context.sourceCreateJobId) throw new Error('missing_stored_job');\nconst matches = jobs.filter((job) => job && job.id === context.sourceCreateJobId && job.job === 'source-create');\nif (matches.length === 0) throw new Error('missing_stored_job');\nif (matches.length > 1) throw new Error('duplicate_stored_job');\nconst status = matches[0].status;\nif (status === 'completed') return [{ json: { ...context, jobState: 'completed' } }];\nif (status === 'failed') return [{ json: { ...context, jobState: 'failed', errorCode: 'source_create_failed' } }];\nconst pollCount = Number(context.pollCount || 0) + 1;\nif (pollCount >= 120) return [{ json: { ...context, pollCount, jobState: 'timeout', errorCode: 'source_job_timeout', preserveWaiting: true } }];\nreturn [{ json: { ...context, pollCount, jobState: 'pending' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7320,
+        -80
+      ],
+      "id": "10000000-0000-4000-8000-000000000040",
+      "name": "Evaluate Reader Job",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.jobState }}",
+                    "rightValue": "pending",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "pending"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.jobState }}",
+                    "rightValue": "completed",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "completed"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.jobState }}",
+                    "rightValue": "failed",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "failed"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.jobState }}",
+                    "rightValue": "timeout",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "timeout"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        7560,
+        -80
+      ],
+      "id": "10000000-0000-4000-8000-000000000041",
+      "name": "Select Reader Job State"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/sources' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        7800,
+        -20
+      ],
+      "id": "10000000-0000-4000-8000-000000000042",
+      "name": "Discover Reader Sources After Job",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Evaluate Reader Job').first().json;\nif (context.jobState !== 'completed') throw new Error('source_job_not_completed');\nconst items = $input.all().map((item) => item.json);\nconst sources = Array.isArray($json) ? $json : ($json.list || $json.data || (items.every((item) => item && item.id) ? items : []));\nconst matches = sources.filter((source) => source && source.fk_integration_id === context.integrationId && source.alias === 'Read Model');\nif (matches.length === 0) throw new Error('missing_source');\nif (matches.length > 1) throw new Error('duplicate_source');\nif (!matches[0].id) throw new Error('invalid_source');\nreturn [{ json: { ...context, sources, sourceId: matches[0].id, selectedIntegrationId: matches[0].fk_integration_id } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        8040,
+        -20
+      ],
+      "id": "10000000-0000-4000-8000-000000000043",
+      "name": "Discover Reader Source After Job",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/sources/' + $json.sourceId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        8280,
+        -20
+      ],
+      "id": "10000000-0000-4000-8000-000000000044",
+      "name": "Get Reader Source",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('Start Reader').first().json;\nconst registry = $('Read Reader State').first().json.result || {};\nconst source = $json;\nconst selections = [];\nfor (const name of ['Discover Reader Source', 'Discover Reader Source After Job']) {\n  try { const candidate = $(name).first().json; if (candidate?.sourceId === source.id && candidate?.selectedIntegrationId) selections.push(candidate); } catch {}\n}\nif (selections.length !== 1) throw new Error('reader_source_identity_invalid');\nconst selected = selections[0];\nconst searchPath = source.config?.searchPath || source.config?.search_path || [];\nif (!source.id || source.id !== selected.sourceId || source.base_id !== base.baseId || source.fk_integration_id !== selected.selectedIntegrationId || source.alias !== 'Read Model') throw new Error('reader_source_identity_invalid');\nif (!source.fk_integration_id || !Array.isArray(searchPath) || searchPath.length !== 1 || searchPath[0] !== 'read_model') throw new Error('reader_schema_invalid');\nif (source.is_data_readonly !== true || source.is_schema_readonly !== true) throw new Error('reader_flags_invalid');\nconst sourceCreateJobId = selected.sourceCreateJobId || registry.sourceCreateJobId || base.sourceCreateJobId || null;\nconst sourceCreateJobState = selected.jobState === 'completed' ? 'completed' : null;\nreturn [{ json: { ...base, ...registry, baseId: registry.baseId ?? base.baseId, sourceId: source.id, integrationId: selected.selectedIntegrationId, sourceCreateJobId, sourceCreateJobState, accessKind: 'reader', sourceDiscovered: true, sourceReadBack: true, dataEditAllowed: source.is_data_readonly === false, schemaEditAllowed: source.is_schema_readonly === false } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        8520,
+        -20
+      ],
+      "id": "10000000-0000-4000-8000-000000000045",
+      "name": "Validate Reader Source",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.validate_nocodb_access($1, $2) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain, $json.accessKind] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        8760,
+        -20
+      ],
+      "id": "10000000-0000-4000-8000-000000000046",
+      "name": "Validate Reader PostgreSQL",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Validate Reader Source').first().json;\nconst result = $json.result;\nconst fields = ['valid', 'loginValid', 'schemaPrivilegesValid', 'objectPrivilegesValid', 'defaultPrivilegesValid', 'outsideSchemaDenied', 'databaseIsolationValid', 'forbiddenAttributesDenied', 'forbiddenMembershipsDenied', 'ddlDenied', 'controlledDmlPresent'];\nif (!result || result.valid !== true || result.accessKind !== 'reader' || fields.some((field) => typeof result[field] !== 'boolean')) throw new Error('reader_postgresql_invalid');\nconst postgresqlValidation = Object.fromEntries(fields.map((field) => [field, result[field]]));\nconst request = $('Normalize Source Request').first().json;\nreturn [{ json: { ...context, postgresqlValidation, rotateTarget: request.operation === 'rotate' && request.requestedAccessKind === 'reader' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        9000,
+        -20
+      ],
+      "id": "10000000-0000-4000-8000-000000000047",
+      "name": "Require Reader PostgreSQL",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.rotateTarget }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        9240,
+        -20
+      ],
+      "id": "10000000-0000-4000-8000-000000000048",
+      "name": "Rotate Reader"
+    },
+    {
+      "parameters": {
+        "action": "generate",
+        "dataPropertyName": "generatedValue",
+        "encodingType": "base64",
+        "stringLength": 48
+      },
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        9480,
+        -140
+      ],
+      "id": "10000000-0000-4000-8000-000000000049",
+      "name": "Generate Reader Rotation Value",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "if (!$json.generatedValue) throw new Error('generation_failed');\nreturn [{ json: $json }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        9720,
+        -140
+      ],
+      "id": "10000000-0000-4000-8000-000000000050",
+      "name": "Prepare Reader Rotation",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.rotate_nocodb_source_credential($1, $2, $3) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain, $json.accessKind, $json.generatedValue] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        9960,
+        -140
+      ],
+      "id": "10000000-0000-4000-8000-000000000051",
+      "name": "Rotate Reader Credential",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+      "jsCode": "const context = $('Prepare Reader Rotation').first().json;\nconst state = $json.result;\nif (!state || state.state !== 'rotating' || !state.integrationId || state.sourceId !== context.sourceId) throw new Error('reader_rotation_state_invalid');\nreturn [{ json: { ...context, ...state, payload: {\n  title: `automation-data/${context.domain}/reader`, type: 'database', sub_type: 'pg', is_private: true,\n  config: { client: 'pg', connection: { host: 'automation-data-postgresql.automation-data.svc.cluster.local', port: 5432, user: state.role, password: context.generatedValue, database: context.domain, ssl: false }, searchPath: ['read_model'] }\n} } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        10200,
+        -140
+      ],
+      "id": "10000000-0000-4000-8000-000000000052",
+      "name": "Build Reader Rotation Integration",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/integrations/' + $json.integrationId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        10440,
+        -140
+      ],
+      "id": "10000000-0000-4000-8000-000000000053",
+      "name": "Patch Reader Rotation Integration",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Build Reader Rotation Integration').first().json;\nif (!$json.id || $json.id !== context.integrationId) throw new Error('reader_rotation_integration_invalid');\nreturn [{ json: context }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        10680,
+        -140
+      ],
+      "id": "10000000-0000-4000-8000-000000000054",
+      "name": "Normalize Reader Rotation",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.validate_nocodb_access($1, $2) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain, $json.accessKind] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        10920,
+        -140
+      ],
+      "id": "10000000-0000-4000-8000-000000000055",
+      "name": "Validate Rotated Reader PostgreSQL",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Normalize Reader Rotation').first().json;\nconst result = $json.result;\nconst fields = ['valid', 'loginValid', 'schemaPrivilegesValid', 'objectPrivilegesValid', 'defaultPrivilegesValid', 'outsideSchemaDenied', 'databaseIsolationValid', 'forbiddenAttributesDenied', 'forbiddenMembershipsDenied', 'ddlDenied', 'controlledDmlPresent'];\nif (!result || result.valid !== true || result.accessKind !== 'reader' || fields.some((field) => typeof result[field] !== 'boolean')) throw new Error('rotated_reader_invalid');\nconst postgresqlValidation = Object.fromEntries(fields.map((field) => [field, result[field]]));\nreturn [{ json: { ...context, postgresqlValidation } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        11160,
+        -140
+      ],
+      "id": "10000000-0000-4000-8000-000000000056",
+      "name": "Keep Rotated Reader",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.record_nocodb_source_ready($1, $2, $3) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain, $json.accessKind, $json.sourceId] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        11400,
+        0
+      ],
+      "id": "10000000-0000-4000-8000-000000000057",
+      "name": "Record Reader Ready",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Normalize Source Request').first().json;\nconst plan = $('Keep Access Plan').first().json.plan;\nconst reader = $json.result || $json;\nif (request.operation === 'rotate' && request.requestedAccessKind === 'operator' && (plan.operatorRequested !== true || plan.operatorEligible !== true)) {\n  throw new Error('operator_not_eligible');\n}\nconst required = plan.operatorRequested === true && plan.operatorEligible === true;\nreturn [{ json: { ...request, plan, baseId: reader.baseId, workspaceId: $('Start Reader').first().json.workspaceId, reader, operatorRequired: required } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        11640,
+        0
+      ],
+      "id": "10000000-0000-4000-8000-000000000058",
+      "name": "Start Operator",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.operatorRequired }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        11880,
+        0
+      ],
+      "id": "10000000-0000-4000-8000-000000000059",
+      "name": "Operator Required"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { ...$json, accessKind: 'operator', alias: 'Operator', schema: 'operator', dataReadonly: false, schemaReadonly: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        12120,
+        -100
+      ],
+      "id": "10000000-0000-4000-8000-000000000060",
+      "name": "Prepare Operator",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.read_nocodb_source_state($1, $2) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain, $json.accessKind] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        12360,
+        -100
+      ],
+      "id": "10000000-0000-4000-8000-000000000061",
+      "name": "Read Operator State",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Prepare Operator').first().json;\nconst state = $json.result;\nreturn [{ json: { ...context, ...(state || {}), baseId: state?.baseId ?? context.baseId, operation: context.operation, registryOperation: state?.operation || null, accessKind: 'operator', alias: 'Operator', schema: 'operator', dataReadonly: false, schemaReadonly: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        12600,
+        -100
+      ],
+      "id": "10000000-0000-4000-8000-000000000062",
+      "name": "Merge Operator State",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.state === 'waiting_for_source' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        12840,
+        -100
+      ],
+      "id": "10000000-0000-4000-8000-000000000063",
+      "name": "Operator Waiting"
+    },
+    {
+      "parameters": {
+        "jsCode": "if ($json.state !== 'waiting_for_source' || !$json.sourceCreateJobId) throw new Error('missing_stored_job');\nreturn [{ json: { ...$json, pollCount: 0 } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        13080,
+        -280
+      ],
+      "id": "10000000-0000-4000-8000-000000000064",
+      "name": "Resume Operator Job",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/sources' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        13080,
+        20
+      ],
+      "id": "10000000-0000-4000-8000-000000000065",
+      "name": "List Operator Sources",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.state !== undefined ? $json : $('Merge Operator State').first().json;\nconst payload = $json.sources !== undefined ? $json.sources : $json;\nconst items = $input.all().map((item) => item.json);\nconst sources = Array.isArray(payload) ? payload : (payload.list || payload.data || (items.every((item) => item && item.id) ? items : []));\nconst aliasMatches = sources.filter((source) => source && source.alias === context.alias);\nconst matches = aliasMatches.filter((source) => source.fk_integration_id === context.integrationId);\nif (matches.length > 1 || aliasMatches.length > 1) throw new Error('duplicate_source');\nconst retainedRotation = context.registryOperation === 'rotate' && context.state === 'error';\nif (context.operation === 'rotate' && retainedRotation && context.requestedAccessKind !== 'operator') throw new Error('rotation_target_mismatch');\nconst retryRotation = context.operation === 'rotate' && retainedRotation && context.requestedAccessKind === 'operator' && context.accessKind === 'operator';\nif (retryRotation) {\n  if (!context.sourceId || !context.integrationId) throw new Error('rotation_identity_missing');\n  if (matches.length !== 1 || matches[0].id !== context.sourceId) throw new Error('rotation_source_identity_mismatch');\n  return [{ json: { ...context, sources, action: 'existing' } }];\n}\nif (context.operation === 'rotate' && context.state === 'error') throw new Error('rotation_retry_invalid');\nif (context.state === 'error' && aliasMatches.length !== 0) throw new Error('error_retry_requires_zero_sources');\nif (context.state === 'ready' && (matches.length !== 1 || matches[0].id !== context.sourceId)) throw new Error('ready_source_missing');\nif (matches.length === 1) return [{ json: { ...context, sources, action: 'existing' } }];\nif (context.state && !['error', 'awaiting_grants'].includes(context.state)) throw new Error('source_state_not_creatable');\nreturn [{ json: { ...context, sources, action: 'create' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        13320,
+        20
+      ],
+      "id": "10000000-0000-4000-8000-000000000066",
+      "name": "Inspect Operator Sources",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "existing",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "existing"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "create",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "create"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        13560,
+        20
+      ],
+      "id": "10000000-0000-4000-8000-000000000067",
+      "name": "Select Operator Source Action"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json;\nconst sources = Array.isArray(context.sources) ? context.sources : [];\nconst aliasMatches = sources.filter((source) => source && source.alias === 'Operator');\nconst matches = aliasMatches.filter((source) => source.fk_integration_id === context.integrationId);\nif (aliasMatches.length > 1 || matches.length > 1) throw new Error('duplicate_source');\nif (matches.length === 0) throw new Error(aliasMatches.length ? 'source_integration_mismatch' : 'missing_source');\nif (!matches[0].id || (context.sourceId && matches[0].id !== context.sourceId)) throw new Error('source_identity_mismatch');\nreturn [{ json: { ...context, sourceId: matches[0].id, selectedIntegrationId: matches[0].fk_integration_id } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        13800,
+        -100
+      ],
+      "id": "10000000-0000-4000-8000-000000000068",
+      "name": "Discover Operator Source",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "action": "generate",
+        "dataPropertyName": "generatedValue",
+        "encodingType": "base64",
+        "stringLength": 48
+      },
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        13800,
+        140
+      ],
+      "id": "10000000-0000-4000-8000-000000000069",
+      "name": "Generate Operator Password",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Inspect Operator Sources').first().json;\nif (!$json.generatedValue) throw new Error('generation_failed');\nreturn [{ json: { ...context, generatedValue: $json.generatedValue } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        14040,
+        140
+      ],
+      "id": "10000000-0000-4000-8000-000000000070",
+      "name": "Prepare Operator Begin",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.begin_nocodb_source($1, $2, $3, $4) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain, $json.accessKind, $json.baseId, $json.generatedValue] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        14280,
+        140
+      ],
+      "id": "10000000-0000-4000-8000-000000000071",
+      "name": "Begin Operator Source",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/workspaces/' + $('Prepare Operator').first().json.workspaceId + '/integrations' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "type",
+              "value": "db"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        14520,
+        140
+      ],
+      "id": "10000000-0000-4000-8000-000000000072",
+      "name": "List Operator Integrations",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+      "jsCode": "const context = $('Prepare Operator Begin').first().json;\nconst state = $('Begin Operator Source').first().json.result;\nconst integrations = Array.isArray($json) ? $json : ($json.list || $json.data || []);\nconst title = `automation-data/${context.domain}/operator`;\nconst named = integrations.filter((item) => item && item.title === title);\nif (named.length > 1) throw new Error('duplicate_integration');\nlet existing = null;\nif (state.integrationId) {\n  existing = integrations.find((item) => item.id === state.integrationId);\n  if (!existing || existing.title !== title) throw new Error('integration_identity_mismatch');\n} else if (named.length === 1) existing = named[0];\nconst payload = {\n  title, type: 'database', sub_type: 'pg', is_private: true,\n  config: { client: 'pg', connection: { host: 'automation-data-postgresql.automation-data.svc.cluster.local', port: 5432, user: state.role, password: context.generatedValue, database: context.domain, ssl: false }, searchPath: ['operator'] }\n};\nreturn [{ json: { ...context, ...state, integrationId: existing?.id || null, integrationExists: Boolean(existing), payload } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        14760,
+        140
+      ],
+      "id": "10000000-0000-4000-8000-000000000073",
+      "name": "Prepare Operator Integration",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.integrationExists }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        15000,
+        140
+      ],
+      "id": "10000000-0000-4000-8000-000000000074",
+      "name": "Operator Integration Exists"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/integrations/' + $json.integrationId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        15240,
+        40
+      ],
+      "id": "10000000-0000-4000-8000-000000000075",
+      "name": "Patch Operator Integration",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/workspaces/' + $json.workspaceId + '/integrations' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        15240,
+        240
+      ],
+      "id": "10000000-0000-4000-8000-000000000076",
+      "name": "Create Operator Integration",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Prepare Operator Integration').first().json;\nif (!$json.id || (context.integrationId && $json.id !== context.integrationId)) throw new Error('invalid_integration_response');\nreturn [{ json: { ...context, integrationId: $json.id } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        15480,
+        140
+      ],
+      "id": "10000000-0000-4000-8000-000000000077",
+      "name": "Normalize Operator Integration",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.record_nocodb_integration($1, $2, $3) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain, $json.accessKind, $json.integrationId] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        15720,
+        140
+      ],
+      "id": "10000000-0000-4000-8000-000000000078",
+      "name": "Record Operator Integration",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Operator Queue Slot').first().json;\nreturn [{ json: { ...context, sourcePayload: {\n  fk_integration_id: context.integrationId, alias: 'Operator', type: 'pg',\n  config: { client: 'pg', searchPath: ['operator'] }, inflection_column: 'none', inflection_table: 'none',\n  is_schema_readonly: true, is_data_readonly: false\n} } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        15960,
+        140
+      ],
+      "id": "10000000-0000-4000-8000-000000000079",
+      "name": "Prepare Operator Source Create",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/sources' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.sourcePayload) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": false
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        16200,
+        140
+      ],
+      "id": "10000000-0000-4000-8000-000000000080",
+      "name": "Create Operator Source",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Prepare Operator Source Create').first().json;\nconst body = $json.body;\nif ($json.statusCode !== 200 || !body || typeof body.id !== 'string' || !body.id || Object.keys(body).length !== 1) throw new Error('invalid_source_create_response');\nreturn [{ json: { ...context, sourceCreateJobId: body.id } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        16440,
+        140
+      ],
+      "id": "10000000-0000-4000-8000-000000000081",
+      "name": "Store Operator Job ID",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.record_nocodb_source_job($1, $2, $3) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain, $json.accessKind, $json.sourceCreateJobId] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        16680,
+        140
+      ],
+      "id": "10000000-0000-4000-8000-000000000082",
+      "name": "Record Operator Job",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Store Operator Job ID').first().json;\nconst state = $json.result;\nif (!state || state.state !== 'waiting_for_source' || state.sourceCreateJobId !== context.sourceCreateJobId) throw new Error('stored_job_mismatch');\nreturn [{ json: { ...context, ...state, pollCount: 0 } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        16920,
+        140
+      ],
+      "id": "10000000-0000-4000-8000-000000000083",
+      "name": "Initialize Operator Poll",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "amount": 5,
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        17160,
+        -160
+      ],
+      "id": "10000000-0000-4000-8000-000000000084",
+      "name": "Wait Operator Job"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/jobs/' + $json.baseId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ job: 'source-create' }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        17400,
+        -160
+      ],
+      "id": "10000000-0000-4000-8000-000000000085",
+      "name": "Poll Operator Jobs",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.sourceCreateJobId ? $json : ($('Wait Operator Job').first().json || {});\nconst raw = $json.jobs !== undefined ? $json.jobs : $json;\nconst items = $input.all().map((item) => item.json);\nconst jobs = Array.isArray(raw) ? raw : (raw.list || raw.data || (items.every((item) => item && item.id && item.job) ? items : []));\nif (!context.sourceCreateJobId) throw new Error('missing_stored_job');\nconst matches = jobs.filter((job) => job && job.id === context.sourceCreateJobId && job.job === 'source-create');\nif (matches.length === 0) throw new Error('missing_stored_job');\nif (matches.length > 1) throw new Error('duplicate_stored_job');\nconst status = matches[0].status;\nif (status === 'completed') return [{ json: { ...context, jobState: 'completed' } }];\nif (status === 'failed') return [{ json: { ...context, jobState: 'failed', errorCode: 'source_create_failed' } }];\nconst pollCount = Number(context.pollCount || 0) + 1;\nif (pollCount >= 120) return [{ json: { ...context, pollCount, jobState: 'timeout', errorCode: 'source_job_timeout', preserveWaiting: true } }];\nreturn [{ json: { ...context, pollCount, jobState: 'pending' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        17640,
+        -160
+      ],
+      "id": "10000000-0000-4000-8000-000000000086",
+      "name": "Evaluate Operator Job",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.jobState }}",
+                    "rightValue": "pending",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "pending"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.jobState }}",
+                    "rightValue": "completed",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "completed"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.jobState }}",
+                    "rightValue": "failed",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "failed"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.jobState }}",
+                    "rightValue": "timeout",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "timeout"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        17880,
+        -160
+      ],
+      "id": "10000000-0000-4000-8000-000000000087",
+      "name": "Select Operator Job State"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/sources' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        18120,
+        -100
+      ],
+      "id": "10000000-0000-4000-8000-000000000088",
+      "name": "Discover Operator Sources After Job",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Evaluate Operator Job').first().json;\nif (context.jobState !== 'completed') throw new Error('source_job_not_completed');\nconst items = $input.all().map((item) => item.json);\nconst sources = Array.isArray($json) ? $json : ($json.list || $json.data || (items.every((item) => item && item.id) ? items : []));\nconst matches = sources.filter((source) => source && source.fk_integration_id === context.integrationId && source.alias === 'Operator');\nif (matches.length === 0) throw new Error('missing_source');\nif (matches.length > 1) throw new Error('duplicate_source');\nif (!matches[0].id) throw new Error('invalid_source');\nreturn [{ json: { ...context, sources, sourceId: matches[0].id, selectedIntegrationId: matches[0].fk_integration_id } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        18360,
+        -100
+      ],
+      "id": "10000000-0000-4000-8000-000000000089",
+      "name": "Discover Operator Source After Job",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/sources/' + $json.sourceId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        18600,
+        -100
+      ],
+      "id": "10000000-0000-4000-8000-000000000090",
+      "name": "Get Operator Source",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('Prepare Operator').first().json;\nconst registry = $('Read Operator State').first().json.result || {};\nconst source = $json;\nconst selections = [];\nfor (const name of ['Discover Operator Source', 'Discover Operator Source After Job']) {\n  try { const candidate = $(name).first().json; if (candidate?.sourceId === source.id && candidate?.selectedIntegrationId) selections.push(candidate); } catch {}\n}\nif (selections.length !== 1) throw new Error('operator_source_identity_invalid');\nconst selected = selections[0];\nconst searchPath = source.config?.searchPath || source.config?.search_path || [];\nif (!source.id || source.id !== selected.sourceId || source.base_id !== base.baseId || source.fk_integration_id !== selected.selectedIntegrationId || source.alias !== 'Operator') throw new Error('operator_source_identity_invalid');\nif (!source.fk_integration_id || !Array.isArray(searchPath) || searchPath.length !== 1 || searchPath[0] !== 'operator') throw new Error('operator_schema_invalid');\nif (source.is_data_readonly !== false || source.is_schema_readonly !== true) throw new Error('operator_flags_invalid');\nconst sourceCreateJobId = selected.sourceCreateJobId || registry.sourceCreateJobId || base.sourceCreateJobId || null;\nconst sourceCreateJobState = selected.jobState === 'completed' ? 'completed' : null;\nreturn [{ json: { ...base, ...registry, baseId: registry.baseId ?? base.baseId, sourceId: source.id, integrationId: selected.selectedIntegrationId, sourceCreateJobId, sourceCreateJobState, accessKind: 'operator', sourceDiscovered: true, sourceReadBack: true, dataEditAllowed: source.is_data_readonly === false, schemaEditAllowed: source.is_schema_readonly === false } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        18840,
+        -100
+      ],
+      "id": "10000000-0000-4000-8000-000000000091",
+      "name": "Validate Operator Source",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.validate_nocodb_access($1, $2) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain, $json.accessKind] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        19080,
+        -100
+      ],
+      "id": "10000000-0000-4000-8000-000000000092",
+      "name": "Validate Operator PostgreSQL",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Validate Operator Source').first().json;\nconst result = $json.result;\nconst fields = ['valid', 'loginValid', 'schemaPrivilegesValid', 'objectPrivilegesValid', 'defaultPrivilegesValid', 'outsideSchemaDenied', 'databaseIsolationValid', 'forbiddenAttributesDenied', 'forbiddenMembershipsDenied', 'ddlDenied', 'controlledDmlPresent'];\nif (!result || result.valid !== true || result.accessKind !== 'operator' || fields.some((field) => typeof result[field] !== 'boolean')) throw new Error('operator_postgresql_invalid');\nconst postgresqlValidation = Object.fromEntries(fields.map((field) => [field, result[field]]));\nconst request = $('Normalize Source Request').first().json;\nreturn [{ json: { ...context, postgresqlValidation, rotateTarget: request.operation === 'rotate' && request.requestedAccessKind === 'operator' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        19320,
+        -100
+      ],
+      "id": "10000000-0000-4000-8000-000000000093",
+      "name": "Require Operator PostgreSQL",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.rotateTarget }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        19560,
+        -100
+      ],
+      "id": "10000000-0000-4000-8000-000000000094",
+      "name": "Rotate Operator"
+    },
+    {
+      "parameters": {
+        "action": "generate",
+        "dataPropertyName": "generatedValue",
+        "encodingType": "base64",
+        "stringLength": 48
+      },
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        19800,
+        -220
+      ],
+      "id": "10000000-0000-4000-8000-000000000095",
+      "name": "Generate Operator Rotation Value",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "if (!$json.generatedValue) throw new Error('generation_failed');\nreturn [{ json: $json }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20040,
+        -220
+      ],
+      "id": "10000000-0000-4000-8000-000000000096",
+      "name": "Prepare Operator Rotation",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.rotate_nocodb_source_credential($1, $2, $3) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain, $json.accessKind, $json.generatedValue] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        20280,
+        -220
+      ],
+      "id": "10000000-0000-4000-8000-000000000097",
+      "name": "Rotate Operator Credential",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+      "jsCode": "const context = $('Prepare Operator Rotation').first().json;\nconst state = $json.result;\nif (!state || state.state !== 'rotating' || !state.integrationId || state.sourceId !== context.sourceId) throw new Error('operator_rotation_state_invalid');\nreturn [{ json: { ...context, ...state, payload: {\n  title: `automation-data/${context.domain}/operator`, type: 'database', sub_type: 'pg', is_private: true,\n  config: { client: 'pg', connection: { host: 'automation-data-postgresql.automation-data.svc.cluster.local', port: 5432, user: state.role, password: context.generatedValue, database: context.domain, ssl: false }, searchPath: ['operator'] }\n} } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20520,
+        -220
+      ],
+      "id": "10000000-0000-4000-8000-000000000098",
+      "name": "Build Operator Rotation Integration",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/integrations/' + $json.integrationId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        20760,
+        -220
+      ],
+      "id": "10000000-0000-4000-8000-000000000099",
+      "name": "Patch Operator Rotation Integration",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Build Operator Rotation Integration').first().json;\nif (!$json.id || $json.id !== context.integrationId) throw new Error('operator_rotation_integration_invalid');\nreturn [{ json: context }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        21000,
+        -220
+      ],
+      "id": "10000000-0000-4000-8000-000000000100",
+      "name": "Normalize Operator Rotation",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.validate_nocodb_access($1, $2) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain, $json.accessKind] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        21240,
+        -220
+      ],
+      "id": "10000000-0000-4000-8000-000000000101",
+      "name": "Validate Rotated Operator PostgreSQL",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Normalize Operator Rotation').first().json;\nconst result = $json.result;\nconst fields = ['valid', 'loginValid', 'schemaPrivilegesValid', 'objectPrivilegesValid', 'defaultPrivilegesValid', 'outsideSchemaDenied', 'databaseIsolationValid', 'forbiddenAttributesDenied', 'forbiddenMembershipsDenied', 'ddlDenied', 'controlledDmlPresent'];\nif (!result || result.valid !== true || result.accessKind !== 'operator' || fields.some((field) => typeof result[field] !== 'boolean')) throw new Error('rotated_operator_invalid');\nconst postgresqlValidation = Object.fromEntries(fields.map((field) => [field, result[field]]));\nreturn [{ json: { ...context, postgresqlValidation } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        21480,
+        -220
+      ],
+      "id": "10000000-0000-4000-8000-000000000102",
+      "name": "Keep Rotated Operator",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.record_nocodb_source_ready($1, $2, $3) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain, $json.accessKind, $json.sourceId] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        21720,
+        -100
+      ],
+      "id": "10000000-0000-4000-8000-000000000103",
+      "name": "Record Operator Ready",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $('Start Reader').first().json.baseId + '/sources' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [5640, 420],
+      "id": "10000000-0000-4000-8000-000000000109",
+      "name": "Relist Reader Sources Before Queue",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const direct = $json.currentIntegrationId ? $json : null;\nconst normalized = direct || $('Normalize Reader Integration').first().json;\nconst state = direct || $('Record Reader Integration').first().json.result;\nif (!state || !state.integrationId || (normalized.integrationId && normalized.integrationId !== state.integrationId)) throw new Error('integration_identity_mismatch');\nconst items = $input.all().map((item) => item.json);\nconst raw = direct ? direct.sources : $json;\nconst sources = Array.isArray(raw) ? raw : (raw.list || raw.data || (items.every((item) => item && item.id) ? items : []));\nconst aliasMatches = sources.filter((source) => source && source.alias === 'Read Model');\nconst integrationMatches = sources.filter((source) => source && source.fk_integration_id === state.integrationId);\nconst exact = aliasMatches.filter((source) => source.fk_integration_id === state.integrationId);\nif (exact.length) throw new Error('source_exists_before_queue');\nif (aliasMatches.length) throw new Error('source_integration_mismatch');\nif (integrationMatches.length) throw new Error('source_alias_mismatch');\nreturn [{ json: { ...normalized, ...state, currentIntegrationId: state.integrationId, integrationId: state.integrationId, sources } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5880, 420],
+      "id": "10000000-0000-4000-8000-000000000110",
+      "name": "Require Reader Queue Slot",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2},
+          "conditions": [
+            {"leftValue": "={{ $json.state }}", "rightValue": "error", "operator": {"type": "string", "operation": "equals"}},
+            {"leftValue": "={{ $json.operation }}", "rightValue": "rotate", "operator": {"type": "string", "operation": "equals"}},
+            {"leftValue": "={{ $json.requestedAccessKind }}", "rightValue": "reader", "operator": {"type": "string", "operation": "equals"}}
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [8760, 180],
+      "id": "10000000-0000-4000-8000-000000000111",
+      "name": "Reader Error Rotation"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/tables' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [9000, 100],
+      "id": "10000000-0000-4000-8000-000000000112",
+      "name": "List Reader Reflected Tables",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.sourceId ? $json : $('Reader Error Rotation').first().json;\nconst items = $input.all().map((item) => item.json);\nconst raw = $json.tables !== undefined ? $json.tables : $json;\nconst tables = Array.isArray(raw) ? raw : (raw.list || raw.data || (items.every((item) => item && item.id) ? items : []));\nconst reflected = tables.filter((table) => table && table.source_id === context.sourceId);\nif (reflected.length === 0 || reflected.some((table) => !table.id)) throw new Error('reader_reflection_missing');\nreflected.sort((left, right) => left.id.localeCompare(right.id));\nreturn [{ json: { ...context, probeTableId: reflected[0].id, reflectedTableCount: reflected.length } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [9240, 100],
+      "id": "10000000-0000-4000-8000-000000000113",
+      "name": "Select Reader Probe Table",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.probeTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "limit", "value": "1"}]},
+        "options": {"response": {"response": {"fullResponse": true, "neverError": false}}}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [9480, 100],
+      "id": "10000000-0000-4000-8000-000000000114",
+      "name": "Probe Reader Source Data",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.context || $('Select Reader Probe Table').first().json;\nconst body = $json.body;\nif ($json.statusCode !== 200 || !body || !Array.isArray(body.list) || !body.pageInfo || body.list.length > 1) throw new Error('data_probe_invalid');\nreturn [{ json: { ...context, dataProbeReady: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [9720, 100],
+      "id": "10000000-0000-4000-8000-000000000115",
+      "name": "Require Reader Data Probe",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/tables' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [10920, 60],
+      "id": "10000000-0000-4000-8000-000000000116",
+      "name": "List Rotated Reader Tables",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.sourceId ? $json : $('Normalize Reader Rotation').first().json;\nconst items = $input.all().map((item) => item.json);\nconst raw = $json.tables !== undefined ? $json.tables : $json;\nconst tables = Array.isArray(raw) ? raw : (raw.list || raw.data || (items.every((item) => item && item.id) ? items : []));\nconst reflected = tables.filter((table) => table && table.source_id === context.sourceId);\nif (reflected.length === 0 || reflected.some((table) => !table.id)) throw new Error('reader_reflection_missing');\nreflected.sort((left, right) => left.id.localeCompare(right.id));\nreturn [{ json: { ...context, probeTableId: reflected[0].id, reflectedTableCount: reflected.length } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [11160, 60],
+      "id": "10000000-0000-4000-8000-000000000117",
+      "name": "Select Rotated Reader Probe Table",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.probeTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "limit", "value": "1"}]},
+        "options": {"response": {"response": {"fullResponse": true, "neverError": false}}}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [11400, 60],
+      "id": "10000000-0000-4000-8000-000000000118",
+      "name": "Probe Rotated Reader Data",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.context || $('Select Rotated Reader Probe Table').first().json;\nconst body = $json.body;\nif ($json.statusCode !== 200 || !body || !Array.isArray(body.list) || !body.pageInfo || body.list.length > 1) throw new Error('data_probe_invalid');\nreturn [{ json: { ...context, dataProbeReady: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [11640, 60],
+      "id": "10000000-0000-4000-8000-000000000119",
+      "name": "Require Rotated Reader Data Probe",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $('Prepare Operator').first().json.baseId + '/sources' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [15960, 340],
+      "id": "10000000-0000-4000-8000-000000000120",
+      "name": "Relist Operator Sources Before Queue",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const direct = $json.currentIntegrationId ? $json : null;\nconst normalized = direct || $('Normalize Operator Integration').first().json;\nconst state = direct || $('Record Operator Integration').first().json.result;\nif (!state || !state.integrationId || (normalized.integrationId && normalized.integrationId !== state.integrationId)) throw new Error('integration_identity_mismatch');\nconst items = $input.all().map((item) => item.json);\nconst raw = direct ? direct.sources : $json;\nconst sources = Array.isArray(raw) ? raw : (raw.list || raw.data || (items.every((item) => item && item.id) ? items : []));\nconst aliasMatches = sources.filter((source) => source && source.alias === 'Operator');\nconst integrationMatches = sources.filter((source) => source && source.fk_integration_id === state.integrationId);\nconst exact = aliasMatches.filter((source) => source.fk_integration_id === state.integrationId);\nif (exact.length) throw new Error('source_exists_before_queue');\nif (aliasMatches.length) throw new Error('source_integration_mismatch');\nif (integrationMatches.length) throw new Error('source_alias_mismatch');\nreturn [{ json: { ...normalized, ...state, currentIntegrationId: state.integrationId, integrationId: state.integrationId, sources } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [16200, 340],
+      "id": "10000000-0000-4000-8000-000000000121",
+      "name": "Require Operator Queue Slot",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2},
+          "conditions": [
+            {"leftValue": "={{ $json.state }}", "rightValue": "error", "operator": {"type": "string", "operation": "equals"}},
+            {"leftValue": "={{ $json.operation }}", "rightValue": "rotate", "operator": {"type": "string", "operation": "equals"}},
+            {"leftValue": "={{ $json.requestedAccessKind }}", "rightValue": "operator", "operator": {"type": "string", "operation": "equals"}}
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [19080, 80],
+      "id": "10000000-0000-4000-8000-000000000122",
+      "name": "Operator Error Rotation"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/tables' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [19320, 20],
+      "id": "10000000-0000-4000-8000-000000000123",
+      "name": "List Operator Reflected Tables",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.sourceId ? $json : $('Operator Error Rotation').first().json;\nconst items = $input.all().map((item) => item.json);\nconst raw = $json.tables !== undefined ? $json.tables : $json;\nconst tables = Array.isArray(raw) ? raw : (raw.list || raw.data || (items.every((item) => item && item.id) ? items : []));\nconst reflected = tables.filter((table) => table && table.source_id === context.sourceId);\nif (reflected.length === 0 || reflected.some((table) => !table.id)) throw new Error('operator_reflection_missing');\nreflected.sort((left, right) => left.id.localeCompare(right.id));\nreturn [{ json: { ...context, probeTableId: reflected[0].id, reflectedTableCount: reflected.length } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [19560, 20],
+      "id": "10000000-0000-4000-8000-000000000124",
+      "name": "Select Operator Probe Table",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.probeTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "limit", "value": "1"}]},
+        "options": {"response": {"response": {"fullResponse": true, "neverError": false}}}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [19800, 20],
+      "id": "10000000-0000-4000-8000-000000000125",
+      "name": "Probe Operator Source Data",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.context || $('Select Operator Probe Table').first().json;\nconst body = $json.body;\nif ($json.statusCode !== 200 || !body || !Array.isArray(body.list) || !body.pageInfo || body.list.length > 1) throw new Error('data_probe_invalid');\nreturn [{ json: { ...context, dataProbeReady: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [20040, 20],
+      "id": "10000000-0000-4000-8000-000000000126",
+      "name": "Require Operator Data Probe",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/tables' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [21240, -20],
+      "id": "10000000-0000-4000-8000-000000000127",
+      "name": "List Rotated Operator Tables",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.sourceId ? $json : $('Normalize Operator Rotation').first().json;\nconst items = $input.all().map((item) => item.json);\nconst raw = $json.tables !== undefined ? $json.tables : $json;\nconst tables = Array.isArray(raw) ? raw : (raw.list || raw.data || (items.every((item) => item && item.id) ? items : []));\nconst reflected = tables.filter((table) => table && table.source_id === context.sourceId);\nif (reflected.length === 0 || reflected.some((table) => !table.id)) throw new Error('operator_reflection_missing');\nreflected.sort((left, right) => left.id.localeCompare(right.id));\nreturn [{ json: { ...context, probeTableId: reflected[0].id, reflectedTableCount: reflected.length } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [21480, -20],
+      "id": "10000000-0000-4000-8000-000000000128",
+      "name": "Select Rotated Operator Probe Table",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.probeTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "limit", "value": "1"}]},
+        "options": {"response": {"response": {"fullResponse": true, "neverError": false}}}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [21720, -20],
+      "id": "10000000-0000-4000-8000-000000000129",
+      "name": "Probe Rotated Operator Data",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.context || $('Select Rotated Operator Probe Table').first().json;\nconst body = $json.body;\nif ($json.statusCode !== 200 || !body || !Array.isArray(body.list) || !body.pageInfo || body.list.length > 1) throw new Error('data_probe_invalid');\nreturn [{ json: { ...context, dataProbeReady: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [21960, -20],
+      "id": "10000000-0000-4000-8000-000000000130",
+      "name": "Require Rotated Operator Data Probe",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const stored = $json.result;\nconst request = $('Normalize Source Request').first().json;\nconst evidenceNode = request.operation === 'rotate' && request.requestedAccessKind === 'reader' ? 'Keep Rotated Reader' : 'Require Reader PostgreSQL';\nconst evidence = $(evidenceNode).first().json;\nconst observedJobState = evidence.sourceCreateJobState;\nif (!stored || stored.state !== 'ready' || stored.accessKind !== 'reader' || stored.sourceId !== evidence.sourceId || stored.integrationId !== evidence.integrationId || stored.sourceCreateJobId !== evidence.sourceCreateJobId || (observedJobState !== null && observedJobState !== 'completed') || evidence.sourceDiscovered !== true || evidence.sourceReadBack !== true || typeof evidence.dataEditAllowed !== 'boolean' || typeof evidence.schemaEditAllowed !== 'boolean' || !evidence.postgresqlValidation || evidence.postgresqlValidation.valid !== true) throw new Error('reader_ready_evidence_invalid');\nreturn [{ json: { ...stored, sourceCreateJobState: observedJobState, sourceDiscovered: evidence.sourceDiscovered, sourceReadBack: evidence.sourceReadBack, dataEditAllowed: evidence.dataEditAllowed, schemaEditAllowed: evidence.schemaEditAllowed, postgresqlValidation: evidence.postgresqlValidation } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [11640, -40],
+      "id": "10000000-0000-4000-8000-000000000133",
+      "name": "Merge Reader Ready Evidence",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const stored = $json.result;\nconst request = $('Normalize Source Request').first().json;\nconst evidenceNode = request.operation === 'rotate' && request.requestedAccessKind === 'operator' ? 'Keep Rotated Operator' : 'Require Operator PostgreSQL';\nconst evidence = $(evidenceNode).first().json;\nconst observedJobState = evidence.sourceCreateJobState;\nif (!stored || stored.state !== 'ready' || stored.accessKind !== 'operator' || stored.sourceId !== evidence.sourceId || stored.integrationId !== evidence.integrationId || stored.sourceCreateJobId !== evidence.sourceCreateJobId || (observedJobState !== null && observedJobState !== 'completed') || evidence.sourceDiscovered !== true || evidence.sourceReadBack !== true || typeof evidence.dataEditAllowed !== 'boolean' || typeof evidence.schemaEditAllowed !== 'boolean' || !evidence.postgresqlValidation || evidence.postgresqlValidation.valid !== true) throw new Error('operator_ready_evidence_invalid');\nreturn [{ json: { ...stored, sourceCreateJobState: observedJobState, sourceDiscovered: evidence.sourceDiscovered, sourceReadBack: evidence.sourceReadBack, dataEditAllowed: evidence.dataEditAllowed, schemaEditAllowed: evidence.schemaEditAllowed, postgresqlValidation: evidence.postgresqlValidation } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [21960, -100],
+      "id": "10000000-0000-4000-8000-000000000136",
+      "name": "Merge Operator Ready Evidence",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.read_nocodb_source_state($1, $2) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain, 'operator'] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [12120, 180],
+      "id": "10000000-0000-4000-8000-000000000137",
+      "name": "Read Optional Operator State",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Start Operator').first().json;\nconst state = $json.result;\nif (context.plan.operatorRequested === true && (!state || state.accessKind !== 'operator' || state.state !== 'awaiting_grants')) throw new Error('optional_operator_state_invalid');\nreturn [{ json: { ...context, operator: context.plan.operatorRequested === true ? state : null } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [12360, 180],
+      "id": "10000000-0000-4000-8000-000000000138",
+      "name": "Capture Optional Operator State",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Normalize Source Request').first().json;\nconst final = $json.result || $json;\nlet reader = final.reader || (final.accessKind === 'reader' ? final : null);\nif (!reader) reader = $('Merge Reader Ready Evidence').first().json;\nconst operator = final.operator !== undefined ? final.operator : (final.accessKind === 'operator' ? final : null);\nconst validationFields = ['valid', 'loginValid', 'schemaPrivilegesValid', 'objectPrivilegesValid', 'defaultPrivilegesValid', 'outsideSchemaDenied', 'databaseIsolationValid', 'forbiddenAttributesDenied', 'forbiddenMembershipsDenied', 'ddlDenied', 'controlledDmlPresent'];\nconst present = (value) => typeof value === 'string' && value.length > 0;\nconst summarize = (source, accessKind) => {\n  if (!source) return null;\n  if (source.accessKind !== accessKind || typeof source.generation !== 'number' || typeof source.credentialGeneration !== 'number' || !present(source.operationStartedAt) || !present(source.updatedAt)) throw new Error('source_response_evidence_invalid');\n  const ready = source.state === 'ready';\n  const observedJobState = source.sourceCreateJobState ?? null;\n  if (ready && (!present(source.sourceId) || !present(source.integrationId) || !present(source.sourceCreateJobId) || (observedJobState !== null && observedJobState !== 'completed') || source.sourceDiscovered !== true || source.sourceReadBack !== true || typeof source.dataEditAllowed !== 'boolean' || typeof source.schemaEditAllowed !== 'boolean' || !present(source.validatedAt) || !source.postgresqlValidation || validationFields.some((field) => typeof source.postgresqlValidation[field] !== 'boolean') || source.postgresqlValidation.valid !== true)) throw new Error('source_response_evidence_invalid');\n  return {\n    accessKind, state: source.state, sourceId: source.sourceId || null, integrationId: source.integrationId || null,\n    sourceCreateJobId: source.sourceCreateJobId || null, sourceCreateJobState: ready ? observedJobState : null,\n    sourceDiscovered: ready ? source.sourceDiscovered : false, sourceReadBack: ready ? source.sourceReadBack : false,\n    generation: source.generation, credentialGeneration: source.credentialGeneration, operationStartedAt: source.operationStartedAt,\n    updatedAt: source.updatedAt, validatedAt: source.validatedAt || null, dataEditAllowed: ready ? source.dataEditAllowed : null,\n    schemaEditAllowed: ready ? source.schemaEditAllowed : null, postgresqlValidation: ready ? Object.fromEntries(validationFields.map((field) => [field, source.postgresqlValidation[field]])) : null\n  };\n};\nconst readerSummary = summarize(reader, 'reader');\nconst operatorSummary = summarize(operator, 'operator');\nconst ok = readerSummary?.state === 'ready' && (!operatorSummary || ['ready', 'awaiting_grants'].includes(operatorSummary.state)) && final.jobState !== 'timeout';\nreturn [{ json: { ok, domain: request.domain, operation: request.operation, baseId: reader.baseId, reader: readerSummary, operator: operatorSummary, errorCode: final.errorCode || null } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        21960,
+        40
+      ],
+      "id": "10000000-0000-4000-8000-000000000104",
+      "name": "Prepare Source Response",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.domain ? $json : {};\nconst request = $('Normalize Source Request').first().json;\nconst sourceOperation = request.operation === 'rotate' && request.requestedAccessKind === context.accessKind ? 'rotate' : 'sync';\nreturn [{ json: { ...context, sourceOperation, errorCode: context.errorCode || 'source_operation_failed' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        19800,
+        260
+      ],
+      "id": "10000000-0000-4000-8000-000000000105",
+      "name": "Prepare Source Error",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.record_nocodb_source_error($1, $2, $3, $4) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain, $json.accessKind, $json.sourceOperation, $json.errorCode] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        20040,
+        260
+      ],
+      "id": "10000000-0000-4000-8000-000000000106",
+      "name": "Record Source Error",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "let context = $json.domain ? $json : {};\ntry { const recorded = $('Prepare Source Error').first().json; if (recorded?.domain) context = recorded; } catch {}\nreturn [{ json: { ok: false, domain: context.domain || null, accessKind: context.accessKind || null, errorCode: context.errorCode || 'source_operation_failed' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        21960,
+        260
+      ],
+      "id": "10000000-0000-4000-8000-000000000107",
+      "name": "Prepare Source Error Response",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        22200,
+        80
+      ],
+      "id": "10000000-0000-4000-8000-000000000108",
+      "name": "Respond"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Source Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Source Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Source Request": {
+      "main": [
+        [
+          {
+            "node": "Validate Managed Domain",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Managed Domain": {
+      "main": [
+        [
+          {
+            "node": "Require Ready Managed Domain",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Ready Managed Domain": {
+      "main": [
+        [
+          {
+            "node": "Prepare NocoDB Access",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare NocoDB Access": {
+      "main": [
+        [
+          {
+            "node": "Keep Access Plan",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep Access Plan": {
+      "main": [
+        [
+          {
+            "node": "List Domain Bases",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Domain Bases": {
+      "main": [
+        [
+          {
+            "node": "Resolve Domain Base",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Domain Base": {
+      "main": [
+        [
+          {
+            "node": "Domain Base Exists",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Domain Base Exists": {
+      "main": [
+        [
+          {
+            "node": "Use Domain Base",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Domain Base",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use Domain Base": {
+      "main": [
+        [
+          {
+            "node": "Start Reader",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Domain Base": {
+      "main": [
+        [
+          {
+            "node": "Normalize Domain Base",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Domain Base": {
+      "main": [
+        [
+          {
+            "node": "Start Reader",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Reader": {
+      "main": [
+        [
+          {
+            "node": "Read Reader State",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Reader State": {
+      "main": [
+        [
+          {
+            "node": "Merge Reader State",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Reader State": {
+      "main": [
+        [
+          {
+            "node": "Reader Waiting",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reader Waiting": {
+      "main": [
+        [
+          {
+            "node": "Resume Reader Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "List Reader Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resume Reader Job": {
+      "main": [
+        [
+          {
+            "node": "Wait Reader Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Reader Sources": {
+      "main": [
+        [
+          {
+            "node": "Inspect Reader Sources",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inspect Reader Sources": {
+      "main": [
+        [
+          {
+            "node": "Select Reader Source Action",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Reader Source Action": {
+      "main": [
+        [
+          {
+            "node": "Discover Reader Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate Reader Password",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discover Reader Source": {
+      "main": [
+        [
+          {
+            "node": "Get Reader Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Reader Password": {
+      "main": [
+        [
+          {
+            "node": "Prepare Reader Begin",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Reader Begin": {
+      "main": [
+        [
+          {
+            "node": "Begin Reader Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Begin Reader Source": {
+      "main": [
+        [
+          {
+            "node": "List Reader Integrations",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Reader Integrations": {
+      "main": [
+        [
+          {
+            "node": "Prepare Reader Integration",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Reader Integration": {
+      "main": [
+        [
+          {
+            "node": "Reader Integration Exists",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reader Integration Exists": {
+      "main": [
+        [
+          {
+            "node": "Patch Reader Integration",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Reader Integration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Patch Reader Integration": {
+      "main": [
+        [
+          {
+            "node": "Normalize Reader Integration",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Reader Integration": {
+      "main": [
+        [
+          {
+            "node": "Normalize Reader Integration",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Reader Integration": {
+      "main": [
+        [
+          {
+            "node": "Record Reader Integration",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Reader Integration": {
+      "main": [
+        [
+          {
+            "node": "Relist Reader Sources Before Queue",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Reader Source Create": {
+      "main": [
+        [
+          {
+            "node": "Create Reader Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Reader Source": {
+      "main": [
+        [
+          {
+            "node": "Store Reader Job ID",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Reader Job ID": {
+      "main": [
+        [
+          {
+            "node": "Record Reader Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Reader Job": {
+      "main": [
+        [
+          {
+            "node": "Initialize Reader Poll",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Reader Poll": {
+      "main": [
+        [
+          {
+            "node": "Wait Reader Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Reader Job": {
+      "main": [
+        [
+          {
+            "node": "Poll Reader Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Poll Reader Jobs": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Reader Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Reader Job": {
+      "main": [
+        [
+          {
+            "node": "Select Reader Job State",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Reader Job State": {
+      "main": [
+        [
+          {
+            "node": "Wait Reader Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Discover Reader Sources After Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discover Reader Sources After Job": {
+      "main": [
+        [
+          {
+            "node": "Discover Reader Source After Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discover Reader Source After Job": {
+      "main": [
+        [
+          {
+            "node": "Get Reader Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Reader Source": {
+      "main": [
+        [
+          {
+            "node": "Validate Reader Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Reader Source": {
+      "main": [
+        [
+          {
+            "node": "Reader Error Rotation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Reader PostgreSQL": {
+      "main": [
+        [
+          {
+            "node": "Require Reader PostgreSQL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Reader PostgreSQL": {
+      "main": [
+        [
+          {
+            "node": "Rotate Reader",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rotate Reader": {
+      "main": [
+        [
+          {
+            "node": "Generate Reader Rotation Value",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record Reader Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Reader Rotation Value": {
+      "main": [
+        [
+          {
+            "node": "Prepare Reader Rotation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Reader Rotation": {
+      "main": [
+        [
+          {
+            "node": "Rotate Reader Credential",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rotate Reader Credential": {
+      "main": [
+        [
+          {
+            "node": "Build Reader Rotation Integration",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Reader Rotation Integration": {
+      "main": [
+        [
+          {
+            "node": "Patch Reader Rotation Integration",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Patch Reader Rotation Integration": {
+      "main": [
+        [
+          {
+            "node": "Normalize Reader Rotation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Reader Rotation": {
+      "main": [
+        [
+          {
+            "node": "List Rotated Reader Tables",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Rotated Reader PostgreSQL": {
+      "main": [
+        [
+          {
+            "node": "Keep Rotated Reader",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep Rotated Reader": {
+      "main": [
+        [
+          {
+            "node": "Record Reader Ready",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Reader Ready": {
+      "main": [
+        [
+          {
+            "node": "Merge Reader Ready Evidence",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Operator": {
+      "main": [
+        [
+          {
+            "node": "Operator Required",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Operator Required": {
+      "main": [
+        [
+          {
+            "node": "Prepare Operator",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Read Optional Operator State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Operator": {
+      "main": [
+        [
+          {
+            "node": "Read Operator State",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Operator State": {
+      "main": [
+        [
+          {
+            "node": "Merge Operator State",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Operator State": {
+      "main": [
+        [
+          {
+            "node": "Operator Waiting",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Operator Waiting": {
+      "main": [
+        [
+          {
+            "node": "Resume Operator Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "List Operator Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resume Operator Job": {
+      "main": [
+        [
+          {
+            "node": "Wait Operator Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Operator Sources": {
+      "main": [
+        [
+          {
+            "node": "Inspect Operator Sources",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inspect Operator Sources": {
+      "main": [
+        [
+          {
+            "node": "Select Operator Source Action",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Operator Source Action": {
+      "main": [
+        [
+          {
+            "node": "Discover Operator Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate Operator Password",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discover Operator Source": {
+      "main": [
+        [
+          {
+            "node": "Get Operator Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Operator Password": {
+      "main": [
+        [
+          {
+            "node": "Prepare Operator Begin",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Operator Begin": {
+      "main": [
+        [
+          {
+            "node": "Begin Operator Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Begin Operator Source": {
+      "main": [
+        [
+          {
+            "node": "List Operator Integrations",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Operator Integrations": {
+      "main": [
+        [
+          {
+            "node": "Prepare Operator Integration",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Operator Integration": {
+      "main": [
+        [
+          {
+            "node": "Operator Integration Exists",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Operator Integration Exists": {
+      "main": [
+        [
+          {
+            "node": "Patch Operator Integration",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Operator Integration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Patch Operator Integration": {
+      "main": [
+        [
+          {
+            "node": "Normalize Operator Integration",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Operator Integration": {
+      "main": [
+        [
+          {
+            "node": "Normalize Operator Integration",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Operator Integration": {
+      "main": [
+        [
+          {
+            "node": "Record Operator Integration",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Operator Integration": {
+      "main": [
+        [
+          {
+            "node": "Relist Operator Sources Before Queue",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Operator Source Create": {
+      "main": [
+        [
+          {
+            "node": "Create Operator Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Operator Source": {
+      "main": [
+        [
+          {
+            "node": "Store Operator Job ID",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Operator Job ID": {
+      "main": [
+        [
+          {
+            "node": "Record Operator Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Operator Job": {
+      "main": [
+        [
+          {
+            "node": "Initialize Operator Poll",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Operator Poll": {
+      "main": [
+        [
+          {
+            "node": "Wait Operator Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Operator Job": {
+      "main": [
+        [
+          {
+            "node": "Poll Operator Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Poll Operator Jobs": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Operator Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Operator Job": {
+      "main": [
+        [
+          {
+            "node": "Select Operator Job State",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Operator Job State": {
+      "main": [
+        [
+          {
+            "node": "Wait Operator Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Discover Operator Sources After Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discover Operator Sources After Job": {
+      "main": [
+        [
+          {
+            "node": "Discover Operator Source After Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discover Operator Source After Job": {
+      "main": [
+        [
+          {
+            "node": "Get Operator Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Operator Source": {
+      "main": [
+        [
+          {
+            "node": "Validate Operator Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Operator Source": {
+      "main": [
+        [
+          {
+            "node": "Operator Error Rotation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Operator PostgreSQL": {
+      "main": [
+        [
+          {
+            "node": "Require Operator PostgreSQL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Operator PostgreSQL": {
+      "main": [
+        [
+          {
+            "node": "Rotate Operator",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rotate Operator": {
+      "main": [
+        [
+          {
+            "node": "Generate Operator Rotation Value",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record Operator Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Operator Rotation Value": {
+      "main": [
+        [
+          {
+            "node": "Prepare Operator Rotation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Operator Rotation": {
+      "main": [
+        [
+          {
+            "node": "Rotate Operator Credential",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rotate Operator Credential": {
+      "main": [
+        [
+          {
+            "node": "Build Operator Rotation Integration",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Operator Rotation Integration": {
+      "main": [
+        [
+          {
+            "node": "Patch Operator Rotation Integration",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Patch Operator Rotation Integration": {
+      "main": [
+        [
+          {
+            "node": "Normalize Operator Rotation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Operator Rotation": {
+      "main": [
+        [
+          {
+            "node": "List Rotated Operator Tables",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Rotated Operator PostgreSQL": {
+      "main": [
+        [
+          {
+            "node": "Keep Rotated Operator",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep Rotated Operator": {
+      "main": [
+        [
+          {
+            "node": "Record Operator Ready",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Operator Ready": {
+      "main": [
+        [
+          {
+            "node": "Merge Operator Ready Evidence",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Relist Reader Sources Before Queue": {
+      "main": [
+        [{"node": "Require Reader Queue Slot", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Require Reader Queue Slot": {
+      "main": [
+        [{"node": "Prepare Reader Source Create", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Reader Error Rotation": {
+      "main": [
+        [{"node": "Generate Reader Rotation Value", "type": "main", "index": 0}],
+        [{"node": "List Reader Reflected Tables", "type": "main", "index": 0}]
+      ]
+    },
+    "List Reader Reflected Tables": {
+      "main": [
+        [{"node": "Select Reader Probe Table", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Select Reader Probe Table": {
+      "main": [
+        [{"node": "Probe Reader Source Data", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Probe Reader Source Data": {
+      "main": [
+        [{"node": "Require Reader Data Probe", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Require Reader Data Probe": {
+      "main": [
+        [{"node": "Validate Reader PostgreSQL", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "List Rotated Reader Tables": {
+      "main": [
+        [{"node": "Select Rotated Reader Probe Table", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Select Rotated Reader Probe Table": {
+      "main": [
+        [{"node": "Probe Rotated Reader Data", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Probe Rotated Reader Data": {
+      "main": [
+        [{"node": "Require Rotated Reader Data Probe", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Require Rotated Reader Data Probe": {
+      "main": [
+        [{"node": "Validate Rotated Reader PostgreSQL", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Relist Operator Sources Before Queue": {
+      "main": [
+        [{"node": "Require Operator Queue Slot", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Require Operator Queue Slot": {
+      "main": [
+        [{"node": "Prepare Operator Source Create", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Operator Error Rotation": {
+      "main": [
+        [{"node": "Generate Operator Rotation Value", "type": "main", "index": 0}],
+        [{"node": "List Operator Reflected Tables", "type": "main", "index": 0}]
+      ]
+    },
+    "List Operator Reflected Tables": {
+      "main": [
+        [{"node": "Select Operator Probe Table", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Select Operator Probe Table": {
+      "main": [
+        [{"node": "Probe Operator Source Data", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Probe Operator Source Data": {
+      "main": [
+        [{"node": "Require Operator Data Probe", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Require Operator Data Probe": {
+      "main": [
+        [{"node": "Validate Operator PostgreSQL", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "List Rotated Operator Tables": {
+      "main": [
+        [{"node": "Select Rotated Operator Probe Table", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Select Rotated Operator Probe Table": {
+      "main": [
+        [{"node": "Probe Rotated Operator Data", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Probe Rotated Operator Data": {
+      "main": [
+        [{"node": "Require Rotated Operator Data Probe", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Require Rotated Operator Data Probe": {
+      "main": [
+        [{"node": "Validate Rotated Operator PostgreSQL", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Prepare Source Error": {
+      "main": [
+        [
+          {
+            "node": "Record Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Source Error": {
+      "main": [
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Reader Ready Evidence": {
+      "main": [
+        [{"node": "Start Operator", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Merge Operator Ready Evidence": {
+      "main": [
+        [{"node": "Prepare Source Response", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error", "type": "main", "index": 0}]
+      ]
+    },
+    "Read Optional Operator State": {
+      "main": [
+        [{"node": "Capture Optional Operator State", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error Response", "type": "main", "index": 0}]
+      ]
+    },
+    "Capture Optional Operator State": {
+      "main": [
+        [{"node": "Prepare Source Response", "type": "main", "index": 0}],
+        [{"node": "Prepare Source Error Response", "type": "main", "index": 0}]
+      ]
+    },
+    "Prepare Source Response": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Source Error Response": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "none",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false,
+    "saveExecutionProgress": false
+  },
+  "tags": []
+}

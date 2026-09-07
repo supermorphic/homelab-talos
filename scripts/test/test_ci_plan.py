@@ -371,6 +371,7 @@ class OwnershipContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.impact = load_impact(IMPACT, CATALOG)
+        catalog = yaml.safe_load(CATALOG.read_text())
         cls.group_work = {}
         for group in FULL:
             completed = subprocess.run(
@@ -388,10 +389,14 @@ class OwnershipContractTests(unittest.TestCase):
                     if identity.startswith("python:")
                 )
             )
-            cls.group_work[group] = listed | discovered
+            catalog_suites = frozenset(
+                f"catalog:{suite_id}"
+                for suite_id in catalog["executions"][planner.EXECUTIONS[group]]
+            )
+            cls.group_work[group] = listed | discovered | catalog_suites
         cls.all_work = frozenset().union(*cls.group_work.values())
 
-    def test_changed_inputs_retain_required_harness_evidence(self):
+    def test_changed_inputs_retain_required_group_evidence(self):
         fixture = yaml.safe_load(OWNERSHIP.read_text())
         self.assertEqual(set(fixture), {"schema_version", "contracts"})
         self.assertEqual(fixture["schema_version"], 1)

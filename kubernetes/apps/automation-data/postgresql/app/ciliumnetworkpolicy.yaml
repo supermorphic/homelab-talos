@@ -15,6 +15,12 @@ spec:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: automation-data
             app.kubernetes.io/name: automation-data-postgresql-backup
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: automation-data
+            app.kubernetes.io/name: nocodb
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: automation-data
+            app.kubernetes.io/name: nocodb-metadata-bootstrap
       toPorts:
         - ports:
             - port: "5432"

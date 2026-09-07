@@ -14,10 +14,91 @@ max_attempts=3
 
 capture_platform_state() {
   output_registry="$1"
-  capture_line="$({
-    psql --no-align --tuples-only --quiet --set=ON_ERROR_STOP=1 --field-separator='|' --command="
+  capture_line="$(psql --no-align --tuples-only --quiet --set=ON_ERROR_STOP=1 \
+    --field-separator='|' 2>/dev/null <<'EOSQL'
+SET lock_timeout = '5s';
+SELECT pg_advisory_lock(
+  hashtextextended('automation-data:platform-upgrade:026-nocodb-v1', 0)
+) AS upgrade_lock_held
+\gset
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
+WITH operation_tables AS (
+  SELECT array_agg(class.relname::text ORDER BY class.relname) AS names
+  FROM pg_class AS class
+  JOIN pg_namespace AS namespace ON namespace.oid = class.relnamespace
+  WHERE namespace.nspname = 'platform_operations' AND class.relkind = 'r'
+),
+operation_functions AS (
+  SELECT array_agg(procedure.proname::text ORDER BY procedure.proname) AS names
+  FROM pg_proc AS procedure
+  JOIN pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
+  WHERE namespace.nspname = 'platform_operations'
+)
+SELECT
+  COALESCE(operation_tables.names = ARRAY[
+    'logical_backup_status', 'managed_domains', 'platform_generation'
+  ]::text[], false) AND
+  COALESCE(operation_functions.names = ARRAY[
+    'capture_backup_state', 'provision_domain', 'publish_backup',
+    'reconcile_domain', 'record_domain_credentials', 'record_operation_error',
+    'rotate_domain_credential', 'validate_domain'
+  ]::text[], false) AND
+  to_regprocedure('platform_operations.provision_domain(text,text,text)') IS NOT NULL AND
+  to_regprocedure('platform_operations.reconcile_domain(text)') IS NOT NULL AND
+  to_regprocedure('platform_operations.record_domain_credentials(text,text,text,timestamptz,timestamptz)') IS NOT NULL AND
+  to_regprocedure('platform_operations.rotate_domain_credential(text,text,text)') IS NOT NULL AND
+  to_regprocedure('platform_operations.record_operation_error(text,text)') IS NOT NULL AND
+  to_regprocedure('platform_operations.validate_domain(text)') IS NOT NULL AND
+  to_regprocedure('platform_operations.capture_backup_state()') IS NOT NULL AND
+  to_regprocedure('platform_operations.publish_backup(text,text,text)') IS NOT NULL AND
+  NOT EXISTS (
+    SELECT 1
+    FROM pg_proc AS procedure
+    JOIN pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
+    WHERE namespace.nspname IN ('platform_operations', 'platform_internal')
+      AND (procedure.proname = 'assert_nocodb_access_kind' OR
+        procedure.proname LIKE '%nocodb%')
+  ) AS old_catalog_valid,
+  to_regclass('platform_operations.platform_schema_revision') IS NOT NULL AND
+  to_regclass('platform_operations.managed_nocodb_sources') IS NOT NULL
+    AS upgraded_catalog_candidate
+FROM operation_tables, operation_functions
+\gset
+\set platform_revision 'invalid'
+\if :old_catalog_valid
+  \set platform_revision '025-baseline'
+\elif :upgraded_catalog_candidate
+  SELECT platform_operations.read_platform_revision() = '026-nocodb-v1'
+    AS revision_oracle_valid
+  \gset
+  \if :revision_oracle_valid
+    \set platform_revision '026-nocodb-v1'
+  \endif
+\endif
 WITH captured AS MATERIALIZED (
   SELECT platform_operations.capture_backup_state() AS state
+),
+platform_shape AS (
+  SELECT CASE
+    WHEN :'platform_revision' = '025-baseline' AND
+      (SELECT array_agg(key ORDER BY key)
+       FROM jsonb_object_keys(captured.state) AS key) =
+        ARRAY['generation', 'registry']::text[] AND
+      jsonb_typeof(captured.state->'generation') = 'number' AND
+      jsonb_typeof(captured.state->'registry') = 'array'
+      THEN '025-baseline'
+    WHEN :'platform_revision' = '026-nocodb-v1' AND
+      (SELECT array_agg(key ORDER BY key)
+       FROM jsonb_object_keys(captured.state) AS key) =
+        ARRAY['generation', 'nocodbSources', 'platformRevision', 'registry']::text[] AND
+      captured.state->>'platformRevision' = '026-nocodb-v1' AND
+      jsonb_typeof(captured.state->'generation') = 'number' AND
+      jsonb_typeof(captured.state->'registry') = 'array' AND
+      jsonb_typeof(captured.state->'nocodbSources') = 'array'
+      THEN '026-nocodb-v1'
+    ELSE NULL
+  END AS revision
+  FROM captured
 ),
 registry_rows AS (
   SELECT managed.*
@@ -76,24 +157,41 @@ registry_text AS (
 )
 SELECT
   captured.state->>'generation',
-  replace(encode(convert_to(registry_text.body, 'UTF8'), 'base64'), E'\\n', '')
+  replace(encode(convert_to(captured.state::text, 'UTF8'), 'base64'), E'\\n', ''),
+  replace(encode(convert_to(registry_text.body, 'UTF8'), 'base64'), E'\\n', ''),
+  platform_shape.revision
 FROM captured
-CROSS JOIN registry_text;
-"
-  } 2>/dev/null)" || return 1
+CROSS JOIN registry_text
+CROSS JOIN platform_shape
+WHERE platform_shape.revision IS NOT NULL;
+COMMIT;
+SELECT 1 / pg_advisory_unlock(
+  hashtextextended('automation-data:platform-upgrade:026-nocodb-v1', 0)
+)::integer AS upgrade_lock_released
+\gset
+EOSQL
+  )" || return 1
   case "$capture_line" in
-    *'|'*) ;;
+    *'|'*'|'*) ;;
     *) return 1 ;;
   esac
   captured_generation="${capture_line%%|*}"
-  encoded_registry="${capture_line#*|}"
+  captured_remainder="${capture_line#*|}"
+  encoded_state="${captured_remainder%%|*}"
+  registry_and_revision="${captured_remainder#*|}"
+  encoded_registry="${registry_and_revision%%|*}"
+  captured_revision="${registry_and_revision#*|}"
   case "$captured_generation" in
     '' | *[!0-9]*) return 1 ;;
   esac
-  [ -n "$encoded_registry" ] || return 1
+  [ -n "$encoded_state" ] && [ -n "$encoded_registry" ] || return 1
+  case "$captured_revision" in
+    025-baseline | 026-nocodb-v1) ;;
+    *) return 1 ;;
+  esac
   printf '%s' "$encoded_registry" | base64 -d >"$output_registry"
   [ -s "$output_registry" ] || return 1
-  printf '%s\n' "$captured_generation"
+  printf '%s|%s|%s\n' "$captured_generation" "$encoded_state" "$captured_revision"
 }
 
 capture_databases() {
@@ -162,12 +260,28 @@ while [ "$attempt" -le "$max_attempts" ]; do
   database_manifest="$temporary_bundle/.database-manifest"
   : >"$database_manifest"
 
-  start_generation="$(capture_platform_state "$temporary_bundle/registry.tsv")"
+  if ! start_platform_state="$(capture_platform_state "$temporary_bundle/registry.tsv")"; then
+    rm -rf -- "$temporary_bundle"
+    if [ "$attempt" -eq "$max_attempts" ]; then
+      echo 'Platform state remained unavailable or invalid.' >&2
+      exit 1
+    fi
+    attempt=$((attempt + 1))
+    continue
+  fi
   capture_databases "$start_databases"
   database_set_hash="$(sha256sum "$start_databases" | awk '{print $1}')"
 
   pg_dumpall --globals-only --file="$temporary_bundle/globals.sql"
   [ -s "$temporary_bundle/globals.sql" ]
+  start_revision="${start_platform_state##*|}"
+  if [ "$start_revision" = '026-nocodb-v1' ]; then
+    {
+      printf '\n-- Fixed revision-026 maintenance database restrictions.\n'
+      printf 'REVOKE CONNECT ON DATABASE postgres FROM PUBLIC;\n'
+      printf 'REVOKE CONNECT ON DATABASE template1 FROM PUBLIC;\n'
+    } >>"$temporary_bundle/globals.sql"
+  fi
 
   while IFS= read -r database_base64; do
     [ -n "$database_base64" ] || continue
@@ -185,9 +299,17 @@ while [ "$attempt" -le "$max_attempts" ]; do
     printf 'database\t%s\t%s\n' "$database_base64" "$dump_relative" >>"$database_manifest"
   done <"$start_databases"
 
-  end_generation="$(capture_platform_state "$end_registry")"
+  if ! end_platform_state="$(capture_platform_state "$end_registry")"; then
+    rm -rf -- "$temporary_bundle"
+    if [ "$attempt" -eq "$max_attempts" ]; then
+      echo 'Platform state remained unavailable or invalid.' >&2
+      exit 1
+    fi
+    attempt=$((attempt + 1))
+    continue
+  fi
   capture_databases "$end_databases"
-  if [ "$start_generation" != "$end_generation" ] ||
+  if [ "$start_platform_state" != "$end_platform_state" ] ||
     ! cmp -s "$start_databases" "$end_databases"; then
     rm -rf -- "$temporary_bundle"
     if [ "$attempt" -eq "$max_attempts" ]; then
@@ -201,7 +323,7 @@ while [ "$attempt" -le "$max_attempts" ]; do
   {
     printf 'bundle_version\t1\n'
     printf 'captured_at\t%s\n' "$captured_at"
-    printf 'platform_generation\t%s\n' "$start_generation"
+    printf 'platform_generation\t%s\n' "${start_platform_state%%|*}"
     printf 'database_set_hash\t%s\n' "$database_set_hash"
     printf 'record_type\tdatabase_name_base64\tdump_path\n'
     cat "$database_manifest"

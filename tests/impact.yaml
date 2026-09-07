@@ -126,10 +126,12 @@ conditional_paths:
     - kubernetes/apps/automation-data/**
     - kubernetes/apps/monitoring/alerts/app/kustomization.yaml
     - kubernetes/apps/monitoring/alerts/app/n8n.yaml
+    - kubernetes/apps/monitoring/alerts/app/nocodb.yaml
     - kubernetes/apps/monitoring/gatus/app/kustomization.yaml
     - kubernetes/apps/monitoring/gatus/app/values.yaml
     - kubernetes/apps/monitoring/gatus/app/n8n-canary-activation.values.yaml
     - kubernetes/apps/monitoring/gatus/app/n8n-canary.sops.yaml
+    - kubernetes/apps/monitoring/gatus/app/nocodb-activation.values.yaml
     - kubernetes/apps/monitoring/kube-prometheus-stack/config/kustomization.yaml
     - kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards/n8n-postgresql.json
     - kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards/automation-data-postgresql.json
@@ -138,15 +140,22 @@ conditional_paths:
     - kubernetes/apps/networking/kustomization.yaml
     - scripts/verify/n8n.sh
     - scripts/verify/automation-data.sh
+    - scripts/verify/nocodb.sh
     - scripts/validate/n8n.sh
     - scripts/validate/automation-data.sh
+    - scripts/validate/nocodb.sh
+    - scripts/nocodb/**
     - scripts/operations/automation-data-*
+    - scripts/upgrade/automation-data.sh
     - scripts/test/n8n-*
     - scripts/test/automation-data-*
+    - scripts/test/nocodb-*
     - scripts/test/lib/n8n-*
     - scripts/test/lib/automation-data-*
+    - scripts/test/lib/nocodb-*
     - scripts/test/scenarios/n8n-*
     - scripts/test/scenarios/automation-data-*
+    - scripts/test/scenarios/nocodb-*
     - tests/fixtures/n8n-failure-notifications/**
 core_paths:
   - .gitignore

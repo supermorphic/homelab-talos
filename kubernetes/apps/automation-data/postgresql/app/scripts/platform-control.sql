@@ -824,7 +824,6 @@ GRANT EXECUTE ON FUNCTION platform_operations.record_domain_credentials(text, te
 GRANT EXECUTE ON FUNCTION platform_operations.rotate_domain_credential(text, text, text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.record_operation_error(text, text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.validate_domain(text) TO automation_data_provisioner;
-
 GRANT USAGE ON SCHEMA platform_operations TO automation_data_backup;
 GRANT SELECT ON platform_operations.managed_domains,
   platform_operations.platform_generation,
@@ -836,3 +835,5 @@ GRANT USAGE ON SCHEMA platform_operations TO automation_data_exporter;
 GRANT SELECT ON platform_operations.managed_domains,
   platform_operations.platform_generation,
   platform_operations.logical_backup_status TO automation_data_exporter;
+
+\ir nocodb-extension.sql

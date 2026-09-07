@@ -1,0 +1,3134 @@
+{
+  "name": "NocoDB Acceptance Domain",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Synthetic acceptance setup\n\nImport this inactive template through the private n8n editor. Bind **automation-data/issue334_acceptance/migrator** to **Create Acceptance Structure**, **Grant Acceptance Access**, **Clear Reader Negative Residue**, **Cleanup Unexpected Reader Insert**, **Clear Feedback Residue**, and **Cleanup Feedback Fact**. Bind **automation-data/issue334_acceptance/runtime** to **Publish Initial Feedback Fact**, **Consume Feedback Before Refresh**, **Refresh Feedback Fact**, and **Consume Feedback After Refresh**. Bind **NocoDB Operator API** to every HTTP Request node and **NocoDB Acceptance Header** to **Acceptance Webhook**. Run structure, source sync, grants, source sync, probe, then feedback. Keep execution persistence disabled. NocoDB receives neither PostgreSQL credential.",
+        "height": 380,
+        "width": 540
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -900,
+        -650
+      ],
+      "id": "20000000-0000-4000-8000-000000000001",
+      "name": "Acceptance Setup"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "nocodb-acceptance-domain",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -840,
+        0
+      ],
+      "id": "20000000-0000-4000-8000-000000000002",
+      "name": "Acceptance Webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['operation', 'runId']);\nif (Object.keys(body).some((key) => !allowedFields.has(key)) || Object.keys(body).length !== 2) throw new Error('unexpected_request_field');\nconst { operation, runId } = body;\nif (!['structure', 'grants', 'probe', 'cleanup', 'feedback'].includes(operation)) throw new Error('invalid_operation');\nif (typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(runId)) throw new Error('invalid_run_id');\nif (['recovery-canary-v1', 'recovery-canary-v2'].includes(runId)) throw new Error('reserved_run_id');\nreturn [{ json: { operation, runId } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -600,
+        0
+      ],
+      "id": "20000000-0000-4000-8000-000000000003",
+      "name": "Normalize Acceptance Request",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.operation }}",
+                    "rightValue": "structure",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "structure"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.operation }}",
+                    "rightValue": "grants",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "grants"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.operation }}",
+                    "rightValue": "probe",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "probe"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.operation }}",
+                    "rightValue": "cleanup",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "cleanup"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.operation }}",
+                    "rightValue": "feedback",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "feedback"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        -360,
+        0
+      ],
+      "id": "20000000-0000-4000-8000-000000000004",
+      "name": "Select Acceptance Operation"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nCREATE SCHEMA IF NOT EXISTS read_model AUTHORIZATION issue334_acceptance_owner;\nCREATE SCHEMA IF NOT EXISTS operator AUTHORIZATION issue334_acceptance_owner;\nCREATE TABLE IF NOT EXISTS app.acceptance_fact (\n  id bigint PRIMARY KEY,\n  run_id text,\n  fact text NOT NULL,\n  artifact_id text,\n  artifact_uri text,\n  artifact_media_type text,\n  artifact_size_bytes bigint,\n  artifact_sha256 text\n);\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS run_id text;\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS artifact_id text;\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS artifact_uri text;\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS artifact_media_type text;\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS artifact_size_bytes bigint;\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS artifact_sha256 text;\nCREATE UNIQUE INDEX IF NOT EXISTS issue334_acceptance_fact_run_id\nON app.acceptance_fact (run_id) WHERE run_id IS NOT NULL;\nCREATE OR REPLACE VIEW read_model.acceptance_facts AS\nSELECT id, fact, run_id, artifact_id, artifact_uri, artifact_media_type,\n  artifact_size_bytes, artifact_sha256\nFROM app.acceptance_fact;\nCREATE TABLE IF NOT EXISTS operator.acceptance_decision (\n  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,\n  run_id text NOT NULL,\n  decision text NOT NULL,\n  protected_created_at timestamptz NOT NULL DEFAULT clock_timestamp()\n);\nCREATE UNIQUE INDEX IF NOT EXISTS issue334_acceptance_recovery_canary_v2_one\nON operator.acceptance_decision (run_id)\nWHERE run_id = 'recovery-canary-v2';\nINSERT INTO app.acceptance_fact (\n  id, run_id, fact, artifact_id, artifact_uri, artifact_media_type,\n  artifact_size_bytes, artifact_sha256\n) VALUES (\n  -334, 'recovery-canary-v2', 'artifact-available',\n  'issue334-artifact-v1', 'https://artifacts.example.invalid/issue334/artifact-v1',\n  'text/plain', 37,\n  '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3'\n) ON CONFLICT (id) DO NOTHING;\nINSERT INTO operator.acceptance_decision (run_id, decision)\nVALUES ('recovery-canary-v2', 'retain')\nON CONFLICT DO NOTHING;\nDO $block$\nBEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM app.acceptance_fact\n    WHERE id = -334 AND run_id = 'recovery-canary-v2'\n      AND fact = 'artifact-available'\n      AND artifact_id = 'issue334-artifact-v1'\n      AND artifact_uri = 'https://artifacts.example.invalid/issue334/artifact-v1'\n      AND artifact_media_type = 'text/plain'\n      AND artifact_size_bytes = 37\n      AND artifact_sha256 = '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3'\n  ) OR NOT EXISTS (\n    SELECT 1 FROM operator.acceptance_decision\n    WHERE run_id = 'recovery-canary-v2' AND decision = 'retain'\n  ) THEN\n    RAISE EXCEPTION 'recovery_canary_incompatible';\n  END IF;\nEND\n$block$;\nCOMMIT;\nSELECT current_user AS \"credentialRole\";",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        -300
+      ],
+      "id": "20000000-0000-4000-8000-000000000005",
+      "name": "Create Acceptance Structure",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Normalize Acceptance Request').first().json;\nif ($json.credentialRole !== 'issue334_acceptance_migrator') throw new Error('acceptance_migrator_binding_invalid');\nreturn [{ json: { ok: true, operation: request.operation, runId: request.runId, domain: 'issue334_acceptance', structureReady: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        -300
+      ],
+      "id": "20000000-0000-4000-8000-000000000006",
+      "name": "Structure Result",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DO $block$\nBEGIN\n  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'issue334_acceptance_operator') THEN\n    RAISE EXCEPTION 'operator_candidate_missing';\n  END IF;\n  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'issue334_acceptance_runtime') THEN\n    RAISE EXCEPTION 'runtime_role_missing';\n  END IF;\nEND\n$block$;\nBEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nGRANT USAGE ON SCHEMA operator TO issue334_acceptance_operator;\nGRANT SELECT, INSERT, DELETE ON TABLE operator.acceptance_decision TO issue334_acceptance_operator;\nGRANT UPDATE (decision) ON TABLE operator.acceptance_decision TO issue334_acceptance_operator;\nGRANT USAGE ON SEQUENCE operator.acceptance_decision_id_seq TO issue334_acceptance_operator;\nGRANT USAGE ON SCHEMA read_model, operator TO issue334_acceptance_runtime;\nGRANT SELECT ON TABLE read_model.acceptance_facts TO issue334_acceptance_runtime;\nGRANT SELECT ON TABLE operator.acceptance_decision TO issue334_acceptance_runtime;\nCOMMIT;\nSELECT current_user AS \"credentialRole\";",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        -100
+      ],
+      "id": "20000000-0000-4000-8000-000000000007",
+      "name": "Grant Acceptance Access",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Normalize Acceptance Request').first().json;\nif ($json.credentialRole !== 'issue334_acceptance_migrator') throw new Error('acceptance_migrator_binding_invalid');\nreturn [{ json: { ok: true, operation: request.operation, runId: request.runId, domain: 'issue334_acceptance', grantsReady: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        -100
+      ],
+      "id": "20000000-0000-4000-8000-000000000008",
+      "name": "Grant Result",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000009",
+      "name": "List Acceptance Bases",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Normalize Acceptance Request').first().json;\nconst bases = Array.isArray($json) ? $json : ($json.list || $json.data || []);\nconst matches = bases.filter((base) => base && base.title === 'issue334_acceptance');\nif (matches.length !== 1 || !matches[0].id) throw new Error(matches.length > 1 ? 'duplicate_acceptance_base' : 'acceptance_base_missing');\nreturn [{ json: { ...request, domain: 'issue334_acceptance', baseId: matches[0].id } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000010",
+      "name": "Resolve Acceptance Base",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/sources' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000011",
+      "name": "List Acceptance Sources",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Resolve Acceptance Base').first().json;\nconst items = $input.all().map((item) => item.json);\nconst sources = Array.isArray($json) ? $json : ($json.list || $json.data || (items.every((item) => item && item.id) ? items : []));\nconst reader = sources.filter((source) => source && source.alias === 'Read Model');\nconst operator = sources.filter((source) => source && source.alias === 'Operator');\nif (reader.length !== 1 || operator.length !== 1) throw new Error('acceptance_source_set_invalid');\nreturn [{ json: { ...context, sources, readerSourceId: reader[0].id, operatorSourceId: operator[0].id } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000012",
+      "name": "Keep Acceptance Sources",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/sources/' + $json.readerSourceId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        320
+      ],
+      "id": "20000000-0000-4000-8000-000000000047",
+      "name": "Get Acceptance Reader Source",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Keep Acceptance Sources').first().json;\nconst source = $json;\nconst searchPath = source.config?.searchPath || source.config?.search_path;\nif (!source || source.id !== context.readerSourceId || source.base_id !== context.baseId || source.alias !== 'Read Model' || !Array.isArray(searchPath) || searchPath.length !== 1 || searchPath[0] !== 'read_model') throw new Error('acceptance_reader_source_invalid');\nreturn [{ json: { ...context, readerSchema: searchPath[0] } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        320
+      ],
+      "id": "20000000-0000-4000-8000-000000000048",
+      "name": "Capture Acceptance Reader Source",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/sources/' + $json.operatorSourceId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        320
+      ],
+      "id": "20000000-0000-4000-8000-000000000049",
+      "name": "Get Acceptance Operator Source",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Capture Acceptance Reader Source').first().json;\nconst source = $json;\nconst searchPath = source.config?.searchPath || source.config?.search_path;\nif (!source || source.id !== context.operatorSourceId || source.base_id !== context.baseId || source.alias !== 'Operator' || !Array.isArray(searchPath) || searchPath.length !== 1 || searchPath[0] !== 'operator') throw new Error('acceptance_operator_source_invalid');\nreturn [{ json: { ...context, operatorSchema: searchPath[0] } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        320
+      ],
+      "id": "20000000-0000-4000-8000-000000000050",
+      "name": "Capture Acceptance Operator Source",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/tables' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000013",
+      "name": "List Acceptance Tables",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const direct = $json.tables !== undefined ? $json : null;\nconst context = direct || $('Capture Acceptance Operator Source').first().json;\nconst items = $input.all().map((item) => item.json);\nconst raw = direct ? direct.tables : $json;\nconst tables = Array.isArray(raw) ? raw : (raw.list || raw.data || (items.every((item) => item && item.id) ? items : []));\nconst pageInfo = direct ? direct.pageInfo : (Array.isArray(raw) ? undefined : raw.pageInfo);\nif (context.readerSchema !== 'read_model' || context.operatorSchema !== 'operator') throw new Error('acceptance_reflection_invalid');\nif (pageInfo !== undefined) {\n  const totalRows = pageInfo?.totalRows;\n  const page = pageInfo?.page;\n  const pageSize = pageInfo?.pageSize;\n  if (!Number.isInteger(totalRows) || totalRows !== tables.length || pageInfo.isLastPage !== true) throw new Error('acceptance_reflection_invalid');\n  if (page !== undefined && page !== 1) throw new Error('acceptance_reflection_invalid');\n  if (pageSize !== undefined && (!Number.isInteger(pageSize) || pageSize < tables.length || pageSize > 100)) throw new Error('acceptance_reflection_invalid');\n}\nconst expected = [\n  { title: 'acceptance_facts', tableName: 'acceptance_facts', sourceId: context.readerSourceId, schema: context.readerSchema },\n  { title: 'acceptance_decision', tableName: 'acceptance_decision', sourceId: context.operatorSourceId, schema: context.operatorSchema }\n];\nconst resolved = expected.map((item) => ({ ...item, matches: tables.filter((table) => table && table.title === item.title && table.table_name === item.tableName && table.source_id === item.sourceId && table.schema === null) }));\nif (tables.length !== expected.length || resolved.some((item) => item.matches.length !== 1 || !item.matches[0].id)) throw new Error('acceptance_reflection_invalid');\nconst facts = resolved[0].matches[0];\nconst decisions = resolved[1].matches[0];\nreturn [{ json: {\n  ...context,\n  factsTableId: facts.id,\n  decisionTableId: decisions.id,\n  reflectedSchemas: [...new Set(expected.map((item) => item.schema))].sort(),\n  reflectedTables: resolved.map((item) => ({ id: item.matches[0].id, title: item.title, tableName: item.tableName, sourceId: item.sourceId, schema: item.schema })).sort((left, right) => left.schema.localeCompare(right.schema)),\n  cleanupOnly: context.operation === 'cleanup'\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000014",
+      "name": "Resolve Acceptance Tables",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/bases/' + $json.baseId + '/shared' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 300],
+      "id": "20000000-0000-4000-8000-000000000051",
+      "name": "Get Acceptance Base Share",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Resolve Acceptance Tables').first().json;\nconst response = $json;\nif (!response || typeof response !== 'object' || Array.isArray(response) || !Object.prototype.hasOwnProperty.call(response, 'uuid') || response.uuid !== null) throw new Error('acceptance_base_share_invalid');\nreturn [{ json: { ...context, publicSharing: { basePublicShareUuid: response.uuid, views: [] } } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 300],
+      "id": "20000000-0000-4000-8000-000000000052",
+      "name": "Require Acceptance Base Private",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/tables/' + $json.factsTableId + '/share' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1560, 300],
+      "id": "20000000-0000-4000-8000-000000000053",
+      "name": "Get Reader Shared Views",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Acceptance Base Private').first().json;\nconst list = $json?.list;\nconst pageInfo = $json?.pageInfo;\nif (!Array.isArray(list) || list.length !== 0) throw new Error('acceptance_table_share_invalid');\nif (pageInfo !== undefined && (pageInfo.totalRows !== 0 || pageInfo.isLastPage !== true)) throw new Error('acceptance_table_share_invalid');\nreturn [{ json: { ...context, publicSharing: { ...context.publicSharing, views: [{ title: 'acceptance_facts', publicShareUuid: null }] } } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 300],
+      "id": "20000000-0000-4000-8000-000000000054",
+      "name": "Require Reader Shares Empty",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/tables/' + $json.decisionTableId + '/share' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1800, 300],
+      "id": "20000000-0000-4000-8000-000000000055",
+      "name": "Get Operator Shared Views",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Reader Shares Empty').first().json;\nconst list = $json?.list;\nconst pageInfo = $json?.pageInfo;\nif (!Array.isArray(list) || list.length !== 0) throw new Error('acceptance_table_share_invalid');\nif (pageInfo !== undefined && (pageInfo.totalRows !== 0 || pageInfo.isLastPage !== true)) throw new Error('acceptance_table_share_invalid');\nreturn [{ json: { ...context, publicSharing: { ...context.publicSharing, views: [...context.publicSharing.views, { title: 'acceptance_decision', publicShareUuid: null }] } } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1920, 300],
+      "id": "20000000-0000-4000-8000-000000000056",
+      "name": "Require Operator Shares Empty",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.cleanupOnly }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1440,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000015",
+      "name": "Cleanup Only"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "={{ '(run_id,eq,' + encodeURIComponent($json.runId) + ')' }}"
+            },
+            {
+              "name": "limit",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        360
+      ],
+      "id": "20000000-0000-4000-8000-000000000016",
+      "name": "List Cleanup Decisions",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const direct = $json.rows !== undefined ? $json : null;\nlet context = direct;\nif (!context) {\n  try { context = $('Continue Cleanup').last().json; } catch { context = $('Initialize Cleanup').first().json; }\n}\nconst raw = direct ? direct.rows : $json;\nconst rows = Array.isArray(raw) ? raw : (raw.list || []);\nif (rows.length > 100 || rows.some((row) => row.run_id !== context.runId || (row.id ?? row.Id) === undefined)) throw new Error('cleanup_scope_invalid');\nif (rows.length > 0 && Number(context.cleanupPageCount || 0) >= 10) throw new Error('cleanup_page_bound_exceeded');\nreturn [{ json: {\n  ...context,\n  hasRows: rows.length > 0,\n  cleanupPageCount: Number(context.cleanupPageCount || 0) + (rows.length > 0 ? 1 : 0),\n  removedCount: Number(context.removedCount || 0) + rows.length,\n  deleteRows: rows.map((row) => ({ id: row.id ?? row.Id }))\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        360
+      ],
+      "id": "20000000-0000-4000-8000-000000000017",
+      "name": "Prepare Cleanup Page",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.deleteRows) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        360
+      ],
+      "id": "20000000-0000-4000-8000-000000000018",
+      "name": "Delete Cleanup Page",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: $('Prepare Cleanup Page').last().json }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        360
+      ],
+      "id": "20000000-0000-4000-8000-000000000019",
+      "name": "Continue Cleanup",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ run_id: $json.runId, decision: 'pending' }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000020",
+      "name": "Insert Acceptance Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Reader Facts Read').first().json;\nconst record = Array.isArray($json) ? $json[0] : $json;\nconst recordId = record?.id ?? record?.Id;\nif (recordId === undefined || recordId === null) throw new Error('inserted_decision_id_missing');\nreturn [{ json: { ...context, recordId, inserted: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000021",
+      "name": "Normalize Inserted Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "={{ '(run_id,eq,' + encodeURIComponent($json.runId) + ')' }}"
+            },
+            {
+              "name": "limit",
+              "value": "2"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000022",
+      "name": "Read Inserted Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Normalize Inserted Decision').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nconst matches = rows.filter((row) => row && row.run_id === context.runId && (row.id ?? row.Id) === context.recordId);\nif (matches.length !== 1 || matches[0].decision !== 'pending') throw new Error('insert_probe_failed');\nreturn [{ json: { ...context, protectedCreatedAt: matches[0].protected_created_at, read: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000023",
+      "name": "Require Inserted Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify([{ id: $json.recordId, decision: 'approved' }]) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000024",
+      "name": "Update Acceptance Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $('Require Inserted Decision').first().json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "={{ '(run_id,eq,' + encodeURIComponent($('Normalize Acceptance Request').first().json.runId) + ')' }}"
+            },
+            {
+              "name": "limit",
+              "value": "2"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2880,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000025",
+      "name": "Read Updated Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Inserted Decision').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nconst matches = rows.filter((row) => row && row.run_id === context.runId && (row.id ?? row.Id) === context.recordId);\nif (matches.length !== 1 || matches[0].decision !== 'approved' || matches[0].protected_created_at !== context.protectedCreatedAt) throw new Error('update_probe_failed');\nreturn [{ json: { ...context, decisionUpdated: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000026",
+      "name": "Require Updated Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify([{ id: $json.recordId, protected_created_at: '2000-01-01T00:00:00Z' }]) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3360,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000027",
+      "name": "Try Protected Column Update",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.context || $('Require Updated Decision').first().json;\nconst body = $json.body || {};\nif ($json.statusCode !== 400 || body.error !== 'ERR_DATABASE_OP_FAILED' || body.code !== '42501' || !/permission to access 'acceptance_decision'/i.test(String(body.message || ''))) throw new Error('protected_update_denial_invalid');\nreturn [{ json: { ...context, protectedUpdateDenied: true, protectedUpdateStatus: 400, protectedUpdateEvidence: 'postgresql_42501' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3600,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000028",
+      "name": "Capture Protected Update Denial",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $('Prepare Reader Negative Probe').first().json.factsTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ id: $('Prepare Reader Negative Probe').first().json.readerProbeId, fact: $('Prepare Reader Negative Probe').first().json.readerProbeFact }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3840,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000029",
+      "name": "Try Reader Insert",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.context || $('Prepare Reader Negative Probe').first().json;\nconst body = $json.body || {};\nif ($json.statusCode === 403 && body.error === 'ERR_FORBIDDEN' && String(body.message || '') === \"Forbidden - Source 'Read Model' is read-only\") {\n  return [{ json: { ...context, readerInsertDenied: true, readerInsertStatus: 403, readerInsertEvidence: 'source_read_only', unexpectedlyPermitted: false } }];\n}\nif ($json.statusCode >= 200 && $json.statusCode < 300) {\n  return [{ json: { ...context, readerInsertDenied: false, unexpectedlyPermitted: true } }];\n}\nthrow new Error('reader_insert_denial_invalid');"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4080,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000030",
+      "name": "Evaluate Reader Insert Denial",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify([{ id: $json.recordId }]) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4320,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000031",
+      "name": "Delete Probe Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $('Evaluate Reader Insert Denial').first().json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "={{ '(run_id,eq,' + encodeURIComponent($('Normalize Acceptance Request').first().json.runId) + ')' }}"
+            },
+            {
+              "name": "limit",
+              "value": "2"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4560,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000032",
+      "name": "Confirm Probe Cleanup",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { ...$json, cleanupPageCount: 0, removedCount: 0 } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 500],
+      "id": "20000000-0000-4000-8000-000000000036",
+      "name": "Initialize Cleanup"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2},
+          "conditions": [{"leftValue": "={{ $json.hasRows }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true", "singleValue": true}}],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2160, 500],
+      "id": "20000000-0000-4000-8000-000000000037",
+      "name": "Cleanup Rows Present"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [
+          {"name": "where", "value": "={{ '(run_id,eq,' + encodeURIComponent($json.runId) + ')' }}"},
+          {"name": "limit", "value": "1"}
+        ]},
+        "options": {"response": {"response": {"fullResponse": true, "neverError": false}}}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2400, 500],
+      "id": "20000000-0000-4000-8000-000000000038",
+      "name": "Confirm Cleanup Absence",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.context || $('Prepare Cleanup Page').last().json;\nconst body = $json.body;\nif ($json.statusCode !== 200 || !body || !Array.isArray(body.list) || !body.pageInfo || body.list.length !== 0 || Number(body.pageInfo.totalRows) !== 0) throw new Error('cleanup_absence_invalid');\nreturn [{ json: { ok: true, operation: 'cleanup', runId: context.runId, domain: 'issue334_acceptance', removedCount: context.removedCount } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2640, 500],
+      "id": "20000000-0000-4000-8000-000000000039",
+      "name": "Require Cleanup Absent",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.factsTableId + '/records' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {"parameters": [{"name": "limit", "value": "1"}]},
+        "options": {"response": {"response": {"fullResponse": true, "neverError": false}}}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1680, -100],
+      "id": "20000000-0000-4000-8000-000000000040",
+      "name": "Read Acceptance Facts",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $json.context || $('Cleanup Only').first().json;\nconst body = $json.body;\nif ($json.statusCode !== 200 || !body || !Array.isArray(body.list) || !body.pageInfo || body.list.length > 1) throw new Error('reader_read_invalid');\nreturn [{ json: { ...context, readerRead: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1920, -100],
+      "id": "20000000-0000-4000-8000-000000000041",
+      "name": "Require Reader Facts Read",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Capture Protected Update Denial').first().json;\nlet hash = 2166136261;\nfor (const character of context.runId) { hash = Math.imul(hash ^ character.charCodeAt(0), 16777619) >>> 0; }\nreturn [{ json: { ...context, readerProbeId: 8000000000 + hash, readerProbeFact: `forbidden:${context.runId}` } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3840, 140],
+      "id": "20000000-0000-4000-8000-000000000042",
+      "name": "Prepare Reader Negative Probe",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nDELETE FROM app.acceptance_fact WHERE id = $1 AND fact = $2;\nCOMMIT;",
+        "options": {"queryReplacement": "={{ [$json.readerProbeId, $json.readerProbeFact] }}"}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [4080, 140],
+      "id": "20000000-0000-4000-8000-000000000043",
+      "name": "Clear Reader Negative Residue",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2},
+          "conditions": [{"leftValue": "={{ $json.readerInsertDenied }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true", "singleValue": true}}],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [4560, 140],
+      "id": "20000000-0000-4000-8000-000000000044",
+      "name": "Reader Insert Denied"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nDELETE FROM app.acceptance_fact WHERE id = $1 AND fact = $2;\nCOMMIT;",
+        "options": {"queryReplacement": "={{ [$json.readerProbeId, $json.readerProbeFact] }}"}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [4800, 220],
+      "id": "20000000-0000-4000-8000-000000000045",
+      "name": "Cleanup Unexpected Reader Insert",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "throw new Error('reader_insert_not_denied');"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5040, 220],
+      "id": "20000000-0000-4000-8000-000000000046",
+      "name": "Fail Unexpected Reader Insert",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/meta/tables/' + $('Evaluate Reader Insert Denial').first().json.factsTableId + '/views' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [4800, 40],
+      "id": "20000000-0000-4000-8000-000000000057",
+      "name": "Get Recovery Saved View",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Evaluate Reader Insert Denial').first().json;\nconst cleanup = $('Confirm Probe Cleanup').first().json;\nconst cleanupRows = Array.isArray(cleanup) ? cleanup : (cleanup.list || []);\nif (cleanupRows.some((row) => row.run_id === context.runId)) throw new Error('probe_cleanup_failed');\nconst list = Array.isArray($json) ? $json : $json.list;\nif (!Array.isArray(list) || list.length !== 1 || $json.pageInfo !== undefined) throw new Error('recovery_saved_view_invalid');\nconst view = list[0];\nif (view.fk_model_id !== context.factsTableId || view.title !== 'acceptance_facts' || view.type !== 3 || view.uuid !== null || typeof view.id !== 'string' || !view.id) throw new Error('recovery_saved_view_invalid');\nreturn [{ json: { ...context, savedView: { id: view.id, tableId: view.fk_model_id, title: view.title, type: view.type } } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5040, 40],
+      "id": "20000000-0000-4000-8000-000000000058",
+      "name": "Require Recovery Saved View",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Recovery Decision').first().json;\nif (context.inserted !== true || context.read !== true || context.readerRead !== true || context.decisionUpdated !== true ||\n  context.protectedUpdateDenied !== true || context.readerInsertDenied !== true ||\n  context.publicSharing?.basePublicShareUuid !== null || context.publicSharing?.views?.length !== 2 ||\n  context.recoveryCanary?.version !== 2 || context.recoveryCanary?.state !== 'ready') throw new Error('probe_evidence_incomplete');\nreturn [{ json: {\n  ok: true,\n  operation: 'probe',\n  runId: context.runId,\n  domain: 'issue334_acceptance',\n  credentialProof: { throughN8n: true, credentialName: 'NocoDB Operator API' },\n  inserted: context.inserted,\n  read: context.read,\n  readerRead: context.readerRead,\n  decisionUpdated: context.decisionUpdated,\n  removed: true,\n  reflectedSchemas: context.reflectedSchemas,\n  reflectedTables: context.reflectedTables,\n  publicSharing: context.publicSharing,\n  recoveryCanary: context.recoveryCanary,\n  forbiddenOperations: {\n    protectedUpdateDenied: context.protectedUpdateDenied,\n    protectedUpdateStatus: context.protectedUpdateStatus,\n    protectedUpdateEvidence: context.protectedUpdateEvidence,\n    readerInsertDenied: context.readerInsertDenied,\n    readerInsertStatus: context.readerInsertStatus,\n    readerInsertEvidence: context.readerInsertEvidence,\n  },\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4800,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000033",
+      "name": "Prepare Acceptance Response",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Normalize Acceptance Request').first().json;\nreturn [{ json: { ok: false, operation: request?.operation || null, runId: request?.runId || null, domain: 'issue334_acceptance', errorCode: 'acceptance_operation_failed' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4560,
+        260
+      ],
+      "id": "20000000-0000-4000-8000-000000000034",
+      "name": "Prepare Acceptance Error Response",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        5040,
+        120
+      ],
+      "id": "20000000-0000-4000-8000-000000000035",
+      "name": "Respond"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.operation === 'feedback' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3240,
+        120
+      ],
+      "id": "20000000-0000-4000-8000-000000000082",
+      "name": "Feedback Only"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.factsTableId + '/records' }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "(id,eq,-334)"
+            },
+            {
+              "name": "limit",
+              "value": "2"
+            }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5760,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000083",
+      "name": "Read Recovery Fact",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Recovery Saved View').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nif (rows.length !== 1) throw new Error('recovery_fact_invalid');\nconst row = rows[0];\nconst forbidden = Object.keys(row).some((key) => key.toLowerCase().startsWith('attach') || ['path', 'signedpath', 'signedurl'].includes(key.toLowerCase()));\nif (forbidden ||\n  Number(row.id) !== -334 || row.run_id !== 'recovery-canary-v2' || row.fact !== 'artifact-available' ||\n  row.artifact_id !== 'issue334-artifact-v1' || row.artifact_uri !== 'https://artifacts.example.invalid/issue334/artifact-v1' ||\n  row.artifact_media_type !== 'text/plain' || Number(row.artifact_size_bytes) !== 37 ||\n  row.artifact_sha256 !== '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3') {\n  throw new Error('recovery_fact_invalid');\n}\nreturn [{ json: { ...context, recoveryFact: row } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6000,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000084",
+      "name": "Require Recovery Fact",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "(run_id,eq,recovery-canary-v2)"
+            },
+            {
+              "name": "limit",
+              "value": "2"
+            }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6240,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000085",
+      "name": "Read Recovery Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Recovery Fact').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nif (rows.length !== 1) throw new Error('recovery_decision_invalid');\nconst row = rows[0];\nif (!Number.isSafeInteger(Number(row.id)) || row.run_id !== 'recovery-canary-v2' || row.decision !== 'retain' ||\n  ['attachment', 'attachments', 'commentId'].some((key) => Object.prototype.hasOwnProperty.call(row, key))) {\n  throw new Error('recovery_decision_invalid');\n}\nconst fact = context.recoveryFact;\nreturn [{ json: { ...context, recoveryCanary: {\n  version: 2,\n  state: 'ready',\n  baseId: context.baseId,\n  readerSourceId: context.readerSourceId,\n  operatorSourceId: context.operatorSourceId,\n  factTableId: context.factsTableId,\n  decisionTableId: context.decisionTableId,\n  viewId: context.savedView.id,\n  rowId: String(row.id),\n  factId: -334,\n  artifact: {\n    id: fact.artifact_id,\n    uri: fact.artifact_uri,\n    mediaType: fact.artifact_media_type,\n    sizeBytes: Number(fact.artifact_size_bytes),\n    sha256: fact.artifact_sha256,\n  },\n} } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6480,
+        40
+      ],
+      "id": "20000000-0000-4000-8000-000000000086",
+      "name": "Require Recovery Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Feedback Only').first().json;\nlet hash = 2166136261;\nfor (const character of context.runId) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619) >>> 0;\nconst factId = 7000000000 + hash;\nif (!Number.isSafeInteger(factId) || factId === -334 || context.runId === 'recovery-canary-v2') throw new Error('feedback_fact_id_invalid');\nreturn [{ json: { ...context, factId } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3480,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000087",
+      "name": "Prepare Feedback Fact",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "={{ '(run_id,eq,' + encodeURIComponent($json.runId) + ')' }}"
+            },
+            {
+              "name": "limit",
+              "value": "2"
+            }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3720,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000104",
+      "name": "List Feedback Residue",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Prepare Feedback Fact').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nconst pageInfo = $json?.pageInfo;\nif (!Array.isArray(rows) || rows.length > 1 || !pageInfo || Number(pageInfo.totalRows) !== rows.length || pageInfo.isLastPage !== true ||\n  rows.some((row) => !Number.isSafeInteger(Number(row.id)) || Number(row.id) <= 0 || row.run_id !== context.runId)) {\n  throw new Error('feedback_residue_invalid');\n}\nreturn [{ json: { ...context, residueDecisionId: rows.length === 1 ? Number(rows[0].id) : null } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3960,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000105",
+      "name": "Require Feedback Residue Bounded",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nDELETE FROM operator.acceptance_decision WHERE id = $3 AND run_id = $1 AND run_id <> 'recovery-canary-v2';\nDELETE FROM app.acceptance_fact WHERE id = $2 AND run_id = $1 AND id <> -334;\nCOMMIT;",
+        "options": {
+          "queryReplacement": "={{ [$json.runId, $json.factId, $json.residueDecisionId] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        4200,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000088",
+      "name": "Clear Feedback Residue",
+      "alwaysOutputData": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH published AS (\n  INSERT INTO app.acceptance_fact (id, run_id, fact)\n  VALUES ($1, $2, 'original')\n  RETURNING id, run_id, fact\n)\nSELECT id AS \"factId\", run_id AS \"runId\", fact, current_user AS \"runtimeRole\"\nFROM published;",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Feedback Fact').first().json.factId, $('Prepare Feedback Fact').first().json.runId] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        4440,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000089",
+      "name": "Publish Initial Feedback Fact",
+      "alwaysOutputData": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Prepare Feedback Fact').first().json;\nif ($json.runtimeRole !== 'issue334_acceptance_runtime' || String($json.factId) !== String(context.factId) ||\n  $json.runId !== context.runId || $json.fact !== 'original') throw new Error('feedback_initial_fact_invalid');\nreturn [{ json: { ...context, initialFact: $json.fact } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4200,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000090",
+      "name": "Require Initial Runtime Fact",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.decisionTableId + '/records' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ run_id: $json.runId, decision: 'corrected' }) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4440,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000091",
+      "name": "Insert Feedback Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Initial Runtime Fact').first().json;\nconst row = Array.isArray($json) ? $json[0] : $json;\nconst decisionRowId = row?.id ?? row?.Id;\nif (decisionRowId === undefined || decisionRowId === null) throw new Error('feedback_decision_id_missing');\nreturn [{ json: { ...context, decisionRowId } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4680,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000092",
+      "name": "Normalize Feedback Decision",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT f.id AS \"factId\", f.run_id AS \"runId\", f.fact AS \"initialFact\",\n  d.decision AS \"operatorDecision\", COALESCE(d.decision, f.fact) AS \"effectiveBeforeRefresh\",\n  current_user AS \"runtimeRole\"\nFROM app.acceptance_fact AS f\nJOIN operator.acceptance_decision AS d ON d.run_id = f.run_id\nWHERE f.id = $1 AND f.run_id = $2 AND d.id = $3;",
+        "options": {
+          "queryReplacement": "={{ [$json.factId, $json.runId, $json.decisionRowId] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        4920,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000093",
+      "name": "Consume Feedback Before Refresh",
+      "alwaysOutputData": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Normalize Feedback Decision').first().json;\nif ($json.runtimeRole !== 'issue334_acceptance_runtime' || String($json.factId) !== String(context.factId) ||\n  $json.runId !== context.runId || $json.initialFact !== 'original' ||\n  $json.operatorDecision !== 'corrected' || $json.effectiveBeforeRefresh !== 'corrected') {\n  throw new Error('feedback_before_refresh_invalid');\n}\nreturn [{ json: { ...context, initialFact: $json.initialFact, operatorDecision: $json.operatorDecision, effectiveBeforeRefresh: $json.effectiveBeforeRefresh } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5160,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000094",
+      "name": "Require Feedback Before Refresh",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH refreshed AS (\n  UPDATE app.acceptance_fact SET fact = 'refreshed'\n  WHERE id = $1 AND run_id = $2 AND fact = 'original'\n  RETURNING id, run_id, fact\n)\nSELECT id AS \"factId\", run_id AS \"runId\", fact, current_user AS \"runtimeRole\"\nFROM refreshed;",
+        "options": {
+          "queryReplacement": "={{ [$json.factId, $json.runId] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        5400,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000095",
+      "name": "Refresh Feedback Fact",
+      "alwaysOutputData": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Feedback Before Refresh').first().json;\nif ($json.runtimeRole !== 'issue334_acceptance_runtime' || String($json.factId) !== String(context.factId) ||\n  $json.runId !== context.runId || $json.fact !== 'refreshed') throw new Error('feedback_refresh_invalid');\nreturn [{ json: context }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5640,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000096",
+      "name": "Require Refreshed Runtime Fact",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.factsTableId + '/records' }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "={{ '(id,eq,' + $json.factId + ')' }}"
+            },
+            {
+              "name": "limit",
+              "value": "2"
+            }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5880,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000097",
+      "name": "Read Refreshed Fact",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Refreshed Runtime Fact').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nconst matches = rows.filter((row) => String(row.id) === String(context.factId) && row.run_id === context.runId);\nif (rows.length !== 1 || matches.length !== 1 || matches[0].fact !== 'refreshed') throw new Error('feedback_reader_refresh_invalid');\nreturn [{ json: { ...context, refreshedFact: matches[0].fact } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6120,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000098",
+      "name": "Require Refreshed Reader Fact",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT f.id AS \"factId\", f.run_id AS \"runId\", f.fact AS \"refreshedFact\",\n  d.decision AS \"operatorDecision\", COALESCE(d.decision, f.fact) AS \"effectiveAfterRefresh\",\n  current_user AS \"runtimeRole\"\nFROM app.acceptance_fact AS f\nJOIN operator.acceptance_decision AS d ON d.run_id = f.run_id\nWHERE f.id = $1 AND f.run_id = $2 AND d.id = $3;",
+        "options": {
+          "queryReplacement": "={{ [$json.factId, $json.runId, $json.decisionRowId] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        6360,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000099",
+      "name": "Consume Feedback After Refresh",
+      "alwaysOutputData": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Refreshed Reader Fact').first().json;\nif ($json.runtimeRole !== 'issue334_acceptance_runtime' || String($json.factId) !== String(context.factId) ||\n  $json.runId !== context.runId || $json.refreshedFact !== 'refreshed' ||\n  $json.operatorDecision !== context.operatorDecision || $json.effectiveAfterRefresh !== 'corrected') {\n  throw new Error('feedback_after_refresh_invalid');\n}\nreturn [{ json: {\n  ok: true,\n  operation: 'feedback',\n  runId: context.runId,\n  domain: 'issue334_acceptance',\n  factId: context.factId,\n  feedback: {\n    initialFact: context.initialFact,\n    operatorDecision: context.operatorDecision,\n    effectiveBeforeRefresh: context.effectiveBeforeRefresh,\n    refreshedFact: $json.refreshedFact,\n    effectiveAfterRefresh: $json.effectiveAfterRefresh,\n  },\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6600,
+        180
+      ],
+      "id": "20000000-0000-4000-8000-000000000100",
+      "name": "Prepare Feedback Response",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Cleanup Absent').first().json;\nlet hash = 2166136261;\nfor (const character of context.runId) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619) >>> 0;\nconst factId = 7000000000 + hash;\nif (!Number.isSafeInteger(factId) || factId === -334 || context.runId === 'recovery-canary-v2') throw new Error('cleanup_fact_id_invalid');\nreturn [{ json: { ...context, factId } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4440,
+        -300
+      ],
+      "id": "20000000-0000-4000-8000-000000000101",
+      "name": "Prepare Cleanup Fact",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nDELETE FROM app.acceptance_fact WHERE id = $1 AND run_id = $2 AND id <> -334;\nCOMMIT;",
+        "options": {
+          "queryReplacement": "={{ [$json.factId, $json.runId] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        4680,
+        -300
+      ],
+      "id": "20000000-0000-4000-8000-000000000102",
+      "name": "Cleanup Feedback Fact",
+      "alwaysOutputData": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $('Prepare Cleanup Fact').first().json.factsTableId + '/records' }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "={{ '(id,eq,' + $('Prepare Cleanup Fact').first().json.factId + ')~and(run_id,eq,' + encodeURIComponent($('Prepare Cleanup Fact').first().json.runId) + ')' }}"
+            },
+            {
+              "name": "limit",
+              "value": "2"
+            }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4920,
+        -300
+      ],
+      "id": "20000000-0000-4000-8000-000000000106",
+      "name": "Read Cleanup Fact",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Prepare Cleanup Fact').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nconst pageInfo = $json?.pageInfo;\nif (!Array.isArray(rows) || rows.length !== 0 || !pageInfo || Number(pageInfo.totalRows) !== 0 || pageInfo.isLastPage !== true) {\n  throw new Error('cleanup_fact_absence_invalid');\n}\nreturn [{ json: context }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5160,
+        -300
+      ],
+      "id": "20000000-0000-4000-8000-000000000107",
+      "name": "Require Cleanup Fact Absent",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/' + $json.factsTableId + '/records' }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "(id,eq,-334)~and(run_id,eq,recovery-canary-v2)"
+            },
+            {
+              "name": "limit",
+              "value": "2"
+            }
+          ]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5400,
+        -300
+      ],
+      "id": "20000000-0000-4000-8000-000000000108",
+      "name": "Read Retained Recovery Fact",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Require Cleanup Fact Absent').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nconst pageInfo = $json?.pageInfo;\nif (!Array.isArray(rows) || rows.length !== 1 || !pageInfo || Number(pageInfo.totalRows) !== 1 || pageInfo.isLastPage !== true) {\n  throw new Error('cleanup_canary_invalid');\n}\nconst row = rows[0];\nif (Number(row.id) !== -334 || row.run_id !== 'recovery-canary-v2' || row.fact !== 'artifact-available' ||\n  row.artifact_id !== 'issue334-artifact-v1' || row.artifact_uri !== 'https://artifacts.example.invalid/issue334/artifact-v1' ||\n  row.artifact_media_type !== 'text/plain' || Number(row.artifact_size_bytes) !== 37 ||\n  row.artifact_sha256 !== '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3') {\n  throw new Error('cleanup_canary_invalid');\n}\nreturn [{ json: { ok: true, operation: 'cleanup', runId: context.runId, domain: 'issue334_acceptance', removedCount: context.removedCount } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5640,
+        -300
+      ],
+      "id": "20000000-0000-4000-8000-000000000103",
+      "name": "Require Cleanup Fact",
+      "onError": "continueErrorOutput"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Acceptance Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Acceptance Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Acceptance Request": {
+      "main": [
+        [
+          {
+            "node": "Select Acceptance Operation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Acceptance Operation": {
+      "main": [
+        [
+          {
+            "node": "Create Acceptance Structure",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Grant Acceptance Access",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "List Acceptance Bases",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "List Acceptance Bases",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "List Acceptance Bases",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Acceptance Structure": {
+      "main": [
+        [
+          {
+            "node": "Structure Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structure Result": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Grant Result": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Acceptance Bases": {
+      "main": [
+        [
+          {
+            "node": "Resolve Acceptance Base",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Acceptance Base": {
+      "main": [
+        [
+          {
+            "node": "List Acceptance Sources",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Acceptance Sources": {
+      "main": [
+        [
+          {
+            "node": "Keep Acceptance Sources",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep Acceptance Sources": {
+      "main": [
+        [
+          {
+            "node": "Get Acceptance Reader Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Acceptance Reader Source": {
+      "main": [
+        [
+          {
+            "node": "Capture Acceptance Reader Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Capture Acceptance Reader Source": {
+      "main": [
+        [
+          {
+            "node": "Get Acceptance Operator Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Acceptance Operator Source": {
+      "main": [
+        [
+          {
+            "node": "Capture Acceptance Operator Source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Capture Acceptance Operator Source": {
+      "main": [
+        [
+          {
+            "node": "List Acceptance Tables",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Acceptance Tables": {
+      "main": [
+        [
+          {
+            "node": "Resolve Acceptance Tables",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Acceptance Tables": {
+      "main": [
+        [
+          {
+            "node": "Get Acceptance Base Share",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Acceptance Base Share": {
+      "main": [
+        [
+          {
+            "node": "Require Acceptance Base Private",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Acceptance Base Private": {
+      "main": [
+        [
+          {
+            "node": "Get Reader Shared Views",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Reader Shared Views": {
+      "main": [
+        [
+          {
+            "node": "Require Reader Shares Empty",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Reader Shares Empty": {
+      "main": [
+        [
+          {
+            "node": "Get Operator Shared Views",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Operator Shared Views": {
+      "main": [
+        [
+          {
+            "node": "Require Operator Shares Empty",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Operator Shares Empty": {
+      "main": [
+        [
+          {
+            "node": "Cleanup Only",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cleanup Only": {
+      "main": [
+        [
+          {
+            "node": "Initialize Cleanup",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Feedback Only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Cleanup Decisions": {
+      "main": [
+        [
+          {
+            "node": "Prepare Cleanup Page",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Cleanup Page": {
+      "main": [
+        [
+          {
+            "node": "Cleanup Rows Present",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Cleanup Page": {
+      "main": [
+        [
+          {
+            "node": "Continue Cleanup",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Continue Cleanup": {
+      "main": [
+        [
+          {
+            "node": "List Cleanup Decisions",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Acceptance Decision": {
+      "main": [
+        [
+          {
+            "node": "Normalize Inserted Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Inserted Decision": {
+      "main": [
+        [
+          {
+            "node": "Read Inserted Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Inserted Decision": {
+      "main": [
+        [
+          {
+            "node": "Require Inserted Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Inserted Decision": {
+      "main": [
+        [
+          {
+            "node": "Update Acceptance Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Acceptance Decision": {
+      "main": [
+        [
+          {
+            "node": "Read Updated Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Updated Decision": {
+      "main": [
+        [
+          {
+            "node": "Require Updated Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Updated Decision": {
+      "main": [
+        [
+          {
+            "node": "Try Protected Column Update",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Try Protected Column Update": {
+      "main": [
+        [
+          {
+            "node": "Capture Protected Update Denial",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Capture Protected Update Denial": {
+      "main": [
+        [
+          {
+            "node": "Prepare Reader Negative Probe",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Try Reader Insert": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Reader Insert Denial",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Reader Insert Denial": {
+      "main": [
+        [
+          {
+            "node": "Reader Insert Denied",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Probe Decision": {
+      "main": [
+        [
+          {
+            "node": "Confirm Probe Cleanup",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirm Probe Cleanup": {
+      "main": [
+        [
+          {
+            "node": "Get Recovery Saved View",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Cleanup": {
+      "main": [
+        [
+          {
+            "node": "List Cleanup Decisions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cleanup Rows Present": {
+      "main": [
+        [
+          {
+            "node": "Delete Cleanup Page",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Confirm Cleanup Absence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirm Cleanup Absence": {
+      "main": [
+        [
+          {
+            "node": "Require Cleanup Absent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Cleanup Absent": {
+      "main": [
+        [
+          {
+            "node": "Prepare Cleanup Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Acceptance Facts": {
+      "main": [
+        [
+          {
+            "node": "Require Reader Facts Read",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Reader Facts Read": {
+      "main": [
+        [
+          {
+            "node": "Insert Acceptance Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Reader Negative Probe": {
+      "main": [
+        [
+          {
+            "node": "Clear Reader Negative Residue",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear Reader Negative Residue": {
+      "main": [
+        [
+          {
+            "node": "Try Reader Insert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reader Insert Denied": {
+      "main": [
+        [
+          {
+            "node": "Delete Probe Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Cleanup Unexpected Reader Insert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cleanup Unexpected Reader Insert": {
+      "main": [
+        [
+          {
+            "node": "Fail Unexpected Reader Insert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fail Unexpected Reader Insert": {
+      "main": [
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Recovery Saved View": {
+      "main": [
+        [
+          {
+            "node": "Require Recovery Saved View",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Recovery Saved View": {
+      "main": [
+        [
+          {
+            "node": "Read Recovery Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Acceptance Response": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Acceptance Error Response": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Grant Acceptance Access": {
+      "main": [
+        [
+          {
+            "node": "Grant Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Feedback Only": {
+      "main": [
+        [
+          {
+            "node": "Prepare Feedback Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Read Acceptance Facts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Cleanup Fact": {
+      "main": [
+        [
+          {
+            "node": "Cleanup Feedback Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cleanup Feedback Fact": {
+      "main": [
+        [
+          {
+            "node": "Read Cleanup Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Cleanup Fact": {
+      "main": [
+        [
+          {
+            "node": "Require Cleanup Fact Absent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Cleanup Fact Absent": {
+      "main": [
+        [
+          {
+            "node": "Read Retained Recovery Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Retained Recovery Fact": {
+      "main": [
+        [
+          {
+            "node": "Require Cleanup Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Cleanup Fact": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Recovery Fact": {
+      "main": [
+        [
+          {
+            "node": "Require Recovery Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Recovery Fact": {
+      "main": [
+        [
+          {
+            "node": "Read Recovery Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Recovery Decision": {
+      "main": [
+        [
+          {
+            "node": "Require Recovery Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Recovery Decision": {
+      "main": [
+        [
+          {
+            "node": "Prepare Acceptance Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Feedback Fact": {
+      "main": [
+        [
+          {
+            "node": "List Feedback Residue",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Feedback Residue": {
+      "main": [
+        [
+          {
+            "node": "Require Feedback Residue Bounded",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Feedback Residue Bounded": {
+      "main": [
+        [
+          {
+            "node": "Clear Feedback Residue",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear Feedback Residue": {
+      "main": [
+        [
+          {
+            "node": "Publish Initial Feedback Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish Initial Feedback Fact": {
+      "main": [
+        [
+          {
+            "node": "Require Initial Runtime Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Initial Runtime Fact": {
+      "main": [
+        [
+          {
+            "node": "Insert Feedback Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Feedback Decision": {
+      "main": [
+        [
+          {
+            "node": "Normalize Feedback Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Feedback Decision": {
+      "main": [
+        [
+          {
+            "node": "Consume Feedback Before Refresh",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consume Feedback Before Refresh": {
+      "main": [
+        [
+          {
+            "node": "Require Feedback Before Refresh",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Feedback Before Refresh": {
+      "main": [
+        [
+          {
+            "node": "Refresh Feedback Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Refresh Feedback Fact": {
+      "main": [
+        [
+          {
+            "node": "Require Refreshed Runtime Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Refreshed Runtime Fact": {
+      "main": [
+        [
+          {
+            "node": "Read Refreshed Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Refreshed Fact": {
+      "main": [
+        [
+          {
+            "node": "Require Refreshed Reader Fact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Refreshed Reader Fact": {
+      "main": [
+        [
+          {
+            "node": "Consume Feedback After Refresh",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consume Feedback After Refresh": {
+      "main": [
+        [
+          {
+            "node": "Prepare Feedback Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Feedback Response": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "none",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false,
+    "saveExecutionProgress": false
+  },
+  "tags": []
+}

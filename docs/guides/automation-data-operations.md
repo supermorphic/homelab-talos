@@ -252,6 +252,38 @@ fresh post-recovery backup, and removes its temporary resources.
 authenticates to the isolated restored database, a fresh post-recovery backup exists,
 and the run-owned temporary resources are removed.
 
+## Install the staged NocoDB platform extension
+
+Use this one-time command only after the NocoDB extension source and backup-compatible
+PostgreSQL package are deployed on `origin/main`. Require a current complete logical
+backup before the command. The command validates source parity, the exact live
+PostgreSQL target, backup health, and absence of another upgrade before it creates a
+bounded Job.
+
+```bash
+AUTOMATION_DATA_UPGRADE_CONFIRM='upgrade:automation-data:nocodb-v1' \
+  mise exec -- just kube automation-data-upgrade
+```
+
+The Job accepts no SQL, password, revision, database, or role argument. It uses the
+existing backup credential by Secret reference and applies only `026-nocodb-v1`. It
+serializes the transaction, validates the accepted pre-extension schema, installs the
+shared fresh-initialization definitions, and reads back
+`platform_operations.read_platform_revision()`. An unchanged rerun is a validated
+no-op. An unknown revision or partial schema fails without changing control-schema
+state. Each run uses a unique `automation-data-nocodb-upgrade-*` Job name. Cleanup checks
+the run label and Kubernetes object UID before deletion, including after a Job failure,
+and the command does not retrieve a Secret.
+
+After the command passes, create another complete automation-data logical backup. Keep
+NocoDB suspended until that post-upgrade bundle and the remaining NocoDB bootstrap
+prerequisites pass. Backup and restore accept both the exact pre-extension baseline and
+the exact `026-nocodb-v1` schema; they reject unknown or malformed optional state.
+The catalog-only upgrade does not change the platform generation or managed-domain
+rows. Instead, the captured backup state adds the installed revision and NocoDB source
+array in the same transaction. A backup that spans the upgrade therefore observes
+different before/after state and retries instead of publishing a mixed-schema bundle.
+
 ## Routine operation
 
 ### Check health

@@ -4,6 +4,8 @@ set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 backup_script="$repo_root/kubernetes/apps/automation-data/postgresql/app/scripts/backup.sh"
 status_sql="$repo_root/kubernetes/apps/automation-data/postgresql/app/scripts/update-backup-status.sql"
+control_sql="$repo_root/kubernetes/apps/automation-data/postgresql/app/scripts/platform-control.sql"
+extension_sql="$repo_root/kubernetes/apps/automation-data/postgresql/app/scripts/nocodb-extension.sql"
 cronjob="$repo_root/kubernetes/apps/automation-data/postgresql/app/cronjob.yaml"
 test_root="$(mktemp -d "${TMPDIR:-/tmp}/automation-data-backup-test.XXXXXX")"
 trap 'rm -rf -- "$test_root"' EXIT
@@ -14,6 +16,10 @@ trap 'rm -rf -- "$test_root"' EXIT
 }
 [[ -f "$status_sql" && -f "$cronjob" ]] || {
   echo 'Missing automation-data backup SQL or CronJob.' >&2
+  exit 1
+}
+[[ -f "$control_sql" && -f "$extension_sql" ]] || {
+  echo 'Missing automation-data control or NocoDB extension SQL.' >&2
   exit 1
 }
 
@@ -54,11 +60,29 @@ case "$tool" in
           ;;
       esac
     done
+    if [[ -z "$command_text" && ! -t 0 ]]; then
+      command_text="$(cat)"
+    fi
     if $is_status; then
       printf 'status-attempt\t%s\n' "$*" >>"$FAKE_LOG"
       [[ "${FAIL_STAGE:-}" != status ]] || exit 41
       printf 'freshness-advanced\n' >>"$FAKE_LOG"
-    elif [[ "$command_text" == *capture_backup_state* ]]; then
+    elif [[ "$command_text" == *operation_tables* && "$command_text" == *assert_nocodb_access_kind* ]]; then
+      [[ "$command_text" == *'BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY'* &&
+        "$command_text" == *'WITH captured AS MATERIALIZED'* &&
+        "$command_text" == *'pg_advisory_lock'* &&
+        "$command_text" == *"SET lock_timeout = '5s'"* ]] || exit 49
+      case "${STATE_SCHEMA:-new}" in
+        old)
+          [[ "$command_text" == *"025-baseline"* ]] || exit 43
+          ;;
+        new)
+          [[ "$command_text" == *read_platform_revision* ]] || exit 48
+          printf 'revision-oracle\n' >>"$FAKE_LOG"
+          ;;
+        unknown | partial) exit 45 ;;
+        *) exit 46 ;;
+      esac
       count=0
       [[ ! -f "$FAKE_STATE_COUNT" ]] || count="$(<"$FAKE_STATE_COUNT")"
       count=$((count + 1))
@@ -73,7 +97,17 @@ case "$tool" in
         printf 'stuck\tstuck\tstuck_owner\tstuck_migrator\tstuck_runtime\terror\tfalse\t7\t\t\t\t\t2026-08-26T00:00:00Z\t2026-08-26T00:00:00Z\tworkflow_operation_failed'
       )"
       encoded_registry="$(printf '%s' "$registry" | base64 | tr -d '\n')"
-      printf '%s|%s\n' "$generation" "$encoded_registry"
+      state_marker='stable'
+      if [[ "${UNSTABLE_ONCE:-}" == state && "$count" == 2 ]]; then
+        state_marker='revision-changed'
+      fi
+      encoded_state="$(printf '%s' "${STATE_SCHEMA:-new}:$generation:$state_marker" | base64 | tr -d '\n')"
+      case "${STATE_SCHEMA:-new}" in
+        old) captured_revision='025-baseline' ;;
+        new) captured_revision='026-nocodb-v1' ;;
+        *) captured_revision='invalid' ;;
+      esac
+      printf '%s|%s|%s|%s\n' "$generation" "$encoded_state" "$encoded_registry" "$captured_revision"
       printf 'capture-state\t%s\n' "$generation" >>"$FAKE_LOG"
     elif [[ "$command_text" == *pg_database* ]]; then
       count=0
@@ -169,7 +203,7 @@ EOF
 }
 
 run_backup() {
-  local case_root="$1" fail_stage="${2:-}" unstable_once="${3:-}"
+  local case_root="$1" fail_stage="${2:-}" unstable_once="${3:-}" state_schema="${4:-new}"
   env \
     PATH="$case_root/bin:$PATH" \
     BACKUP_DIR="$case_root/backups" \
@@ -184,9 +218,27 @@ run_backup() {
     FAKE_DATABASE_COUNT="$case_root/database-count" \
     FAIL_STAGE="$fail_stage" \
     UNSTABLE_ONCE="$unstable_once" \
+    STATE_SCHEMA="$state_schema" \
     REAL_SHA256SUM="$real_sha256sum" \
     "$backup_test_shell" "$backup_script"
 }
+
+old_schema_case="$(new_case old-schema)"
+run_backup "$old_schema_case" '' '' old
+[[ -s "$old_schema_case/backups/automation-data-20260827T003000Z/COMPLETE" ]] ||
+  fail 'recognized pre-extension schema did not produce a complete backup'
+! rg -Fq 'Fixed revision-026 maintenance database restrictions.' \
+  "$old_schema_case/backups/automation-data-20260827T003000Z/globals.sql" ||
+  fail 'recognized pre-extension backup changed maintenance database ACL semantics'
+
+for invalid_schema in unknown partial; do
+  invalid_case="$(new_case "$invalid_schema-schema")"
+  if run_backup "$invalid_case" '' '' "$invalid_schema" >/dev/null 2>&1; then
+    fail "$invalid_schema schema produced a backup"
+  fi
+  ! find "$invalid_case/backups" -type f -name COMPLETE -print -quit | rg -q . ||
+    fail "$invalid_schema schema published a complete backup"
+done
 
 success_case="$(new_case success)"
 run_backup "$success_case"
@@ -196,6 +248,10 @@ final_bundle="$success_case/backups/automation-data-20260827T003000Z"
 for artifact in globals.sql registry.tsv manifest.tsv SHA256SUMS COMPLETE; do
   [[ -s "$final_bundle/$artifact" ]] || fail "complete bundle is missing $artifact"
 done
+rg -Fq 'REVOKE CONNECT ON DATABASE postgres FROM PUBLIC;' "$final_bundle/globals.sql" ||
+  fail 'upgraded backup globals omit the postgres maintenance restriction'
+rg -Fq 'REVOKE CONNECT ON DATABASE template1 FROM PUBLIC;' "$final_bundle/globals.sql" ||
+  fail 'upgraded backup globals omit the template1 maintenance restriction'
 assert_count "$final_bundle/databases" '*.dump' 4
 (cd "$final_bundle" && "$real_sha256sum" -c SHA256SUMS >/dev/null &&
   "$real_sha256sum" -c COMPLETE >/dev/null) || fail 'published checksums do not validate'
@@ -223,6 +279,8 @@ rename_target="$(cut -f3 <<<"$rename_record")"
   fail 'bundle publication must rename within one filesystem'
 rg -q '^freshness-advanced$' "$success_case/commands.log" ||
   fail 'successful final validation did not advance freshness'
+[[ "$(rg -c '^revision-oracle$' "$success_case/commands.log")" == 2 ]] ||
+  fail 'upgraded backup did not validate revision through the oracle before both captures'
 
 for failure_stage in globals dump restore checksum rename final_validation status; do
   failure_case="$(new_case "failure-$failure_stage")"
@@ -235,7 +293,7 @@ for failure_stage in globals dump restore checksum rename final_validation statu
     fail "$failure_stage failure advanced freshness"
 done
 
-for unstable_kind in database generation; do
+for unstable_kind in database generation state; do
   retry_case="$(new_case "retry-$unstable_kind")"
   run_backup "$retry_case" '' "$unstable_kind"
   [[ "$(rg -c '^pg_dumpall\t' "$retry_case/commands.log")" == 2 ]] ||
@@ -299,5 +357,13 @@ cron_contract="$(yq -r '
 
 rg -Fq "platform_operations.publish_backup(:'bundle', :'checksum', :'database_set_hash')" \
   "$status_sql" || fail 'status SQL does not call the fixed publication function'
+rg -Fq "'nocodbSources'" "$extension_sql" ||
+  fail 'backup state omits NocoDB source state'
+rg -Fq 'ORDER BY source.domain, source.access_kind' "$extension_sql" ||
+  fail 'NocoDB source backup state lacks stable domain/access ordering'
+rg -Fq "captured.state->'nocodbSources'" "$backup_script" ||
+  fail 'backup capture does not require the NocoDB source snapshot'
+! rg -q 'nocodb.*registry.tsv\|registry.tsv.*nocodb' "$backup_script" ||
+  fail 'backup registry export must not include NocoDB identifiers'
 
 echo 'automation-data dynamic logical backup behavior passed.'

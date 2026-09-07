@@ -86,7 +86,7 @@ def expect_acceptance(
         f"{name}: expected acceptance, got exit {completed.returncode}\n"
         f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
     )
-    assert completed.stdout == "Test catalog passed validation: suites=120.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=125.\n"
     assert completed.stderr == ""
 
 
@@ -602,11 +602,13 @@ def campaign_composition_contract(root: Path, canonical: dict[str, Any]) -> None
         "Campaign integration ordering differs from the explicit catalog contract.\n"
         "--- /dev/fd/<fd>\t<timestamp>\n"
         "+++ /dev/fd/<fd>\t<timestamp>\n"
-        "@@ -1,8 +1,8 @@\n"
+        "@@ -1,10 +1,10 @@\n"
         "-test.cilium-connectivity\n"
         "-test.storage-provisioning\n"
         "-test.flux-canary\n"
         "-test.n8n-restore-drill\n"
+        "-test.nocodb-access\n"
+        "-test.nocodb-restore-drill\n"
         "-test.automation-data-restore-drill\n"
         "-test.integration.media-hardlink\n"
         "-test.plex-network-policy\n"
@@ -614,6 +616,8 @@ def campaign_composition_contract(root: Path, canonical: dict[str, Any]) -> None
         "+test.plex-network-policy\n"
         "+test.integration.media-hardlink\n"
         "+test.automation-data-restore-drill\n"
+        "+test.nocodb-restore-drill\n"
+        "+test.nocodb-access\n"
         "+test.n8n-restore-drill\n"
         "+test.flux-canary\n"
         "+test.storage-provisioning\n"
@@ -749,7 +753,7 @@ def execution_contract(root: Path, canonical: dict[str, Any]) -> None:
         canonical,
         "validation-count",
         add_unregistered_validation,
-        "Validation catalog/executions.ci count differs: catalog=44 ci=43.\n",
+        "Validation catalog/executions.ci count differs: catalog=45 ci=44.\n",
     )
     expect_rejection(
         root,
@@ -794,6 +798,12 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
         assert "verification.logging" in canonical["campaigns"][campaign_name]["members"], (
             f"verification.logging is absent from {campaign_name}"
         )
+        assert "verification.nocodb" not in canonical["campaigns"][campaign_name]["members"], (
+            f"staged verification.nocodb is enrolled in {campaign_name}"
+        )
+    assert suite(canonical, "verification.nocodb")["runner"]["implementation"] == (
+        "scripts/verify/nocodb.sh"
+    ), "offline NocoDB verification definition is absent"
     analyze = catalog_validator.forbidden_kubernetes_operations
     forbidden_cases = {
         "array-secret": 'kc=(kubectl --kubeconfig x)\n"${kc[@]}" get secrets',
@@ -1114,7 +1124,7 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
 def main() -> int:
     completed = run_validator(CATALOG)
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout == "Test catalog passed validation: suites=120.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=125.\n"
     assert completed.stderr == ""
     canonical = yaml.safe_load(CATALOG.read_text(encoding="utf-8"))
     groups = {

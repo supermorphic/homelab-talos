@@ -14,12 +14,17 @@ configMapGenerator:
   - name: automation-data-postgresql-init
     files:
       - init-platform.sh=scripts/init-platform.sh
+      - nocodb-extension.sql=scripts/nocodb-extension.sql
       - platform-control.sql=scripts/platform-control.sql
       - migrate-control.sh=scripts/migrate-control.sh
   - name: automation-data-postgresql-backup
     files:
       - backup.sh=scripts/backup.sh
       - update-backup-status.sql=scripts/update-backup-status.sql
+  - name: automation-data-postgresql-upgrade
+    files:
+      - nocodb-extension.sql=scripts/nocodb-extension.sql
+      - upgrade-nocodb.sql=scripts/upgrade-nocodb.sql
   - name: automation-data-postgresql-sql-exporter
     files:
       - sql-exporter.yml

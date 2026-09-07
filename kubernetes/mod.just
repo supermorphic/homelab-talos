@@ -21,6 +21,40 @@ cilium-render:
 cilium-validate: require-bash
     @scripts/validate/cilium.sh
 
+# Validate the staged NocoDB source and its pinned OCI Helm render. This is local,
+# secret-free, and remains safe while the Flux Kustomization is suspended.
+nocodb-validate: require-bash
+    @scripts/validate/nocodb.sh
+
+# Observe deployed NocoDB only through scoped Kubernetes and Prometheus/Gatus reads.
+nocodb-verify: require-bash
+    @scripts/test/run-catalog-suite.sh verification.nocodb -- scripts/verify/nocodb.sh {{quote(kubeconfig)}}
+
+# Reconcile every eligible NocoDB source for one managed domain through the fixed private
+# webhook. Guard: NOCODB_SOURCE_SYNC_CONFIRM='sync:nocodb:<domain>'.
+nocodb-source-sync domain: require-bash
+    @scripts/nocodb/source-operation.sh sync {{quote(domain)}}
+
+# Rotate exactly one NocoDB source credential through the fixed private webhook. Guard:
+# NOCODB_SOURCE_ROTATE_CONFIRM='rotate:nocodb:<domain>:<reader|operator>'.
+nocodb-source-rotate domain access_kind: require-bash
+    @scripts/nocodb/source-operation.sh rotate {{quote(domain)}} {{quote(access_kind)}}
+
+# Run the catalog-coordinated synthetic NocoDB reader/operator acceptance lifecycle.
+# Guard: NOCODB_ACCESS_TEST_CONFIRM='test:nocodb:access'.
+nocodb-access-test: require-bash
+    @scripts/test/run-catalog-suite.sh test.nocodb-access -- scripts/test/scenarios/nocodb-access.sh {{quote(kubeconfig)}}
+
+# Run the registered disposable Podman integration. It binds loopback ports only and
+# never uses cluster credentials or production endpoints.
+nocodb-local-integration-test: require-bash
+    @scripts/test/run-catalog-suite.sh test.nocodb-local-integration -- scripts/test/scenarios/nocodb-local-integration.sh
+
+# Restore one complete NocoDB logical bundle into isolated PostgreSQL with fresh
+# application scratch. Guard: NOCODB_RESTORE_CONFIRM='restore:nocodb:metadata'.
+nocodb-restore-drill: require-bash
+    @scripts/test/run-catalog-suite.sh test.nocodb-restore-drill -- scripts/test/scenarios/nocodb-restore-drill.sh {{quote(kubeconfig)}}
+
 # Validate specification 023 source, rendered n8n chart, database, backup, routes,
 # containment, monitoring, and secret structure. Cluster-independent; part of just ci.
 n8n-validate: require-bash
@@ -35,6 +69,11 @@ automation-data-validate: require-bash
 # Operator-run; deactivate provisioning and drain executions before confirmation.
 automation-data-control-migrate: require-bash
     @scripts/operations/automation-data-control-migrate.sh {{quote(kubeconfig)}}
+
+# Apply the one fixed existing-platform upgrade for the NocoDB extension. Guard:
+# AUTOMATION_DATA_UPGRADE_CONFIRM='upgrade:automation-data:nocodb-v1'.
+automation-data-upgrade: require-bash
+    @scripts/upgrade/automation-data.sh {{quote(kubeconfig)}}
 
 # Observe the deployed automation-data platform without reading Secrets, querying
 # PostgreSQL, invoking n8n, execing into a Pod, or opening a port-forward.

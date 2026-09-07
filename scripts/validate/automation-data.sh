@@ -25,6 +25,7 @@ scripts/test/automation-data-control-contract-test.sh
 scripts/test/automation-data-workflow-contract-test.sh
 scripts/test/automation-data-provisioning-command-test.sh
 scripts/test/automation-data-exporter-grant-test.sh
+scripts/test/automation-data-upgrade-test.sh --offline
 scripts/test/automation-data-backup-test.sh
 scripts/test/automation-data-restore-command-test.sh
 scripts/test/automation-data-longhorn-health-test.sh
@@ -35,10 +36,12 @@ scripts/test/automation-data-longhorn-health-test.sh
 
 platform_graph="$(yq -r '[.resources[]] | sort | join(",")' \
   kubernetes/apps/automation-data/kustomization.yaml)"
-[[ "$platform_graph" == './namespace/ks.yaml,./postgresql/ks.yaml' ]] ||
+[[ "$platform_graph" == './namespace/ks.yaml,./nocodb/ks.yaml,./postgresql/ks.yaml' ]] ||
   fail 'the automation-data Flux package graph is incomplete'
 [[ "$(yq -r '.spec.suspend' kubernetes/apps/automation-data/postgresql/ks.yaml)" == false ]] ||
   fail 'the accepted automation-data PostgreSQL package must remain active'
+[[ "$(yq -r '.spec.suspend' kubernetes/apps/automation-data/nocodb/ks.yaml)" == true ]] ||
+  fail 'the NocoDB package must remain staged'
 
 exporter='kubernetes/apps/automation-data/postgresql/app/sql-exporter.yml'
 mapfile -t metrics < <(

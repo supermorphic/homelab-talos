@@ -4,6 +4,7 @@ rule_files:
   - gatus.yaml
   - logging.yaml
   - n8n.yaml
+  - nocodb.yaml
   - ntfy.yaml
   - portainer.yaml
   - test-reports.yaml
@@ -11,6 +12,171 @@ rule_files:
 evaluation_interval: 1m
 
 tests:
+  # --- NocoDB operator UI ---
+
+  - name: NocoDB black-box down and missing-probe alerts obey their windows
+    interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{name="nocodb",group="Platform"}'
+        values: '1x3 0x8 1x8'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: NocoDBDown
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: NocoDBDown
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: NocoDBDown
+        exp_alerts:
+          - exp_labels: {severity: critical, name: nocodb, group: Platform}
+            exp_annotations: {summary: NocoDB is unavailable through the internal gateway}
+      - eval_time: 14m
+        alertname: NocoDBDown
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: NocoDBProbeMissing
+        exp_alerts: []
+
+  - name: NocoDB missing black-box probe fires after fifteen minutes
+    interval: 1m
+    input_series:
+      - series: 'unrelated_metric{scope="nocodb-probe"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: NocoDBProbeMissing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: NocoDBProbeMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, name: nocodb, group: Platform}
+            exp_annotations: {summary: NocoDB black-box probe data is missing}
+
+  - name: NocoDB Deployment unavailability uses the exact workload selector and recovers
+    interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="automation-data",deployment="nocodb"}'
+        values: '1x3 0x8 1x8'
+      - series: 'kube_deployment_status_replicas_available{namespace="other",deployment="nocodb"}'
+        values: '0x19'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: NocoDBWorkloadUnavailable
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: NocoDBWorkloadUnavailable
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: NocoDBWorkloadUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation-data, deployment: nocodb}
+            exp_annotations: {summary: NocoDB Deployment has no available replica}
+      - eval_time: 13m
+        alertname: NocoDBWorkloadUnavailable
+        exp_alerts: []
+
+  - name: NocoDB restart and OOM alerts match only the application container
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="automation-data",pod="nocodb-abc",container="nocodb"}'
+        values: '0x2 1x2 2x2 3x10 3x12'
+      - series: 'kube_pod_container_status_restarts_total{namespace="automation-data",pod="nocodb-oom",container="nocodb"}'
+        values: '0x3 1x19'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="automation-data",pod="nocodb-oom",container="nocodb",reason="OOMKilled"}'
+        values: '0x3 1x19'
+      - series: 'kube_pod_container_status_restarts_total{namespace="automation-data",pod="redis-abc",container="redis"}'
+        values: '0+1x26'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: NocoDBContainerRestarting
+        exp_alerts: []
+      - eval_time: 13m
+        alertname: NocoDBContainerRestarting
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: NocoDBContainerRestarting
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: automation-data, pod: nocodb-abc, container: nocodb}
+            exp_annotations: {summary: NocoDB container is restarting repeatedly}
+      - eval_time: 25m
+        alertname: NocoDBContainerRestarting
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: NocoDBContainerOomKilled
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: NocoDBContainerOomKilled
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: NocoDBContainerOomKilled
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: automation-data, pod: nocodb-oom, container: nocodb}
+            exp_annotations: {summary: NocoDB container was OOM killed}
+      - eval_time: 20m
+        alertname: NocoDBContainerOomKilled
+        exp_alerts: []
+
+  - name: NocoDB metadata bootstrap failure and overdue windows are independent
+    interval: 1m
+    input_series:
+      - series: 'kube_job_failed{namespace="automation-data",job_name="nocodb-metadata-bootstrap",condition="true"}'
+        values: '1x40'
+      - series: 'kube_job_status_start_time{namespace="automation-data",job_name="nocodb-metadata-bootstrap"}'
+        values: '0x40'
+      - series: 'kube_job_failed{namespace="automation-data",job_name="other",condition="true"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: NocoDBMetadataBootstrapJobFailed
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: NocoDBMetadataBootstrapJobFailed
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: automation-data, job_name: nocodb-metadata-bootstrap, condition: "true"}
+            exp_annotations: {summary: NocoDB metadata bootstrap Job failed}
+      - eval_time: 34m
+        alertname: NocoDBMetadataBootstrapJobOverdue
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: NocoDBMetadataBootstrapJobOverdue
+        exp_alerts: []
+      - eval_time: 36m
+        alertname: NocoDBMetadataBootstrapJobOverdue
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: automation-data, job_name: nocodb-metadata-bootstrap}
+            exp_annotations: {summary: NocoDB metadata bootstrap Job is overdue}
+
+  - name: NocoDB acceptance Job failure and overdue selectors reject non-acceptance Jobs
+    interval: 1m
+    input_series:
+      - series: 'kube_job_failed{namespace="automation-data",job_name="nocodb-acceptance-domain",condition="true"}'
+        values: '1x40'
+      - series: 'kube_job_status_start_time{namespace="automation-data",job_name="nocodb-acceptance-domain"}'
+        values: '0x40'
+      - series: 'kube_job_failed{namespace="automation-data",job_name="nocodb-bootstrap",condition="true"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: NocoDBAcceptanceJobFailed
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: NocoDBAcceptanceJobFailed
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: automation-data, job_name: nocodb-acceptance-domain, condition: "true"}
+            exp_annotations: {summary: NocoDB acceptance Job failed}
+      - eval_time: 34m
+        alertname: NocoDBAcceptanceJobOverdue
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: NocoDBAcceptanceJobOverdue
+        exp_alerts: []
+      - eval_time: 36m
+        alertname: NocoDBAcceptanceJobOverdue
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: automation-data, job_name: nocodb-acceptance-domain}
+            exp_annotations: {summary: NocoDB acceptance Job is overdue}
+
   # --- n8n and PostgreSQL ---
 
   - name: active n8n platform alerts when scrape and workload series are fully absent

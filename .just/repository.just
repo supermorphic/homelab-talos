@@ -336,6 +336,199 @@ automation-data-secrets:
     committed=true
     echo "Wrote SOPS-encrypted $target."
 
+# Write the SOPS-encrypted NocoDB runtime Secret from operator-supplied values. The
+# connection encryption key is recovery material and cannot be replaced by this writer.
+nocodb-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    expected_confirmation='write:automation-data:nocodb:sops'
+    target='kubernetes/apps/automation-data/nocodb/app/nocodb-credentials.sops.yaml'
+    kustomization='kubernetes/apps/automation-data/nocodb/app/kustomization.yaml'
+    resource_entry='  - ./nocodb-credentials.sops.yaml'
+    [[ -n "${NOCODB_METADATA_PASSWORD:-}" ]] || {
+      echo 'Set NOCODB_METADATA_PASSWORD to the NocoDB metadata database password.' >&2
+      exit 1
+    }
+    [[ -n "${NOCODB_AUTH_JWT_SECRET:-}" ]] || {
+      echo 'Set NOCODB_AUTH_JWT_SECRET to the NocoDB JWT signing secret.' >&2
+      exit 1
+    }
+    [[ -n "${NOCODB_CONNECTION_ENCRYPT_KEY:-}" ]] || {
+      echo 'Set NOCODB_CONNECTION_ENCRYPT_KEY to the retained NocoDB connection encryption key.' >&2
+      exit 1
+    }
+    [[ -n "${NOCODB_ADMIN_PASSWORD:-}" ]] || {
+      echo 'Set NOCODB_ADMIN_PASSWORD to the initial NocoDB administrator password.' >&2
+      exit 1
+    }
+    [[ -n "${NOCODB_SOURCE_PROVISIONING_HEADER:-}" ]] || {
+      echo 'Set NOCODB_SOURCE_PROVISIONING_HEADER to the fixed source-provisioning header value.' >&2
+      exit 1
+    }
+    [[ -n "${NOCODB_ADMIN_EMAIL:-}" ]] || {
+      echo 'Set NOCODB_ADMIN_EMAIL to the initial NocoDB administrator email address.' >&2
+      exit 1
+    }
+    [[ "${NOCODB_SECRETS_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo 'Refusing to write the automation-data NocoDB Secret.' >&2
+      echo "Set NOCODB_SECRETS_CONFIRM='$expected_confirmation' after reviewing both targets." >&2
+      exit 1
+    }
+    for secret_variable in NOCODB_METADATA_PASSWORD NOCODB_AUTH_JWT_SECRET \
+      NOCODB_CONNECTION_ENCRYPT_KEY NOCODB_ADMIN_PASSWORD \
+      NOCODB_SOURCE_PROVISIONING_HEADER; do
+      secret_value="${!secret_variable}"
+      [[ "${#secret_value}" -ge 32 ]] || {
+        echo "Refusing: $secret_variable must be at least 32 characters." >&2
+        exit 1
+      }
+    done
+    [[ "$NOCODB_ADMIN_EMAIL" =~ ^[^[:space:]@]+@[^[:space:]@]+$ ]] || {
+      echo 'Refusing: NOCODB_ADMIN_EMAIL must be one non-whitespace email address.' >&2
+      exit 1
+    }
+
+    target_exists=false
+    [[ -e "$target" ]] && target_exists=true
+    kustomization_has_resource=false
+    rg -Fxq -- "$resource_entry" "$kustomization" && kustomization_has_resource=true
+    if [[ "$target_exists" == true && "$kustomization_has_resource" != true ]]; then
+      echo 'Refusing: the existing NocoDB Secret is not listed by its Kustomization.' >&2
+      exit 1
+    fi
+    if [[ "$target_exists" != true && "$kustomization_has_resource" == true ]]; then
+      echo 'Refusing: the NocoDB Kustomization already lists an absent Secret.' >&2
+      exit 1
+    fi
+
+    committed=false
+    stage_directory=''
+    temp_dir=''
+    declare -a install_targets=()
+    declare -a install_candidates=()
+    declare -a backups=()
+    declare -a replaced=()
+    cleanup() {
+      local result="$?" index rollback_failed=false
+      trap - EXIT
+      if [[ "$committed" != true ]]; then
+        for ((index = ${#install_targets[@]} - 1; index >= 0; index -= 1)); do
+          if [[ -n "${backups[$index]:-}" && -e "${backups[$index]}" ]]; then
+            mv -- "${backups[$index]}" "${install_targets[$index]}" || rollback_failed=true
+          elif [[ "${replaced[$index]:-false}" == true ]]; then
+            rm -f -- "${install_targets[$index]}" || rollback_failed=true
+          fi
+        done
+      fi
+      [[ -z "$temp_dir" ]] || rm -rf -- "$temp_dir"
+      [[ -z "$stage_directory" ]] || rm -rf -- "$stage_directory"
+      if [[ "$rollback_failed" == true ]]; then
+        echo 'Failed to restore the previous NocoDB Secret source.' >&2
+        result=1
+      fi
+      exit "$result"
+    }
+    umask 077
+    temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-talos-nocodb-secrets.XXXXXX")"
+    trap cleanup EXIT
+
+    just repo secrets
+    mapfile -t expected_recipients < <(
+      target="$target" yq -r \
+        '.creation_rules[] | select(.path_regex as $rule | env(target) | test($rule)) | .age' \
+        .sops.yaml
+    )
+    [[ "${#expected_recipients[@]}" -eq 1 && -n "${expected_recipients[0]}" && \
+      "${expected_recipients[0]}" != null ]] || {
+      echo "Unable to select exactly one SOPS age recipient for $target." >&2
+      exit 1
+    }
+    expected_recipient="${expected_recipients[0]}"
+
+    connection_key="$NOCODB_CONNECTION_ENCRYPT_KEY"
+    if [[ "$target_exists" == true ]]; then
+      existing_plaintext="$temp_dir/existing-nocodb-credentials.yaml"
+      sops --decrypt "$target" >"$existing_plaintext"
+      retained_connection_key="$(yq -r '.stringData.NC_CONNECTION_ENCRYPT_KEY' "$existing_plaintext")"
+      [[ -n "$retained_connection_key" && "$retained_connection_key" != null && \
+        "${NOCODB_CONNECTION_ENCRYPT_KEY_RECOVERY:-}" == "$retained_connection_key" ]] || {
+        echo 'Refusing to replace the retained NC_CONNECTION_ENCRYPT_KEY.' >&2
+        exit 1
+      }
+      [[ "${#retained_connection_key}" -ge 32 ]] || {
+        echo 'Refusing: retained NC_CONNECTION_ENCRYPT_KEY must be at least 32 characters.' >&2
+        exit 1
+      }
+      connection_key="$retained_connection_key"
+    fi
+
+    export NOCODB_METADATA_PASSWORD NOCODB_AUTH_JWT_SECRET NOCODB_ADMIN_EMAIL
+    export NOCODB_ADMIN_PASSWORD NOCODB_SOURCE_PROVISIONING_HEADER connection_key
+    metadata_password_encoded="$(python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["NOCODB_METADATA_PASSWORD"], safe=""))')"
+    export metadata_password_encoded
+    plaintext="$temp_dir/nocodb-credentials.yaml"
+    candidate="$temp_dir/nocodb-credentials.sops.yaml"
+    yq -n \
+      '.apiVersion = "v1" |
+       .kind = "Secret" |
+       .metadata.name = "nocodb-credentials" |
+       .metadata.namespace = "automation-data" |
+       .type = "Opaque" |
+       .stringData.DATABASE_URL = "postgres://nocodb_metadata:" + strenv(metadata_password_encoded) + "@automation-data-postgresql.automation-data.svc.cluster.local:5432/nocodb?sslmode=disable" |
+       .stringData."metadata-password" = strenv(NOCODB_METADATA_PASSWORD) |
+       .stringData.NC_AUTH_JWT_SECRET = strenv(NOCODB_AUTH_JWT_SECRET) |
+       .stringData.NC_CONNECTION_ENCRYPT_KEY = strenv(connection_key) |
+       .stringData.NC_ADMIN_EMAIL = strenv(NOCODB_ADMIN_EMAIL) |
+       .stringData.NC_ADMIN_PASSWORD = strenv(NOCODB_ADMIN_PASSWORD) |
+       .stringData."source-provisioning-header" = strenv(NOCODB_SOURCE_PROVISIONING_HEADER)' \
+      >"$plaintext"
+    sops --encrypt --filename-override "$target" "$plaintext" >"$candidate"
+
+    [[ "$(sops filestatus "$candidate" | yq -r '.encrypted')" == true ]]
+    mapfile -t candidate_recipients < <(yq -r '.sops.age[].recipient' "$candidate" | sort -u)
+    [[ "${#candidate_recipients[@]}" -eq 1 && \
+      "${candidate_recipients[0]}" == "$expected_recipient" ]]
+    [[ "$(yq -r 'keys | sort | join(",")' "$candidate")" == \
+      'apiVersion,kind,metadata,sops,stringData,type' ]]
+    [[ "$(yq -r '.metadata | keys | sort | join(",")' "$candidate")" == 'name,namespace' ]]
+    [[ "$(yq -r '.apiVersion' "$candidate")" == v1 ]]
+    [[ "$(yq -r '.kind' "$candidate")" == Secret ]]
+    [[ "$(yq -r '.metadata.name' "$candidate")" == nocodb-credentials ]]
+    [[ "$(yq -r '.metadata.namespace' "$candidate")" == automation-data ]]
+    [[ "$(yq -r '.type' "$candidate")" == Opaque ]]
+    [[ "$(yq -r 'has("data") | not' "$candidate")" == true ]]
+    [[ "$(yq -r '.stringData | keys | sort | join(",")' "$candidate")" == \
+      'DATABASE_URL,NC_ADMIN_EMAIL,NC_ADMIN_PASSWORD,NC_AUTH_JWT_SECRET,NC_CONNECTION_ENCRYPT_KEY,metadata-password,source-provisioning-header' ]]
+    for supplied_value in "$NOCODB_METADATA_PASSWORD" "$NOCODB_AUTH_JWT_SECRET" \
+      "$NOCODB_CONNECTION_ENCRYPT_KEY" "$NOCODB_ADMIN_PASSWORD" \
+      "$NOCODB_SOURCE_PROVISIONING_HEADER" "$NOCODB_ADMIN_EMAIL" "$connection_key"; do
+      ! rg -Fq -- "$supplied_value" "$candidate"
+    done
+
+    stage_directory="$(mktemp -d "$(dirname -- "$target")/.nocodb-secrets.XXXXXX")"
+    install_targets=("$target")
+    install_candidates=("$stage_directory/candidate")
+    backups=("$stage_directory/previous-secret")
+    replaced=(false)
+    cp -- "$candidate" "${install_candidates[0]}"
+    [[ "$target_exists" != true ]] || cp -- "$target" "${backups[0]}"
+    if [[ "$target_exists" != true ]]; then
+      kustomization_candidate="$stage_directory/kustomization"
+      yq -o=yaml '.resources += ["./nocodb-credentials.sops.yaml"]' "$kustomization" >"$kustomization_candidate"
+      install_targets+=("$kustomization")
+      install_candidates+=("$kustomization_candidate")
+      backups+=("$stage_directory/previous-kustomization")
+      replaced+=(false)
+      cp -- "$kustomization" "${backups[1]}"
+    fi
+    for index in "${!install_targets[@]}"; do
+      mv -- "${install_candidates[$index]}" "${install_targets[$index]}"
+      replaced[$index]=true
+    done
+    committed=true
+    echo "Wrote SOPS-encrypted $target."
+
 # Write the three SOPS-encrypted n8n platform Secrets from operator-supplied values.
 # The stable n8n encryption key and database passwords must be retained for recovery.
 n8n-secrets:

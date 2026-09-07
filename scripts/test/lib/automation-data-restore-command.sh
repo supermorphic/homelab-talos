@@ -172,6 +172,106 @@ WHERE managed.state = 'ready';
 ")" || restore_fail permission-query
 test "$permission_contract" = true || restore_fail permission-validation
 
+restored_catalog_state="$(psql --dbname=automation_data_control --tuples-only --no-align --command="
+WITH operation_tables AS (
+  SELECT array_agg(class.relname::text ORDER BY class.relname) AS names
+  FROM pg_class AS class
+  JOIN pg_namespace AS namespace ON namespace.oid = class.relnamespace
+  WHERE namespace.nspname = 'platform_operations' AND class.relkind = 'r'
+),
+operation_functions AS (
+  SELECT array_agg(procedure.proname::text ORDER BY procedure.proname) AS names
+  FROM pg_proc AS procedure
+  JOIN pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
+  WHERE namespace.nspname = 'platform_operations'
+)
+SELECT CASE
+  WHEN COALESCE(operation_tables.names = ARRAY[
+      'logical_backup_status', 'managed_domains', 'platform_generation'
+    ]::text[], false) AND
+    COALESCE(operation_functions.names = ARRAY[
+      'capture_backup_state', 'provision_domain', 'publish_backup',
+      'reconcile_domain', 'record_domain_credentials', 'record_operation_error',
+      'rotate_domain_credential', 'validate_domain'
+    ]::text[], false) AND
+    to_regprocedure('platform_operations.provision_domain(text,text,text)') IS NOT NULL AND
+    to_regprocedure('platform_operations.reconcile_domain(text)') IS NOT NULL AND
+    to_regprocedure('platform_operations.record_domain_credentials(text,text,text,timestamptz,timestamptz)') IS NOT NULL AND
+    to_regprocedure('platform_operations.rotate_domain_credential(text,text,text)') IS NOT NULL AND
+    to_regprocedure('platform_operations.record_operation_error(text,text)') IS NOT NULL AND
+    to_regprocedure('platform_operations.validate_domain(text)') IS NOT NULL AND
+    to_regprocedure('platform_operations.capture_backup_state()') IS NOT NULL AND
+    to_regprocedure('platform_operations.publish_backup(text,text,text)') IS NOT NULL AND
+    NOT EXISTS (
+      SELECT 1
+      FROM pg_proc AS procedure
+      JOIN pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
+      WHERE namespace.nspname IN ('platform_operations', 'platform_internal')
+        AND (procedure.proname = 'assert_nocodb_access_kind' OR
+          procedure.proname LIKE '%nocodb%')
+    ) THEN '025-baseline'
+  WHEN to_regclass('platform_operations.platform_schema_revision') IS NOT NULL AND
+    to_regclass('platform_operations.managed_nocodb_sources') IS NOT NULL
+    THEN 'upgraded-candidate'
+  ELSE 'invalid'
+END
+FROM operation_tables, operation_functions;
+")" || restore_fail platform-catalog-query
+case "$restored_catalog_state" in
+  025-baseline) restored_platform_revision='025-baseline' ;;
+  upgraded-candidate)
+    restored_platform_revision="$(psql --dbname=automation_data_control \
+      --tuples-only --no-align \
+      --command='SELECT platform_operations.read_platform_revision();'
+    )" || restore_fail platform-revision-oracle
+    test "$restored_platform_revision" = '026-nocodb-v1' ||
+      restore_fail platform-revision-validation
+    ;;
+  *) restore_fail platform-catalog-validation ;;
+esac
+
+restored_platform_shape="$(psql --dbname=automation_data_control --tuples-only --no-align --command="
+WITH captured AS (
+  SELECT platform_operations.capture_backup_state() AS state
+)
+SELECT '$restored_platform_revision'
+FROM captured
+WHERE
+  ('$restored_platform_revision' = '025-baseline' AND
+    (SELECT array_agg(key ORDER BY key)
+     FROM captured, LATERAL jsonb_object_keys(captured.state) AS key) =
+      ARRAY['generation', 'registry']::text[] AND
+    jsonb_typeof(captured.state->'generation') = 'number' AND
+    jsonb_typeof(captured.state->'registry') = 'array') OR
+  ('$restored_platform_revision' = '026-nocodb-v1' AND
+    captured.state->>'platformRevision' = '026-nocodb-v1' AND
+    (SELECT array_agg(key ORDER BY key)
+     FROM captured, LATERAL jsonb_object_keys(captured.state) AS key) =
+      ARRAY['generation', 'nocodbSources', 'platformRevision', 'registry']::text[] AND
+    jsonb_typeof(captured.state->'generation') = 'number' AND
+    jsonb_typeof(captured.state->'registry') = 'array' AND
+    jsonb_typeof(captured.state->'nocodbSources') = 'array');
+")" || restore_fail platform-state-query
+test "$restored_platform_shape" = "$restored_platform_revision" ||
+  restore_fail platform-state-validation
+case "$restored_platform_revision" in
+  025-baseline) ;;
+  026-nocodb-v1)
+    nocodb_permission_contract="$(psql --dbname=automation_data_control --tuples-only --no-align --command="
+SELECT COALESCE(bool_and(
+  source.state = 'ready' AND
+  (platform_operations.validate_nocodb_access(
+    source.domain, source.access_kind
+  )->>'valid')::boolean
+), true)::text
+FROM platform_operations.managed_nocodb_sources AS source
+WHERE source.state = 'ready';
+")" || restore_fail nocodb-permission-query
+    test "$nocodb_permission_contract" = true || restore_fail nocodb-permission-validation
+    ;;
+  *) restore_fail platform-revision-validation ;;
+esac
+
 printf '%s\n' 'restore_stage=post-recovery-backup'
 mkdir -p "$POST_RECOVERY_BACKUP_DIR"
 PGDATABASE=automation_data_control \

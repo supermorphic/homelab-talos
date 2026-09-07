@@ -1,0 +1,60 @@
+---
+replicaCount: 1
+
+updateStrategy:
+  type: Recreate
+  # Helm otherwise merges the chart's default RollingUpdate fields into this strategy,
+  # which Kubernetes rejects for a Recreate Deployment.
+  rollingUpdate: null
+
+worker:
+  enabled: false
+
+autoscaling:
+  enabled: false
+
+image:
+  registry: docker.io
+  repository: nocodb/nocodb
+  tag: "2026.08.2"
+  digest: sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9
+
+externalDatabase:
+  existingSecret: nocodb-credentials
+  existingSecretUrlKey: DATABASE_URL
+
+auth:
+  existingSecret: nocodb-credentials
+
+persistence:
+  enabled: false
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+
+networkPolicy:
+  enabled: false
+
+nocodb:
+  publicUrl: https://nocodb.lab.supermorphic.com
+  disableMux: true
+  disableTelemetry: true
+  extraEnvVars:
+    - name: NC_ALLOW_LOCAL_EXTERNAL_DBS
+      value: "true"
+    - name: NC_DISABLE_SUPPORT_CHAT
+      value: "true"
+    - name: NC_ADMIN_EMAIL
+      valueFrom:
+        secretKeyRef:
+          name: nocodb-credentials
+          key: NC_ADMIN_EMAIL
+    - name: NC_ADMIN_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: nocodb-credentials
+          key: NC_ADMIN_PASSWORD
