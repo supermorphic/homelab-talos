@@ -5,20 +5,28 @@
 
 # shellcheck disable=SC2034 # This source interface deliberately initializes caller-owned variables.
 flux_alerts_source() {
-  # Production remains on the dedicated exporter during shadow collection. Do not
-  # infer these identities from target health or chart-generated name fragments.
-  flux_alerts_service='flux-kube-state-metrics'
-  flux_alerts_deployment='flux-kube-state-metrics'
-  flux_alerts_serviceaccount='flux-kube-state-metrics'
-  flux_alerts_release='flux-kube-state-metrics'
-  flux_alerts_values='kubernetes/apps/monitoring/flux-kube-state-metrics/app/values.yaml'
-  flux_alerts_values_root='.'
+  # Production selects the verified bundled KPS resources. Do not infer these
+  # identities from target health or chart-generated name fragments.
+  flux_alerts_service='kube-prometheus-stack-kube-state-metrics'
+  flux_alerts_deployment='kube-prometheus-stack-kube-state-metrics'
+  flux_alerts_serviceaccount='kube-prometheus-stack-kube-state-metrics'
+  flux_alerts_release='kube-prometheus-stack'
+  flux_alerts_workload_instance='kube-prometheus-stack'
+  flux_alerts_workload_name='kube-state-metrics'
+  flux_alerts_values='kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml'
+  flux_alerts_values_root='."kube-state-metrics"'
 }
 
 flux_alerts_metric_selector() {
   flux_alerts_source
   printf 'gotk_resource_info{service="%s",namespace="monitoring"}\n' \
     "$flux_alerts_service"
+}
+
+flux_alerts_workload_selector() {
+  flux_alerts_source
+  printf 'app.kubernetes.io/name=%s,app.kubernetes.io/instance=%s\n' \
+    "$flux_alerts_workload_name" "$flux_alerts_workload_instance"
 }
 
 flux_alerts_configured_gvks() {
@@ -132,6 +140,63 @@ flux_alerts_rule_rows() {
     ] |
     @tsv
   '
+}
+
+flux_alerts_rules_select_production_source() {
+  flux_alerts_source
+  local rule_json rule_name query remaining selector match
+  local service_without_expected namespace_without_expected
+  local selector_count status=0
+  local reconciliation_seen=false missing_seen=false
+
+  while IFS= read -r rule_json; do
+    rule_name="$(yq -r '.name // ""' <<<"$rule_json")"
+    query="$(yq -r '.query // ""' <<<"$rule_json")"
+    case "$rule_name" in
+    FluxReconciliationFailure)
+      [[ "$reconciliation_seen" == 'false' ]] || status=1
+      reconciliation_seen=true
+      ;;
+    FluxResourceMetricsMissing)
+      [[ "$missing_seen" == 'false' ]] || status=1
+      missing_seen=true
+      ;;
+    *) status=1 ;;
+    esac
+
+    selector_count=0
+    remaining="$query"
+    while [[ "$remaining" =~ gotk_resource_info\{([^}]*)\} ]]; do
+      match="${BASH_REMATCH[0]}"
+      selector="${BASH_REMATCH[1]}"
+      selector_count=$((selector_count + 1))
+      service_without_expected="${selector/"service=\"$flux_alerts_service\""/}"
+      namespace_without_expected="${selector/namespace=\"monitoring\"/}"
+      [[ "$selector" == *"service=\"$flux_alerts_service\""* ]] || status=1
+      [[ "$service_without_expected" != *'service='* ]] || status=1
+      [[ "$selector" == *'namespace="monitoring"'* ]] || status=1
+      [[ "$namespace_without_expected" != *'namespace='* ]] || status=1
+      remaining="${remaining#*"$match"}"
+    done
+    [[ "$selector_count" -gt 0 ]] || status=1
+  done < <(
+    yq -o=json -I=0 '
+      .data.groups[]?.rules[]? |
+      select(
+        .name == "FluxReconciliationFailure" or
+        .name == "FluxResourceMetricsMissing"
+      ) |
+      .
+    '
+  )
+
+  [[ "$reconciliation_seen" == 'true' ]] || status=1
+  [[ "$missing_seen" == 'true' ]] || status=1
+  if [[ "$status" -eq 0 ]]; then
+    printf 'true\n'
+  else
+    printf 'false\n'
+  fi
 }
 
 flux_alerts_active_alertmanager_count() {

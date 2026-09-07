@@ -15,6 +15,7 @@ kubeconfig="$1"
 ns='monitoring'
 gateway_ip="$HOMELAB_GATEWAY_VIP"
 exporter_name="$flux_alerts_service"
+exporter_release="$flux_alerts_release"
 exporter_values="$flux_alerts_values"
 exporter_values_root="$flux_alerts_values_root"
 prometheus_base_url='https://prometheus.lab.supermorphic.com'
@@ -22,18 +23,14 @@ prometheus_resolve="prometheus.lab.supermorphic.com:443:${gateway_ip}"
 alertmanager_base_url='https://alertmanager.lab.supermorphic.com'
 alertmanager_resolve="alertmanager.lab.supermorphic.com:443:${gateway_ip}"
 
-for k in kube-prometheus-stack kube-prometheus-stack-config flux-kube-state-metrics; do
+for k in kube-prometheus-stack kube-prometheus-stack-config; do
   [[ "$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get kustomization "$k" --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
     echo "Monitoring Kustomization $k is not Ready." >&2
     exit 1
   }
 done
-[[ "$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get helmrelease kube-prometheus-stack --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
+[[ "$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get helmrelease "$exporter_release" --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
   echo 'kube-prometheus-stack HelmRelease is not Ready.' >&2
-  exit 1
-}
-[[ "$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" get helmrelease "$exporter_name" --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || {
-  echo 'flux-kube-state-metrics HelmRelease is not Ready.' >&2
   exit 1
 }
 kubectl --kubeconfig "$kubeconfig" --namespace "$ns" \
@@ -86,11 +83,11 @@ targets_response="$(
 target_count="$(flux_alerts_target_count "$exporter_name" "$ns" <<<"$targets_response")"
 target_healths="$(flux_alerts_target_healths "$exporter_name" "$ns" <<<"$targets_response")"
 [[ "$target_count" -gt 0 ]] || {
-  echo 'Prometheus has not discovered the flux-kube-state-metrics scrape target.' >&2
+  echo "Prometheus has not discovered the $exporter_name scrape target." >&2
   exit 1
 }
 [[ "$target_healths" == 'up' ]] || {
-  echo "flux-kube-state-metrics Prometheus target health is '${target_healths:-unknown}', not up." >&2
+  echo "$exporter_name Prometheus target health is '${target_healths:-unknown}', not up." >&2
   exit 1
 }
 
@@ -138,6 +135,10 @@ for row in "${flux_rule_rows[@]}"; do
     exit 1
   }
 done
+[[ "$(flux_alerts_rules_select_production_source <<<"$rules_response")" == 'true' ]] || {
+  echo "Prometheus loaded Flux alert rules that do not select $exporter_name canonical metrics." >&2
+  exit 1
+}
 
 alertmanagers_response="$(
   flux_alerts_prometheus_get "$prometheus_base_url" "$prometheus_resolve" \

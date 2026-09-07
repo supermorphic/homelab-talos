@@ -568,7 +568,7 @@ if [[ "$scope" == all || "$scope" == alloy-events ]]; then
 	bash "$alloy_logs_render_validator" "$temp_dir/alloy-events.yaml" Deployment alloy-events 473
 fi
 
-# --- Flux reconciliation alerting: dedicated KSM (gotk_resource_info) + PodMonitor + rule ---
+# --- Flux reconciliation alerting: bundled KSM production source + fallback parity ---
 if [[ "$scope" == all || "$scope" == flux-exporter ]]; then
 	fksm='kubernetes/apps/monitoring/flux-kube-state-metrics'
 	cfg="$base/config"
@@ -597,8 +597,8 @@ if [[ "$scope" == all || "$scope" == flux-exporter ]]; then
 	}
 	rg -qx '  - ./flux-podmonitor.yaml' "$cfg/kustomization.yaml"
 
-	# Shadow collection is explicit: both exporters collect the exact five Flux
-	# kinds, but production rules continue to select only the dedicated source.
+	# Both exporters collect the exact five Flux kinds, but production rules select
+	# only the bundled KPS source.
 	# The bundled exporter retains its standard collectors and only receives the
 	# incremental CRD-discovery and Flux list/watch rules below.
 	# shellcheck source=scripts/lib/flux-alerts.sh
@@ -638,13 +638,8 @@ if [[ "$scope" == all || "$scope" == flux-exporter ]]; then
 		echo 'Refusing: bundled kube-state-metrics extraRules must contain only the four dedicated CRD/Flux list-watch rules.' >&2
 		exit 1
 	}
-	[[ "$(yq -r '.["kube-state-metrics"].prometheus.monitor.http.metricRelabelings | length' "$values")" == '1' &&
-		"$(yq -r '.["kube-state-metrics"].prometheus.monitor.http.metricRelabelings[0].action' "$values")" == 'replace' &&
-		"$(yq -r '.["kube-state-metrics"].prometheus.monitor.http.metricRelabelings[0].sourceLabels | join(",")' "$values")" == '__name__' &&
-		"$(yq -r '.["kube-state-metrics"].prometheus.monitor.http.metricRelabelings[0].regex' "$values")" == 'gotk_resource_info' &&
-		"$(yq -r '.["kube-state-metrics"].prometheus.monitor.http.metricRelabelings[0].targetLabel' "$values")" == '__name__' &&
-		"$(yq -r '.["kube-state-metrics"].prometheus.monitor.http.metricRelabelings[0].replacement' "$values")" == 'gotk_candidate_resource_info' ]] || {
-		echo 'Refusing: bundled kube-state-metrics must rename only gotk_resource_info to gotk_candidate_resource_info.' >&2
+	[[ "$(yq -r '.["kube-state-metrics"].prometheus.monitor.http.metricRelabelings | length' "$values")" == '0' ]] || {
+		echo 'Refusing: bundled kube-state-metrics must not rename gotk_resource_info.' >&2
 		exit 1
 	}
 
@@ -711,8 +706,8 @@ if [[ "$scope" == all || "$scope" == flux-exporter ]]; then
 	[[ "$(yq ea -r '[select(.kind == "ClusterRole")] | length' "$temp_dir/fksm.yaml")" == '0' ]]
 	rg -q -- '--custom-resource-state-only=true' "$temp_dir/fksm.yaml"
 
-	# The KPS render, not only source values, proves the candidate collector receives
-	# its config and that its ServiceMonitor applies the metric rename before ingest.
+	# The KPS render, not only source values, proves the production collector receives
+	# its config while retaining the canonical metric name before ingest.
 	rendered_args="$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "kube-prometheus-stack-kube-state-metrics") | .spec.template.spec.containers[0].args[]' "$temp_dir/kps.yaml")"
 	rendered_configmap="$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "kube-prometheus-stack-kube-state-metrics") | .spec.template.spec.volumes[] | select(.name == "customresourcestate-config") | .configMap.name' "$temp_dir/kps.yaml")"
 	rendered_mount="$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "kube-prometheus-stack-kube-state-metrics") | .spec.template.spec.containers[0].volumeMounts[] | select(.name == "customresourcestate-config") | .mountPath' "$temp_dir/kps.yaml")"
@@ -731,14 +726,9 @@ if [[ "$scope" == all || "$scope" == flux-exporter ]]; then
 		echo 'Refusing: rendered bundled kube-state-metrics custom-resource-state ConfigMap is missing.' >&2
 		exit 1
 	}
-	rendered_rename="$(yq ea -o=json 'select(.kind == "ServiceMonitor" and .metadata.name == "kube-prometheus-stack-kube-state-metrics") | .spec.endpoints[0].metricRelabelings' "$temp_dir/kps.yaml")"
-	[[ "$(yq -r 'length' <<<"$rendered_rename")" == '1' &&
-		"$(yq -r '.[0].action' <<<"$rendered_rename")" == 'replace' &&
-		"$(yq -r '.[0].sourceLabels | join(",")' <<<"$rendered_rename")" == '__name__' &&
-		"$(yq -r '.[0].regex' <<<"$rendered_rename")" == 'gotk_resource_info' &&
-		"$(yq -r '.[0].targetLabel' <<<"$rendered_rename")" == '__name__' &&
-		"$(yq -r '.[0].replacement' <<<"$rendered_rename")" == 'gotk_candidate_resource_info' ]] || {
-		echo 'Refusing: rendered bundled ServiceMonitor must rename only gotk_resource_info to gotk_candidate_resource_info.' >&2
+	rendered_rename="$(yq ea -o=json 'select(.kind == "ServiceMonitor" and .metadata.name == "kube-prometheus-stack-kube-state-metrics") | .spec.endpoints[0].metricRelabelings // []' "$temp_dir/kps.yaml")"
+	[[ "$(yq -r 'length' <<<"$rendered_rename")" == '0' ]] || {
+		echo 'Refusing: rendered bundled ServiceMonitor must not rename gotk_resource_info.' >&2
 		exit 1
 	}
 	for expected_rule in \
@@ -781,7 +771,10 @@ if [[ "$scope" == all || "$scope" == flux-exporter ]]; then
 	frf_expr="$(yq -r '.spec.groups[].rules[] | select(.alert == "FluxReconciliationFailure") | .expr' "$fr")"
 	[[ "$frf_expr" == *gotk_resource_info* ]]
 	# shellcheck disable=SC2154 # flux_alerts_source initializes the source interface above.
-	[[ "$frf_expr" == *"service=\"$flux_alerts_service\""* ]]
+	[[ "$frf_expr" == *"service=\"$flux_alerts_service\""* ]] || {
+		echo 'Refusing: FluxReconciliationFailure must select the bundled production source.' >&2
+		exit 1
+	}
 	[[ "$frf_expr" == *'namespace="monitoring"'* ]]
 	[[ "$frf_expr" == *'ready!="True"'* ]]
 	[[ "$frf_expr" == *'suspended!="true"'* ]]
@@ -789,7 +782,7 @@ if [[ "$scope" == all || "$scope" == flux-exporter ]]; then
 	while IFS= read -r expected_kind; do
 		[[ -n "$expected_kind" ]] || continue
 		[[ "$frm_expr" == *"service=\"$flux_alerts_service\",namespace=\"monitoring\",customresource_kind=\"$expected_kind\""* ]] || {
-			echo "Refusing: FluxResourceMetricsMissing does not watch $expected_kind metrics." >&2
+			echo "Refusing: FluxResourceMetricsMissing does not watch bundled $expected_kind metrics." >&2
 			exit 1
 		}
 	done < <(
@@ -818,9 +811,9 @@ fi
 
 case "$scope" in
 all)
-	echo 'Monitoring source, encrypted Grafana Secret, dependency graph, values, HTTPRoutes, pinned kube-prometheus-stack, Loki, Alloy logs, and Alloy Events renders, Grafana Loki datasource, and Flux reconciliation alerting (dedicated KSM + PodMonitor + rule) passed validation.'
+	echo 'Monitoring source, encrypted Grafana Secret, dependency graph, values, HTTPRoutes, pinned kube-prometheus-stack, Loki, Alloy logs, and Alloy Events renders, Grafana Loki datasource, and Flux reconciliation alerting (bundled KSM + PodMonitor + rule) passed validation.'
 	;;
-flux-exporter) echo 'Flux exporter source, dedicated and bundled renders, explicit production selection, and shadow candidate wiring passed validation.' ;;
+flux-exporter) echo 'Flux exporter source, dedicated fallback and bundled renders, explicit production selection, and rollback parity wiring passed validation.' ;;
 loki) echo 'Loki source and render passed validation.' ;;
 alloy-logs) echo 'Alloy Logs source and render passed validation.' ;;
 alloy-events) echo 'Alloy Events source and render passed validation.' ;;

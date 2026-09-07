@@ -30,6 +30,7 @@ if [[ " $* " == *'/api/v1/targets?state=active'* ]]; then
   printf '%s\n' "$FAKE_TARGETS"
 else
   [[ -z "${FAKE_CALL_LOG:-}" ]] || printf 'query\n' >>"$FAKE_CALL_LOG"
+  [[ -z "${FAKE_QUERY_LOG:-}" ]] || printf '%s\n' "$*" >>"$FAKE_QUERY_LOG"
   printf '%s\n' "$FAKE_VECTOR"
 fi
 EOF
@@ -81,7 +82,7 @@ assert_invalid_inventory_rejected wrong-gvk
 assert_invalid_inventory_rejected malformed
 
 if ! PATH="$fixture/bin:$PATH" FAKE_VECTOR="$vector" FAKE_TARGETS="$targets" \
-  FAKE_INVENTORY_MODE=valid bash "$verifier" "$fixture/kubeconfig" \
+  FAKE_INVENTORY_MODE=valid FAKE_QUERY_LOG="$fixture/queries.log" bash "$verifier" "$fixture/kubeconfig" \
   >"$fixture/valid.out" 2>&1; then
   echo 'Verifier rejected kubectl generic List inventory responses.' >&2
   cat "$fixture/valid.out" >&2
@@ -92,6 +93,12 @@ rg -Fq 'Flux exporter parity acceptance passed' "$fixture/valid.out" || {
   cat "$fixture/valid.out" >&2
   exit 1
 }
+[[ "$(wc -l <"$fixture/queries.log" | tr -d ' ')" == '8' ]] || {
+  echo 'Verifier did not query both canonical metric sources on each accepted attempt.' >&2
+  exit 1
+}
+rg -Fq 'gotk_resource_info{service="flux-kube-state-metrics",namespace="monitoring"}' "$fixture/queries.log"
+rg -Fq 'gotk_resource_info{service="kube-prometheus-stack-kube-state-metrics",namespace="monitoring"}' "$fixture/queries.log"
 
 target_failure_log="$fixture/target-failure.log"
 : >"$target_failure_log"

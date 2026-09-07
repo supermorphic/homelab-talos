@@ -176,7 +176,8 @@ notification_total_query='sum(alertmanager_notifications_total{integration="webh
 notification_failed_query='sum(alertmanager_notifications_failed_total{integration="webhook"}) or vector(0)'
 notification_total_series_query='count(alertmanager_notifications_total{integration="webhook"})'
 notification_failed_series_query='count(alertmanager_notifications_failed_total{integration="webhook"})'
-alert_metric_query="count(gotk_resource_info{customresource_kind=\"Kustomization\",exported_namespace=\"$namespace\",name=\"$test_name\",ready!=\"True\",suspended!=\"true\"})"
+production_metric_selector="$(flux_alerts_metric_selector)"
+alert_metric_query="count(${production_metric_selector%?},customresource_kind=\"Kustomization\",exported_namespace=\"$namespace\",name=\"$test_name\",ready!=\"True\",suspended!=\"true\"})"
 pending_alert_query="count(ALERTS{alertname=\"FluxReconciliationFailure\",exported_namespace=\"$namespace\",name=\"$test_name\",alertstate=\"pending\"})"
 firing_alert_query="count(ALERTS{alertname=\"FluxReconciliationFailure\",exported_namespace=\"$namespace\",name=\"$test_name\",alertstate=\"firing\"})"
 any_alert_query="count(ALERTS{alertname=\"FluxReconciliationFailure\",exported_namespace=\"$namespace\",name=\"$test_name\"})"
