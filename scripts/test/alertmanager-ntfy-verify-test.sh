@@ -40,6 +40,8 @@ PATH="$fixture/bin:$PATH" \
 FAKE_ALERTMANAGER_CONFIG="$valid_config" \
   "$verifier" "$fixture/kubeconfig" >"$fixture/valid.out"
 rg -q 'Alertmanager ntfy receiver and route are loaded' "$fixture/valid.out"
+rg -q 'records delivery as inconclusive' "$fixture/valid.out"
+rg -q 'not a test-specific ntfy publication receipt' "$fixture/valid.out"
 
 missing_route=$'route:\n  routes: []\nreceivers:\n  - name: ntfy\n    webhook_configs:\n      - url: <secret>'
 if PATH="$fixture/bin:$PATH" \

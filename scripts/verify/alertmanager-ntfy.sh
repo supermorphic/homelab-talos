@@ -41,4 +41,5 @@ echo 'E2E (operator confirmation required; allow about 25 minutes):'
 echo "  FLUX_ALERT_E2E_CONFIRM='test:flux-alert:firing-resolved' \\"
 echo '    mise exec -- just kube flux-alert-delivery-test'
 echo '  This creates and deletes only a run-owned failing Flux Kustomization, exercises the'
-echo '  production 15-minute rule, and verifies synchronous firing + resolved ntfy webhooks.'
+echo '  production 15-minute rule, then records delivery as inconclusive because Alertmanager'
+echo '  exposes only aggregate webhook counters, not a test-specific ntfy publication receipt.'

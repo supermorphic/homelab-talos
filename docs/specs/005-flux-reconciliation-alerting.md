@@ -96,8 +96,10 @@ real path from Flux resource failure through `gotk_resource_info`, the productio
 15-minute rule, Alertmanager, `alertmanager-ntfy`, and ntfy, then prove resolution after
 removing the failure. The retained lineage records the scenario's implementation and
 offline validation, but leaves its post-merge live execution pending. It is therefore a
-defined acceptance test, not completed firing-and-resolved evidence. Even a successful
-run would prove synchronous ntfy publication rather than human handset receipt.
+defined acceptance test, not completed firing-and-resolved evidence. Aggregate webhook
+counters cannot attribute publication to the test alert. Without independent evidence
+for its firing and resolved messages, delivery remains inconclusive and the fallback
+stays in place. Human handset receipt is a separate acceptance claim.
 
 ## Rejected alternatives
 
@@ -155,6 +157,7 @@ Shadow collection passed live comparison against the independent Flux API invent
 all five kinds. Production consumers now select the bundled source, with standard
 Kubernetes metrics and existing alert semantics preserved. Explicit source selection
 prevents parallel collection from duplicating alerts or concealing loss of production
-metrics. Post-cutover monitoring and firing-and-resolved acceptance remain pending;
-the dedicated exporter stays available until those gates permit removal. Detailed rollout
+metrics. Post-cutover monitoring and API-backed parity passed, including a full
+15-minute healthy observation interval. Firing-and-resolved delivery acceptance remains
+pending; the dedicated exporter stays available until that gate permits removal. Detailed rollout
 sequencing and test procedures belong in the implementation plan.
