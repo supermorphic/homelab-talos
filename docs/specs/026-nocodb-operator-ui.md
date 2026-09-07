@@ -616,9 +616,11 @@ NOCODB_SOURCE_SYNC_CONFIRM='sync:nocodb:<domain>' \
 
 The command and webhook accept only one existing managed-domain identifier. Access mode
 is derived from the domain's catalog privileges; arbitrary source targets and grants are
-not inputs. One NocoDB workspace named **Automation Data** contains one base per enabled
-domain. Each base contains a reader source and, when eligible, an operator source. Names
-are deterministic:
+not inputs. The workflow reuses an existing workspace or creates **Automation Data** as
+the default. The PostgreSQL registry's base ID and the base's workspace ID are the
+durable identities; recovery does not depend on a fixed workspace title. One base per
+enabled domain contains a reader source and, when eligible, an operator source. Names are
+deterministic:
 
 - base: `<domain>`;
 - integration: `automation-data/<domain>/<access-kind>`; and
@@ -1084,7 +1086,9 @@ replaced the NocoDB container and scratch, and restored a checksum-valid complet
 bundle into separate PostgreSQL and fresh NocoDB instances. The restored source was
 forced to the separate PostgreSQL address while the original PostgreSQL was stopped;
 retained credentials, denials, records, views, references, and a new checksum-valid
-backup passed. Run-owned resources were absent after each run.
+backup passed. The final lifecycle regression also exercised independent reader and
+operator credential rotation and ran the production restore request helper against the
+separate restored application. Run-owned resources were absent after each run.
 
 This local evidence does not establish live Gateway or Cilium behavior, Longhorn
 recovery, or browser usability. Attended cluster acceptance and activation remain

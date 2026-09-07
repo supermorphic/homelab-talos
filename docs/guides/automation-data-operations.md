@@ -271,8 +271,9 @@ serializes the transaction, validates the accepted pre-extension schema, install
 shared fresh-initialization definitions, and reads back
 `platform_operations.read_platform_revision()`. An unchanged rerun is a validated
 no-op. An unknown revision or partial schema fails without changing control-schema
-state. The command removes only `automation-data-nocodb-upgrade`, including after a Job
-failure, and does not retrieve a Secret.
+state. Each run uses a unique `automation-data-nocodb-upgrade-*` Job name. Cleanup checks
+the run label and Kubernetes object UID before deletion, including after a Job failure,
+and the command does not retrieve a Secret.
 
 After the command passes, create another complete automation-data logical backup. Keep
 NocoDB suspended until that post-upgrade bundle and the remaining NocoDB bootstrap

@@ -240,7 +240,7 @@ jq -e '
   .metadata.id == "test.nocodb-restore-drill" and
   .metadata.source == "test" and .metadata.framework == "bash" and
   .metadata.suite == "platform" and .metadata.tier == "integration" and
-  .metadata.target == "nocodb" and .metadata.scenario == "metadata-attachment-restore" and
+  .metadata.target == "nocodb" and .metadata.scenario == "metadata-record-restore" and
   .metadata.scope == "system" and .metadata.intent == "resilience" and
   .metadata.mutates_cluster == true and .metadata.execution_owner == "human" and
   .confirmation.type == "exact" and

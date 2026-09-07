@@ -9,10 +9,11 @@ bootstrap, source acceptance, logical backup, and restore drill have not run. Do
 claim that NocoDB is active or recoverable until the attended rollout in this guide has
 completed and its evidence has been reviewed.
 
-The 2026-09-05 integration audit revised
-[specification 026](../specs/026-nocodb-operator-ui.md). Complete its existing-platform
-upgrade and integration acceptance, then reconcile the procedures below with the tested
-implementation before starting activation. The current scripts are not rollout-ready.
+The repository procedures are reconciled with the tested offline and disposable local
+implementation described in [specification 026](../specs/026-nocodb-operator-ui.md).
+Before activation, complete the operator-run existing-platform upgrade and attended
+cluster acceptance for the deployed revision. This local evidence does not prove live
+access, browser behavior, backup publication, restore behavior, or activation.
 
 Use [Staged activation](#staged-activation) for the first deployment and
 [Routine operation](#routine-operation) afterward. For failure classification and

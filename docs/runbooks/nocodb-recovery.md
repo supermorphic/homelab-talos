@@ -9,11 +9,11 @@ The repository contains the recovery workflow, but live recovery remains unprove
 the attended NocoDB access test, complete logical backup, and restore drill pass. Do not
 describe an unrun drill as established recoverability.
 
-The integration requirements in
-[specification 026](../specs/026-nocodb-operator-ui.md) were revised on 2026-09-05.
-Reconcile this runbook with the tested implementation before using it for rollout
-acceptance; the initial recovery scripts alone do not establish that those requirements
-are met.
+This runbook is reconciled with the tested offline and disposable local implementation
+in [specification 026](../specs/026-nocodb-operator-ui.md). Its local restore proof does
+not establish live backup publication, Longhorn recovery, Gateway access, or browser
+behavior. Require the attended checks below before using the result as live rollout or
+recovery acceptance.
 
 ## Recovery roots and limits
 

@@ -698,7 +698,7 @@ suites:
     runner: {command: "mise exec -- just kube nocodb-local-integration-test", implementation: scripts/test/scenarios/nocodb-local-integration.sh}
     native_results: {strategy: wrapper-junit}
     dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/nocodb-local-integration.sh, args: [], selector: null}
-  - metadata: {id: test.nocodb-restore-drill, source: test, framework: bash, suite: platform, tier: integration, target: nocodb, scenario: metadata-attachment-restore, scope: system, intent: resilience, mutates_cluster: true, execution_owner: human}
+  - metadata: {id: test.nocodb-restore-drill, source: test, framework: bash, suite: platform, tier: integration, target: nocodb, scenario: metadata-record-restore, scope: system, intent: resilience, mutates_cluster: true, execution_owner: human}
     confirmation: {type: exact, variable: NOCODB_RESTORE_CONFIRM, expected: "restore:nocodb:metadata"}
     runner: {command: "NOCODB_RESTORE_CONFIRM=restore:nocodb:metadata mise exec -- just kube nocodb-restore-drill", implementation: scripts/test/scenarios/nocodb-restore-drill.sh}
     native_results: {strategy: wrapper-junit}
