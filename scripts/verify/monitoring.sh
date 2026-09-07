@@ -118,6 +118,24 @@ while IFS=$'\t' read -r _group _version expected_kind; do
   }
 done <<<"$expected_flux_gvks"
 
+# The bundled collector must retain its standard Kubernetes metrics as well as
+# the Flux custom-resource metrics. Select the same proven service and namespace
+# so another kube-state-metrics instance cannot satisfy this check.
+for standard_metric in kube_node_info kube_pod_info; do
+  standard_metric_response="$(
+    flux_alerts_prometheus_query "$prometheus_base_url" "$prometheus_resolve" \
+      "${standard_metric}{service=\"${exporter_name}\",namespace=\"${ns}\"}"
+  )"
+  [[ "$(yq -r '.status // ""' <<<"$standard_metric_response")" == 'success' ]] || {
+    echo "Prometheus $standard_metric query did not return status=success." >&2
+    exit 1
+  }
+  [[ "$(yq -r '.data.result | length' <<<"$standard_metric_response")" -gt 0 ]] || {
+    echo "Prometheus returned no $standard_metric series from the bundled collector." >&2
+    exit 1
+  }
+done
+
 rules_response="$(
   flux_alerts_prometheus_get "$prometheus_base_url" "$prometheus_resolve" \
     '/api/v1/rules?type=alert'
@@ -185,4 +203,4 @@ yq -r '
   }
 
 just kube foundation-verify
-echo 'Monitoring acceptance passed: the stack and bundled Flux collector are Ready; Prometheus discovered an up exporter target, ingested every expected Flux resource kind, loaded both healthy Flux alert rules, and has an active Alertmanager connection with the expected ntfy route. This does not send or prove external ntfy delivery.'
+echo 'Monitoring acceptance passed: the stack and bundled Flux collector are Ready; Prometheus discovered an up exporter target, ingested every expected Flux resource kind plus bundled node and pod metrics, loaded both healthy Flux alert rules, and has an active Alertmanager connection with the expected ntfy route. This does not send or prove external ntfy delivery.'

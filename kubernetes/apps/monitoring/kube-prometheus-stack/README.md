@@ -29,8 +29,9 @@ metrics, and the KPS `TargetDown` rule covers unreachable scrape targets.
 ## Verification and diagnostics
 
 Run `mise exec -- just kube monitoring-verify` for acceptance. It checks the bundled
-exporter target, all five Flux kinds, both loaded rules, and the Alertmanager connection
-and ntfy route. It does not send a notification.
+exporter target, bundled `kube_node_info` and `kube_pod_info` metrics, all five Flux
+kinds, both loaded rules, and the Alertmanager connection and ntfy route. It does not
+send a notification.
 
 If acceptance fails, run `mise exec -- just kube flux-alerts-diagnostics`. This read-only
 workflow checks each stage from Flux objects through exporter permissions and metrics

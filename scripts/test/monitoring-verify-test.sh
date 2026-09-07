@@ -19,9 +19,23 @@ cat >"$stub_bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "$*" == *'--namespace flux-system'* ]] &&
+  [[ "$*" == *'get kustomization kube-prometheus-stack --output jsonpath='* ||
+    "$*" == *'get kustomization kube-prometheus-stack-config --output jsonpath='* ]]; then
+  printf 'True\n'
+  exit 0
+fi
+if [[ "$*" == *'--namespace monitoring'* ]] &&
+  [[ "$*" == *'get helmrelease kube-prometheus-stack --output jsonpath='* ]]; then
+  printf 'True\n'
+  exit 0
+fi
+if [[ "$*" == *'--namespace monitoring'* ]] &&
+  [[ "$*" == *'rollout status deployment/kube-prometheus-stack-kube-state-metrics --timeout=5m'* ]]; then
+  exit 0
+fi
+
 case " $* " in
-  *' get kustomization '* | *' get helmrelease '*) printf 'True\n' ;;
-  *' rollout status '*) ;;
   *' get pvc '*) printf '%s\n' '{"items":[{"status":{"phase":"Bound"}},{"status":{"phase":"Bound"}},{"status":{"phase":"Bound"}}]}' ;;
   *' get httproute '*) printf '%s\n' '{"status":{"parents":[{"conditions":[{"type":"Accepted","status":"True"}]}]}}' ;;
   *) echo "Unexpected kubectl request: $*" >&2; exit 64 ;;
@@ -67,6 +81,20 @@ case " $* " in
   *'/api/v2/status'*)
     printf '%s\n' '{"config":{"original":"route:\n  routes:\n    - receiver: ntfy\n      matchers:\n        - severity=~\\\"critical|warning\\\"\nreceivers:\n  - name: ntfy\n    webhook_configs:\n      - url: http://example.invalid/hook"}}'
     ;;
+  *'query=kube_node_info{'*)
+    case "${FAKE_STANDARD_METRIC_MODE:-healthy}" in
+      missing-node) printf '%s\n' '{"status":"success","data":{"result":[]}}' ;;
+      api-error) printf '%s\n' '{"status":"error","errorType":"bad_data","error":"fixture standard metric error"}' ;;
+      *) printf '%s\n' '{"status":"success","data":{"result":[{"metric":{"node":"node-a"},"value":[1,"1"]}]}}' ;;
+    esac
+    ;;
+  *'query=kube_pod_info{'*)
+    case "${FAKE_STANDARD_METRIC_MODE:-healthy}" in
+      missing-pod) printf '%s\n' '{"status":"success","data":{"result":[]}}' ;;
+      api-error) printf '%s\n' '{"status":"error","errorType":"bad_data","error":"fixture standard metric error"}' ;;
+      *) printf '%s\n' '{"status":"success","data":{"result":[{"metric":{"pod":"kube-state-metrics-a"},"value":[1,"1"]}]}}' ;;
+    esac
+    ;;
   *'/api/v1/query'*)
     printf '%s\n' '{"status":"success","data":{"result":[{"metric":{"customresource_kind":"Kustomization"},"value":[1,"1"]},{"metric":{"customresource_kind":"HelmRelease"},"value":[1,"1"]},{"metric":{"customresource_kind":"GitRepository"},"value":[1,"1"]},{"metric":{"customresource_kind":"OCIRepository"},"value":[1,"1"]},{"metric":{"customresource_kind":"HelmRepository"},"value":[1,"1"]}]}}'
     ;;
@@ -87,8 +115,9 @@ reset_tree() {
 }
 
 expect_success() {
-  local output
-  output="$(cd "$tree" && PATH="$stub_bin:$PATH" bash scripts/verify/monitoring.sh "$fixture/kubeconfig")"
+  local output standard_mode="${1:-healthy}"
+  output="$(cd "$tree" && PATH="$stub_bin:$PATH" FAKE_STANDARD_METRIC_MODE="$standard_mode" \
+    bash scripts/verify/monitoring.sh "$fixture/kubeconfig")"
   rg -Fq 'Monitoring acceptance passed' <<<"$output" || {
     echo 'Bundled-only monitoring verification did not report success.' >&2
     echo "$output" >&2
@@ -97,9 +126,10 @@ expect_success() {
 }
 
 expect_rejected() {
-  local label="$1" expected="$2" output exit_code
+  local label="$1" expected="$2" standard_mode="${3:-healthy}" output exit_code
   set +e
-  output="$(cd "$tree" && PATH="$stub_bin:$PATH" bash scripts/verify/monitoring.sh "$fixture/kubeconfig" 2>&1)"
+  output="$(cd "$tree" && PATH="$stub_bin:$PATH" FAKE_STANDARD_METRIC_MODE="$standard_mode" \
+    bash scripts/verify/monitoring.sh "$fixture/kubeconfig" 2>&1)"
   exit_code="$?"
   set -e
   [[ "$exit_code" -ne 0 ]] || {
@@ -127,5 +157,27 @@ yq -i 'del(."kube-state-metrics".customResourceState.config.spec.resources[] | s
   "$tree/kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml"
 expect_rejected 'missing OCIRepository metric family' \
   'Bundled kube-state-metrics must configure exactly the five expected Flux resource kinds'
+
+reset_tree
+expect_rejected 'missing bundled node metric' \
+  'Prometheus returned no kube_node_info series from the bundled collector' missing-node
+
+reset_tree
+expect_rejected 'missing bundled pod metric' \
+  'Prometheus returned no kube_pod_info series from the bundled collector' missing-pod
+
+reset_tree
+expect_rejected 'failed bundled standard-metric API query' \
+  'Prometheus kube_node_info query did not return status=success' api-error
+
+reset_tree
+perl -0pi -e "s/flux_alerts_release='kube-prometheus-stack'/flux_alerts_release='flux-kube-state-metrics'/" \
+  "$tree/scripts/lib/flux-alerts.sh"
+expect_rejected 'old dedicated HelmRelease identity' 'kube-prometheus-stack HelmRelease is not Ready.'
+
+reset_tree
+perl -0pi -e "s/flux_alerts_service='kube-prometheus-stack-kube-state-metrics'/flux_alerts_service='flux-kube-state-metrics'/" \
+  "$tree/scripts/lib/flux-alerts.sh"
+expect_rejected 'old dedicated deployment identity' 'Unexpected kubectl request'
 
 echo 'Bundled-only monitoring verifier regression tests passed.'
