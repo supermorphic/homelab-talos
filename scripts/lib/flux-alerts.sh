@@ -172,10 +172,10 @@ flux_alerts_rules_select_production_source() {
       selector_count=$((selector_count + 1))
       service_without_expected="${selector/"service=\"$flux_alerts_service\""/}"
       namespace_without_expected="${selector/namespace=\"monitoring\"/}"
-      [[ "$selector" == *"service=\"$flux_alerts_service\""* &&
-        "$service_without_expected" != *'service='* &&
-        "$selector" == *'namespace="monitoring"'* &&
-        "$namespace_without_expected" != *'namespace='* ]] || status=1
+      [[ "$selector" == *"service=\"$flux_alerts_service\""* ]] || status=1
+      [[ "$service_without_expected" != *'service='* ]] || status=1
+      [[ "$selector" == *'namespace="monitoring"'* ]] || status=1
+      [[ "$namespace_without_expected" != *'namespace='* ]] || status=1
       remaining="${remaining#*"$match"}"
     done
     [[ "$selector_count" -gt 0 ]] || status=1
@@ -190,7 +190,9 @@ flux_alerts_rules_select_production_source() {
     '
   )
 
-  if [[ "$status" -eq 0 && "$reconciliation_seen" == 'true' && "$missing_seen" == 'true' ]]; then
+  [[ "$reconciliation_seen" == 'true' ]] || status=1
+  [[ "$missing_seen" == 'true' ]] || status=1
+  if [[ "$status" -eq 0 ]]; then
     printf 'true\n'
   else
     printf 'false\n'
