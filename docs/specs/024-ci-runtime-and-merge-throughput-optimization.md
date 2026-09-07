@@ -43,6 +43,25 @@ The earlier two-minute objective exposed excessive CI cost; it is not an accepta
 threshold. The objective is useful reduction in validation and serialized merge-drain
 latency without disproportionate maintenance cost.
 
+## Offline-CI scope
+
+Stage 1 may change offline tests, fixtures, setup, source validation, parsing, rendering,
+linting, report adapters, and behavior-neutral test interfaces. It may remove redundant
+cases, batch repeated tool invocations, decompose tests, and add bounded concurrency
+after proving isolation. These are changes to how CI obtains evidence, not permission
+to change the system behavior that the evidence protects.
+
+Stage 1 does not change live diagnostic or encoding runtime, production settings,
+scientific quality methodology, dispatch authority, or operational safety contracts.
+Test optimization must preserve relevant run identity, provenance, resume, cleanup,
+and evidence-comparability requirements. A narrower fixture or injected clock is valid
+only when it still detects the production failure the test is intended to catch.
+
+An experimental harness is reviewed against its own design and evidence consumer.
+Neither its age nor its runtime authorizes retirement; lifecycle closure must come
+from the owning workstream. CI cleanup implements that disposition without reopening
+the scientific or operational decision.
+
 ## Initial measured baseline
 
 The initial review of 15 successful GitHub PR runs found concentrated validation cost:
@@ -125,7 +144,7 @@ the experiment's evidence contract to obtain a shorter runtime.
 A future encoding strategy requires a current design; it does not restore this completed
 harness by default.
 
-## Stage 1 design
+## Stage 1 optimization design
 
 The optimization order is:
 
@@ -139,7 +158,31 @@ The optimization order is:
 Implementation effort follows measured cost and maintenance value. Small suites remain
 in scope for audit but do not require speculative rewrites.
 
-### Canonical ownership and same-run reuse
+### Per-unit optimization method
+
+For each retained validation unit:
+
+1. Identify its current consumer, independent oracle, and meaningful passing and failing
+   cases before changing its implementation.
+2. Measure validation, setup, significant subtest groups, and repeated-command costs.
+   Separate a costly assertion from costly preparation or reporting.
+3. Remove equivalent execution or assign a canonical owner before attempting a speedup.
+4. Batch immutable preparation and repeated parsing, rendering, or tool startup where
+   that preserves import, environment, and mutable-fixture isolation.
+5. Make necessary work faster; decompose or parallelize only where the measured result
+   and isolation properties justify it.
+6. Verify equivalent positive and negative protection, then remeasure the complete gate.
+   Retain the change only when correctness and its actual benefit justify maintenance.
+
+A rewrite from repeated `yq` subprocesses to one Python parse is a valid technique,
+not a requirement to migrate every test. The assertion's meaning and independent oracle
+must survive the implementation change.
+
+### General test harness and canonical ownership
+
+The general harness combines catalog validation, Chainsaw configuration and scenario lint,
+policy evaluation, shell and Python test groups, and Ruff checks. It is a collection of
+independent validation units, not a reason to repeat all preparation for every case.
 
 Each invariant has a canonical producer:
 
@@ -169,6 +212,23 @@ Focused rewrites and deterministic test-time controls are appropriate when they 
 the independent oracle and relevant failure behavior. A framework replacement is not a
 prerequisite. Overlapping suite and subtest measurements are not additive savings claims.
 
+### Remaining suites
+
+The same review applies outside the largest harnesses. Inspect every retained suite for:
+
+- duplicate parsing, linting, schemas, policy evaluation, or reporting;
+- repeated Helm/Kustomize rendering and immutable dependency preparation;
+- `yq`, `jq`, shell, or interpreter invocations repeated inside test loops;
+- generated-file drift checks or schema assertions that duplicate another owner;
+- repeated dependency installation or locked-environment startup;
+- real-time polling, timeout, and retry waits that can use a deterministic test clock; and
+- opportunities for safe batching, fixture reuse, or bounded concurrency.
+
+Python startup may be consolidated where import isolation permits. Immutable inputs may
+be prepared once, but mutable state and failure attribution remain per test. A smaller
+fixture must still exercise the relevant behavior rather than replace an assertion with
+a check of its own assumptions. Small suites need an audit, not an obligatory rewrite.
+
 ### Bounded concurrency and failure semantics
 
 Stage 1 retains full-suite execution for every candidate. Its selected concurrency is
@@ -190,6 +250,31 @@ individual commands from consuming later suite identities through stdin. Every r
 suite must be accounted for; a partial run cannot pass as a complete gate.
 Canonical reports preserve native assertions, failures, errors, and skips rather than
 collapsing them into a misleading aggregate success.
+
+## Stage 1 verification and measurement
+
+Each retained change is checked with representative valid and invalid inputs, focused
+suite execution, and the canonical full gate. A successful subset or internally valid
+report is insufficient if required suites were never executed. No live cluster test is
+introduced into the full CI command to compensate for an inadequate offline assertion.
+
+Measure through the pinned toolchain, separating:
+
+- workflow queue and runner-start latency;
+- checkout, dependency, and tool setup;
+- suite execution and significant test-group preparation;
+- reporting and artifact finalization; and
+- complete required-check latency and its contribution to serialized merge drain.
+
+Focused before/after comparisons use comparable source, tool, runner, and cache conditions.
+Record sample counts and limitations with the evidence. Do not mix local and hosted
+measurements or add overlapping profiles into a savings claim. A focused speedup is a
+hypothesis about the full gate until complete-gate measurement confirms it.
+
+Report small samples with their median and range. A dependable p95 requires a sufficiently
+supported distribution; normal PR history can extend the evidence without making a small
+experimental sample look statistically settled. The final results below are the retained
+acceptance facts, not a transcript of the measurement process.
 
 ## Final Stage 1 outcome
 
@@ -219,9 +304,17 @@ repository revisions or current Stage 2 runtime.
 
 ## Stage 2 decision and handoff
 
-The decision gate requires retained correctness, material remaining merge latency,
-expensive Active evidence unrelated to ordinary changes, and expected savings that
-justify selection's maintenance cost.
+Stage 2 is optional and proceeds only when all four conditions hold:
+
+1. Stage 1 correctness and retained coverage checks pass.
+2. Ordinary merge latency remains operationally unacceptable.
+3. A material part of the remaining time comes from Active validation unrelated to
+   typical changes.
+4. Deterministic selection offers enough expected savings to justify its maintenance
+   and enforcement complexity.
+
+If the optimized full gate is operationally acceptable, stop and reassess rather than
+implementing a planner merely because it was proposed.
 
 That gate was satisfied. The optimized full gate still took roughly five minutes, which
 is repeatedly serialized across ready branches. Retained observability and framework
@@ -251,19 +344,44 @@ boundary. A later measured decision and new numbered implementation specificatio
 authorize runner placement and any advanced evidence-reuse design. This specification
 does not prescribe benchmark quotas, orchestration, operator procedures, or a NUC placement.
 
-## Rejected alternatives and debrief
+## Rejected alternatives
 
-- **Scheduling before cleanup:** encodes obsolete or duplicated work into orchestration.
-  Lifecycle and semantic ownership come first.
-- **Hotspot-only audit:** misses smaller redundant or obsolete coverage. Audit broadly,
-  then focus engineering effort on measured costs.
-- **Wholesale harness migration or more workers first:** adds regression surface or
-  contention without necessarily reducing required work. Retain changes only when
-  correctness and measured benefit justify them.
-- **Post-merge substitution or a merge queue:** changes the required workflow rather than
-  solving its stated pre-merge evidence cost.
-- **Archived runnable experiments:** retains dependency and maintenance burden after the
-  consumer is gone. Preserve the decision and evidence, not unused operational surfaces.
+### Build the impact planner first
+
+Scheduling before cleanup encodes obsolete, duplicated, or inefficient work into new
+orchestration. Lifecycle and semantic ownership must be established before selecting it.
+
+### Optimize only the largest hotspots
+
+The hotspots deserve most engineering effort, but a hotspot-only audit preserves smaller
+duplicate or obsolete work and cannot establish trustworthy ownership. Audit broadly,
+then prioritize implementation by measured cost and maintenance value.
+
+### Rewrite the complete harness stack
+
+A wholesale migration adds semantic-regression surface before measurements establish
+that the framework is the constraint. Focused behavior-preserving changes are sufficient
+unless later evidence justifies a separate architectural decision.
+
+### Add more runners before reducing work
+
+Parallel compute does not remove duplicate evaluation or inefficient preparation. Shared
+CPU and I/O can also make additional workers slower. Measure bounded concurrency after
+cleanup rather than treating worker count as the optimization.
+
+### Replace pre-merge evidence or add a merge queue
+
+Post-merge testing cannot protect the required current-main pre-merge decision. A merge
+queue changes orchestration rather than reducing the evidence invalidated by each rebase.
+Neither is a substitute for this initiative's stated workflow and protection boundary.
+
+### Retain completed harnesses as archives
+
+Unused runnable source carries dependency, security, and maintenance costs after its
+consumer is gone. Preserve its decision and necessary evidence through retained records
+and Git history rather than keeping unused operational surfaces in the repository.
+
+## Initiative debrief
 
 The durable lesson is that validation semantics, execution completeness, and lifecycle
 ownership matter more than test counts or theoretical parallel speedups. Complete-gate

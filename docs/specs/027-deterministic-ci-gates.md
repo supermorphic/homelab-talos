@@ -32,6 +32,26 @@ cost—not achieving an arbitrary two-minute runtime.
 - Existing root policy still requires full local CI before PR publication. Local selective
   validation would require a separate explicit policy decision after the remote gate is proven.
 
+## Decision rationale
+
+Keeping full execution for every change is the simplest model, but the completed Stage 1
+measurements showed substantial unrelated work still delaying ordinary merges. Selective
+execution is justified for that residual cost, not as a substitute for optimizing the tests.
+
+A category for every service or domain would create mapping and enforcement overhead for
+many checks that take only seconds. Coarse runtime-based groups concentrate configuration
+on worthwhile savings; inexpensive validation remains intentionally broad in core.
+Automation is the explicit growth exception, not a general license for speculative groups.
+
+A generalized dependency DAG would add another build system to maintain. The current
+repository can instead express its few conditional boundaries through category patterns
+and explicit cross-directory consumers. Independent ownership tests check those boundaries;
+uncertainty selects full rather than demanding increasingly precise dependency machinery.
+
+This choice can be reconsidered if repository complexity and measured costs change.
+Until then, neither a richer planner nor trusted cross-run passing-result storage is a
+prerequisite for a useful and correct gate.
+
 ## Architecture
 
 ```text
@@ -214,6 +234,23 @@ execution itself is defective, restore the known full workflow with a coordinate
 protection change; never bypass validation or leave a nonexistent required check.
 
 ## Measurement and acceptance
+
+### Local publication validation
+
+After remote selective enforcement is proven, extend the same repository-owned plan,
+group execution, and reconciliation to one local publication command. Agents must not
+choose reduced validation themselves. Keep `just ci` as the explicit full fallback.
+The local command must validate the candidate being published, reject stale results,
+and recompute its plan after rebases or further candidate changes. Ordinary documentation
+uses core unless a declared consumer requires additional groups; a rebase alone is not
+a full-validation classification.
+
+Adoption requires an explicit update to `AGENTS.md` together with the command, not an
+informal exception to the current full-local-CI rule. Focused checks may support edit
+iterations, but publication must satisfy the repository's then-current gate. This local
+extension is planned, not enabled by the shadow rollout.
+
+### Evidence requirements
 
 Measure validation separately from queue/start, checkout, tool setup, report finalization,
 and reconciliation. Include runner consumption alongside critical-path wall time.
