@@ -2,6 +2,35 @@
 # Disposable local NocoDB integration against the repository's pinned containers.
 set -euo pipefail
 
+if [[ "${NOCODB_LOCAL_OUTPUT_CAPTURED:-false}" != true ]]; then
+	output_capture_root="$(mktemp -d "${TMPDIR:-/tmp}/nocodb-local-output.XXXXXX")"
+	chmod 700 "$output_capture_root"
+	trap 'rm -r -- "$output_capture_root"' EXIT
+	set +e
+	NOCODB_LOCAL_OUTPUT_CAPTURED=true \
+		NOCODB_LOCAL_SECRET_MANIFEST="$output_capture_root/secrets" \
+		"$0" "$@" >"$output_capture_root/stdout" 2>"$output_capture_root/stderr"
+	captured_status=$?
+	set -e
+	credential_output_detected=false
+	if [[ -s "$output_capture_root/secrets" ]]; then
+		while IFS= read -r captured_secret; do
+			[[ -n "$captured_secret" ]] || continue
+			if rg -Fq -- "$captured_secret" "$output_capture_root/stdout" "$output_capture_root/stderr"; then
+				credential_output_detected=true
+				break
+			fi
+		done <"$output_capture_root/secrets"
+	fi
+	if [[ "$credential_output_detected" == true ]]; then
+		echo 'NocoDB local integration credential output safety check failed.' >&2
+		exit 1
+	fi
+	cat "$output_capture_root/stdout"
+	cat "$output_capture_root/stderr" >&2
+	exit "$captured_status"
+fi
+
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
@@ -24,21 +53,42 @@ fail() {
 }
 
 usage() {
-	echo 'Usage: nocodb-local-integration.sh [--preflight|--cleanup-test]' >&2
+	echo 'Usage: nocodb-local-integration.sh [--preflight|--cleanup-test|--output-safety-test]' >&2
 	exit 2
 }
 
 case "$#" in
-	0) preflight_only=false; cleanup_test=false ;;
+	0) preflight_only=false; cleanup_test=false; output_safety_test=false ;;
 	1)
 		case "$1" in
-			--preflight) preflight_only=true; cleanup_test=false ;;
-			--cleanup-test) preflight_only=false; cleanup_test=true ;;
+			--preflight) preflight_only=true; cleanup_test=false; output_safety_test=false ;;
+			--cleanup-test) preflight_only=false; cleanup_test=true; output_safety_test=false ;;
+			--output-safety-test) preflight_only=false; cleanup_test=false; output_safety_test=true ;;
 			*) usage ;;
 		esac
 		;;
 	*) usage ;;
 esac
+
+secret_manifest="${NOCODB_LOCAL_SECRET_MANIFEST:?internal secret manifest is required}"
+: >"$secret_manifest"
+chmod 600 "$secret_manifest"
+record_secret() {
+	printf '%s\n' "$1" >>"$secret_manifest"
+}
+
+if [[ "$output_safety_test" == true ]]; then
+	output_test_sentinel="${NOCODB_LOCAL_OUTPUT_TEST_SENTINEL:?output test sentinel is required}"
+	record_secret "$output_test_sentinel"
+	case "${NOCODB_LOCAL_OUTPUT_TEST_LEAK_STREAM:-safe}" in
+		safe) ;;
+		stdout) printf '%s\n' "$output_test_sentinel" ;;
+		stderr) printf '%s\n' "$output_test_sentinel" >&2 ;;
+		*) fail 'output safety test stream is invalid.' ;;
+	esac
+	echo 'NocoDB local integration output safety self-test completed.'
+	exit 0
+fi
 
 [[ "$run_id" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,47}$ ]] ||
 	fail 'NOCODB_LOCAL_RUN_ID must contain 1-48 safe identifier characters.'
@@ -187,6 +237,13 @@ nocodb_connection_key="$(random_secret)"
 provision_webhook_secret="$(random_secret)"
 source_webhook_secret="$(random_secret)"
 acceptance_webhook_secret="$(random_secret)"
+for generated_secret in \
+	"$postgres_password" "$provisioner_password" "$backup_password" "$exporter_password" \
+	"$metadata_password" "$n8n_password" "$n8n_encryption_key" "$n8n_owner_password" \
+	"$nocodb_admin_password" "$nocodb_jwt_secret" "$nocodb_connection_key" \
+	"$provision_webhook_secret" "$source_webhook_secret" "$acceptance_webhook_secret"; do
+	record_secret "$generated_secret"
+done
 
 postgres_name="${containers[0]}"
 nocodb_name="${containers[1]}"
@@ -409,10 +466,12 @@ NOCODB_ADMIN_PASSWORD="$nocodb_admin_password" jq -n \
 http_request POST "$nocodb_url/api/v1/auth/user/signin" none \
 	"$integration_root/nocodb-signin.json" "$integration_root/nocodb-signin-response.json"
 nocodb_session="$(jq -er '.token | select(type == "string" and length > 0)' "$integration_root/nocodb-signin-response.json")"
+record_secret "$nocodb_session"
 jq -n '{description:"NocoDB Task 5 disposable integration"}' >"$integration_root/nocodb-token.json"
 http_request POST "$nocodb_url/api/v1/tokens" nocodb-jwt "$integration_root/nocodb-token.json" \
 	"$integration_root/nocodb-token-response.json"
 nocodb_token="$(jq -er '.token | select(type == "string" and length > 0)' "$integration_root/nocodb-token-response.json")"
+record_secret "$nocodb_token"
 
 phase='n8n-owner-setup'
 N8N_OWNER_PASSWORD="$n8n_owner_password" jq -n \
@@ -432,6 +491,7 @@ jq '{label:"NocoDB Task 5 disposable integration",scopes:.data,expiresAt:null}' 
 http_request POST "$n8n_url/rest/api-keys" n8n-cookie "$integration_root/n8n-key.json" \
 	"$integration_root/n8n-key-response.json"
 n8n_api_key="$(jq -er '.data.rawApiKey | select(type == "string" and length > 0)' "$integration_root/n8n-key-response.json")"
+record_secret "$n8n_api_key"
 
 phase='n8n-credential-import'
 create_n8n_credential() { # <name> <type> <data-json>
@@ -627,9 +687,10 @@ jq -e --arg migrator "$migrator_credential_id" --arg runtime "$runtime_credentia
 	fail 'n8n did not retain the exact six-migrator/four-runtime acceptance credential binding.'
 
 prove_aged_jobs_rotation_and_restart() { # <ready source response>
-	local ready_response="$1" reader_job_id operator_job_id completed_count absent_count
+	local ready_response="$1" reader_job_id operator_job_id completed_count absent_count base_id
 	reader_job_id="$(jq -er '.reader.sourceCreateJobId' "$ready_response")"
 	operator_job_id="$(jq -er '.operator.sourceCreateJobId' "$ready_response")"
+	base_id="$(jq -er '.baseId' "$ready_response")"
 	[[ "$reader_job_id" =~ ^[A-Za-z0-9_-]+$ && "$operator_job_id" =~ ^[A-Za-z0-9_-]+$ &&
 		"$reader_job_id" != "$operator_job_id" ]] || fail 'source job identities were not safe and distinct.'
 
@@ -646,6 +707,14 @@ prove_aged_jobs_rotation_and_restart() { # <ready source response>
 		--set=ON_ERROR_STOP=1 --username postgres --dbname nocodb --command \
 		"SELECT count(*) FROM nc_jobs WHERE id IN ('$reader_job_id', '$operator_job_id');")"
 	[[ "$absent_count" == 0 ]] || fail 'aged source jobs were not exactly removed from disposable metadata.'
+	jq -n '{}' >"$integration_root/aged-job-api-request.json"
+	http_request POST "$nocodb_url/api/v2/jobs/$base_id" nocodb-jwt \
+		"$integration_root/aged-job-api-request.json" "$integration_root/aged-job-api-response.json"
+	jq -e --arg reader "$reader_job_id" --arg operator "$operator_job_id" '
+		type == "array" and
+		([.[] | select(.id == $reader or .id == $operator)] | length) == 0
+	' "$integration_root/aged-job-api-response.json" >/dev/null ||
+		fail 'complete aged-job API readback still exposed a deleted source job.'
 
 	phase='sync-with-aged-jobs'
 	source_call sync - "$integration_root/source-aged-sync.json"
@@ -765,6 +834,16 @@ prove_interrupted_initial_creation() {
 replace_nocodb_scratch() { # <ready-source-response> <probe-response>
 	local ready_before="$1" probe_before="$2" old_container_id new_container_id
 	phase='nocodb-container-and-scratch-replacement'
+	jq -n '{invite_only_signup:true,restrict_workspace_creation:true}' \
+		>"$integration_root/replacement-settings-update.json"
+	http_request POST "$nocodb_url/api/v1/app-settings" nocodb-jwt \
+		"$integration_root/replacement-settings-update.json" \
+		"$integration_root/replacement-settings-update-response.json"
+	http_request GET "$nocodb_url/api/v1/app-settings" nocodb-jwt - \
+		"$integration_root/replacement-settings-before.json"
+	jq -e '.invite_only_signup == true and .restrict_workspace_creation == true' \
+		"$integration_root/replacement-settings-before.json" >/dev/null ||
+		fail 'safe app settings were not established before scratch replacement.'
 	old_container_id="$("$podman_bin" inspect --format '{{.Id}}' "$nocodb_name")"
 	[[ -n "$old_container_id" ]] || fail 'could not capture the original NocoDB container identity.'
 	remove_owned_resource container "$nocodb_name" || fail 'could not remove the exact run-owned NocoDB container.'
@@ -778,6 +857,14 @@ replace_nocodb_scratch() { # <ready-source-response> <probe-response>
 		"$integration_root/nocodb-signin.json" "$integration_root/replacement-signin-response.json"
 	nocodb_session="$(jq -er '.token | select(type == "string" and length > 0)' \
 		"$integration_root/replacement-signin-response.json")"
+	record_secret "$nocodb_session"
+	http_request GET "$nocodb_url/api/v1/app-settings" nocodb-jwt - \
+		"$integration_root/replacement-settings-after.json"
+	jq -e --slurpfile before "$integration_root/replacement-settings-before.json" '
+		.invite_only_signup == $before[0].invite_only_signup and
+		.restrict_workspace_creation == $before[0].restrict_workspace_creation
+	' "$integration_root/replacement-settings-after.json" >/dev/null ||
+		fail 'safe app settings changed across container and scratch replacement.'
 	http_request GET "$nocodb_url/api/v2/meta/bases" nocodb-token - \
 		"$integration_root/replacement-bases.json"
 	jq -e 'if type == "array" then length >= 1 else (.list // .data // [] | length >= 1) end' \
@@ -948,6 +1035,7 @@ prove_logical_restore() { # <ready-source-response> <probe-response>
 		"$integration_root/restore-signin-response.json"
 	restored_session="$(jq -er '.token | select(type == "string" and length > 0)' \
 		"$integration_root/restore-signin-response.json")"
+	record_secret "$restored_session"
 	nocodb_session="$restored_session"
 	http_request GET "$restore_url/api/v2/meta/bases/$(jq -er '.baseId' "$ready_before")/sources" nocodb-token - \
 		"$integration_root/restore-sources.json"

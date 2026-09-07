@@ -47,6 +47,10 @@ rg -Fq 'prove_aged_jobs_rotation_and_restart()' "$runner" || {
 	echo 'NocoDB local integration guard test failed: aged-job rotation and restart proof is missing' >&2
 	exit 1
 }
+rg -Fq 'aged-job-api-response.json' "$runner" || {
+	echo 'NocoDB local integration guard test failed: aged-job API absence readback is missing' >&2
+	exit 1
+}
 rg -Fq 'prove_interrupted_initial_creation()' "$runner" || {
 	echo 'NocoDB local integration guard test failed: interrupted initial creation proof is missing' >&2
 	exit 1
@@ -57,6 +61,10 @@ rg -Fq 'prove_additive_metadata_refresh()' "$runner" || {
 }
 rg -Fq 'replace_nocodb_scratch()' "$runner" || {
 	echo 'NocoDB local integration guard test failed: NocoDB container and scratch replacement proof is missing' >&2
+	exit 1
+}
+rg -Fq 'replacement-settings-before.json' "$runner" || {
+	echo 'NocoDB local integration guard test failed: exact retained app-setting proof is missing' >&2
 	exit 1
 }
 rg -Fq 'prove_logical_restore()' "$runner" || {
@@ -83,11 +91,6 @@ rg -Fq 'slice_run second' "$runner" || {
 	echo 'NocoDB local integration guard test failed: runner persists or reads credential-bearing executions' >&2
 	exit 1
 }
-! rg -q 'podman[^\n]*logs|set -x|printenv' "$runner" || {
-	echo 'NocoDB local integration guard test failed: runner can expose credential-bearing diagnostics' >&2
-	exit 1
-}
-
 fail() {
 	echo "NocoDB local integration guard test failed: $*" >&2
 	exit 1
@@ -155,6 +158,32 @@ run_preflight() {
 	printf '%s\n' "$output" >"$fixture/output"
 	return "$status"
 }
+
+output_sentinel='task7-output-sentinel-do-not-print-334'
+run_output_safety_test() { # <safe|stdout|stderr>
+	local leak_stream="$1" result_code
+	set +e
+	NOCODB_LOCAL_OUTPUT_TEST_SENTINEL="$output_sentinel" \
+		NOCODB_LOCAL_OUTPUT_TEST_LEAK_STREAM="$leak_stream" \
+		"$runner" --output-safety-test >"$fixture/output-safety.stdout" \
+		2>"$fixture/output-safety.stderr"
+	result_code=$?
+	set -e
+	return "$result_code"
+}
+
+run_output_safety_test safe || fail 'safe sentinel output self-test failed'
+! rg -Fq "$output_sentinel" "$fixture/output-safety.stdout" "$fixture/output-safety.stderr" ||
+	fail 'safe sentinel appeared in captured output'
+for leak_stream in stdout stderr; do
+	if run_output_safety_test "$leak_stream"; then
+		fail "$leak_stream sentinel leak was accepted"
+	fi
+	! rg -Fq "$output_sentinel" "$fixture/output-safety.stdout" "$fixture/output-safety.stderr" ||
+		fail "$leak_stream sentinel was replayed after leak detection"
+	rg -Fq 'credential output safety check failed' "$fixture/output-safety.stderr" ||
+		fail "$leak_stream sentinel refusal was unclear"
+done
 
 if NOCODB_LOCAL_PODMAN='podman-does-not-exist' run_preflight; then
 	fail 'missing Podman was accepted'
