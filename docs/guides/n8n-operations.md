@@ -1,9 +1,11 @@
 # n8n operations
 
 This guide activates and operates the n8n platform in its required dependency order. The
-private editor is `https://n8n.lab.supermorphic.com`. The public interface permits only
-the exact production paths `/webhook/platform-canary` and `/webhook/theirstack-jobs`
-on `https://hooks.lab.supermorphic.com` after their respective activation checkpoints.
+private editor is `https://n8n.lab.supermorphic.com`. The public interface at
+`https://hooks.lab.supermorphic.com` permits only the exact paths declared in the
+[public HTTPRoute](../../kubernetes/apps/networking/public-webhook-gateway/route/httproute.yaml),
+after their activation checkpoints. That manifest is the source of truth for the
+allowlist; `/webhook/platform-canary` is the initial example used throughout this guide.
 PostgreSQL, the editor, the REST API, metrics, test webhooks, and all other webhook paths
 stay private.
 
