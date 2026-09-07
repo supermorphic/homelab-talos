@@ -95,12 +95,11 @@ The implemented confirmation-guarded firing-and-resolved scenario creates a run-
 Flux Kustomization with a deliberately missing source. It is designed to exercise the
 real path from Flux resource failure through `gotk_resource_info`, the production
 15-minute rule, Alertmanager, `alertmanager-ntfy`, and ntfy, then prove resolution after
-removing the failure. The retained lineage records the scenario's implementation and
-offline validation, but leaves its post-merge live execution pending. It is therefore a
-defined acceptance test, not completed firing-and-resolved evidence. Aggregate webhook
-counters cannot attribute publication to the test alert. Without independent evidence
-for its firing and resolved messages, delivery remains inconclusive and the fallback
-stays in place. Human handset receipt is a separate acceptance claim.
+removing the failure. Aggregate webhook counters cannot attribute publication to the
+test alert, so the automated scenario reports delivery as inconclusive. Acceptance
+requires independent evidence for the matching firing and resolved messages alongside
+the lifecycle and cleanup checks. Human handset receipt is recorded separately from
+the automated result.
 
 ## Rejected alternatives
 
@@ -159,9 +158,11 @@ all five kinds. Production consumers now select the bundled source, with standar
 Kubernetes metrics and existing alert semantics preserved. Explicit source selection
 prevents parallel collection from duplicating alerts or concealing loss of production
 metrics. Post-cutover monitoring and API-backed parity passed, including a full
-15-minute healthy observation interval. Firing-and-resolved delivery acceptance remains
-pending; the live dedicated exporter stays available until that gate permits removal.
+15-minute healthy observation interval. On September 7, the operator-run scenario
+exercised the production 15-minute rule and the operator confirmed receipt of the
+matching warning and resolved notifications from the bundled source. Independent
+cleanup and monitoring checks passed, satisfying the delivery gate for removal.
 The final cleanup removes the separate release and migration-only parity tooling,
-retaining independent five-kind, source-selection, and permission checks. Offline cleanup
-validation does not establish live removal or delivery acceptance. Detailed rollout
+retaining independent five-kind, source-selection, and permission checks. Actual
+resource removal still requires post-merge reconciliation verification. Detailed rollout
 sequencing and test procedures belong in the implementation plan.
