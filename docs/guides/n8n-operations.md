@@ -585,9 +585,7 @@ queue. An ntfy outage can lose notifications. Keep existing platform monitoring 
    including the dedicated write-only identity and `Platform Failure ntfy` credential.
 2. Import the secret-free
    [handler template](../../kubernetes/apps/automation/n8n/app/workflows/platform-workflow-failure.json)
-   into the private n8n editor, or have the connected n8n MCP tools prepare it using
-   [the handoff below](#mcp-preparation-and-credential-handoff).
-   Check for an existing workflow with the exact name first;
+   into the private n8n editor. Check for an existing workflow with the exact name first;
    update that workflow in place on later changes so consumers retain its ID. Stop on
    duplicate names. Flux does not import or reconcile workflows.
 3. Before binding a credential, require the HTTP Request node to use exactly **POST**
@@ -609,72 +607,40 @@ says publication is unnecessary. Follow the pinned implementation and prove it w
 automatic failure on this installation; recheck save/publish behavior after upgrades.
 Manual editor executions do not prove Error Trigger delivery.
 
-### MCP preparation and credential handoff
+### Temporary test credentials
 
-Use the connected n8n MCP tools for supported workflow creation, inspection, binding,
-publication, and execution-history checks. The operator fills secret values in n8n's
-credential editor from the password manager. Do not put tokens in chat, workflow
-parameters, Git, or acceptance notes. The publisher credential still comes from
-`ntfy-consumer-sync n8n`; do not manually replace its token as part of fixture setup.
+Create these credentials in the same trusted project as the test workflows. Keep the
+workflows unpublished until you have checked their credential bindings and settings.
+Enter secret values directly in n8n's credential editor from the password manager;
+do not put them in workflow parameters, Git, or acceptance notes. The shared handler's
+publisher credential comes from `ntfy-consumer-sync n8n` and is not used by the fixtures.
 
-Before asking the operator to enter values, prepare the workflows from the repository
-templates in the same trusted project as the shared handler. Check for existing names
-and record the exact IDs locally; stop on duplicates or uncertain ownership. Keep the
-temporary workflows unpublished and disable their credential-dependent nodes until
-their bindings are verified. Apply the template's workflow settings explicitly and
-read them back; creating the graph alone does not prove retention or caller settings.
+After importing the two fixtures in acceptance step 2:
 
-| Workflow | Node awaiting a credential | Required credential title |
-| --- | --- | --- |
-| `Platform Failure Fixture One` | `Synthetic Failure Webhook` | `Platform Failure Test Header` |
-| `Platform Failure Fixture Two` | `Synthetic Failure Webhook` | The same `Platform Failure Test Header` credential |
-| `Platform Failure Delivery Test Handler` (temporary copy of the shared handler) | `Publish Failure Notification` | `Platform Failure Invalid ntfy` |
+1. Open `Platform Failure Fixture One`, then `Synthetic Failure Webhook`. Set
+   **Authentication** to **Header Auth**. In its credential selector, create a new
+   Header Auth credential. The title at the top of the credential editor is separate
+   from the header **Name** field.
+2. Fill the first row below and save. Generate the test token once in the password
+   manager: use at least 32 characters from `A-Z`, `a-z`, `0-9`, `_`, and `-`.
+   Use a fresh temporary token, not an existing production secret.
+3. Open `Platform Failure Fixture Two`, then `Synthetic Failure Webhook`, and select
+   the same `Platform Failure Test Header` credential. Check that both nodes use it.
 
-Select the published shared handler as both fixtures' Error Workflow. Leave the test
-handler's own Error Workflow unset. Unlike the shared handler, the temporary handler
-copy saves failed execution data for the synthetic delivery-failure check.
-
-Inspect the available MCP capabilities before handing off. A named SDK credential
-placeholder is not proof that a stored credential was created. The current connection
-can list and bind existing credentials, but has no credential-creation tool. Verify that
-the prepared drafts have no unintended credential bindings before handoff. If a future
-connection can create empty credentials, create those too and verify their metadata;
-otherwise the operator creates them from the node's credential selector as follows:
-
-1. Open `Platform Failure Fixture One`, then `Synthetic Failure Webhook`. Keep
-   **Authentication** set to **Header Auth**. In its credential selector, create a new
-   Header Auth credential, or open the prepared credential if one exists. The title at
-   the top of the credential editor is separate from the header **Name** field.
-2. Fill the fields below and save. Generate the test token once in the password manager:
-   use at least 32 characters from `A-Z`, `a-z`, `0-9`, `_`, and `-`. This is a temporary
-   webhook token, not the ntfy publisher token or an existing production secret.
-3. Open `Platform Failure Delivery Test Handler`, then `Publish Failure Notification`.
-   Keep **Authentication** set to **Generic Credential Type** and **Generic Auth Type**
-   set to **Header Auth**. Create or open its separate credential and fill the second row.
-   The invalid bearer value is deliberately synthetic; it needs no password-manager secret.
+During acceptance step 5, open `Platform Failure Delivery Test Handler`, then
+`Publish Failure Notification`. Set **Authentication** to **Generic Credential Type**
+and **Generic Auth Type** to **Header Auth**. Create a separate Header Auth credential
+with the second row's fields and save. Its value is deliberately invalid and needs no
+password-manager secret. Check that only this temporary handler uses that credential.
 
 | Credential title | Connection → Name | Connection → Value |
 | --- | --- | --- |
 | `Platform Failure Test Header` | `X-Platform-Failure-Test` | Paste the temporary token from the password manager |
 | `Platform Failure Invalid ntfy` | `Authorization` | Enter exactly `Bearer synthetic-invalid` |
 
-Report only that the credentials are saved. The agent then resolves exactly one of each
-title with type `httpHeaderAuth`, binds the same test credential to both fixture webhooks,
-and binds only the invalid credential to the temporary handler copy. It reads back the
-graph, settings, and credential IDs before enabling the prepared nodes. Publish each
-workflow only when its step in synthetic acceptance requires it. Keep production
-consumers unchanged until acceptance passes.
-
-For the remaining handoffs, the operator sends the authenticated private requests below
-when the agent has checked each phase's bindings, and inspects `homelab` using the
-subscriber account. The agent checks matching execution metadata and the bounded fields
-needed for acceptance; do not copy raw webhook headers into chat or artifacts. It
-performs supported unpublication and cleanup operations. The current MCP connection
-supports workflow archiving, but has no deletion tool for workflows, credentials, or
-executions and no ntfy inbox reader. The operator completes those deletions in the UI
-for the recorded test objects only. Archiving alone does not complete the cleanup step.
-Report each remaining action with its workflow/node or credential title and the guide
-step, so setup and acceptance do not depend on chat-only instructions.
+Check for existing credential titles before creating duplicates. Reuse credentials
+only when you can confirm they belong to the current acceptance session. Keep the
+shared handler bound to `Platform Failure ntfy` and its execution-data retention disabled.
 
 ### Consumer adoption and notification contract
 
@@ -726,11 +692,11 @@ cannot read messages.
    private Header Auth
    credential whose header **Name** is `X-Platform-Failure-Test` and whose **Value** is
    a fresh temporary token, using the
-   [credential handoff](#mcp-preparation-and-credential-handoff). Reuse the prepared
-   drafts when MCP has already created them. Use unique private webhook paths if a
-   previous test occupies the fixture paths. Do not add public routes. After verifying
-   both bindings, enable their webhook nodes if preparation disabled them, and publish
-   both fixtures.
+   [temporary credential procedure](#temporary-test-credentials). Check for existing
+   workflow names before importing, and reuse drafts only when they belong to the current
+   acceptance session. Use unique private webhook paths if a previous test occupies the
+   fixture paths. Do not add public routes. Verify both credential bindings, confirm
+   their webhook nodes are enabled, and publish both fixtures.
 3. Send one authenticated POST to each fixture's **production webhook path through the
    private editor origin**, using [the request block below](#send-one-private-fixture-request)
    once for each fixture. The Stop And Error node must fail each automatic execution.
@@ -742,13 +708,15 @@ cannot read messages.
    and an execution link opening the corresponding failure in n8n. Inspect the actual
    stored ntfy messages: no synthetic sensitive marker from either fixture may appear.
    A formatter unit test or an HTTP response alone does not prove this delivery.
-5. Prove a notification failure remains bounded using a **temporary copy** of the handler,
-   with no Error Workflow and the same retry, redirect, and timeout settings. For this
+5. Prove a notification failure remains bounded: import the secret-free handler template
+   as a separate workflow named `Platform Failure Delivery Test Handler`. Keep its own
+   Error Workflow unset and preserve the retry, redirect, and timeout settings. For this
    synthetic-only copy, temporarily save failed execution data to obtain test evidence;
    never make this retention change on the shared handler or bind a production workflow
-   to the copy. Use the prepared `Platform Failure Delivery Test Handler` when present.
-   Bind `Platform Failure Invalid ntfy`, verify the binding, and enable its HTTP node
-   if preparation disabled it. Publish the copy, then bind Fixture One to that copy.
+   to the copy. Check for an existing draft before importing and reuse it only if it
+   belongs to this acceptance session. Create and bind `Platform Failure Invalid ntfy`
+   using the temporary credential procedure above. Verify the binding and confirm its
+   HTTP node is enabled. Publish the copy, then bind Fixture One to that copy.
    Save/publish the changed fixture and send one automatic request with the same private
    request block. Require the delivery attempt to end with authentication
    failure, zero ntfy messages for that execution, and no recursive handler executions
@@ -811,9 +779,10 @@ origin; these fixture paths are intentionally absent from the public allowlist.
 )
 ```
 
-An HTTP success is only an acknowledgement. Give the agent the fixture label, request
-time, and HTTP status to match the failed automatic execution. Inspect the corresponding
-ntfy message and report the content/link checks from acceptance step 4; keep tokens and
+An HTTP success is only an acknowledgement. Record the fixture label, request time,
+and HTTP status, then match the failed automatic execution in n8n execution history.
+Inspect the corresponding ntfy message and record the content/link checks from acceptance
+step 4. Do not copy raw webhook headers into acceptance notes; keep tokens and
 instance IDs out of public artifacts. After cleanup, repeat the request for each recorded
 path and require `404` plus no new fixture execution. A response or execution indicating
 that a fixture still runs means cleanup is incomplete. After these checks, remove the
@@ -821,8 +790,8 @@ temporary test token from the password manager.
 
 **Activation status (2026-09-07):** the merged identity and workload changes are deployed;
 live n8n, ntfy, and Alertmanager adapter verification passed. The operator reported
-credential synchronization complete, and MCP confirmed the publisher credential and
-published shared handler. The temporary test workflows are prepared but unpublished.
+credential synchronization complete; the publisher credential exists and the shared
+handler is published. The temporary test workflows are prepared but unpublished.
 Automatic delivery, bounded-failure behavior, and test cleanup remain pending. Do not
 treat handler publication or offline CI as proof of ntfy or phone delivery.
 
