@@ -984,10 +984,10 @@ alertmanager-ntfy-validate: require-bash
 alertmanager-ntfy-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.alertmanager-ntfy -- scripts/verify/alertmanager-ntfy.sh {{quote(kubeconfig)}}
 
-# Prove the real Flux failure rule, Alertmanager route, and synchronous ntfy adapter
-# delivery for both firing and resolved states. Creates only a run-owned Kustomization
-# with a deliberately nonexistent source, holds the failure for the production 15-minute
-# alert window, and deletes it. Operator-only; state-changing; allow about 25 minutes.
+# Exercise the real Flux failure rule and Alertmanager ntfy route for both firing and
+# resolved states. Aggregate webhook counters cannot prove test-specific ntfy publication,
+# so the scenario reports delivery as inconclusive after it cleans up its run-owned
+# Kustomization. Operator-only; state-changing; allow about 25 minutes.
 # Guard: FLUX_ALERT_E2E_CONFIRM='test:flux-alert:firing-resolved'.
 flux-alert-delivery-test: require-bash
     @scripts/test/run-catalog-suite.sh test.e2e.flux-alert-delivery -- scripts/test/scenarios/flux-alert-delivery.sh {{quote(kubeconfig)}}

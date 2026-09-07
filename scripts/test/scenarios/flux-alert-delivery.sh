@@ -22,15 +22,56 @@ alertmanager_base_url='https://alertmanager.lab.supermorphic.com'
 alertmanager_resolve="alertmanager.lab.supermorphic.com:443:${HOMELAB_GATEWAY_VIP}"
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-flux-alert-delivery.XXXXXX")"
 manifest="$temp_dir/kustomization.yaml"
+run_dir="${HOMELAB_TEST_RUN_DIR:-}"
 created=false
 
-cleanup() {
-  if [[ "$created" == 'true' ]]; then
+write_phase() {
+  local phase="$1"
+  local phase_status="$2"
+  local reason="$3"
+  [[ -n "$run_dir" ]] || return 0
+  PHASE_STATUS="$phase_status" PHASE_REASON="$reason" \
+    yq --null-input --output-format json '{
+      "status": strenv(PHASE_STATUS),
+      "reason": strenv(PHASE_REASON)
+    }' >"$run_dir/$phase.json"
+}
+
+run_owned_kustomization_absent() {
+  assert_command_finds_nothing \
+    "Run-owned Kustomization $namespace/$test_name still exists after cleanup." \
     kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" \
-      delete kustomization "$test_name" --ignore-not-found --wait=true \
-      --timeout=2m >/dev/null 2>&1 || true
+    get kustomization "$test_name" >/dev/null
+}
+
+delete_run_owned_kustomization() {
+  kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" \
+    delete kustomization "$test_name" --wait=true --timeout=2m >/dev/null || return 1
+  run_owned_kustomization_absent || return 1
+  created=false
+}
+
+# shellcheck disable=SC2329 # invoked by the EXIT trap below.
+cleanup() {
+  local original_exit="$?"
+  local cleanup_ok=true
+  trap - EXIT INT TERM
+  set +e
+  if [[ "$created" == 'true' ]]; then
+    delete_run_owned_kustomization || cleanup_ok=false
   fi
-  rm -rf -- "$temp_dir"
+  rm -rf -- "$temp_dir" || cleanup_ok=false
+  [[ ! -e "$temp_dir" ]] || cleanup_ok=false
+  if [[ "$cleanup_ok" == 'true' ]]; then
+    write_phase cleanup passed 'the run-owned Kustomization and local temporary files are absent'
+  else
+    write_phase cleanup failed 'the run-owned Kustomization or local temporary files could not be confirmed absent'
+    echo 'Flux alert delivery cleanup failed; inspect the run-owned Kustomization before another run.' >&2
+  fi
+  if [[ "$cleanup_ok" != 'true' ]]; then
+    return 1
+  fi
+  return "$original_exit"
 }
 trap cleanup EXIT
 
@@ -38,6 +79,12 @@ trap cleanup EXIT
   echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
   exit 1
 }
+[[ -z "$run_dir" || -d "$run_dir" ]] || {
+  echo "HOMELAB_TEST_RUN_DIR does not exist: $run_dir" >&2
+  exit 1
+}
+write_phase recovery not-required 'the scenario does not disrupt a workload'
+write_phase cleanup not-classified 'the run-owned Kustomization has not been verified absent'
 [[ "${FLUX_ALERT_E2E_CONFIRM:-}" == "$expected_confirmation" ]] || {
   echo "Refusing the state-changing Flux alert delivery test; set FLUX_ALERT_E2E_CONFIRM='$expected_confirmation' after reviewing its 15-minute failure window and exact cleanup scope." >&2
   exit 1
@@ -55,9 +102,9 @@ if kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" \
 fi
 
 # This Alertmanager version exposes notification counters by integration, but not by
-# receiver. Prove that ntfy is the only loaded webhook before using the webhook counter
-# as the delivery oracle. This prevents unrelated webhook traffic from satisfying the
-# test if another webhook receiver is added later.
+# receiver. Confirm that ntfy is the only loaded webhook to preserve the receiver
+# identity check. That does not make the aggregate counter test-specific: unrelated
+# alerts routed to ntfy can still increment it.
 alertmanager_status="$(
   flux_alerts_prometheus_get "$alertmanager_base_url" "$alertmanager_resolve" \
     '/api/v2/status'
@@ -225,30 +272,33 @@ wait_for_query_gt 'FluxReconciliationFailure to fire' "$firing_alert_query" 0 12
   >/dev/null
 wait_for_alertmanager_route 1 'the firing test alert' 48 5
 notification_total_firing="$(
-  wait_for_query_gt 'the firing ntfy webhook success' "$notification_total_query" \
+  wait_for_query_gt 'the aggregate webhook notification counter after the firing alert' "$notification_total_query" \
     "$notification_total_before" 48 5
 )"
 notification_failed_firing="$(query_value "$notification_failed_query")"
 [[ "$notification_failed_firing" == "$notification_failed_before" ]] || {
-  echo 'Alertmanager recorded a failed ntfy webhook while sending the firing alert.' >&2
+  echo 'Alertmanager aggregate webhook failure counter increased after the firing alert.' >&2
   exit 1
 }
-echo 'Firing alert reached Alertmanager receiver ntfy and its synchronous webhook succeeded.'
+echo 'Firing alert reached Alertmanager receiver ntfy; aggregate webhook counters increased without failures.'
 
-kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" \
-  delete kustomization "$test_name" --wait=true --timeout=2m >/dev/null
-created=false
+delete_run_owned_kustomization || {
+  echo "Could not delete and confirm absence of the run-owned $namespace/$test_name Kustomization." >&2
+  exit 1
+}
 echo "Deleted only the run-owned $namespace/$test_name Kustomization."
 
 wait_for_query_zero 'the test alert to leave Prometheus' "$any_alert_query" 48 5
 wait_for_alertmanager_route 0 'the test alert to resolve' 96 5
-wait_for_query_gt 'the resolved ntfy webhook success' "$notification_total_query" \
+wait_for_query_gt 'the aggregate webhook notification counter after the resolved alert' "$notification_total_query" \
   "$notification_total_firing" 96 5 >/dev/null
 notification_failed_resolved="$(query_value "$notification_failed_query")"
 [[ "$notification_failed_resolved" == "$notification_failed_before" ]] || {
-  echo 'Alertmanager recorded a failed ntfy webhook while sending the resolved alert.' >&2
+  echo 'Alertmanager aggregate webhook failure counter increased after the resolved alert.' >&2
   exit 1
 }
 
-echo 'Flux alert delivery E2E passed: the run-owned Kustomization became non-ready, the real 15-minute rule fired through Alertmanager receiver ntfy, both synchronous firing/resolved webhooks succeeded, and the test resource was deleted.'
-echo "Human acceptance: confirm the phone received the warning and 'Resolved:' messages naming $namespace/$test_name on the homelab topic."
+echo 'Flux alert lifecycle completed: the run-owned Kustomization became non-ready, the real 15-minute rule fired through Alertmanager receiver ntfy, and the test resource was deleted.'
+echo 'Flux alert delivery evidence is inconclusive: Alertmanager webhook counters are aggregate and cannot attribute firing or resolved publication to this test alert.' >&2
+echo "Human acceptance remains separate: confirm the phone received the warning and 'Resolved:' messages naming $namespace/$test_name on the homelab topic."
+exit 1
