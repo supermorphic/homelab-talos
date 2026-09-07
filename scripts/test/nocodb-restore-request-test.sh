@@ -46,12 +46,18 @@ globalThis.fetch = async (input, options = {}) => {
     ...(fixtureCase === 'duplicate-managed-source' ? [{id:'source-reader-duplicate'}] : []),
     ...(fixtureCase === 'extra-unmanaged-source' ? [{id:'source-extra'}] : [])
   ]});
-  if (url.pathname === '/api/v2/meta/bases/base-acceptance/sources/source-default' && method === 'GET') return json({
-    id:'source-default',base_id:'base-acceptance',fk_workspace_id:'workspace-1',alias:null,type:'pg',
-    fk_integration_id:null,fk_sql_executor_id:null,is_local:true,
-    is_meta:fixtureCase === 'malformed-intrinsic-source',enabled:true,deleted:false,is_encrypted:true,
-    is_data_readonly:false,is_schema_readonly:false,config:null,meta:null,description:null,order:1,upgraderQueries:[]
-  });
+  if (url.pathname === '/api/v2/meta/bases/base-acceptance/sources/source-default' && method === 'GET') {
+    const source = {
+      id:'source-default',base_id:'base-acceptance',fk_workspace_id:'workspace-1',alias:null,type:'pg',
+      fk_integration_id:null,fk_sql_executor_id:null,is_local:true,
+      is_meta:fixtureCase === 'malformed-intrinsic-source',enabled:true,deleted:false,is_encrypted:true,
+      is_data_readonly:false,is_schema_readonly:false,meta:null,description:null,order:1,upgraderQueries:[]
+    };
+    if (fixtureCase === 'valid-explicit-null-config') source.config = null;
+    if (fixtureCase === 'intrinsic-config-object') source.config = {};
+    if (fixtureCase === 'intrinsic-config-string') source.config = 'unexpected';
+    return json(source);
+  }
   if (url.pathname === '/api/v2/meta/bases/base-acceptance/sources/source-extra' && method === 'GET') return json({
     id:'source-extra',base_id:'base-acceptance',fk_workspace_id:'workspace-1',alias:null,type:'pg',
     fk_integration_id:null,fk_sql_executor_id:null,is_local:true,is_meta:false,enabled:true,deleted:false,
@@ -142,6 +148,9 @@ rg -q '^GET /api/v2/tables/table-decision/records\?.*where=.*recovery-canary-v2'
 ! rg -q '/api/v2/meta/comments|/download/|/api/v2/storage/upload' "$events" ||
   record_failure 'record recovery attempted a native attachment operation'
 
+IFS=$'\t' read -r case_name status output events < <(run_case valid-explicit-null-config)
+[[ "$status" -eq 0 ]] || record_failure "explicit-null intrinsic config was rejected: $(tail -n 1 "$output")"
+
 for rejected_case in missing-canary-fact duplicate-canary-fact wrong-artifact-uri wrong-artifact-sha \
   wrong-fact-id legacy-attachment missing-canary-decision duplicate-canary-decision wrong-decision \
   legacy-decision-attachment wrong-saved-view wrong-view-title wrong-view-type wrong-integration \
@@ -150,7 +159,8 @@ for rejected_case in missing-canary-fact duplicate-canary-fact wrong-artifact-ur
 	[[ "$status" -ne 0 ]] || record_failure "$case_name producer-contract violation was accepted"
 done
 
-for rejected_case in extra-unmanaged-source malformed-intrinsic-source; do
+for rejected_case in extra-unmanaged-source malformed-intrinsic-source intrinsic-config-object \
+	intrinsic-config-string; do
 	IFS=$'\t' read -r case_name status output events < <(run_case "$rejected_case")
 	[[ "$status" -ne 0 ]] || record_failure "$case_name unexpected intrinsic-source remainder was accepted"
 done
