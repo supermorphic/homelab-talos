@@ -25,6 +25,16 @@ cd "$repo_root"
 
 group_selected() { [[ "$group" == all || "$group" == "$1" ]]; }
 
+python_discovery_dirs() {
+	case "$1" in
+	core)
+		find scripts/test/core scripts/test/scenarios tests/probes \
+			-type f -name 'test_*.py' -exec dirname {} \; | LC_ALL=C sort -u
+		;;
+	ci-framework) printf '%s\n' scripts/test ;;
+	esac
+}
+
 epoch_milliseconds() {
 	local now seconds fraction
 	now="$EPOCHREALTIME"
@@ -216,8 +226,12 @@ register_group_shell_case observability ntfy-identity scripts/test/ntfy-identity
 register_group_shell_case observability ntfy-consumer-sync scripts/test/ntfy-consumer-sync-test.sh
 
 if [[ "$mode" == list ]]; then
-	group_selected core && printf 'python:scripts/test/scenarios\npython:tests/probes\n'
-	group_selected ci-framework && printf 'python:scripts/test\n'
+	for owner in core ci-framework; do
+		group_selected "$owner" || continue
+		while IFS= read -r py_test_dir; do
+			printf 'python:%s\n' "$py_test_dir"
+		done < <(python_discovery_dirs "$owner")
+	done
 	group_selected core && printf 'ruff:check\nruff:format\n'
 	exit 0
 fi
@@ -241,8 +255,7 @@ if group_selected core; then
 			uv run --locked python -m unittest discover -s "$py_test_dir" -p 'test_*.py'
 		fi
 		py_test_dirs=$((py_test_dirs + 1))
-	done < <(find scripts/test/scenarios tests/probes -type f -name 'test_*.py' \
-		-exec dirname {} \; | LC_ALL=C sort -u)
+	done < <(python_discovery_dirs core)
 fi
 if group_selected ci-framework; then
 	# Root discovery includes planner and merge-gate reconciliation tests exactly once.
@@ -267,8 +280,8 @@ if group_selected core; then
 		scripts/test/ci_plan.py scripts/test/test_ci_plan.py
 		scripts/test/ci_reconcile.py scripts/test/test_ci_reconcile.py
 		scripts/test/test_repository_secret_scan.py
-		scripts/test/test_public_webhook_routes.py
-		scripts/test/test_internal_dns_endpoints.py
+		scripts/test/core/test_public_webhook_routes.py
+		scripts/test/core/test_internal_dns_endpoints.py
 		scripts/test/test_github_protection.py scripts/test/helpers/qbit_manage_policy_api.py
 		scripts/test/scenarios/resilience_support.py scripts/test/scenarios/plex_cross_node_reschedule.py
 		scripts/test/scenarios/qbittorrent_pod_recreation.py scripts/test/scenarios/qbittorrent_vpn_disconnect.py

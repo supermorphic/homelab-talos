@@ -112,6 +112,8 @@ validator_root="$fixture_root/validator repository"
 mkdir -p "$validator_root/scripts/test/lib" "$validator_root/tests/chainsaw/nested" \
 	"$validator_root/tests/chainsaw/with space" \
 	"$validator_root/tests/fixtures/chainsaw/support" "$validator_root/bin"
+mkdir -p "$validator_root/scripts/test/core" "$validator_root/scripts/test/scenarios" \
+	"$validator_root/tests/probes/vpn"
 cp "$repo_root/scripts/test/validate-chainsaw.sh" \
 	"$validator_root/scripts/test/validate-chainsaw.sh"
 cp "$repo_root/scripts/test/lib/chainsaw-inputs.sh" \
@@ -125,6 +127,12 @@ printf '%s\n' '#!/usr/bin/env bash' 'exit 0' \
 	>"$validator_root/scripts/test/validate-catalog.sh"
 chmod +x "$validator_root/scripts/test/run-native-junit-validator.sh" \
 	"$validator_root/scripts/test/validate-catalog.sh"
+for python_test in \
+	scripts/test/core/test_core.py \
+	scripts/test/scenarios/test_scenario.py \
+	tests/probes/vpn/test_probe.py; do
+	printf '%s\n' 'import unittest' >"$validator_root/$python_test"
+done
 
 while IFS= read -r test_script; do
 	[[ "$test_script" == 'scripts/test/validate-chainsaw.sh' ]] && continue
@@ -211,6 +219,10 @@ git -C "$validator_root" config user.email test@example.invalid
 git -C "$validator_root" config user.name 'Chainsaw Validator Test'
 git -C "$validator_root" add tests
 git -C "$validator_root" commit -qm 'validator fixture'
+
+python_listing="$(bash "$validator_root/scripts/test/validate-chainsaw.sh" --list all |
+	sed -n 's/^python://p')"
+[[ "$python_listing" == $'scripts/test/core\nscripts/test/scenarios\ntests/probes/vpn\nscripts/test' ]]
 
 chainsaw_log="$fixture_root/chainsaw.log"
 yq_log="$fixture_root/yq.log"

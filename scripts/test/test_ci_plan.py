@@ -32,6 +32,7 @@ make_plan = planner.make_plan
 FULL = ("core", "observability", "automation", "ci-framework")
 IMPACT = ROOT / "tests/impact.yaml"
 CATALOG = ROOT / "tests/catalog.yaml"
+OWNERSHIP = ROOT / "tests/fixtures/ci-impact/ownership.yaml"
 
 
 class ClassificationTests(unittest.TestCase):
@@ -127,13 +128,12 @@ class ClassificationTests(unittest.TestCase):
             ("core", "automation"),
         )
 
-    def test_internal_dns_invariant_has_explicit_core_and_full_owners(self):
+    def test_foundation_invariants_and_regressions_select_core(self):
         cases = {
+            "scripts/validate/public-webhook-routes.sh": (("core",), "core"),
             "scripts/validate/internal-dns-endpoints.sh": (("core",), "core"),
-            "scripts/test/test_internal_dns_endpoints.py": (
-                ("core", "observability", "automation", "ci-framework"),
-                "full",
-            ),
+            "scripts/test/core/test_public_webhook_routes.py": (("core",), "core"),
+            "scripts/test/core/test_internal_dns_endpoints.py": (("core",), "core"),
         }
         for path, (expected, reason) in cases.items():
             with self.subTest(path=path):
@@ -152,8 +152,12 @@ class ClassificationTests(unittest.TestCase):
     def test_observability_implementations_select_owned_tests(self):
         cases = {
             "scripts/diagnose/flux-alerts.sh": ("core", "observability"),
+            "scripts/verify/flux-exporter-parity.sh": ("core", "observability"),
             "scripts/verify/logging.sh": ("core", "observability"),
             "scripts/verify/alertmanager-ntfy.sh": ("core", "observability"),
+            "scripts/test/flux-exporter-parity-test.sh": ("core", "observability"),
+            "scripts/test/flux-exporter-parity-verify-test.sh": ("core", "observability"),
+            "scripts/test/monitoring-flux-exporter-test.sh": ("core", "observability"),
             "kubernetes/mod.just": ("core", "observability", "automation", "ci-framework"),
         }
         for path, expected in cases.items():
@@ -341,6 +345,94 @@ class ClassificationTests(unittest.TestCase):
                 self.assertEqual(groups, FULL, path)
         self.assertEqual(unmatched, [], "Tracked paths need deliberate ownership")
         self.assertTrue(explicit_full, "Coverage must retain explicitly foundational paths")
+
+
+class OwnershipContractTests(unittest.TestCase):
+    @staticmethod
+    def discovered_python_tests(directory):
+        loader = unittest.TestLoader()
+        suite = loader.discover(str(ROOT / directory), pattern="test_*.py")
+        if loader.errors:
+            raise AssertionError("\n".join(loader.errors))
+
+        def iter_tests(candidate):
+            for test in candidate:
+                if isinstance(test, unittest.TestSuite):
+                    yield from iter_tests(test)
+                else:
+                    yield test
+
+        identities = set()
+        for test in iter_tests(suite):
+            module = sys.modules[test.__class__.__module__]
+            path = Path(module.__file__).resolve().relative_to(ROOT).as_posix()
+            identities.add(f"python:{path}")
+        return frozenset(identities)
+
+    @classmethod
+    def setUpClass(cls):
+        cls.impact = load_impact(IMPACT, CATALOG)
+        cls.group_work = {}
+        for group in FULL:
+            completed = subprocess.run(
+                [str(ROOT / "scripts/test/validate-chainsaw.sh"), "--list", group],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            listed = frozenset(completed.stdout.splitlines())
+            discovered = frozenset().union(
+                *(
+                    cls.discovered_python_tests(identity.removeprefix("python:"))
+                    for identity in listed
+                    if identity.startswith("python:")
+                )
+            )
+            cls.group_work[group] = listed | discovered
+        cls.all_work = frozenset().union(*cls.group_work.values())
+
+    def test_changed_inputs_retain_required_harness_evidence(self):
+        fixture = yaml.safe_load(OWNERSHIP.read_text())
+        self.assertEqual(set(fixture), {"schema_version", "contracts"})
+        self.assertEqual(fixture["schema_version"], 1)
+        self.assertIsInstance(fixture["contracts"], dict)
+        self.assertTrue(fixture["contracts"])
+        for name, contract in fixture["contracts"].items():
+            with self.subTest(name=name):
+                self.assertEqual(set(contract), {"changed_inputs", "required_tests"})
+                changed_inputs = contract["changed_inputs"]
+                required_tests = contract["required_tests"]
+                self.assertIsInstance(changed_inputs, list)
+                self.assertTrue(changed_inputs)
+                self.assertEqual(len(changed_inputs), len(set(changed_inputs)))
+                self.assertIsInstance(required_tests, list)
+                self.assertTrue(required_tests)
+                self.assertEqual(len(required_tests), len(set(required_tests)))
+                for path in changed_inputs:
+                    self.assertIsInstance(path, str)
+                    self.assertTrue((ROOT / path).is_file(), f"stale changed input: {path}")
+                for identity in required_tests:
+                    self.assertIsInstance(identity, str)
+                    self.assertIn(identity, self.all_work, f"stale harness identity: {identity}")
+                for path in changed_inputs:
+                    selected = classify([Change("M", None, path)], self.impact, full=False)
+                    selected_work = frozenset().union(
+                        *(self.group_work[group] for group in selected)
+                    )
+                    self.assertTrue(
+                        set(required_tests).issubset(selected_work),
+                        f"input {path} selects {selected}, which omits required evidence",
+                    )
+
+    def test_python_modules_have_exactly_one_group_owner(self):
+        owners = {}
+        for group, work in self.group_work.items():
+            for identity in work:
+                if identity.startswith("python:") and identity.endswith(".py"):
+                    owners.setdefault(identity, []).append(group)
+        duplicates = {identity: groups for identity, groups in owners.items() if len(groups) != 1}
+        self.assertEqual(duplicates, {}, "Python modules need exactly one harness group owner")
 
 
 class GitPlanTests(unittest.TestCase):

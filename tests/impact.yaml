@@ -84,12 +84,16 @@ conditional_paths:
     - scripts/diagnose/flux-alerts.sh
     - scripts/verify/logging.sh
     - scripts/verify/alertmanager-ntfy.sh
+    - scripts/verify/flux-exporter-parity.sh
     - scripts/test/flux-alerts-diagnostics-test.sh
     - scripts/test/flux-alert-delivery-test.sh
+    - scripts/test/flux-exporter-parity-test.sh
+    - scripts/test/flux-exporter-parity-verify-test.sh
     - scripts/test/logging-verify-test.sh
     - scripts/test/monitoring-alloy-logs-validator-test.sh
     - scripts/test/monitoring-loki-validator-test.sh
     - scripts/test/monitoring-alloy-events-validator-test.sh
+    - scripts/test/monitoring-flux-exporter-test.sh
     - scripts/test/grafana-admin-reset-test.sh
     - scripts/test/alertmanager-ntfy-verify-test.sh
     - scripts/test/ntfy-publish-test.sh
@@ -197,6 +201,7 @@ core_paths:
   - scripts/test/tailscale-routes-test.sh
   - scripts/test/talos-apply-live-test.sh
   - scripts/test/tautulli-verify-test.sh
+  - scripts/test/core/**
   - scripts/test/helpers/qbit_manage_policy_api.py
   - scripts/test/scenarios/cilium-connectivity.sh
   - scripts/test/scenarios/media-hardlink-test.sh

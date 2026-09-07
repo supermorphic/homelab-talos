@@ -1,0 +1,32 @@
+schema_version: 1
+contracts:
+  public-webhook-routes:
+    changed_inputs:
+      - scripts/validate/public-webhook-routes.sh
+    required_tests:
+      - python:scripts/test/core/test_public_webhook_routes.py
+  internal-dns-endpoints:
+    changed_inputs:
+      - scripts/validate/internal-dns-endpoints.sh
+    required_tests:
+      - python:scripts/test/core/test_internal_dns_endpoints.py
+  flux-exporter-parity-verifier:
+    changed_inputs:
+      - scripts/verify/flux-exporter-parity.sh
+    required_tests:
+      - shell:flux-exporter-parity-verifier
+  monitoring-flux-exporter-validator:
+    changed_inputs:
+      - scripts/validate/monitoring.sh
+    required_tests:
+      - shell:monitoring-flux-exporter-validator
+  automation-backup:
+    changed_inputs:
+      - kubernetes/apps/automation/n8n-postgresql/app/scripts/backup.sh
+    required_tests:
+      - shell:n8n-backup
+  ci-framework-runner:
+    changed_inputs:
+      - scripts/test/run-ci.sh
+    required_tests:
+      - shell:ci-runner

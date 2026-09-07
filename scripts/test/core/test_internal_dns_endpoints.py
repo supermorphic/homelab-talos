@@ -1,7 +1,6 @@
 """Foundation owns internal-audience DNS uniqueness across Kubernetes domains."""
 
 import copy
-import shutil
 import subprocess
 import tempfile
 import unittest
@@ -9,7 +8,7 @@ from pathlib import Path
 
 import yaml
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 DIAGNOSTIC = "Only the exact public-webhook DNSEndpoint may carry the internal DNS audience."
 
 
@@ -41,10 +40,40 @@ class InternalDNSEndpointTests(unittest.TestCase):
             },
         }
         self.write_endpoint(self.endpoint_path, self.endpoint)
-        # This unrelated foundation precondition uses the real approved public route.
-        shutil.copyfile(
-            ROOT / "kubernetes/apps/networking/public-webhook-gateway/route/httproute.yaml",
-            self.root / "kubernetes/apps/approved-route.yaml",
+        route = {
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {"name": "n8n-platform-canary", "namespace": "networking-public"},
+            "spec": {
+                "parentRefs": [
+                    {
+                        "group": "gateway.networking.k8s.io",
+                        "kind": "Gateway",
+                        "name": "public-webhooks",
+                        "namespace": "networking-public",
+                        "sectionName": "https",
+                    }
+                ],
+                "rules": [
+                    {
+                        "backendRefs": [
+                            {
+                                "group": "",
+                                "kind": "Service",
+                                "name": "n8n",
+                                "namespace": "automation",
+                                "port": 5678,
+                            }
+                        ],
+                        "matches": [
+                            {"path": {"type": "Exact", "value": "/webhook/platform-canary"}}
+                        ],
+                    }
+                ],
+            },
+        }
+        (self.root / "kubernetes/apps/approved-route.yaml").write_text(
+            yaml.safe_dump(route, sort_keys=False)
         )
 
     def write_endpoint(self, path, endpoint):
