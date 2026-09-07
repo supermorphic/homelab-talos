@@ -12,9 +12,10 @@ kubeconfig="$1"
 expected_origin='https://github.com/supermorphic/homelab-talos.git'
 expected_confirmation='upgrade:automation-data:nocodb-v1'
 expected_revision='026-nocodb-v1'
-job_name='automation-data-nocodb-upgrade'
+job_name=''
 namespace='automation-data'
 job_cleanup_pending=false
+job_uid=''
 temp_dir=''
 captured_main_sha=''
 run_marker=''
@@ -37,7 +38,7 @@ job_name_if_present() {
 }
 
 delete_owned_job() {
-	local job_json remaining
+	local job_json observed_uid remaining delete_options
 	job_json="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get job \
 		"$job_name" --ignore-not-found --output json 2>/dev/null)" || {
 		echo "Could not inspect run-owned Job $namespace/$job_name." >&2
@@ -52,8 +53,22 @@ delete_owned_job() {
 		echo "Refusing to delete $namespace/$job_name because its run ownership differs." >&2
 		return 1
 	}
-	kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete job \
-		"$job_name" --wait=true --timeout=2m >/dev/null || return 1
+	observed_uid="$(jq -er '.metadata.uid | select(type == "string" and length > 0)' <<<"$job_json")" || return 1
+	if [[ -n "$job_uid" && "$observed_uid" != "$job_uid" ]]; then
+		echo "Refusing to delete $namespace/$job_name because its object identity changed." >&2
+		return 1
+	fi
+	job_uid="$observed_uid"
+	delete_options="$temp_dir/delete-job.json"
+	jq -n --arg uid "$job_uid" '{
+    apiVersion:"v1", kind:"DeleteOptions", propagationPolicy:"Foreground",
+    preconditions:{uid:$uid}
+  }' >"$delete_options"
+	kubectl --kubeconfig "$kubeconfig" delete \
+		--raw "/apis/batch/v1/namespaces/$namespace/jobs/$job_name" \
+		--filename "$delete_options" >/dev/null || return 1
+	kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" wait \
+		--for=delete "job/$job_name" --timeout=2m >/dev/null || return 1
 	remaining="$(job_name_if_present)" || return 1
 	[[ -z "$remaining" ]] || {
 		echo "Failed to prove removal of run-owned Job $namespace/$job_name." >&2
@@ -104,7 +119,8 @@ git cat-file -e "${captured_main_sha}^{commit}" 2>/dev/null || {
 umask 077
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/automation-data-upgrade.XXXXXX")"
 chmod 700 "$temp_dir"
-run_marker="${captured_main_sha:0:12}-${temp_dir##*.}"
+run_marker="${captured_main_sha:0:12}-$$-$RANDOM"
+job_name="automation-data-nocodb-upgrade-$run_marker"
 
 require_source() {
 	local -a source_paths=(
@@ -125,11 +141,22 @@ require_source() {
 }
 
 require_deployed_revision() {
-	local deployed_revision
+	local deployed_revision applied_state
 	deployed_revision="$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
 		get gitrepository flux-system --output jsonpath='{.status.artifact.revision}')"
 	[[ "$deployed_revision" == "main@sha1:$captured_main_sha" ]] || {
 		echo 'Refusing automation-data upgrade: Flux does not serve captured origin/main.' >&2
+		return 1
+	}
+	applied_state="$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
+		get kustomization automation-data-postgresql --output json)" || return 1
+	CAPTURED_REVISION="main@sha1:$captured_main_sha" jq -e '
+    .metadata.name == "automation-data-postgresql" and
+    .metadata.generation == .status.observedGeneration and
+    .status.lastAppliedRevision == env.CAPTURED_REVISION and
+    any(.status.conditions[]?; .type == "Ready" and .status == "True")
+  ' >/dev/null <<<"$applied_state" || {
+		echo 'Refusing automation-data upgrade: PostgreSQL has not applied captured origin/main.' >&2
 		return 1
 	}
 }
@@ -154,23 +181,41 @@ require_target() {
 }
 
 require_no_overlap() {
-	local found
-	found="$(job_name_if_present)" || return 1
-	if [[ -n "$found" ]]; then
-		echo "Refusing automation-data upgrade: $namespace/$job_name already exists." >&2
+	local inventory
+	inventory="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get jobs \
+		--selector='homelab-talos/role=nocodb-platform-upgrade' --output json)" || return 1
+	jq -e '.items | type == "array" and length == 0' >/dev/null <<<"$inventory" || {
+		echo 'Refusing automation-data upgrade: another platform-upgrade Job exists.' >&2
 		return 1
-	fi
+	}
 }
 
-resolve_upgrade_configmap() {
-	local inventory="$1"
-	jq -er '
-    [.items[] | select(
-      (.metadata.name | startswith("automation-data-postgresql-upgrade-")) and
+render_expected_upgrade_configmap() { # <output-json>
+	local output="$1" package_yaml="$temp_dir/postgresql-package.yaml"
+	local package_json="$temp_dir/postgresql-package.json"
+	kustomize build kubernetes/apps/automation-data/postgresql/app >"$package_yaml" || return 1
+	# shellcheck disable=SC2016 # yq evaluates its own expression.
+	yq ea -o=json -I=0 '. as $item ireduce ([]; . + [$item])' \
+		"$package_yaml" >"$package_json" || return 1
+	jq -e '
+    [.[] | select(
+      .kind == "ConfigMap" and .metadata.namespace == "automation-data" and
+      (.metadata.name | test("^automation-data-postgresql-upgrade-[a-z0-9]+$")) and
       ((.data | keys | sort) == ["nocodb-extension.sql", "upgrade-nocodb.sql"])
-    ) | .metadata.name] |
-    if length == 1 then .[0] else error("expected one generated upgrade ConfigMap") end
-  ' "$inventory"
+    )] | if length == 1 then .[0] else error("expected one rendered upgrade ConfigMap") end
+  ' "$package_json" >"$output"
+}
+
+require_deployed_upgrade_configmap() { # <expected-json> <deployed-json>
+	local expected="$1" deployed="$2" configmap_name
+	configmap_name="$(jq -er '.metadata.name' "$expected")" || return 1
+	kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get configmap \
+		"$configmap_name" --output json >"$deployed" || return 1
+	EXPECTED_CONFIGMAP="$expected" CONFIGMAP_NAME="$configmap_name" jq -e --slurpfile expected "$expected" '
+    .kind == "ConfigMap" and .metadata.namespace == "automation-data" and
+    .metadata.name == env.CONFIGMAP_NAME and
+    (.binaryData // {}) == {} and .data == $expected[0].data
+  ' "$deployed" >/dev/null
 }
 
 require_preconditions() {
@@ -311,18 +356,27 @@ require_preconditions
 }
 require_preconditions
 
-configmap_inventory="$temp_dir/configmaps.json"
-kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get configmaps \
-	--output json >"$configmap_inventory"
-configmap_name="$(resolve_upgrade_configmap "$configmap_inventory")" || {
-	echo 'Refusing automation-data upgrade: exact generated upgrade ConfigMap is unavailable.' >&2
+expected_configmap="$temp_dir/expected-upgrade-configmap.json"
+render_expected_upgrade_configmap "$expected_configmap" || {
+	echo 'Refusing automation-data upgrade: captured source did not render one exact upgrade ConfigMap.' >&2
+	exit 1
+}
+configmap_name="$(jq -er '.metadata.name' "$expected_configmap")"
+deployed_configmap="$temp_dir/deployed-upgrade-configmap.json"
+require_deployed_upgrade_configmap "$expected_configmap" "$deployed_configmap" || {
+	echo 'Refusing automation-data upgrade: deployed upgrade ConfigMap differs from captured source.' >&2
 	exit 1
 }
 
+require_source
 require_deployed_revision
 require_target
 just kube automation-data-verify >/dev/null
 require_no_overlap
+require_deployed_upgrade_configmap "$expected_configmap" "$deployed_configmap" || {
+	echo 'Refusing automation-data upgrade: deployed upgrade ConfigMap changed before Job creation.' >&2
+	exit 1
+}
 
 job_cleanup_pending=true
 if ! render_job "$configmap_name" | kubectl --kubeconfig "$kubeconfig" \
@@ -330,6 +384,22 @@ if ! render_job "$configmap_name" | kubectl --kubeconfig "$kubeconfig" \
 	echo 'The fixed automation-data upgrade Job create response was ambiguous.' >&2
 	exit 1
 fi
+created_job_json="$temp_dir/created-job.json"
+kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get job \
+	"$job_name" --output json >"$created_job_json" || {
+	echo 'The created automation-data upgrade Job could not be read back.' >&2
+	exit 1
+}
+job_uid="$(RUN_ID="$run_marker" JOB_NAME="$job_name" jq -er '
+  select(
+    .metadata.name == env.JOB_NAME and
+    .metadata.labels."homelab-talos/role" == "nocodb-platform-upgrade" and
+    .metadata.labels."homelab-talos/run-id" == env.RUN_ID
+  ) | .metadata.uid | select(type == "string" and length > 0)
+' "$created_job_json")" || {
+	echo 'The created automation-data upgrade Job did not retain its exact object identity.' >&2
+	exit 1
+}
 
 if ! kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" wait \
 	--for=condition=Complete "job/$job_name" --timeout=5m >/dev/null; then

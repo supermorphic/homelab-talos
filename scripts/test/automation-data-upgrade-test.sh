@@ -114,6 +114,22 @@ mkdir -p "$stub_bin"
 remote_main='0123456789012345678901234567890123456789'
 export UPGRADE_TEST_LOG="$fixture/events.log"
 export UPGRADE_TEST_REMOTE_MAIN="$remote_main"
+rendered_package="$fixture/rendered-postgresql.yaml"
+rendered_package_json="$fixture/rendered-postgresql.json"
+kustomize build kubernetes/apps/automation-data/postgresql/app >"$rendered_package"
+# shellcheck disable=SC2016 # yq evaluates its own expression.
+yq ea -o=json -I=0 '. as $item ireduce ([]; . + [$item])' \
+	"$rendered_package" >"$rendered_package_json"
+export UPGRADE_TEST_EXPECTED_CONFIGMAP="$fixture/expected-upgrade-configmap.json"
+jq -e '
+  [.[] | select(
+    .kind == "ConfigMap" and
+    (.metadata.name | startswith("automation-data-postgresql-upgrade-")) and
+    ((.data | keys | sort) == ["nocodb-extension.sql", "upgrade-nocodb.sql"])
+  )] | if length == 1 then .[0] else error("expected one rendered upgrade ConfigMap") end
+' "$rendered_package_json" >"$UPGRADE_TEST_EXPECTED_CONFIGMAP"
+export UPGRADE_TEST_EXPECTED_CONFIGMAP_NAME
+UPGRADE_TEST_EXPECTED_CONFIGMAP_NAME="$(jq -er '.metadata.name' "$UPGRADE_TEST_EXPECTED_CONFIGMAP")"
 
 cat >"$stub_bin/git" <<'EOF'
 #!/usr/bin/env bash
@@ -154,11 +170,28 @@ case "$*" in
   *'--namespace flux-system get gitrepository flux-system --output jsonpath={.status.artifact.revision}')
     printf 'main@sha1:%s' "$UPGRADE_TEST_REMOTE_MAIN"
     ;;
+  *'--namespace flux-system get kustomization automation-data-postgresql --output json')
+    revision="main@sha1:$UPGRADE_TEST_REMOTE_MAIN"
+    [[ "${UPGRADE_TEST_CASE:-}" != stale-kustomization ]] || revision='main@sha1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    jq -n --arg revision "$revision" '{
+      metadata:{name:"automation-data-postgresql",generation:3},
+      status:{observedGeneration:3,lastAppliedRevision:$revision,conditions:[{type:"Ready",status:"True"}]}
+    }'
+    ;;
   *'--namespace automation-data get statefulset automation-data-postgresql --output json')
     if [[ "${UPGRADE_TEST_CASE:-}" == wrong-target ]]; then
       printf '%s\n' '{"metadata":{"name":"automation-data-postgresql"},"spec":{"serviceName":"other","replicas":1,"template":{"spec":{"containers":[{"name":"postgresql","image":"postgres:17.11-alpine3.24"}]}}},"status":{"observedGeneration":1,"currentRevision":"a","updateRevision":"a","readyReplicas":1},"metadata":{"name":"automation-data-postgresql","generation":1}}'
     else
       printf '%s\n' '{"metadata":{"name":"automation-data-postgresql","generation":1},"spec":{"serviceName":"automation-data-postgresql","replicas":1,"template":{"spec":{"containers":[{"name":"postgresql","image":"postgres:17.11-alpine3.24"}]}}},"status":{"observedGeneration":1,"currentRevision":"a","updateRevision":"a","readyReplicas":1}}'
+    fi
+    ;;
+  *'--namespace automation-data get jobs --selector=homelab-talos/role=nocodb-platform-upgrade --output json')
+    if [[ "${UPGRADE_TEST_CASE:-}" == api-error ]]; then
+      exit 69
+    elif [[ "${UPGRADE_TEST_CASE:-}" == overlap ]]; then
+      printf '%s\n' '{"items":[{"metadata":{"name":"foreign-upgrade"}}]}'
+    else
+      printf '%s\n' '{"items":[]}'
     fi
     ;;
   *'--namespace automation-data get job automation-data-nocodb-upgrade --output json')
@@ -185,14 +218,63 @@ case "$*" in
       printf '%s' ''
     fi
     ;;
+  *'--namespace automation-data get job automation-data-nocodb-upgrade-'*' --output json')
+    [[ -f "$UPGRADE_TEST_CASE_ROOT/job-exists" ]] || exit 1
+    if [[ -f "$UPGRADE_TEST_CASE_ROOT/replacement-created" ]]; then
+      yq -o=json "$UPGRADE_TEST_CASE_ROOT/job.yaml" | jq '.metadata.uid = "uid-replacement"'
+    else
+      yq -o=json "$UPGRADE_TEST_CASE_ROOT/job.yaml" | jq '.metadata.uid = "uid-owned"'
+    fi
+    ;;
+  *'--namespace automation-data get job automation-data-nocodb-upgrade-'*' --ignore-not-found --output name')
+    if [[ -f "$UPGRADE_TEST_CASE_ROOT/job-exists" ]]; then
+      printf 'job.batch/%s\n' "$(yq -r '.metadata.name' "$UPGRADE_TEST_CASE_ROOT/job.yaml")"
+    fi
+    ;;
+  *'--namespace automation-data get job automation-data-nocodb-upgrade-'*' --ignore-not-found --output json')
+    if [[ -f "$UPGRADE_TEST_CASE_ROOT/job-exists" ]]; then
+      if [[ -f "$UPGRADE_TEST_CASE_ROOT/replacement-created" ]]; then
+        yq -o=json "$UPGRADE_TEST_CASE_ROOT/job.yaml" | jq '.metadata.uid = "uid-replacement"'
+      else
+        yq -o=json "$UPGRADE_TEST_CASE_ROOT/job.yaml" | jq '.metadata.uid = "uid-owned"'
+      fi
+    fi
+    ;;
   *'--namespace automation-data get configmaps --output json')
-    printf '%s\n' '{"items":[{"metadata":{"name":"automation-data-postgresql-upgrade-abc123"},"data":{"nocodb-extension.sql":"fixed","upgrade-nocodb.sql":"fixed"}}]}'
+    expected="$(jq -c . "$UPGRADE_TEST_EXPECTED_CONFIGMAP")"
+    case "${UPGRADE_TEST_CASE:-}" in
+      stale-configmap)
+        jq -cn '{items:[{metadata:{name:"automation-data-postgresql-upgrade-stale1"},data:{"nocodb-extension.sql":"stale","upgrade-nocodb.sql":"stale"}}]}'
+        ;;
+      wrong-generated-name)
+        jq -cn --argjson expected "$expected" '{items:[($expected | .metadata.name = "automation-data-postgresql-upgrade-wrong1")]}'
+        ;;
+      changed-upgrade-sql)
+        jq -cn --argjson expected "$expected" '{items:[($expected | .data["upgrade-nocodb.sql"] = "changed reviewed SQL")]}'
+        ;;
+      *) jq -cn --argjson expected "$expected" '{items:[$expected]}' ;;
+    esac
+    ;;
+  *'--namespace automation-data get configmap '*"$UPGRADE_TEST_EXPECTED_CONFIGMAP_NAME"' --output json')
+    expected="$(jq -c . "$UPGRADE_TEST_EXPECTED_CONFIGMAP")"
+    case "${UPGRADE_TEST_CASE:-}" in
+      stale-configmap | wrong-generated-name) exit 1 ;;
+      changed-upgrade-sql)
+        jq -cn --argjson expected "$expected" '$expected | .data["upgrade-nocodb.sql"] = "changed reviewed SQL"'
+        ;;
+      *) jq -cn --argjson expected "$expected" '$expected' ;;
+    esac
     ;;
   *'--namespace automation-data create --filename -')
     cat >"$UPGRADE_TEST_CASE_ROOT/job.yaml"
     : >"$UPGRADE_TEST_CASE_ROOT/job-exists"
     printf 'create-job\n' >>"$UPGRADE_TEST_LOG"
     [[ "${UPGRADE_TEST_CASE:-}" != ambiguous-create ]] || exit 74
+    ;;
+  *' wait --for=condition=Complete job/automation-data-nocodb-upgrade-'*' --timeout=5m')
+    case "${UPGRADE_TEST_CASE:-}" in
+      sql-unknown | sql-partial | sql-overlap) exit 72 ;;
+    esac
     ;;
   *'--namespace automation-data wait --for=condition=Complete job/automation-data-nocodb-upgrade --timeout=5m')
     case "${UPGRADE_TEST_CASE:-}" in
@@ -206,13 +288,44 @@ case "$*" in
       printf '%s\n' 'installed_revision=026-nocodb-v1' 'extension_contract_valid=true'
     fi
     ;;
+  *'--namespace automation-data logs job/automation-data-nocodb-upgrade-'*' --container=upgrade')
+    if [[ "${UPGRADE_TEST_CASE:-}" == sql-unknown ]]; then
+      printf '%s\n' 'UNSAFE_RAW_DIAGNOSTIC' 'ERROR: unknown_platform_revision'
+    else
+      printf '%s\n' 'installed_revision=026-nocodb-v1' 'extension_contract_valid=true'
+    fi
+    ;;
   *'--namespace automation-data get pods --selector='*'--output json')
     printf '%s\n' '{"items":[{"metadata":{"name":"owned-upgrade-pod"},"spec":{"containers":[{"env":[{"value":"UNSAFE_POD_SPEC"}]}]},"status":{"phase":"Failed","containerStatuses":[{"name":"upgrade","state":{"terminated":{"reason":"Error","exitCode":3}}}]}}]}'
     ;;
   *'--namespace automation-data delete job automation-data-nocodb-upgrade --wait=true --timeout=2m')
     printf 'delete-job\n' >>"$UPGRADE_TEST_LOG"
+    if [[ "${UPGRADE_TEST_CASE:-}" == replacement-between-inspect-delete ]]; then
+      printf 'unsafe-delete-replacement\n' >>"$UPGRADE_TEST_LOG"
+    else
+      rm -f -- "$UPGRADE_TEST_CASE_ROOT/job-exists"
+    fi
+    ;;
+  *' delete --raw /apis/batch/v1/namespaces/automation-data/jobs/automation-data-nocodb-upgrade-'*' --filename '*)
+	options=''
+	while [[ "$#" -gt 0 ]]; do
+		if [[ "$1" == --filename ]]; then
+			options="${2:-}"
+			break
+		fi
+		shift
+	done
+	[[ -n "$options" ]] || exit 76
+    jq -e '.kind == "DeleteOptions" and .propagationPolicy == "Foreground" and .preconditions.uid == "uid-owned"' \
+      "$options" >/dev/null || exit 76
+    if [[ "${UPGRADE_TEST_CASE:-}" == replacement-between-inspect-delete ]]; then
+      : >"$UPGRADE_TEST_CASE_ROOT/replacement-created"
+      exit 75
+    fi
+    printf 'delete-job\n' >>"$UPGRADE_TEST_LOG"
     rm -f -- "$UPGRADE_TEST_CASE_ROOT/job-exists"
     ;;
+  *'--namespace automation-data wait --for=delete job/automation-data-nocodb-upgrade-'*' --timeout=2m') ;;
   *) echo "unexpected kubectl invocation: $*" >&2; exit 64 ;;
 esac
 EOF
@@ -235,13 +348,21 @@ run_case() {
 	return "$status"
 }
 
-for rejected in stale-source wrong-target missing-backup overlap api-error; do
+for rejected in stale-source wrong-target missing-backup overlap api-error stale-kustomization \
+	stale-configmap wrong-generated-name changed-upgrade-sql; do
 	if run_case "$rejected"; then
 		fail "$rejected was accepted"
 	fi
 	! rg -Fxq create-job "$UPGRADE_TEST_LOG" ||
 		fail "$rejected created a Job"
 done
+
+if run_case replacement-between-inspect-delete; then
+	fail 'replacement Job race was accepted'
+fi
+! rg -Fxq unsafe-delete-replacement "$UPGRADE_TEST_LOG" ||
+	fail 'cleanup issued an unconditioned delete against a replacement Job'
+[[ -e "$case_root/job-exists" ]] || fail 'replacement Job was not retained'
 
 if run_case ambiguous-create; then
 	fail 'ambiguous create response was accepted'
@@ -273,10 +394,10 @@ done
 run_case valid || fail 'valid fixed upgrade was rejected'
 rg -Fxq create-job "$UPGRADE_TEST_LOG" || fail 'valid upgrade did not create its Job'
 rg -Fxq delete-job "$UPGRADE_TEST_LOG" || fail 'valid upgrade did not delete its Job'
-[[ "$(yq -r '[.kind, .metadata.name, .spec.template.spec.containers[0].name,
-  .spec.template.spec.containers[0].env[] | select(.name == "PGPASSWORD") |
-  .valueFrom.secretKeyRef.name + "/" + .valueFrom.secretKeyRef.key] | join("|")' \
-	"$case_root/job.yaml")" == 'Job|automation-data-nocodb-upgrade|upgrade|postgresql-credentials/backup-password' ]] ||
+[[ "$(yq -r '[.kind, (.metadata.name | test("^automation-data-nocodb-upgrade-[0-9a-f]{12}-[0-9]+-[0-9]+$")), .spec.template.spec.containers[0].name,
+	  .spec.template.spec.containers[0].env[] | select(.name == "PGPASSWORD") |
+	  .valueFrom.secretKeyRef.name + "/" + .valueFrom.secretKeyRef.key] | join("|")' \
+	"$case_root/job.yaml")" == 'Job|true|upgrade|postgresql-credentials/backup-password' ]] ||
 	fail 'upgrade Job identity or Secret reference is wrong'
 rg -Fxq 'installed_revision=026-nocodb-v1' "$case_root/output" ||
 	fail 'valid upgrade did not read back the fixed installed revision'
