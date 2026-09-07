@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Focused mutation tests for the parallel Flux resource-state exporters.
+# Focused mutation tests for the bundled Flux resource-state collector.
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -50,23 +50,31 @@ expect_rejected() {
 }
 
 reset_tree
+# The final production state has only the bundled kube-state-metrics collector.
+# Before Task 5 removes the dedicated package, this is expected to fail because the
+# validator still requires that package; after the cleanup it must validate.
+if [[ -e "$tree/kubernetes/apps/monitoring/flux-kube-state-metrics" ]]; then
+  mv "$tree/kubernetes/apps/monitoring/flux-kube-state-metrics" "$fixture/removed-flux-kube-state-metrics"
+fi
+yq -i 'del(.resources[] | select(. == "./flux-kube-state-metrics/ks.yaml"))' \
+  "$tree/kubernetes/apps/monitoring/kustomization.yaml"
 (cd "$tree" && bash "${validator[@]}")
 
 reset_tree
+yq -i 'del(."kube-state-metrics".customResourceState)' "$tree/kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml"
+expect_rejected 'missing bundled Flux collector configuration' 'bundled kube-state-metrics must enable customResourceState'
+
+reset_tree
 yq -i 'del(."kube-state-metrics".customResourceState.config.spec.resources[] | select(.groupVersionKind.kind == "OCIRepository"))' "$tree/kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml"
-expect_rejected 'missing bundled Flux collector' 'bundled Flux customResourceState must exactly match'
+expect_rejected 'missing OCIRepository metric family' 'must configure exactly the five expected Flux resource kinds'
 
 reset_tree
-yq -i '."kube-state-metrics".customResourceState.config.spec.resources[0].metrics[0].help = "changed"' "$tree/kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml"
-expect_rejected 'altered bundled collector help' 'bundled Flux customResourceState content must match'
-
-reset_tree
-yq -i '."kube-state-metrics".customResourceState.config.spec.resources[0].metrics[0].labelsFromPath.ready = ["status", "phase"]' "$tree/kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml"
-expect_rejected 'altered bundled collector labels' 'bundled Flux customResourceState content must match'
+yq -i '."kube-state-metrics".customResourceState.config.spec.resources[0].groupVersionKind.kind = "Bucket"' "$tree/kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml"
+expect_rejected 'wrong Flux resource kind' 'must configure exactly the five expected Flux resource kinds'
 
 reset_tree
 yq -i 'del(."kube-state-metrics".rbac.extraRules[] | select(.apiGroups[0] == "apiextensions.k8s.io"))' "$tree/kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml"
-expect_rejected 'missing bundled CRD discovery permission' 'extraRules must contain only the four dedicated'
+expect_rejected 'missing bundled CRD discovery permission' 'must grant only Flux list/watch and CRD discovery permissions'
 
 reset_tree
 yq -i '."kube-state-metrics".rbac.extraRules[0].resources = ["*"]' "$tree/kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml"
@@ -79,6 +87,10 @@ expect_rejected 'disabled bundled standard collectors' 'standard collectors must
 reset_tree
 yq -i '."kube-state-metrics".prometheus.monitor.http.metricRelabelings = [{"action":"replace", "sourceLabels":["__name__"], "regex":"gotk_resource_info", "targetLabel":"__name__", "replacement":"gotk_candidate_resource_info"}]' "$tree/kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml"
 expect_rejected 'candidate metric rename remains configured' 'must not rename gotk_resource_info'
+
+reset_tree
+yq -i '(.spec.groups[].rules[] | select(.alert == "FluxReconciliationFailure").expr) |= sub("kube-prometheus-stack-kube-state-metrics"; "flux-kube-state-metrics")' "$tree/kubernetes/apps/monitoring/alerts/app/flux.yaml"
+expect_rejected 'wrong Flux alert source' 'FluxReconciliationFailure must select the bundled production source'
 
 reset_tree
 yq -i '.grafana.deploymentStrategy.type = "RollingUpdate"' "$tree/kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml"

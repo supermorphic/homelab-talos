@@ -150,8 +150,8 @@ kube-state-metrics:
       memory: 128Mi
     limits:
       memory: 256Mi
-  # Shadow-collect Flux resource state while the dedicated exporter remains the
-  # sole production alert source. Keep the bundled standard collectors enabled.
+  # Collect Flux resource state for the production alert source while retaining
+  # the bundled standard collectors.
   customResourceState:
     enabled: true
     config:

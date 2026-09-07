@@ -568,11 +568,9 @@ if [[ "$scope" == all || "$scope" == alloy-events ]]; then
 	bash "$alloy_logs_render_validator" "$temp_dir/alloy-events.yaml" Deployment alloy-events 473
 fi
 
-# --- Flux reconciliation alerting: bundled KSM production source + fallback parity ---
+# --- Flux reconciliation alerting: bundled KSM production source ---
 if [[ "$scope" == all || "$scope" == flux-exporter ]]; then
-	fksm='kubernetes/apps/monitoring/flux-kube-state-metrics'
 	cfg="$base/config"
-	fksm_values="$fksm/app/values.yaml"
 	flux_alerts_lib='scripts/lib/flux-alerts.sh'
 	flux_alerts_diagnostics='scripts/diagnose/flux-alerts.sh'
 	# The rule itself now lives in the monitoring alerts application. Its placement, wiring,
@@ -580,9 +578,7 @@ if [[ "$scope" == all || "$scope" == flux-exporter ]]; then
 	# is the content contract that ties the rule to this exporter's configuration.
 	flux_rule='kubernetes/apps/monitoring/alerts/app/flux.yaml'
 
-	for f in "$fksm/ks.yaml" "$fksm/app/kustomization.yaml" "$fksm/app/helmrelease.yaml" \
-		"$fksm_values" "$fksm/app/rbac.yaml" "$fksm/README.md" \
-		"$cfg/flux-podmonitor.yaml" "$flux_rule" \
+	for f in "$cfg/flux-podmonitor.yaml" "$flux_rule" \
 		"$flux_alerts_lib" "$flux_alerts_diagnostics"; do
 		[[ -f "$f" ]] || {
 			echo "Missing Flux monitoring source: $f" >&2
@@ -590,88 +586,78 @@ if [[ "$scope" == all || "$scope" == flux-exporter ]]; then
 		}
 	done
 
-	# Wiring into the respective kustomizations.
-	rg -qx '  - ./flux-kube-state-metrics/ks.yaml' kubernetes/apps/monitoring/kustomization.yaml || {
-		echo 'Refusing: flux-kube-state-metrics is not wired into monitoring/kustomization.yaml.' >&2
-		exit 1
-	}
+	# The controller PodMonitor remains an explicit KPS configuration resource.
 	rg -qx '  - ./flux-podmonitor.yaml' "$cfg/kustomization.yaml"
 
-	# Both exporters collect the exact five Flux kinds, but production rules select
-	# only the bundled KPS source.
-	# The bundled exporter retains its standard collectors and only receives the
-	# incremental CRD-discovery and Flux list/watch rules below.
+	# One bundled exporter owns the Flux signal. Keep its five GVKs and incremental
+	# permissions as literals: an expected value must not be derived from the
+	# configuration it validates.
 	# shellcheck source=scripts/lib/flux-alerts.sh
 	source "$flux_alerts_lib"
 	flux_alerts_source
-	bundled_values_root='.["kube-state-metrics"]'
-	dedicated_gvks="$(flux_alerts_configured_gvks "$fksm_values")"
-	bundled_gvks="$(flux_alerts_configured_gvks "$values" "$bundled_values_root")"
-	[[ "$dedicated_gvks" == "$bundled_gvks" ]] || {
-		echo 'Refusing: bundled Flux customResourceState must exactly match the dedicated five-kind configuration.' >&2
+	bundled_values_root="$flux_alerts_values_root"
+	[[ "$(yq -r "(${bundled_values_root}).customResourceState.enabled // false" "$values")" == 'true' ]] || {
+		echo 'Refusing: bundled kube-state-metrics must enable customResourceState.' >&2
 		exit 1
 	}
-	[[ "$(wc -l <<<"$bundled_gvks" | tr -d ' ')" == '5' ]] || {
-		echo 'Refusing: bundled Flux customResourceState must configure exactly five kinds.' >&2
+	expected_flux_gvks=$'helm.toolkit.fluxcd.io\tv2\tHelmRelease\nkustomize.toolkit.fluxcd.io\tv1\tKustomization\nsource.toolkit.fluxcd.io\tv1\tGitRepository\nsource.toolkit.fluxcd.io\tv1\tHelmRepository\nsource.toolkit.fluxcd.io\tv1\tOCIRepository'
+	bundled_gvks="$(flux_alerts_configured_gvks "$values" "$bundled_values_root" | LC_ALL=C sort)"
+	[[ "$bundled_gvks" == "$expected_flux_gvks" ]] || {
+		echo 'Refusing: bundled kube-state-metrics must configure exactly the five expected Flux resource kinds.' >&2
 		exit 1
 	}
-	cmp <(yq -o=json '.customResourceState' "$fksm_values") \
-		<(yq -o=json '.["kube-state-metrics"].customResourceState' "$values") || {
-		echo 'Refusing: bundled Flux customResourceState content must match the dedicated exporter.' >&2
+	[[ "$(yq -r "(${bundled_values_root}).customResourceState.config.kind // \"\"" "$values")" == 'CustomResourceStateMetrics' ]] || {
+		echo 'Refusing: bundled kube-state-metrics customResourceState must use CustomResourceStateMetrics.' >&2
 		exit 1
 	}
-	[[ "$(yq -r '.["kube-state-metrics"].collectors // "enabled-by-default"' "$values")" == 'enabled-by-default' ]] || {
+	[[ "$(yq -r "(${bundled_values_root}).collectors // \"enabled-by-default\"" "$values")" == 'enabled-by-default' ]] || {
 		echo 'Refusing: bundled kube-state-metrics standard collectors must remain enabled.' >&2
 		exit 1
 	}
-	if yq -r '.["kube-state-metrics"].extraArgs[]? // ""' "$values" | rg -Fxq -- '--custom-resource-state-only=true'; then
+	if yq -r "(${bundled_values_root}).extraArgs[]? // \"\"" "$values" | rg -Fxq -- '--custom-resource-state-only=true'; then
 		echo 'Refusing: bundled kube-state-metrics must not use CRS-only mode.' >&2
 		exit 1
 	fi
-	if yq -o=json '.["kube-state-metrics"].rbac.extraRules' "$values" | rg -q '"\*"'; then
+	if yq -o=json "(${bundled_values_root}).rbac.extraRules" "$values" | rg -q '"\*"'; then
 		echo 'Refusing: bundled kube-state-metrics extraRules must not use wildcards.' >&2
 		exit 1
 	fi
-	dedicated_extra_rules="$(yq ea -o=json '[select(.kind == "ClusterRole") | .rules[] | {"apiGroups": .apiGroups, "resources": .resources, "verbs": .verbs}]' "$fksm/app/rbac.yaml")"
-	bundled_extra_rules="$(yq -o=json '.["kube-state-metrics"].rbac.extraRules' "$values")"
-	[[ "$dedicated_extra_rules" == "$bundled_extra_rules" ]] || {
-		echo 'Refusing: bundled kube-state-metrics extraRules must contain only the four dedicated CRD/Flux list-watch rules.' >&2
+	expected_extra_rules=$'apiextensions.k8s.io|customresourcedefinitions|list,watch\nhelm.toolkit.fluxcd.io|helmreleases|list,watch\nkustomize.toolkit.fluxcd.io|kustomizations|list,watch\nsource.toolkit.fluxcd.io|gitrepositories,helmrepositories,ocirepositories|list,watch'
+	bundled_extra_rules="$(yq -r "
+  [(${bundled_values_root}).rbac.extraRules[] |
+    [(.apiGroups | sort | join(\",\")), (.resources | sort | join(\",\")), (.verbs | sort | join(\",\"))] | join(\"|\")
+  ] | sort | .[]
+" "$values")"
+	[[ "$bundled_extra_rules" == "$expected_extra_rules" ]] || {
+		echo 'Refusing: bundled kube-state-metrics must grant only Flux list/watch and CRD discovery permissions.' >&2
 		exit 1
 	}
-	[[ "$(yq -r '.["kube-state-metrics"].prometheus.monitor.http.metricRelabelings | length' "$values")" == '0' ]] || {
+	[[ "$(yq -r "(${bundled_values_root}).prometheus.monitor.http.metricRelabelings | length" "$values")" == '0' ]] || {
 		echo 'Refusing: bundled kube-state-metrics must not rename gotk_resource_info.' >&2
 		exit 1
 	}
 
-	# Dedicated exporter is custom-resource-state-only with chart RBAC disabled.
-	[[ "$(yq -r '.customResourceState.enabled' "$fksm_values")" == 'true' ]]
-	[[ "$(yq -r '.collectors | length' "$fksm_values")" == '0' ]]
-	rg -q -- '--custom-resource-state-only=true' "$fksm_values"
-	[[ "$(yq -r '.rbac.create' "$fksm_values")" == 'false' ]]
-	[[ "$(yq -r '.prometheus.monitor.enabled' "$fksm_values")" == 'true' ]]
-	fksm_ver="$(yq -r '.spec.chart.spec.version' "$fksm/app/helmrelease.yaml")"
-	[[ -n "$fksm_ver" && "$fksm_ver" != 'null' ]]
-	fksm_resource_count="$(
-		yq -r '.customResourceState.config.spec.resources | length' "$fksm_values"
+	bundled_resource_count="$(
+		yq -r "(${bundled_values_root}).customResourceState.config.spec.resources | length" "$values"
 	)"
-	fksm_unique_help_count="$(
+	bundled_unique_help_count="$(
 		yq -r '
     [
-      .customResourceState.config.spec.resources[].metrics[].help
+      .["kube-state-metrics"].customResourceState.config.spec.resources[].metrics[].help
     ] |
     unique |
     length
-  ' "$fksm_values"
+  ' "$values"
 	)"
-	[[ "$fksm_unique_help_count" -eq "$fksm_resource_count" ]] || {
+	[[ "$bundled_unique_help_count" -eq "$bundled_resource_count" ]] || {
 		echo 'Refusing: every Flux custom-resource collector must use a unique help string.' >&2
 		exit 1
 	}
 	# `$resource` is a yq variable and must not be expanded by the shell.
 	# shellcheck disable=SC2016
-	yq -e '
+yq -e '
   [
-    .customResourceState.config.spec.resources[] |
+    .["kube-state-metrics"].customResourceState.config.spec.resources[] |
     . as $resource |
     .metrics[] |
     .help == (
@@ -681,30 +667,10 @@ if [[ "$scope" == all || "$scope" == flux-exporter ]]; then
     )
   ] |
   all
-' "$fksm_values" >/dev/null || {
+' "$values" >/dev/null || {
 		echo 'Refusing: Flux collector help strings must identify their resource kind.' >&2
 		exit 1
 	}
-
-	# Minimal RBAC: CRD discovery plus only the exported Flux API groups, list/watch,
-	# no wildcards.
-	[[ "$(yq ea '[select(.kind == "ClusterRole") | .rules[].apiGroups[]] | unique | sort | join(",")' "$fksm/app/rbac.yaml")" == 'apiextensions.k8s.io,helm.toolkit.fluxcd.io,kustomize.toolkit.fluxcd.io,source.toolkit.fluxcd.io' ]]
-	[[ "$(yq ea '[select(.kind == "ClusterRole") | .rules[].verbs[]] | unique | sort | join(",")' "$fksm/app/rbac.yaml")" == 'list,watch' ]]
-	[[ "$(yq ea -r 'select(.kind == "ClusterRole") | .rules[] | select(.apiGroups[] == "apiextensions.k8s.io") | .resources | join(",")' "$fksm/app/rbac.yaml")" == 'customresourcedefinitions' ]]
-	if rg -q '\*' "$fksm/app/rbac.yaml"; then
-		echo 'Refusing: flux-kube-state-metrics RBAC must not use wildcards.' >&2
-		exit 1
-	fi
-
-	kustomize build "$fksm/app" >/dev/null
-
-	# Render the dedicated KSM chart: proves the ServiceMonitor + custom-resource-state-only wiring
-	# and that the chart emits no broad ClusterRole (rbac.create: false).
-	HELM_REPOSITORY_CONFIG="$temp_dir/repos.yaml" HELM_REPOSITORY_CACHE="$temp_dir/cache" \
-		helm template flux-kube-state-metrics kube-state-metrics --repo https://prometheus-community.github.io/helm-charts --version "$fksm_ver" --namespace monitoring --values "$fksm_values" >"$temp_dir/fksm.yaml"
-	[[ "$(yq ea -r '[select(.kind == "ServiceMonitor")] | length' "$temp_dir/fksm.yaml")" -ge 1 ]]
-	[[ "$(yq ea -r '[select(.kind == "ClusterRole")] | length' "$temp_dir/fksm.yaml")" == '0' ]]
-	rg -q -- '--custom-resource-state-only=true' "$temp_dir/fksm.yaml"
 
 	# The KPS render, not only source values, proves the production collector receives
 	# its config while retaining the canonical metric name before ingest.
@@ -779,17 +745,13 @@ if [[ "$scope" == all || "$scope" == flux-exporter ]]; then
 	[[ "$frf_expr" == *'ready!="True"'* ]]
 	[[ "$frf_expr" == *'suspended!="true"'* ]]
 	frm_expr="$(yq -r '.spec.groups[].rules[] | select(.alert == "FluxResourceMetricsMissing") | .expr' "$fr")"
-	while IFS= read -r expected_kind; do
+	while IFS=$'\t' read -r _group _version expected_kind; do
 		[[ -n "$expected_kind" ]] || continue
 		[[ "$frm_expr" == *"service=\"$flux_alerts_service\",namespace=\"monitoring\",customresource_kind=\"$expected_kind\""* ]] || {
 			echo "Refusing: FluxResourceMetricsMissing does not watch bundled $expected_kind metrics." >&2
 			exit 1
 		}
-	done < <(
-		yq -r '
-    .customResourceState.config.spec.resources[].groupVersionKind.kind
-  ' "$fksm_values"
-	)
+	done <<<"$expected_flux_gvks"
 	# Inspect the rule expressions only (not explanatory comments): none may use the metric
 	# Flux v2 removed.
 	if yq -r '.spec.groups[].rules[].expr' "$fr" | rg -q 'gotk_reconcile_condition'; then
@@ -813,7 +775,7 @@ case "$scope" in
 all)
 	echo 'Monitoring source, encrypted Grafana Secret, dependency graph, values, HTTPRoutes, pinned kube-prometheus-stack, Loki, Alloy logs, and Alloy Events renders, Grafana Loki datasource, and Flux reconciliation alerting (bundled KSM + PodMonitor + rule) passed validation.'
 	;;
-flux-exporter) echo 'Flux exporter source, dedicated fallback and bundled renders, explicit production selection, and rollback parity wiring passed validation.' ;;
+flux-exporter) echo 'Bundled Flux resource-state collector, explicit production selection, and monitoring alert wiring passed validation.' ;;
 loki) echo 'Loki source and render passed validation.' ;;
 alloy-logs) echo 'Alloy Logs source and render passed validation.' ;;
 alloy-events) echo 'Alloy Events source and render passed validation.' ;;

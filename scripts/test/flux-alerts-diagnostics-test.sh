@@ -32,7 +32,7 @@ assert_eq 'app.kubernetes.io/name=kube-state-metrics,app.kubernetes.io/instance=
   "$(flux_alerts_workload_selector)" 'bundled workload selector'
 assert_eq $'helm.toolkit.fluxcd.io\tv2\tHelmRelease\nkustomize.toolkit.fluxcd.io\tv1\tKustomization\nsource.toolkit.fluxcd.io\tv1\tGitRepository\nsource.toolkit.fluxcd.io\tv1\tHelmRepository\nsource.toolkit.fluxcd.io\tv1\tOCIRepository' \
   "$(flux_alerts_configured_gvks "$flux_alerts_values" "$flux_alerts_values_root" | sort)" \
-  'dedicated configured GVKs'
+  'bundled configured GVKs'
 assert_eq $'helm.toolkit.fluxcd.io\tv2\tHelmRelease\nkustomize.toolkit.fluxcd.io\tv1\tKustomization\nsource.toolkit.fluxcd.io\tv1\tGitRepository\nsource.toolkit.fluxcd.io\tv1\tHelmRepository\nsource.toolkit.fluxcd.io\tv1\tOCIRepository' \
   "$(flux_alerts_configured_gvks kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml '.["kube-state-metrics"]' | sort)" \
   'bundled configured GVKs'

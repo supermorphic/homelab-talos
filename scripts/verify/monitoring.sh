@@ -18,6 +18,12 @@ exporter_name="$flux_alerts_service"
 exporter_release="$flux_alerts_release"
 exporter_values="$flux_alerts_values"
 exporter_values_root="$flux_alerts_values_root"
+expected_flux_gvks=$'helm.toolkit.fluxcd.io\tv2\tHelmRelease\nkustomize.toolkit.fluxcd.io\tv1\tKustomization\nsource.toolkit.fluxcd.io\tv1\tGitRepository\nsource.toolkit.fluxcd.io\tv1\tHelmRepository\nsource.toolkit.fluxcd.io\tv1\tOCIRepository'
+configured_flux_gvks="$(flux_alerts_configured_gvks "$exporter_values" "$exporter_values_root" | LC_ALL=C sort)"
+[[ "$configured_flux_gvks" == "$expected_flux_gvks" ]] || {
+  echo 'Bundled kube-state-metrics must configure exactly the five expected Flux resource kinds.' >&2
+  exit 1
+}
 prometheus_base_url='https://prometheus.lab.supermorphic.com'
 prometheus_resolve="prometheus.lab.supermorphic.com:443:${gateway_ip}"
 alertmanager_base_url='https://alertmanager.lab.supermorphic.com'
@@ -107,10 +113,10 @@ metric_kinds="$(flux_alerts_metric_kinds <<<"$metric_response")"
 while IFS=$'\t' read -r _group _version expected_kind; do
   [[ -n "$expected_kind" ]] || continue
   rg -Fxq "$expected_kind" <<<"$metric_kinds" || {
-    echo "Prometheus gotk_resource_info is missing configured Flux kind $expected_kind." >&2
+    echo "Prometheus gotk_resource_info is missing expected Flux kind $expected_kind." >&2
     exit 1
   }
-done < <(flux_alerts_configured_gvks "$exporter_values" "$exporter_values_root")
+done <<<"$expected_flux_gvks"
 
 rules_response="$(
   flux_alerts_prometheus_get "$prometheus_base_url" "$prometheus_resolve" \
@@ -179,4 +185,4 @@ yq -r '
   }
 
 just kube foundation-verify
-echo 'Monitoring acceptance passed: the stack and Flux exporter are Ready; Prometheus discovered an up exporter target, ingested every configured Flux resource kind, loaded both healthy Flux alert rules, and has an active Alertmanager connection with the expected ntfy route. This does not send or prove external ntfy delivery.'
+echo 'Monitoring acceptance passed: the stack and bundled Flux collector are Ready; Prometheus discovered an up exporter target, ingested every expected Flux resource kind, loaded both healthy Flux alert rules, and has an active Alertmanager connection with the expected ntfy route. This does not send or prove external ntfy delivery.'
