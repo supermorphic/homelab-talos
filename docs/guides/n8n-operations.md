@@ -728,11 +728,13 @@ cannot read messages.
    to diagnose a failed check.
 6. In a `finally`-style cleanup, unpublish the two recorded fixture IDs and the temporary
    handler copy. Delete all recorded fixture and temporary-handler executions, then
-   remove those three test workflows and only their temporary credentials. The fixture
+   archive those three test workflows and delete only their temporary credentials. The fixture
    records can include the temporary authentication header; include all four fixture
-   requests from a successful acceptance session and any extra attempts. If deleting a
-   workflow also removes its executions, verify their absence. Verify the temporary
-   workflows are absent and their private production webhooks no
+   requests from a successful acceptance session and any extra attempts. For pinned n8n
+   `2.36.7`, archive is the available workflow-removal action; the UI does not offer
+   permanent workflow deletion. Verify the recorded executions and temporary credentials
+   are absent, the archived workflows are excluded from normal workflow access, and their
+   private production webhooks no
    longer execute. Keep the shared handler and its publisher credential. Cleanup failure
    means acceptance is incomplete even if notifications arrived.
 
@@ -789,11 +791,16 @@ that a fixture still runs means cleanup is incomplete. After these checks, remov
 temporary test token from the password manager.
 
 **Activation status (2026-09-07):** the merged identity and workload changes are deployed;
-live n8n, ntfy, and Alertmanager adapter verification passed. The operator reported
-credential synchronization complete; the publisher credential exists and the shared
-handler is published. The temporary test workflows are prepared but unpublished.
-Automatic delivery, bounded-failure behavior, and test cleanup remain pending. Do not
-treat handler publication or offline CI as proof of ntfy or phone delivery.
+live n8n, ntfy, and Alertmanager adapter verification passed. Credential synchronization
+is complete, and the shared handler is published. Both automatic failure fixtures each
+produced exactly one normal-priority `homelab` notification with the expected bounded
+content and matching execution link. The invalid-publisher test made one publisher
+attempt, received `401`, produced no notification, and produced no recursive handler
+execution during an observation window longer than 60 seconds. Delivery succeeded again
+after restoring the shared handler. Exactly five test executions and two temporary
+credentials were deleted, all three temporary workflows were archived, and both private
+fixture paths returned `404`. The shared handler and its dedicated publisher credential
+remain active.
 
 ## Day-2 operation and controlled assurance
 
