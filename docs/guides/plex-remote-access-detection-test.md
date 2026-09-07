@@ -43,7 +43,7 @@ pattern.
 | `plex-verify`, `cilium-verify`, `monitoring-verify`, and `alertmanager-ntfy-verify` | Observe live readiness and implemented wiring assertions | Approved scoped verification; no synthetic notification |
 | `plex-network-observe` | Opens a bounded Hubble port-forward and prints live Plex flows | Operator-only read diagnostic because it exposes private runtime source data |
 | `hping3` or an approved equivalent | Sends deliberate half-open SYN traffic to the production Plex port | Operator-attended disruptive external activity |
-| `flux-alert-delivery-test` | Creates and removes a temporary failing Flux object to prove firing and resolved delivery | Separate operator-run state-changing test |
+| `flux-alert-delivery-test` | Creates and removes a temporary failing Flux object; checks alert lifecycle but aggregate counters cannot prove its notification delivery | Separate operator-run state-changing test |
 
 The external traffic generator requires suitable authority on a host outside Kubernetes.
 Scoped cluster credentials do not authorize an agent to run it. A confirmation guard on

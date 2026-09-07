@@ -116,7 +116,7 @@ the action.
 | `ntfy-publish-test` | Runs `ntfy-verify`, then publishes three real positive ACL test messages | Operator-run mutating test; exact confirmation acknowledges that clients will receive messages |
 | `alertmanager-ntfy-verify` | Uses observer access to check the adapter and Alertmanager's loaded receiver/route | Agent-autonomous when an approved task needs scoped verification; sends no notification |
 | `ntfy-consumer-sync seerr` | Decrypts repository credentials, sends a Seerr test notification, then changes Seerr's stored ntfy settings | Operator-run: requires the age identity and changes application-owned state |
-| `flux-alert-delivery-test` | Creates and removes a temporary failing Flux object to prove firing and resolved delivery | Operator-run unless an agent is explicitly authorized for that invocation and its required elevated credential |
+| `flux-alert-delivery-test` | Creates and removes a temporary failing Flux object; checks alert lifecycle and reports delivery evidence limits | Operator-run unless an agent is explicitly authorized for that invocation and its required elevated credential |
 | `bootstrap ntfy` | Resumes and verifies an intentionally suspended Flux deployment | Operator-run live mutation using the administrator path |
 
 Repository validation such as `mise exec -- just ci` is agent-owned and does not need
@@ -294,8 +294,8 @@ mise exec -- just kube alertmanager-ntfy-verify
 
 This proves that the adapter Kustomization and HelmRelease are Ready, the Deployment has
 rolled out, and Alertmanager's loaded runtime configuration contains the ntfy receiver
-and route. It does not send a webhook or notification. Use the end-to-end test below to
-prove actual firing and resolved delivery.
+and route. It does not send a webhook or notification. The end-to-end test below
+exercises the alert lifecycle; its aggregate counters alone cannot prove delivery.
 
 ### Seerr
 
@@ -365,8 +365,9 @@ ntfy-consumer-sync seerr
 flux-alert-delivery-test
   → creates temporary failing Flux state
   → waits for the production alert interval
-  → proves firing and resolved webhook delivery
+  → checks alert routing and aggregate webhook activity
   → removes its exact temporary resource
+  → reports delivery as inconclusive without test-specific publication evidence
 ```
 
 The full Alertmanager delivery test is intentionally state-changing and takes about 25
@@ -379,13 +380,19 @@ FLUX_ALERT_E2E_CONFIRM='test:flux-alert:firing-resolved' \
 
 The test creates one uniquely named Flux Kustomization that references a deliberately
 nonexistent source. It waits for the real 15-minute `FluxReconciliationFailure` rule,
-proves the alert entered Alertmanager's ntfy route and the synchronous webhook succeeded,
-deletes only its run-owned Kustomization, then proves the resolved webhook succeeded.
-Its cleanup trap also attempts removal on failure.
+checks that the exact alert entered Alertmanager's ntfy route, deletes only its run-owned
+Kustomization, and checks alert resolution. Cleanup also runs on failure; a failed
+deletion or absence check must remain visible.
 
-The metric and API oracles prove webhook delivery to ntfy, not the phone display. Human
-acceptance is still required: confirm the iPhone receives the warning and matching
-`Resolved:` messages on `homelab` with the generated resource name.
+Webhook counters combine all ntfy notifications. Increases with no recorded failures
+are useful supporting evidence, but unrelated alerts can cause those increases. The
+test therefore returns a non-success, inconclusive result rather than claiming that
+its firing and resolved messages were published. Do not use that result to approve
+fallback removal or expand credential access to obtain a pass.
+
+Record test-specific publication evidence separately. Human acceptance can confirm
+the iPhone receives the warning and matching `Resolved:` messages on `homelab` with
+the generated resource name; the automated test does not establish phone receipt.
 
 For Seerr, also perform a real application acceptance event after synchronization. Use
 one of the three enabled event classes and confirm the resulting `media` notification on
@@ -567,7 +574,7 @@ Work from the client toward the producer so each step isolates one boundary:
    health, identity, mirror, or ACL failures before investigating a producer.
 5. **Producer path:**
    - Alertmanager: run `mise exec -- just kube alertmanager-ntfy-verify`, then use the
-     guarded delivery test when actual firing/resolved proof is needed.
+     guarded delivery test for alert lifecycle evidence, with the attribution limits above.
    - Seerr: review the managed fields and rerun the guarded consumer sync. A failed test
      leaves the stored settings unchanged.
 6. **Positive publish:** Run the guarded `ntfy-publish-test`. If direct publishing
