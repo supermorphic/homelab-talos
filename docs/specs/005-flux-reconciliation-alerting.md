@@ -22,9 +22,9 @@ targets.
 
 Per-resource readiness uses `gotk_resource_info` from the kube-state-metrics exporter
 bundled with kube-prometheus-stack in `monitoring`. Production consumers select that
-source explicitly. The dedicated `flux-kube-state-metrics` release remains available
-for rollback and comparison; it disables standard collectors, so it does not duplicate
-the bundled exporter's `kube_*` metrics. Both collect these Flux kinds:
+source explicitly. The dedicated `flux-kube-state-metrics` release supplied the original
+signal and the migration fallback, with standard collectors disabled to avoid duplicate
+`kube_*` metrics. The bundled exporter retains these five Flux kinds:
 
 - Kustomization;
 - HelmRelease;
@@ -38,15 +38,16 @@ header, so the help strings are part of the correctness contract.
 
 ## Isolation and authority boundary
 
-The dedicated exporter isolates Flux readiness collection from kube-prometheus-stack
-values changes. Reported upgrade failures on July 22, 2026 motivated this separation.
+The dedicated exporter originally isolated Flux readiness collection from
+kube-prometheus-stack values changes. Reported upgrade failures on July 22, 2026
+motivated this separation.
 The September 5 investigation below revises the original assumption that all values
-changes fail; it does not yet establish a validated exporter migration.
+changes fail; that upgrade alone did not establish a validated exporter migration.
 
-The dedicated exporter has only `list` and `watch` access to the five Flux resource kinds
-and to CustomResourceDefinitions needed for collector discovery. It cannot read Secrets or
-mutate cluster state. The chart's broad RBAC generation is disabled and the repository
-owns the focused ClusterRole and binding.
+The dedicated exporter had only `list` and `watch` access to the five Flux resource kinds
+and to CustomResourceDefinitions needed for collector discovery. It could not read Secrets or
+mutate cluster state. The chart's broad RBAC generation was disabled and the repository
+owned the focused ClusterRole and binding.
 
 Bundled collection adds the same Flux and CRD-discovery permissions to the shared
 exporter's existing role. Its standard Kubernetes collection permissions remain in place.
@@ -81,9 +82,9 @@ privacy impact reserved for `critical` alerts.
 ## Validation model
 
 Cluster-independent checks validate the custom-resource configuration, unique help
-strings, minimal RBAC, PrometheusRule syntax, and the behavior of readiness, suspension,
-and partial metric-loss expressions. This catches errors that a successful YAML render
-cannot detect.
+strings, narrow added Flux permissions, PrometheusRule syntax, and the behavior of
+readiness, suspension, and partial metric-loss expressions. This catches errors that a
+successful YAML render cannot detect.
 
 The guarded diagnostic workflow checks the independent live stages: exporter target
 health, presence of all five resource kinds, rule health, Alertmanager connectivity, and
@@ -94,12 +95,11 @@ The implemented confirmation-guarded firing-and-resolved scenario creates a run-
 Flux Kustomization with a deliberately missing source. It is designed to exercise the
 real path from Flux resource failure through `gotk_resource_info`, the production
 15-minute rule, Alertmanager, `alertmanager-ntfy`, and ntfy, then prove resolution after
-removing the failure. The retained lineage records the scenario's implementation and
-offline validation, but leaves its post-merge live execution pending. It is therefore a
-defined acceptance test, not completed firing-and-resolved evidence. Aggregate webhook
-counters cannot attribute publication to the test alert. Without independent evidence
-for its firing and resolved messages, delivery remains inconclusive and the fallback
-stays in place. Human handset receipt is a separate acceptance claim.
+removing the failure. Aggregate webhook counters cannot attribute publication to the
+test alert, so the automated scenario reports delivery as inconclusive. Acceptance
+requires independent evidence for the matching firing and resolved messages alongside
+the lifecycle and cleanup checks. Human handset receipt is recorded separately from
+the automated result.
 
 ## Rejected alternatives
 
@@ -123,9 +123,9 @@ deduplication, inhibition, repeat, and resolution semantics.
 ## Consequences
 
 The original dedicated design made Flux object failures visible independently of changes
-to the shared monitoring release. The retained exporter consumes a small amount of CPU
-and memory and introduces one additional component to operate, but it has a narrow read-only authority surface
-and produces no duplicate standard Kubernetes metrics.
+to the shared monitoring release. It added a workload and a separate release to operate,
+with a narrow read-only authority surface and no duplicate standard Kubernetes metrics.
+Consolidation removes that operational overhead while preserving Flux readiness collection.
 
 ## September 2026 upgrade debrief
 
@@ -158,6 +158,11 @@ all five kinds. Production consumers now select the bundled source, with standar
 Kubernetes metrics and existing alert semantics preserved. Explicit source selection
 prevents parallel collection from duplicating alerts or concealing loss of production
 metrics. Post-cutover monitoring and API-backed parity passed, including a full
-15-minute healthy observation interval. Firing-and-resolved delivery acceptance remains
-pending; the dedicated exporter stays available until that gate permits removal. Detailed rollout
+15-minute healthy observation interval. On September 7, the operator-run scenario
+exercised the production 15-minute rule and the operator confirmed receipt of the
+matching warning and resolved notifications from the bundled source. Independent
+cleanup and monitoring checks passed, satisfying the delivery gate for removal.
+The final cleanup removes the separate release and migration-only parity tooling,
+retaining independent five-kind, source-selection, and permission checks. Actual
+resource removal still requires post-merge reconciliation verification. Detailed rollout
 sequencing and test procedures belong in the implementation plan.
