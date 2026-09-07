@@ -322,10 +322,7 @@ def run_check(api: GitHubAPI) -> int:
             print(f"- {finding}")
         return 1
     print("GitHub protection check: PASS")
-    print(
-        "main accepts squash-merged pull requests only after strict GitHub Actions "
-        "merge-gate."
-    )
+    print("main accepts squash-merged pull requests only after strict GitHub Actions merge-gate.")
     return 0
 
 
