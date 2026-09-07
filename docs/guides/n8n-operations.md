@@ -1,8 +1,9 @@
 # n8n operations
 
 This guide activates and operates the n8n platform in its required dependency order. The
-private editor is `https://n8n.lab.supermorphic.com`. The only public interface is the
-exact production webhook `https://hooks.lab.supermorphic.com/webhook/platform-canary`.
+private editor is `https://n8n.lab.supermorphic.com`. The public interface permits only
+the exact production paths `/webhook/platform-canary` and `/webhook/theirstack-jobs`
+on `https://hooks.lab.supermorphic.com` after their respective activation checkpoints.
 PostgreSQL, the editor, the REST API, metrics, test webhooks, and all other webhook paths
 stay private.
 
@@ -623,6 +624,40 @@ Keep the shared DNS record, certificate, Gateway, and UniFi TCP/443 forward when
 approved webhook path remains. If this is the last public integration, use
 [public exposure rollback](#public-exposure-rollback), including route pruning before
 suspension and router-forward removal ordering.
+
+### TheirStack activation checkpoint
+
+The `/webhook/theirstack-jobs` match is the integration change for
+[issue 380](https://github.com/supermorphic/homelab-talos/issues/380). Its receiver,
+application SQL, credentials, and provider lifecycle belong to career-ops. Follow the
+merged [career-ops activation guide](https://github.com/supermorphic/career-ops/blob/main/docs/guides/theirstack-activation.md)
+alongside the integration procedure above.
+
+Before merging this route addition, require private isolated receiver acceptance,
+retirement of acceptance resources, and verified production credential binding. Prove
+raw-body HMAC verification, rejection without application writes, duplicate handling,
+and commit-before-success in the isolated environment. Never send synthetic jobs to
+the production receiver or database. Account setup, credential binding, and provider
+activation remain attended operations with separate operator authorization.
+
+After the reviewed route change merges and Flux reconciles it, run
+`mise exec -- just kube n8n-verify`. Its route inventory requires both exact paths;
+it does not send a delivery or prove the receiver's authentication or transaction
+behavior. Off-network acceptance must also confirm neighboring paths such as
+`/webhook/theirstack-jobs-extra` and `/webhook-test/theirstack-jobs` return `404`,
+and bootstrap, configuration, metrics, editor, API, and root paths remain private.
+Confirm the existing Platform Canary check remains green.
+
+Use only the career-ops guarded activation flow to establish one from-now `job.new`
+subscription, with no historical import and `job.closed` disabled. Require a genuine
+signed provider delivery and private evidence that its transaction committed before
+the successful response. Do not create an extra provider webhook or use a synthetic
+production delivery to complete acceptance.
+
+Record repository validation, deployed route verification, and provider acceptance
+separately. Until the operator confirms the private prerequisites and genuine delivery,
+integration activation and live acceptance remain pending. Keep credentials, private
+payloads, signatures, and job descriptions out of published evidence.
 
 ## Day-2 operation and controlled assurance
 

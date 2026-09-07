@@ -19,7 +19,9 @@ The target request path is:
 Internet sender
     |
     v
-public Envoy Gateway -- hooks.lab.supermorphic.com/webhook/platform-canary --+
+public Envoy Gateway -- hooks.lab.supermorphic.com --------------------------+
+                       /webhook/platform-canary (Exact)                     |
+                       /webhook/theirstack-jobs (Exact)                     |
                                                                               |
 private operator -- n8n.lab.supermorphic.com ------------------------------> n8n
                                                                               |
@@ -207,11 +209,20 @@ Gateway accepts explicitly attached routes and does not expose an n8n administra
 path. Its listener accepts routes only from the dedicated public routing namespace, so an
 application namespace cannot attach another backend directly.
 
-The initial HTTPRoute uses an `Exact` path match for `/webhook/platform-canary`. It does
-not expose `/webhook/*`, `/webhook-test/*`, or another prefix. Each later production n8n
-integration, including TheirStack, requires its own exact path to be added through
-Git/Flux. Publishing an n8n workflow alone therefore does not make its webhook Internet
-reachable.
+The HTTPRoute retains the `Exact` match for `/webhook/platform-canary` and adds the
+`Exact` match `/webhook/theirstack-jobs` for issue 380, both targeting the existing
+`automation/n8n:5678` Service through the existing ReferenceGrant. It does not expose
+`/webhook/*`, `/webhook-test/*`, or another prefix. The source validator, live route
+verifier, and smoke assertions require both approved paths. Each later production n8n
+integration requires its own exact path through Git/Flux. Publishing an n8n workflow
+alone therefore does not make its webhook Internet reachable.
+
+The TheirStack addition requires private isolated receiver acceptance before merge;
+deployment and genuine provider delivery acceptance remain separate checkpoints in
+the [operations guide](../guides/n8n-operations.md#theirstack-activation-checkpoint).
+The route change adds no domain database, credential, Cilium policy, DNS name, or
+router forward. Application ingestion and attended provider activation belong to
+career-ops.
 
 Future applications may reuse the same hostname only through separately reviewed,
 non-overlapping exact paths or top-level prefixes. Adding a Service does not make it
@@ -220,9 +231,9 @@ Unmatched paths have no backend route.
 
 TLS and route matching authenticate neither the sender nor the event. Every production
 webhook workflow must enforce an integration-appropriate secret, signature, or token.
-The synthetic canary uses n8n header authentication. The later TheirStack integration
-must use the provider's verified signing or authentication contract once that contract is
-confirmed.
+The synthetic canary uses n8n header authentication. The TheirStack receiver must
+verify `X-TheirStack-Signature-256` using HMAC-SHA256 over the unchanged raw body and
+a timing-safe comparison, and commit application data before acknowledging success.
 
 The cluster's internal DNS answer for `hooks.lab.supermorphic.com` resolves to the
 dedicated public Envoy LoadBalancer, not the internal Gateway. The always-active public
@@ -598,7 +609,8 @@ Focused tests and rendered-manifest assertions verify:
   deprecated `WEBHOOK_URL`;
 - a Deployment mounting the n8n `ReadWriteOnce` claim uses `Recreate`;
 - all three claims are Longhorn-backed and carry Flux prune protection;
-- the only initial public route is an `Exact` match for `/webhook/platform-canary`, with
+- the public route has only `Exact` matches for `/webhook/platform-canary` and
+  `/webhook/theirstack-jobs`, with
   no editor, API, metrics, PostgreSQL, test-webhook, prefix, or catch-all route;
 - only the public routing namespace receives the cross-namespace Service grant;
 - network policies implement the approved ingress and egress boundaries;
@@ -630,7 +642,11 @@ Combined read-only and attended live acceptance verifies:
 
 1. Flux reports the public Gateway, PostgreSQL, n8n, and monitoring resources ready.
 2. The n8n UI works through the private hostname and has no public route.
-3. The public hostname serves only the exact `/webhook/platform-canary` path.
+3. The public hostname serves only the exact `/webhook/platform-canary` and
+   `/webhook/theirstack-jobs` paths after their activation checkpoints; all other paths
+   have no public backend route. TheirStack additionally requires isolated authentication
+   and transaction tests, then a genuine signed production delivery persisted before
+   acknowledgement, as described in the operations guide.
 4. An authenticated canary request returns its correlation value and execution ID only
    after a matching successful execution is immediately retrievable from n8n history;
    invalid authentication fails without a successful execution.

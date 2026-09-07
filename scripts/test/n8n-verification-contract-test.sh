@@ -355,7 +355,10 @@ cat >"$temp_dir/routes.json" <<'EOF'
         "hostnames": ["hooks.lab.supermorphic.com"],
         "parentRefs": [{"name": "public-webhooks", "sectionName": "https"}],
         "rules": [{
-          "matches": [{"path": {"type": "Exact", "value": "/webhook/platform-canary"}}],
+          "matches": [
+            {"path": {"type": "Exact", "value": "/webhook/platform-canary"}},
+            {"path": {"type": "Exact", "value": "/webhook/theirstack-jobs"}}
+          ],
           "backendRefs": [{"group": "", "kind": "Service", "name": "n8n", "namespace": "automation", "port": 5678}]
         }]
       },
@@ -374,10 +377,24 @@ expect_true 'canonical routes with Gateway API defaults' n8n_routes_match_contra
   full "$temp_dir/routes.json"
 expect_true 'private route only' n8n_routes_match_contract \
   private <(yq -p=json -o=json '.items = [.items[0]]' "$temp_dir/routes.json")
+expect_false 'missing TheirStack path' n8n_routes_match_contract \
+  full <(yq -p=json -o=json 'del(.items[1].spec.rules[0].matches[1])' "$temp_dir/routes.json")
+expect_false 'missing existing Platform Canary path' n8n_routes_match_contract \
+  full <(yq -p=json -o=json 'del(.items[1].spec.rules[0].matches[0])' "$temp_dir/routes.json")
+expect_false 'TheirStack prefix exposes neighboring paths' n8n_routes_match_contract \
+  full <(yq -p=json -o=json '.items[1].spec.rules[0].matches[1].path.type = "PathPrefix"' "$temp_dir/routes.json")
+for unapproved_path in / /webhook/ /webhook/theirstack-jobs-extra \
+  /webhook-test/theirstack-jobs /webhook/theirstack-configuration \
+  /webhook/career-ops-database-bootstrap /webhook/career-ops-metrics /rest /api/v1 /metrics; do
+  expect_false "unapproved path $unapproved_path" n8n_routes_match_contract \
+    full <(UNAPPROVED_PATH="$unapproved_path" yq -p=json -o=json \
+      '.items[1].spec.rules[0].matches += [{"path":{"type":"Exact","value":strenv(UNAPPROVED_PATH)}}]' \
+      "$temp_dir/routes.json")
+done
 yq -p=json -o=json '.items[1].spec.rules[0].matches +=
   [{"path":{"type":"PathPrefix","value":"/webhook"}}]' \
   "$temp_dir/routes.json" >"$temp_dir/routes-broad.json"
-expect_false 'second broader public match' n8n_routes_match_contract \
+expect_false 'additional broader public match' n8n_routes_match_contract \
   full "$temp_dir/routes-broad.json"
 yq -p=json -o=json '.items += [{
   "apiVersion":"gateway.networking.k8s.io/v1",

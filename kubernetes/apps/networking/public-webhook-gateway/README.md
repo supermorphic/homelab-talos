@@ -2,8 +2,12 @@
 
 This package owns the isolated public Envoy data plane for
 `hooks.lab.supermorphic.com`. It uses `192.168.90.39` as the dedicated webhook
-VIP, with the route reconciliation kept suspended until the operator publishes
-and authenticates the canary.
+VIP. Initial route activation requires the operator to publish and authenticate
+the canary. The HTTPRoute allowlists only the exact `/webhook/platform-canary` and
+`/webhook/theirstack-jobs` paths to `automation/n8n:5678`. Each integration must pass
+the [activation procedure](../../../../docs/guides/n8n-operations.md#add-a-public-webhook-integration)
+before its route change merges; repository validation alone does not prove provider
+acceptance.
 
 The package also owns an annotated `DNSEndpoint` that makes the internal Pi-hole
 answer resolve this hostname to the dedicated VIP before route activation. The
