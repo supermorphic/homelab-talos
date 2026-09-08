@@ -145,7 +145,11 @@ values='kubernetes/apps/automation-data/nocodb/app/values.yaml'
   fail 'the NocoDB explicit environment contract is incorrect'
 ! rg -q 'envFrom|NC_INVITE_ONLY_SIGNUP|NC_REDIS_URL' "$values" ||
   fail 'NocoDB values must not bulk-load credentials or configure unsupported settings'
-[[ "$(yq -r '[.resources[]] | sort | join(",")' kubernetes/apps/automation-data/nocodb/app/kustomization.yaml)" == './ciliumnetworkpolicy.yaml,./helmrelease.yaml,./httproute.yaml,./metadata-bootstrap-job.yaml,./ocirepository.yaml' ]] ||
+expected_resources='./ciliumnetworkpolicy.yaml,./helmrelease.yaml,./httproute.yaml,./metadata-bootstrap-job.yaml,./ocirepository.yaml'
+if [[ -f kubernetes/apps/automation-data/nocodb/app/nocodb-credentials.sops.yaml ]]; then
+  expected_resources='./ciliumnetworkpolicy.yaml,./helmrelease.yaml,./httproute.yaml,./metadata-bootstrap-job.yaml,./nocodb-credentials.sops.yaml,./ocirepository.yaml'
+fi
+[[ "$(yq -r '[.resources[]] | sort | join(",")' kubernetes/apps/automation-data/nocodb/app/kustomization.yaml)" == "$expected_resources" ]] ||
   fail 'the NocoDB app kustomization resource set is incorrect'
 
 ks='kubernetes/apps/automation-data/nocodb/ks.yaml'

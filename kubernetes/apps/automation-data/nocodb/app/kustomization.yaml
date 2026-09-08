@@ -8,6 +8,7 @@ resources:
   - ./httproute.yaml
   - ./metadata-bootstrap-job.yaml
   - ./ocirepository.yaml
+  - ./nocodb-credentials.sops.yaml
 configMapGenerator:
   - name: nocodb-values
     files:

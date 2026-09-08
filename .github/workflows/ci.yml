@@ -31,8 +31,10 @@ jobs:
 
       - name: Install mise and repository tools
         # Installs the exact toolchain pinned in .mise.toml / mise.lock.
+        # Temporary: avoid selecting a mise tag before its release assets exist.
         uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
         with:
+          version: 2026.9.2
           install: true
           cache: true
 
@@ -85,8 +87,10 @@ jobs:
           persist-credentials: false
 
       - name: Install mise and repository tools
+        # Temporary: avoid selecting a mise tag before its release assets exist.
         uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
         with:
+          version: 2026.9.2
           install: true
           cache: true
 

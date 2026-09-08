@@ -7,6 +7,7 @@ cd "$repo_root"
 workflow=.github/workflows/ci.yml
 checkout_action='actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
 mise_action='jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea'
+mise_version='2026.9.2'
 upload_action='actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'
 fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/ci-workflow-contract-test.XXXXXX")"
 trap 'rm -rf -- "$fixture_root"' EXIT
@@ -75,14 +76,20 @@ mise exec -- yq -e '
 
 # These GitHub expressions are literal workflow values, not shell expansions.
 # shellcheck disable=SC2016
-CHECKOUT_ACTION="$checkout_action" MISE_ACTION="$mise_action" \
+CHECKOUT_ACTION="$checkout_action" MISE_ACTION="$mise_action" MISE_VERSION="$mise_version" \
 	mise exec -- yq -e '
   (.jobs.plan-shadow.steps | map(select(.uses == strenv(CHECKOUT_ACTION))) | length) == 1 and
   (.jobs.plan-shadow.steps[] | select(.uses == strenv(CHECKOUT_ACTION)) | .with.ref) ==
     "${{ github.event_name == '\''pull_request'\'' && github.event.pull_request.head.sha || github.sha }}" and
   (.jobs.plan-shadow.steps[] | select(.uses == strenv(CHECKOUT_ACTION)) | .with."fetch-depth") == 0 and
   (.jobs.plan-shadow.steps[] | select(.uses == strenv(CHECKOUT_ACTION)) | .with."persist-credentials") == false and
-  (.jobs.plan-shadow.steps | map(select(.uses == strenv(MISE_ACTION))) | length) == 1
+  (.jobs.plan-shadow.steps | map(select(.uses == strenv(MISE_ACTION))) | length) == 1 and
+  (.jobs.ci.steps | map(select(
+    .uses == strenv(MISE_ACTION) and .with.version == strenv(MISE_VERSION)
+  )) | length) == 1 and
+  (.jobs.plan-shadow.steps | map(select(
+    .uses == strenv(MISE_ACTION) and .with.version == strenv(MISE_VERSION)
+  )) | length) == 1
 ' "$workflow" >/dev/null
 
 # The planner commands are executed with synthetic event values so argument order is
