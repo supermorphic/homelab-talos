@@ -448,7 +448,8 @@ require_attended_evidence() {
       common_evidence_paths=(
         .justfile
         .mise.toml
-        kubernetes/apps/automation-data
+        kubernetes/apps/automation-data/namespace
+        kubernetes/apps/automation-data/postgresql
         kubernetes/apps/automation/n8n/app/ciliumnetworkpolicy.yaml
         kubernetes/apps/automation/n8n/app/helmrelease.yaml
         kubernetes/apps/automation/n8n/app/kustomization.yaml

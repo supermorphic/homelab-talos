@@ -153,6 +153,11 @@ case "$*" in
       evidence-validate-run-source)
         [[ "$*" != *'scripts/test/validate-run.sh'* ]] || exit 1
         ;;
+      evidence-nocodb-source)
+        for argument in "$@"; do
+          [[ "$argument" != 'kubernetes/apps/automation-data' ]] || exit 1
+        done
+        ;;
       evidence-unknown-coverage) exit 2 ;;
     esac
     ;;
@@ -370,7 +375,7 @@ case "$url" in
     esac
     evidence_revision="$FAKE_REMOTE_MAIN"
     case "${FAKE_FAILURE:-}" in
-      evidence-docs|evidence-provisioning-source|evidence-backup-source|evidence-sql-source|evidence-image-source|evidence-policy-source|evidence-restore-source|evidence-lifecycle-source|evidence-validate-run-source|evidence-unknown-coverage|evidence-object-missing|evidence-newest-unsuitable)
+      evidence-docs|evidence-provisioning-source|evidence-backup-source|evidence-sql-source|evidence-image-source|evidence-policy-source|evidence-restore-source|evidence-lifecycle-source|evidence-validate-run-source|evidence-nocodb-source|evidence-unknown-coverage|evidence-object-missing|evidence-newest-unsuitable)
         evidence_revision="$FAKE_EVIDENCE_SHA"
         ;;
     esac
@@ -714,6 +719,11 @@ run_case evidence-validate-run-source
 assert_failure
 assert_contains 'applicable provisioning and restore evidence'
 assert_no_activation
+
+case_name='NocoDB-only source changes preserve platform evidence eligibility'
+run_case evidence-nocodb-source
+assert_status 0
+assert_event "git diff --quiet $evidence_sha $remote_main --"
 
 case_name='newest suitable restore evidence is selected when a newer affected run is ineligible'
 run_case evidence-newest-unsuitable
