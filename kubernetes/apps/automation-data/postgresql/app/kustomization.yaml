@@ -15,6 +15,7 @@ configMapGenerator:
     files:
       - init-platform.sh=scripts/init-platform.sh
       - nocodb-extension.sql=scripts/nocodb-extension.sql
+      - nocodb-metadata.sql=scripts/nocodb-metadata.sql
       - platform-control.sql=scripts/platform-control.sql
       - migrate-control.sh=scripts/migrate-control.sh
   - name: automation-data-postgresql-backup
@@ -24,6 +25,7 @@ configMapGenerator:
   - name: automation-data-postgresql-upgrade
     files:
       - nocodb-extension.sql=scripts/nocodb-extension.sql
+      - nocodb-metadata.sql=scripts/nocodb-metadata.sql
       - upgrade-nocodb.sql=scripts/upgrade-nocodb.sql
   - name: automation-data-postgresql-sql-exporter
     files:

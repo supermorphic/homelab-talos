@@ -201,7 +201,7 @@ render_expected_upgrade_configmap() { # <output-json>
     [.[] | select(
       .kind == "ConfigMap" and .metadata.namespace == "automation-data" and
       (.metadata.name | test("^automation-data-postgresql-upgrade-[a-z0-9]+$")) and
-      ((.data | keys | sort) == ["nocodb-extension.sql", "upgrade-nocodb.sql"])
+      ((.data | keys | sort) == ["nocodb-extension.sql", "nocodb-metadata.sql", "upgrade-nocodb.sql"])
     )] | if length == 1 then .[0] else error("expected one rendered upgrade ConfigMap") end
   ' "$package_json" >"$output"
 }

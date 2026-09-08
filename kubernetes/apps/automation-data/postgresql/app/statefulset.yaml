@@ -121,6 +121,10 @@ spec:
               mountPath: /scripts/nocodb-extension.sql
               subPath: nocodb-extension.sql
               readOnly: true
+            - name: init
+              mountPath: /scripts/nocodb-metadata.sql
+              subPath: nocodb-metadata.sql
+              readOnly: true
             - name: postgresql-run
               mountPath: /var/run/postgresql
             - name: tmp

@@ -439,8 +439,18 @@ preconditions immediately before applying the reviewed upgrade. Its source and c
 registration must exist and pass local tests before any operator invocation is published
 as an available procedure.
 
-The implemented revision is `026-nocodb-v1`. A single-row
-`platform_operations.platform_schema_revision` table records it as platform migration
+The implemented revision remains `026-nocodb-v1`, describing the unchanged schema
+and backup format. A
+targeted correction to `provision_nocodb_metadata` is applied by the existing upgrade
+command from the same `nocodb-metadata.sql` used by fresh initialization. It allows
+never-ready registry rows without databases, rejects missing formerly ready databases
+before metadata mutation, and revokes metadata access to existing managed databases.
+The command preserves domain data and credentials and advances `installed_at` only
+when the function body changes, requiring a subsequent complete backup. Bootstrap
+preflight compares the installed function body with the reviewed SQL in addition to
+checking revision and backup freshness.
+
+A single-row `platform_operations.platform_schema_revision` table records it as platform migration
 metadata. The fixed read-only oracle is
 `platform_operations.read_platform_revision() RETURNS text`; the function also validates
 the installed extension contract before returning the revision. Fresh initialization
@@ -559,6 +569,12 @@ and n8n APIs. It performs this fixed transaction:
 3. Repeat the source, target, Secret-shape, live suspension, and prerequisite checks
    immediately before mutation.
 4. Temporarily reconcile the staged NocoDB package and run the fixed metadata bootstrap
+   Job. Before resume, a confirmed retry may remove the exact terminally failed Job
+   with expected Flux ownership, using UID and resource-version delete preconditions
+   while the Kustomization is suspended. Active or terminating Jobs stop the retry;
+   completed Jobs are retained. Suspension does not stop an already-created application
+   or HelmRelease. The application and metadata Job remain in the same package.
+   Reconciliation recreates the failed metadata bootstrap
    Job. The Job creates or reconciles only the `nocodb` database and
    `nocodb_metadata` login from the encrypted Secret.
 5. Wait for NocoDB rollout and health at `/api/v1/health`.

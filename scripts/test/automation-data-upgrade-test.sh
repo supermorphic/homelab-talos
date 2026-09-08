@@ -85,8 +85,8 @@ rg -Fq -- "scripts/upgrade/automation-data.sh '.kube/config'" <<<"$recipe" ||
   select(.kind == "Kustomization") |
   [.configMapGenerator[] | select(.name == "automation-data-postgresql-upgrade") |
     (.files | sort | join(","))] | join("")
-' "$kustomization")" == 'nocodb-extension.sql=scripts/nocodb-extension.sql,upgrade-nocodb.sql=scripts/upgrade-nocodb.sql' ]] ||
-	fail 'upgrade ConfigMap does not contain the two fixed reviewed SQL sources'
+' "$kustomization")" == 'nocodb-extension.sql=scripts/nocodb-extension.sql,nocodb-metadata.sql=scripts/nocodb-metadata.sql,upgrade-nocodb.sql=scripts/upgrade-nocodb.sql' ]] ||
+	fail 'upgrade ConfigMap does not contain the three fixed reviewed SQL sources'
 
 rg -Fq '\ir nocodb-extension.sql' "$control_sql" ||
 	fail 'fresh initialization does not load the shared NocoDB definitions'
@@ -125,7 +125,7 @@ jq -e '
   [.[] | select(
     .kind == "ConfigMap" and
     (.metadata.name | startswith("automation-data-postgresql-upgrade-")) and
-    ((.data | keys | sort) == ["nocodb-extension.sql", "upgrade-nocodb.sql"])
+    ((.data | keys | sort) == ["nocodb-extension.sql", "nocodb-metadata.sql", "upgrade-nocodb.sql"])
   )] | if length == 1 then .[0] else error("expected one rendered upgrade ConfigMap") end
 ' "$rendered_package_json" >"$UPGRADE_TEST_EXPECTED_CONFIGMAP"
 export UPGRADE_TEST_EXPECTED_CONFIGMAP_NAME
@@ -1031,6 +1031,76 @@ restore_bundle() { # <bundle> <expected-revision>
 
 restore_bundle "$old_bundle" 025-baseline
 restore_bundle "$new_bundle" 026-nocodb-v1
+
+# A never-ready registry row without a database is a retained provisioning outcome.
+# It must not prevent metadata initialization or erase the record.
+# Install the actual historical function to prove correction of an existing v1.
+(
+  export job_name='metadata-preflight-fixture'
+  export run_marker='metadata-preflight-fixture'
+  # Exercise the production renderer and its actual psql query on real PostgreSQL.
+  # shellcheck source=/dev/null
+  source <(sed -n '/^render_job() {/,/^}/p' scripts/nocodb/platform-preflight.sh)
+  render_job
+) >"$integration_root/preflight.yaml"
+preflight_script="$(yq -r '.spec.template.spec.containers[0].args[0]' "$integration_root/preflight.yaml")"
+preflight_digest="$(yq -r '.spec.template.spec.containers[0].env[] | select(.name == "NOCODB_METADATA_BODY_MD5") | .value' "$integration_root/preflight.yaml")"
+psql_query "$old_container" automation_data_control \
+  'UPDATE platform_operations.logical_backup_status SET completed_at = clock_timestamp();' >/dev/null
+podman exec --env PGUSER=postgres --env PGDATABASE=automation_data_control \
+  --env "NOCODB_METADATA_BODY_MD5=$preflight_digest" "$old_container" \
+  /bin/sh -ceu "$preflight_script" >"$integration_root/preflight-result"
+git show 2d2820f1299b68c6e54f7a6672c2f9c367bad281:kubernetes/apps/automation-data/postgresql/app/scripts/nocodb-extension.sql |
+  awk '/^CREATE OR REPLACE FUNCTION platform_operations.provision_nocodb_metadata\(/ { selected=1 }
+    selected { print } /^\$function\$;/ { selected=0 }' |
+  podman exec -i "$old_container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
+    --username postgres --dbname automation_data_control >/dev/null
+historical_body="$(psql_query "$old_container" automation_data_control \
+  "SELECT md5(prosrc) FROM pg_proc WHERE oid = 'platform_operations.provision_nocodb_metadata(text)'::regprocedure;")"
+if podman exec --env PGUSER=postgres --env PGDATABASE=automation_data_control \
+  --env "NOCODB_METADATA_BODY_MD5=$preflight_digest" "$old_container" \
+  /bin/sh -ceu "$preflight_script" >"$integration_root/preflight-old-result" 2>&1; then
+  fail 'preflight accepted the historical defective function with a current backup'
+fi
+psql_file "$old_container" automation_data_control /candidate/upgrade-nocodb.sql >"$rerun_output"
+corrected_body="$(psql_query "$old_container" automation_data_control \
+  "SELECT md5(prosrc) FROM pg_proc WHERE oid = 'platform_operations.provision_nocodb_metadata(text)'::regprocedure;")"
+[[ "$historical_body" != "$corrected_body" ]] || fail 'installed v1 metadata function was not corrected'
+[[ "$installed_at_before" != "$(psql_query "$old_container" automation_data_control \
+  'SELECT installed_at::text FROM platform_operations.platform_schema_revision WHERE singleton;')" ]] ||
+  fail 'function correction did not require a subsequent backup'
+psql_query "$old_container" automation_data_control "
+  INSERT INTO platform_operations.managed_domains
+    (domain, database_name, owner_role, migrator_role, runtime_role, state, generation)
+  VALUES ('issue317_backup_error', 'issue317_backup_error',
+    'issue317_backup_error_owner', 'issue317_backup_error_migrator',
+    'issue317_backup_error_runtime', 'error', platform_internal.bump_generation());
+  SELECT platform_operations.provision_nocodb_metadata(repeat('synthetic', 6));
+  SELECT platform_operations.provision_nocodb_metadata(repeat('synthetic', 6));
+" >"$integration_root/metadata-result"
+[[ "$(psql_query "$old_container" automation_data_control "
+  SELECT EXISTS (SELECT FROM platform_operations.managed_domains
+    WHERE domain = 'issue317_backup_error' AND NOT has_reached_ready AND state = 'error')
+    AND NOT EXISTS (SELECT FROM pg_database WHERE datname = 'issue317_backup_error')
+    AND NOT has_database_privilege('nocodb_metadata', 'upgrade_fixture', 'CONNECT');")" == t ]] ||
+  fail 'metadata bootstrap changed the error record or allowed access to domain data'
+
+# Missing formerly ready databases must fail before any password-changing remote DDL.
+metadata_verifier="$(psql_query "$old_container" automation_data_control \
+  "SELECT md5(rolpassword) FROM pg_authid WHERE rolname = 'nocodb_metadata';")"
+psql_query "$old_container" automation_data_control "
+  UPDATE platform_operations.managed_domains SET has_reached_ready = true
+  WHERE domain = 'issue317_backup_error';" >/dev/null
+if psql_query "$old_container" automation_data_control \
+  "SELECT platform_operations.provision_nocodb_metadata(repeat('different', 6));" \
+  >"$integration_root/private/missing-ready.log" 2>&1; then
+  fail 'metadata initialization accepted a missing formerly ready database'
+fi
+rg -q 'managed_database_missing' "$integration_root/private/missing-ready.log" ||
+  fail 'missing ready database failed for an unrelated reason'
+[[ "$metadata_verifier" == "$(psql_query "$old_container" automation_data_control \
+  "SELECT md5(rolpassword) FROM pg_authid WHERE rolname = 'nocodb_metadata';")" ]] ||
+  fail 'missing database refusal changed the metadata password'
 
 printf '%s\n' \
 	'role_oids_unchanged=true' \
