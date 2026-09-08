@@ -487,7 +487,7 @@ helper_job_manifest() {
 
 verify_lease
 helper_job_manifest | "${kc[@]}" create --filename - >/dev/null
-if ! wait_for_job_terminal "$helper_job" 300 2 "${kc[@]}"; then
+if ! wait_for_job_terminal "$helper_job" 300 2 "${kc[@]}" >/dev/null 2>&1; then
   # Only relay the helper's fixed diagnostic tokens; never arbitrary Pod output.
   "${kc[@]}" logs "job/$helper_job" --tail=20 --limit-bytes=4096 2>/dev/null |
     awk '/^bundle_check_failed=(scratch|bundle_missing|required_files|checksums|expected_inventory|database_inventory|registry_format|error_record)$/ {print}' >&2 || true
