@@ -382,6 +382,18 @@ require_attended_evidence() {
   local -a common_evidence_paths suite_evidence_paths
   curl_request 'Automation-data evidence query' GET "$reports_url" none '' "$evidence"
   jq -e '
+    def provisioning_evidence:
+      .source == "test" and
+      .suite == "platform" and
+      .tier == "integration" and
+      .target == "automation-data" and
+      .scenario == "provisioning";
+    def restore_evidence:
+      .source == "test" and
+      .suite == "platform" and
+      .tier == "integration" and
+      .target == "automation-data-restore-drill" and
+      .scenario == "full-chain";
     def valid_end:
       (.end | type) == "string" and
       (.end | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
@@ -389,8 +401,7 @@ require_attended_evidence() {
     .schema_version == 1 and
     (.runs | type == "array") and
     all(.runs[] | select(
-      .suite == "test.automation-data-provisioning" or
-      .suite == "test.automation-data-restore-drill"
+      provisioning_evidence or restore_evidence
     ) | select(.result == "passed" and .authoritative == true);
       (.git_sha | type) == "string" and
       (.git_sha | test("^[0-9a-f]{40}$")) and valid_end)
@@ -399,11 +410,30 @@ require_attended_evidence() {
     return 1
   }
   jq -r '
+    def provisioning_evidence:
+      .source == "test" and
+      .suite == "platform" and
+      .tier == "integration" and
+      .target == "automation-data" and
+      .scenario == "provisioning";
+    def restore_evidence:
+      .source == "test" and
+      .suite == "platform" and
+      .tier == "integration" and
+      .target == "automation-data-restore-drill" and
+      .scenario == "full-chain";
     [.runs[] | select(
-      (.suite == "test.automation-data-provisioning" or
-        .suite == "test.automation-data-restore-drill") and
+      (provisioning_evidence or restore_evidence) and
       .result == "passed" and .authoritative == true
-    ) | [.suite, .git_sha, .end]] |
+    ) | [
+      (if provisioning_evidence then
+        "test.automation-data-provisioning"
+      else
+        "test.automation-data-restore-drill"
+      end),
+      .git_sha,
+      .end
+    ]] |
     sort_by(.[0], .[2]) | reverse | .[] | @tsv
   ' "$evidence" >"$candidates"
 
