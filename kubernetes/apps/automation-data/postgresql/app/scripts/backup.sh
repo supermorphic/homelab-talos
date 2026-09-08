@@ -123,16 +123,16 @@ registry_rows AS (
 ),
 registry_text AS (
   SELECT
-    'domain' || E'\\t' || 'database_name' || E'\\t' || 'owner_role' || E'\\t' ||
-    'migrator_role' || E'\\t' || 'runtime_role' || E'\\t' || 'state' || E'\\t' ||
-    'has_reached_ready' || E'\\t' || 'generation' || E'\\t' ||
-    'migrator_credential_id' || E'\\t' || 'runtime_credential_id' || E'\\t' ||
-    'migrator_credential_updated_at' || E'\\t' || 'runtime_credential_updated_at' || E'\\t' ||
-    'operation_started_at' || E'\\t' || 'updated_at' || E'\\t' || 'error_code' ||
+    'domain' || E'\t' || 'database_name' || E'\t' || 'owner_role' || E'\t' ||
+    'migrator_role' || E'\t' || 'runtime_role' || E'\t' || 'state' || E'\t' ||
+    'has_reached_ready' || E'\t' || 'generation' || E'\t' ||
+    'migrator_credential_id' || E'\t' || 'runtime_credential_id' || E'\t' ||
+    'migrator_credential_updated_at' || E'\t' || 'runtime_credential_updated_at' || E'\t' ||
+    'operation_started_at' || E'\t' || 'updated_at' || E'\t' || 'error_code' ||
     COALESCE(
-      E'\\n' || string_agg(
+      E'\n' || string_agg(
         concat_ws(
-          E'\\t',
+          E'\t',
           domain,
           database_name,
           owner_role,
@@ -149,7 +149,7 @@ registry_text AS (
           updated_at::text,
           COALESCE(error_code, '')
         ),
-        E'\\n' ORDER BY domain
+        E'\n' ORDER BY domain
       ),
       ''
     ) AS body
@@ -157,8 +157,8 @@ registry_text AS (
 )
 SELECT
   captured.state->>'generation',
-  replace(encode(convert_to(captured.state::text, 'UTF8'), 'base64'), E'\\n', ''),
-  replace(encode(convert_to(registry_text.body, 'UTF8'), 'base64'), E'\\n', ''),
+  replace(encode(convert_to(captured.state::text, 'UTF8'), 'base64'), E'\n', ''),
+  replace(encode(convert_to(registry_text.body, 'UTF8'), 'base64'), E'\n', ''),
   platform_shape.revision
 FROM captured
 CROSS JOIN registry_text

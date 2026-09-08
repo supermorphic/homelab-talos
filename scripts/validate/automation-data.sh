@@ -27,6 +27,7 @@ scripts/test/automation-data-provisioning-command-test.sh
 scripts/test/automation-data-exporter-grant-test.sh
 scripts/test/automation-data-upgrade-test.sh --offline
 scripts/test/automation-data-backup-test.sh
+scripts/test/automation-data-bundle-test.sh
 scripts/test/automation-data-restore-command-test.sh
 scripts/test/automation-data-longhorn-health-test.sh
 

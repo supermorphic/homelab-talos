@@ -1053,6 +1053,13 @@ remain agent-run under repository policy.
 
 ## Implementation status
 
+The 2026-09-08 backup correction emits actual tab and newline separators from the
+quoted PostgreSQL capture query. A populated PostgreSQL integration regression checks
+that the resulting registry is 15-column TSV. Bundle acceptance retains checksum,
+database-inventory, and error-record checks and reports a fixed diagnostic token before
+removing a failed helper Job. Retained bundles are not rewritten; acceptance must create
+a fresh bundle after the corrected backup writer is deployed.
+
 As of 2026-09-05, the repository contains the staged NocoDB package, optional
 automation-data roles and single source registry, secret-free n8n workflows, lifecycle
 commands, monitoring, offline contract tests, operations guide, and recovery runbook.

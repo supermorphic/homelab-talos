@@ -60,4 +60,29 @@ rg -Fq 'SELECT FROM pg_roles' "$temp_dir/fixture.sql"
 yq -e '.spec.template.spec.containers[0].env[] | select(.name == "PGPASSWORD") |
   .valueFrom.secretKeyRef.key == "backup-password"' "$temp_dir/error-job.yaml" >/dev/null
 
+# Exercise the real terminal-wait integration: its generic failure path emits raw
+# logs, which the bundle caller must suppress before relaying approved tokens.
+source scripts/test/lib/job.sh
+# shellcheck disable=SC2016 # Match the literal caller variable in source.
+sed -n '/^if ! wait_for_job_terminal "\$helper_job"/,/^fi$/p' "$scenario" >"$temp_dir/bundle-wait.sh"
+[[ -s "$temp_dir/bundle-wait.sh" ]]
+fake_bundle_kubectl() {
+  case "$1" in
+    get) printf '%s\n' '{"status":{"conditions":[{"type":"Failed","status":"True","reason":"BackoffLimitExceeded","message":"DO_NOT_EXPOSE"}]}}' ;;
+    logs) printf '%s\n' 'DO_NOT_EXPOSE' 'bundle_check_failed=registry_format' ;;
+    *) return 2 ;;
+  esac
+}
+# shellcheck disable=SC2034 # Consumed by the extracted caller below.
+helper_job='synthetic-bundle'
+# shellcheck disable=SC2034 # Consumed by the extracted caller below.
+kc=(fake_bundle_kubectl)
+wait_status=0
+# shellcheck disable=SC1091 # Execute the actual caller block with a fake cluster.
+wait_output="$(source "$temp_dir/bundle-wait.sh" 2>&1)" || wait_status="$?"
+[[ "$wait_status" == 1 && "$wait_output" == 'bundle_check_failed=registry_format' ]] || {
+  echo 'Bundle failure must relay only the fixed diagnostic, never generic wait logs.' >&2
+  exit 1
+}
+
 echo 'automation-data provisioning command test: PASS'

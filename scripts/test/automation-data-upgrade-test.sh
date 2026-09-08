@@ -870,6 +870,8 @@ new_bundle="$(find "$integration_root/backups/new" -mindepth 1 -maxdepth 1 \
 	-type d -name 'automation-data-*' -print -quit)"
 [[ -n "$new_bundle" && -s "$new_bundle/COMPLETE" ]] ||
 	fail 'candidate backup did not publish a bundle for the upgraded schema'
+awk -F '\t' 'NF != 15 {exit 1} END {if (NR < 2) exit 1}' "$new_bundle/registry.tsv" ||
+	fail 'real PostgreSQL backup did not serialize registry rows as 15-column TSV'
 [[ "$(rg -c -F 'REVOKE CONNECT ON DATABASE postgres FROM PUBLIC;' "$new_bundle/globals.sql")" == 1 &&
 	"$(rg -c -F 'REVOKE CONNECT ON DATABASE template1 FROM PUBLIC;' "$new_bundle/globals.sql")" == 1 ]] ||
 	fail 'upgraded backup did not carry the exact maintenance database restrictions'
