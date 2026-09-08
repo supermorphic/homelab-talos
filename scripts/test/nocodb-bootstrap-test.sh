@@ -64,6 +64,7 @@ n8n_api_key='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 jwt='synthetic_nocodb_jwt_0123456789'
 nocodb_token='synthetic_nocodb_api_token_0123456789'
 nocodb_token_prefix='sensitive-prefix-012345'
+real_curl="$(command -v curl)"
 
 export FAKE_NOCODB_EVENT_LOG="$event_log"
 export FAKE_REMOTE_MAIN="$remote_main"
@@ -75,6 +76,7 @@ export FAKE_N8N_API_KEY="$n8n_api_key"
 export FAKE_NOCODB_JWT="$jwt"
 export FAKE_NOCODB_TOKEN="$nocodb_token"
 export FAKE_NOCODB_TOKEN_PREFIX="$nocodb_token_prefix"
+export FAKE_REAL_CURL="$real_curl"
 
 cat >"$stub_bin/git" <<'EOF'
 #!/usr/bin/env bash
@@ -348,8 +350,9 @@ body="$(awk -F'"' '/^data-binary = / { value=$2; sub(/^@/, "", value); print val
 [[ -n "$url" && -n "$method" && -n "$output" && "$output" == "$config_dir"/* ]] || exit 66
 [[ -z "$body" || (-f "$body" && "$(nocodb_test_mode "$body")" == 600) ]] || exit 66
 rg -Fxq -- 'silent' "$config" && rg -Fxq -- 'show-error' "$config" &&
-  rg -Fxq -- 'fail-with-body' "$config" && rg -Fxq -- 'location = false' "$config" &&
+  rg -Fxq -- 'fail-with-body' "$config" && rg -Fxq -- 'no-location' "$config" &&
   rg -Fxq -- 'max-filesize = 65536' "$config" || exit 67
+"${FAKE_REAL_CURL:?}" --config "$config" --version >/dev/null 2>&1 || exit 67
 
 case "$url" in
   'https://tests.lab.supermorphic.com/api/catalog.json')
