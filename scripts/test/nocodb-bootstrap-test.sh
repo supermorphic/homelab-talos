@@ -376,9 +376,9 @@ case "$url" in
     esac
     extra_run=''
     if [[ "${FAKE_FAILURE:-}" == evidence-newest-unsuitable ]]; then
-      extra_run=",{\"suite\":\"test.automation-data-restore-drill\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$FAKE_NEWER_EVIDENCE_SHA\",\"end\":\"2026-09-04T12:00:00Z\"}"
+      extra_run=",{\"source\":\"test\",\"suite\":\"platform\",\"tier\":\"integration\",\"target\":\"automation-data-restore-drill\",\"scenario\":\"full-chain\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$FAKE_NEWER_EVIDENCE_SHA\",\"end\":\"2026-09-04T12:00:00Z\"}"
     fi
-    printf '%s\n' "{\"schema_version\":1,\"runs\":[{\"suite\":\"test.automation-data-provisioning\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$evidence_revision\",\"end\":\"2026-09-04T08:00:00Z\"},{\"suite\":\"test.automation-data-provisioning\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$evidence_revision\",\"end\":\"$provision_end\"},{\"suite\":\"test.automation-data-restore-drill\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$evidence_revision\",\"end\":\"$restore_end\"}$extra_run]}" >"$output"
+    printf '%s\n' "{\"schema_version\":1,\"runs\":[{\"source\":\"test\",\"suite\":\"platform\",\"tier\":\"integration\",\"target\":\"automation-data\",\"scenario\":\"provisioning\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$evidence_revision\",\"end\":\"2026-09-04T08:00:00Z\"},{\"source\":\"test\",\"suite\":\"platform\",\"tier\":\"integration\",\"target\":\"automation-data\",\"scenario\":\"provisioning\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$evidence_revision\",\"end\":\"$provision_end\"},{\"source\":\"test\",\"suite\":\"platform\",\"tier\":\"integration\",\"target\":\"automation-data-restore-drill\",\"scenario\":\"full-chain\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$evidence_revision\",\"end\":\"$restore_end\"}$extra_run]}" >"$output"
     ;;
   'https://nocodb.lab.supermorphic.com/api/v1/health')
     [[ "$method" == GET && -z "$body" ]] || exit 69
