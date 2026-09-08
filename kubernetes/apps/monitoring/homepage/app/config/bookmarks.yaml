@@ -24,13 +24,13 @@
           icon: makemkv.png
 - Local Area Network:
     - Unifi Network:
-        - href: https://192.168.0.1
+        - href: https://udm.supermorphic.com
           icon: unifi-controller.png
     - Unifi Protect:
-        - href: https://192.168.0.2
+        - href: https://protect.supermorphic.com
           icon: unifi-protect.png
     - Unifi Drive:
-        - href: https://192.168.0.3
+        - href: https://nas.supermorphic.com
           icon: unifi-drive.png
     - Cable Modem:
         - href: https://192.168.100.1/Login.html
