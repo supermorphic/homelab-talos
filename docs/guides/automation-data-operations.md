@@ -282,6 +282,13 @@ state. Each run uses a unique `automation-data-nocodb-upgrade-*` Job name. Clean
 the run label and Kubernetes object UID before deletion, including after a Job failure,
 and the command does not retrieve a Secret.
 
+On installed `026-nocodb-v1`, this command also reconciles the reviewed metadata
+function from the shared `nocodb-metadata.sql` source. It permits never-ready registry
+rows without databases, but rejects missing databases for formerly ready domains before
+changing the metadata login. It preserves domain rows, credentials, and the backup
+format. A changed function body advances `installed_at` to require a subsequent backup;
+an unchanged rerun preserves that timestamp.
+
 After the command passes, create another complete automation-data logical backup. Keep
 NocoDB suspended until that post-upgrade bundle and the remaining NocoDB bootstrap
 prerequisites pass. Backup and restore accept both the exact pre-extension baseline and

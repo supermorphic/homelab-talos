@@ -308,6 +308,29 @@ case "$*" in
     printf 'nocodb-credentials'
     ;;
   *'wait --for=condition=Ready kustomization/automation-data '*) ;;
+  *'get job nocodb-metadata-bootstrap --ignore-not-found --output json')
+    case "${FAKE_FAILURE:-}" in
+      retry-failed|retry-active|retry-foreign|retry-foreign-complete|retry-race|retry-complete)
+        [[ ! -f "$FAKE_CASE_ROOT/metadata-deleted" ]] || exit 0
+        jq -n --arg scenario "$FAKE_FAILURE" '{
+          metadata:{name:"nocodb-metadata-bootstrap",namespace:"automation-data",
+            uid:"failed-job-uid",resourceVersion:"12",labels:{
+              "app.kubernetes.io/name":"nocodb-metadata-bootstrap",
+              "kustomize.toolkit.fluxcd.io/name":(if ($scenario | startswith("retry-foreign")) then "other" else "nocodb" end),
+              "kustomize.toolkit.fluxcd.io/namespace":"flux-system"}},
+          status:{active:(if $scenario == "retry-active" then 1 else 0 end),
+            conditions:[{type:(if ($scenario | endswith("complete")) then "Complete" else "Failed" end),status:"True"}]}}
+        '
+        ;;
+    esac
+    ;;
+  *'delete --raw /apis/batch/v1/namespaces/automation-data/jobs/nocodb-metadata-bootstrap --filename '*)
+    jq -e '.preconditions == {uid:"failed-job-uid",resourceVersion:"12"} and .propagationPolicy == "Foreground"' "${@: -1}" >/dev/null
+    [[ "$(jq -r '.spec.suspend' "$FAKE_CASE_ROOT/kustomization.json")" == true ]] || exit 81
+    [[ "$FAKE_FAILURE" != retry-race ]] || exit 82
+    touch "$FAKE_CASE_ROOT/metadata-deleted"
+    ;;
+  *'wait --for=delete job/nocodb-metadata-bootstrap --timeout=2m') ;;
   *'get job nocodb-metadata-bootstrap --output json')
     if [[ "${FAKE_FAILURE:-}" == cleanup-marker-mismatch ]]; then
       jq '.metadata.annotations["homelab.supermorphic.com/nocodb-bootstrap-owner"] = "another-owner"' \
@@ -567,6 +590,7 @@ EOF
 }
 
 reset_transaction_state() {
+  rm -f -- "$case_root/metadata-deleted"
   cat >"$case_root/kustomization.json" <<'EOF'
 {"apiVersion":"kustomize.toolkit.fluxcd.io/v1","kind":"Kustomization","metadata":{"name":"nocodb","namespace":"flux-system","resourceVersion":"1","annotations":{}},"spec":{"suspend":true}}
 EOF
@@ -724,6 +748,22 @@ case_name='NocoDB-only source changes preserve platform evidence eligibility'
 run_case evidence-nocodb-source
 assert_status 0
 assert_event "git diff --quiet $evidence_sha $remote_main --"
+
+for retry_case in retry-failed retry-complete retry-active retry-foreign retry-foreign-complete retry-race; do
+  case_name="metadata retry: $retry_case"
+  run_case "$retry_case"
+  if [[ "$retry_case" == retry-failed ]]; then
+    assert_status 0
+    assert_event 'delete --raw /apis/batch/v1/namespaces/automation-data/jobs/nocodb-metadata-bootstrap'
+  elif [[ "$retry_case" == retry-complete ]]; then
+    assert_status 0
+    assert_no_delete
+  else
+    assert_failure
+    ! rg -q '^kubectl-replace suspend=false owner=.' "$event_log" || fail 'retry refusal resumed NocoDB'
+    ! rg -q '^flux reconcile kustomization nocodb ' "$event_log" || fail 'retry refusal reconciled NocoDB'
+  fi
+done
 
 case_name='newest suitable restore evidence is selected when a newer affected run is ineligible'
 run_case evidence-newest-unsuitable

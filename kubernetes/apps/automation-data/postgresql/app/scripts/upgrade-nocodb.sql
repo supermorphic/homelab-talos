@@ -98,6 +98,19 @@ $validation$;
 \endif
 
 SELECT platform_internal.assert_nocodb_extension_contract();
+-- Reconcile the fixed metadata function on installed v1 as well as fresh installs.
+-- Keep the schema/backup format revision; advance backup freshness only on change.
+SELECT md5(prosrc) AS previous_metadata_body FROM pg_proc
+WHERE oid = 'platform_operations.provision_nocodb_metadata(text)'::regprocedure \gset
+SET LOCAL ROLE postgres;
+\ir nocodb-metadata.sql
+UPDATE platform_operations.platform_schema_revision
+SET installed_at = clock_timestamp()
+WHERE singleton AND :'previous_metadata_body' <> (
+  SELECT md5(prosrc) FROM pg_proc
+  WHERE oid = 'platform_operations.provision_nocodb_metadata(text)'::regprocedure
+);
+SELECT platform_internal.assert_nocodb_extension_contract();
 COMMIT;
 
 SELECT 'installed_revision=' || platform_operations.read_platform_revision();

@@ -599,6 +599,52 @@ resume_with_ownership() {
   replace_nocodb_kustomization "$replacement"
 }
 
+remove_failed_metadata_job() {
+  local state="$temp_dir/failed-metadata-job.json" options="$temp_dir/delete-metadata-job.json"
+  kubectl --kubeconfig "$kubeconfig" --namespace automation-data get job \
+    nocodb-metadata-bootstrap --ignore-not-found --output json >"$state"
+  [[ -s "$state" ]] || return 0
+  jq -e '
+    .metadata.name == "nocodb-metadata-bootstrap" and
+    .metadata.namespace == "automation-data" and
+    .metadata.labels."app.kubernetes.io/name" == "nocodb-metadata-bootstrap" and
+    .metadata.labels."kustomize.toolkit.fluxcd.io/name" == "nocodb" and
+    .metadata.labels."kustomize.toolkit.fluxcd.io/namespace" == "flux-system"
+  ' "$state" >/dev/null || {
+    echo 'Refusing metadata Job retry: Job does not have the expected Flux ownership.' >&2
+    return 1
+  }
+  jq -e '
+    (.status.active // 0) == 0 and (.status.terminating // 0) == 0 and
+    (.metadata.deletionTimestamp // null) == null and
+    any(.status.conditions[]?; .type == "Complete" and .status == "True") and
+    (any(.status.conditions[]?; .type == "Failed" and .status == "True") | not)
+  ' "$state" >/dev/null && return 0
+  jq -e '
+    (.metadata.uid | type == "string" and length > 0) and
+    (.metadata.resourceVersion | type == "string" and length > 0) and
+    (.metadata.deletionTimestamp // null) == null and
+    (.status.active // 0) == 0 and (.status.terminating // 0) == 0 and
+    any(.status.conditions[]?; .type == "Failed" and .status == "True") and
+    (any(.status.conditions[]?; .type == "Complete" and .status == "True") | not)
+  ' "$state" >/dev/null || {
+    echo 'Refusing metadata Job retry: Job is not terminally failed with the expected Flux ownership.' >&2
+    return 1
+  }
+  jq '{apiVersion:"v1",kind:"DeleteOptions",propagationPolicy:"Foreground",
+    preconditions:{uid:.metadata.uid,resourceVersion:.metadata.resourceVersion}}' \
+    "$state" >"$options"
+  require_checkout_parity
+  require_deployed_revision
+  require_live_suspension
+  kubectl --kubeconfig "$kubeconfig" delete \
+    --raw /apis/batch/v1/namespaces/automation-data/jobs/nocodb-metadata-bootstrap \
+    --filename "$options" >/dev/null
+  kubectl --kubeconfig "$kubeconfig" --namespace automation-data wait \
+    --for=delete job/nocodb-metadata-bootstrap --timeout=2m >/dev/null
+  echo 'Removed the failed metadata bootstrap Job and its dependent pods; Flux will recreate the Job on resume.' >&2
+}
+
 # The first pass is reviewable preflight. The second pass is the immediate check before
 # the first mutation; neither pass resumes or reconciles a Kustomization.
 require_preconditions
@@ -626,6 +672,7 @@ just kube automation-data-verify
 require_platform_preflight
 
 echo 'Resuming and reconciling the staged NocoDB package.' >&2
+remove_failed_metadata_job
 resume_with_ownership
 require_deployed_revision
 flux reconcile kustomization nocodb --namespace flux-system \

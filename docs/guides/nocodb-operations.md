@@ -186,6 +186,12 @@ plus a complete logical backup whose `completed_at` is at or after the revision'
 before NocoDB resume. The Job does not expose a general SQL surface or retrieve Secret
 values, and bootstrap removes only the Job with its exact run marker.
 
+Preflight also compares the installed metadata function body with the reviewed SQL.
+If it differs, run the confirmed `automation-data-upgrade` command from deployed main,
+then obtain a new complete backup and affected provisioning/restore evidence before
+retrying bootstrap. The schema revision remains `026-nocodb-v1`; revision alone does
+not prove the function correction is installed.
+
 Bootstrap then reconciles the parent package,
 uses an ownership marker to resume NocoDB, creates or reconciles only the `nocodb`
 database and `nocodb_metadata` login, waits for the one NocoDB pod, enables invite-only
@@ -212,6 +218,17 @@ attended review before retrying.
 On failure, bootstrap re-suspends only the live Kustomization mutation that carries its
 ownership marker. It preserves the metadata database, token state, and n8n
 credential for diagnosis and retry.
+
+Suspension does not stop an already-created Deployment or its HelmRelease. The metadata
+Job and application still reconcile in the same package, so a failed bootstrap can
+leave the application running before API setup completes.
+
+On a confirmed retry, after preflight succeeds and while NocoDB is suspended, bootstrap
+removes only a terminally failed `nocodb-metadata-bootstrap` Job with the expected Flux
+labels. UID and resource-version preconditions reject concurrent changes. Foreground
+deletion removes its dependent pods, and Flux recreates the Job on resume. Successful
+Jobs are retained. Active, terminating, or unexpectedly owned failed Jobs stop the retry.
+Collect needed failed-Job diagnostics before retrying.
 
 **Expected result:** NocoDB is healthy for attended setup, required application settings
 read back as enabled, and n8n has exactly one **NocoDB Operator API** Header Auth
