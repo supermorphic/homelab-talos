@@ -412,18 +412,7 @@ database_set_after="$(query_database_set)"
 }
 expected_database_set_base64="$(printf '%s\n' "$database_set_before" | base64 | tr -d '\n')"
 
-# shellcheck disable=SC2016 # The generated helper Job expands these variables.
-helper_command='set -eu
-bundle="$(find /backups -mindepth 1 -maxdepth 1 -type d -name "automation-data-*" | LC_ALL=C sort | tail -n 1)"
-test -n "$bundle"
-test -s "$bundle/COMPLETE" -a -s "$bundle/SHA256SUMS" -a -s "$bundle/manifest.tsv" -a -s "$bundle/registry.tsv"
-(cd "$bundle" && sha256sum -c SHA256SUMS >/dev/null && sha256sum -c COMPLETE >/dev/null)
-printf %s "$EXPECTED_DATABASE_SET_BASE64" | base64 -d > /tmp/expected-databases
-awk -F "\t" '\''$1 == "database" {print $2}'\'' "$bundle/manifest.tsv" | LC_ALL=C sort -u > /tmp/manifest-databases
-cmp -s /tmp/expected-databases /tmp/manifest-databases
-awk -F "\t" '\''$1 == "issue317_backup_error" && $6 == "error" && $15 == "acceptance_backup_error" {found=1} END {exit !found}'\'' "$bundle/registry.tsv"
-database_count="$(wc -l < /tmp/manifest-databases | tr -d " ")"
-printf "bundle_valid=true database_count=%s error_record=present\n" "$database_count"'
+helper_command="$(<scripts/test/lib/automation-data-bundle.sh)"
 
 helper_job_manifest() {
   JOB_NAME="$helper_job" RUN_HASH="$run_hash" \
@@ -498,7 +487,12 @@ helper_job_manifest() {
 
 verify_lease
 helper_job_manifest | "${kc[@]}" create --filename - >/dev/null
-wait_for_job_terminal "$helper_job" 300 2 "${kc[@]}"
+if ! wait_for_job_terminal "$helper_job" 300 2 "${kc[@]}"; then
+  # Only relay the helper's fixed diagnostic tokens; never arbitrary Pod output.
+  "${kc[@]}" logs "job/$helper_job" --tail=20 --limit-bytes=4096 2>/dev/null |
+    awk '/^bundle_check_failed=(scratch|bundle_missing|required_files|checksums|expected_inventory|database_inventory|registry_format|error_record)$/ {print}' >&2 || true
+  exit 1
+fi
 helper_result="$("${kc[@]}" logs "job/$helper_job" --tail=1)"
 [[ "$helper_result" =~ ^bundle_valid=true\ database_count=[0-9]+\ error_record=present$ ]] || {
   echo 'The read-only backup helper did not return its bounded success evidence.' >&2

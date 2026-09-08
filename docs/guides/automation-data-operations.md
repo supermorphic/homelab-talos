@@ -206,6 +206,13 @@ replacement, or bulk data deletion.
 exist, unchanged reconciliation preserves their credentials, explicit rotation changes
 only the selected login credential, and the resulting backup is complete.
 
+If the bundle-validation Job fails, the command prints a bounded
+`bundle_check_failed=<check>` diagnostic before cleanup. Stop at that failure; do not
+proceed to restore or NocoDB bootstrap. A message that the canonical test run passed
+validation confirms the report structure only, not acceptance success. After correcting
+the cause, create a fresh backup through the acceptance command; do not edit retained
+bundles or bypass their checksums.
+
 ### 6. Provision and bind the stable canary
 
 After the provisioning acceptance completes, use the private provisioning workflow to
