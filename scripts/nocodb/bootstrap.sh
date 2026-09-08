@@ -255,7 +255,7 @@ curl_request() { # <label> <method> <url> <auth:none|jwt|n8n|token> <body-or-emp
       'silent' \
       'show-error' \
       'fail-with-body' \
-      'location = false' \
+      'no-location' \
       'connect-timeout = 10' \
       'max-time = 60' \
       'max-filesize = 65536' \
