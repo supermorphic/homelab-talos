@@ -10,6 +10,7 @@ ns="$base/app/namespace.yaml"
 dep="$base/app/deployment.yaml"
 route="$base/app/httproute.yaml"
 app_kustomization="$base/app/kustomization.yaml"
+bookmarks="$base/app/config/bookmarks.yaml"
 custom_js="$base/app/config/custom.js"
 allure_icon="$base/app/icons/allure.svg"
 allure_provenance="$base/app/icons/README.md"
@@ -26,7 +27,7 @@ allure_commit='fe2ea92eaab4e409a3c8cf52ba96e35df96b2298'
 for f in "$ks" "$ns" "$dep" "$route" "$base/app/rbac.yaml" "$base/app/service.yaml" \
   "$app_kustomization" "$base/app/config/settings.yaml" \
   "$base/app/config/kubernetes.yaml" "$base/app/config/services.yaml" \
-  "$base/app/config/widgets.yaml" "$base/app/config/bookmarks.yaml" "$custom_js" \
+  "$base/app/config/widgets.yaml" "$bookmarks" "$custom_js" \
   "$allure_icon" \
   "$allure_provenance" "$seerr_route" "$n8n_route" "$gatus_route" "$longhorn_route" \
   "$monitoring_routes" "$portainer_route" "$ntfy_route" "$test_reports_route"; do
@@ -48,6 +49,14 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 [[ "$(yq -r '[.layout[] | keys | .[0]] | join(",")' "$base/app/config/settings.yaml")" == \
   'Media,Monitoring & Testing,Platform' ]] || {
   echo 'Homepage groups must use the explicit Media, Monitoring & Testing, Platform order.' >&2
+  exit 1
+}
+[[ "$(yq -r '.[] | select(has("Local Area Network")) |
+  .["Local Area Network"][0:3] |
+  map(to_entries[0] | [.key, .value[0].href, .value[0].icon] | join(",")) |
+  join(";")' "$bookmarks")" == \
+  'Unifi Network,https://udm.supermorphic.com,unifi-controller.png;Unifi Protect,https://protect.supermorphic.com,unifi-protect.png;Unifi Drive,https://nas.supermorphic.com,unifi-drive.png' ]] || {
+  echo 'Homepage UniFi bookmarks must use the trusted HTTPS hostnames with their existing labels, icons, and order.' >&2
   exit 1
 }
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/icon"' "$seerr_route")" == 'seerr.svg' ]]
