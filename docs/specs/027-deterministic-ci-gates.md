@@ -284,8 +284,10 @@ categories. No runtime number overrides correctness or justifies unnecessary mac
 
 Stage 2 is in split-all parity rollout. A full-bound plan runs all four groups and the
 advisory `merge-gate` reconciles their separate results. Full `ci` remains authoritative.
-Provider parity proof, the protection transition, and selective enforcement remain
-pending.
+Successful provider execution established equivalent full and grouped evidence on the
+same candidate tree. On the merged workflow, cancellation of the group jobs caused
+the always-running gate to fail; a complete retry produced passing group results and
+reconciliation. The protection transition and selective enforcement remain pending.
 
 Operational commands and inspection examples live in
 [the testing guide](../../tests/README.md). Detailed execution evidence and remaining

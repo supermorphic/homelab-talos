@@ -102,6 +102,18 @@ The full `mise exec -- just ci` command remains available and required locally u
 current repository policy. See [Spec 027](../docs/specs/027-deterministic-ci-gates.md)
 for the shadow, split-all, and selective rollout checkpoints and protection transition.
 
+### Retrying a provider run
+
+Use **Re-run all jobs** when retrying this workflow, or run
+`mise exec -- gh run rerun <run-id>`. Do not select only failed jobs or an individual
+group or gate. Plans and result artifacts include the workflow run attempt in their
+names. A partial retry starts a new attempt without recreating successful dependencies'
+artifacts, so the group or gate cannot download its required inputs and fails safely.
+A complete retry produces a fresh plan and every required result in the same attempt.
+
+After editing or rebasing the candidate, use the new PR run. Retrying an older run
+validates its original revision, not the updated branch.
+
 ## Offline harness execution
 
 The offline harness keeps its cheap/high-signal and repository-mutating shell
