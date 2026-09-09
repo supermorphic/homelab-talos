@@ -13,6 +13,18 @@ TEST_REPORTS_STORAGE_ROOT="$storage" \
   sh "$repo_root/kubernetes/apps/monitoring/test-reports/app/bootstrap-storage.sh"
 rg -q '<title>Test Reports</title>' "$storage/state/current/index.html"
 rg -q '<h1>Test Reports</h1>' "$storage/state/current/index.html"
+jq -e '
+  .last_failure == null and
+  .last_success == {} and
+  .seen_runs == {} and
+  .runs_total == {} and
+  .cases_total == {}
+' "$storage/state/current/state.json" >/dev/null
+jq -e '
+  .latest == null and
+  .last_run == null and
+  .last_failure == null
+' "$storage/state/current/api/homepage.json" >/dev/null
 mkdir -p \
   "$bundle/artifact" \
   "$bundle/generation/$generation/api" \
@@ -24,7 +36,8 @@ printf '%s\n' '{"schema_version":1,"runs":[]}' \
 printf '%s\n' '{"schema_version":1}' \
   >"$bundle/generation/$generation/state.json"
 printf '%s\n' '<html>index</html>' >"$bundle/generation/$generation/index.html"
-printf '%s\n' '{"items":[]}' >"$bundle/generation/$generation/api/homepage.json"
+printf '%s\n' '{"latest":null,"last_run":null,"last_failure":null}' \
+  >"$bundle/generation/$generation/api/homepage.json"
 printf '%s\n' '# fixture' >"$bundle/generation/$generation/api/metrics.prom"
 : >"$bundle/generation/$generation/history.jsonl"
 : >"$bundle/prune.txt"

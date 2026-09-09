@@ -8,7 +8,7 @@ metadata:
     external-dns.k8s.io/audience: internal
     gethomepage.dev/enabled: "true"
     gethomepage.dev/name: "Test Reports"
-    gethomepage.dev/description: "Persistent operator-published test results"
+    gethomepage.dev/description: "Retained test evidence"
     gethomepage.dev/group: "Monitoring & Testing"
     gethomepage.dev/icon: "/icons/allure.svg"
     gethomepage.dev/href: "https://tests.lab.supermorphic.com"
@@ -16,13 +16,14 @@ metadata:
     gethomepage.dev/widget.type: "customapi"
     gethomepage.dev/widget.url: "http://test-reports.test-reports.svc.cluster.local:8080/api/homepage.json"
     gethomepage.dev/widget.refreshInterval: "300000"
-    gethomepage.dev/widget.display: "dynamic-list"
-    gethomepage.dev/widget.mappings.items: "items"
-    gethomepage.dev/widget.mappings.name: "name"
-    gethomepage.dev/widget.mappings.label: "end"
-    gethomepage.dev/widget.mappings.limit: "6"
-    gethomepage.dev/widget.mappings.format: "relativeDate"
-    gethomepage.dev/widget.mappings.target: "https://tests.lab.supermorphic.com{path}"
+    gethomepage.dev/widget.mappings.0.field: "latest"
+    gethomepage.dev/widget.mappings.0.label: "LATEST"
+    gethomepage.dev/widget.mappings.1.field: "last_run"
+    gethomepage.dev/widget.mappings.1.label: "LAST RUN"
+    gethomepage.dev/widget.mappings.1.format: "relativeDate"
+    gethomepage.dev/widget.mappings.2.field: "last_failure"
+    gethomepage.dev/widget.mappings.2.label: "LAST FAILURE"
+    gethomepage.dev/widget.mappings.2.format: "relativeDate"
 spec:
   hostnames:
     - tests.lab.supermorphic.com
