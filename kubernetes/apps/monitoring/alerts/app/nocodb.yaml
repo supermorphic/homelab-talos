@@ -13,12 +13,12 @@ spec:
     - name: nocodb
       rules:
         - alert: NocoDBDown
-          expr: gatus_results_endpoint_success{name="nocodb", group="Platform"} == 0
+          expr: gatus_results_endpoint_success{name="nocodb", group="Automation"} == 0
           for: 5m
           labels: {severity: critical}
           annotations: {summary: NocoDB is unavailable through the internal gateway}
         - alert: NocoDBProbeMissing
-          expr: absent(gatus_results_endpoint_success{name="nocodb", group="Platform"})
+          expr: absent(gatus_results_endpoint_success{name="nocodb", group="Automation"})
           for: 15m
           labels: {severity: warning}
           annotations: {summary: NocoDB black-box probe data is missing}

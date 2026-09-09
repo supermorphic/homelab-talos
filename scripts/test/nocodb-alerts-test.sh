@@ -19,7 +19,7 @@ fail() {
 [[ "$(yq -r '[.config.endpoints[] | select(.name == "nocodb")] | length' "$values")" == '1' ]] ||
   fail 'Active NocoDB must have exactly one Gatus endpoint.'
 endpoint="$(yq -o=json -I=0 '.config.endpoints[] | select(.name == "nocodb")' "$values")"
-[[ "$(yq -r '.group' <<<"$endpoint")" == 'Platform' ]] || fail 'NocoDB Gatus group must be Platform.'
+[[ "$(yq -r '.group' <<<"$endpoint")" == 'Automation' ]] || fail 'NocoDB Gatus group must be Automation.'
 [[ "$(yq -r '.url' <<<"$endpoint")" == 'https://nocodb.lab.supermorphic.com/api/v1/health' ]] || fail 'NocoDB Gatus URL is incorrect.'
 [[ "$(yq -r '.interval' <<<"$endpoint")" == '1m' ]] || fail 'NocoDB Gatus interval must be 1m.'
 [[ "$(yq -r '.conditions | join(",")' <<<"$endpoint")" == '[STATUS] == 200' ]] || fail 'NocoDB Gatus must require HTTP 200.'
@@ -33,8 +33,8 @@ actual_alerts="$(yq -r '.spec.groups[0].rules[].alert' "$rule" | LC_ALL=C sort)"
 [[ "$actual_alerts" == "$expected_alerts" ]] || fail "NocoDB alert coverage is incorrect: $actual_alerts"
 
 for required_expression in \
-  'gatus_results_endpoint_success{name="nocodb", group="Platform"}' \
-  'absent(gatus_results_endpoint_success{name="nocodb", group="Platform"})' \
+  'gatus_results_endpoint_success{name="nocodb", group="Automation"}' \
+  'absent(gatus_results_endpoint_success{name="nocodb", group="Automation"})' \
   'kube_deployment_status_replicas_available' \
   'kube_pod_container_status_restarts_total' \
   'reason="OOMKilled"' \

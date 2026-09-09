@@ -474,9 +474,10 @@ edit.
 ### 8. Make activation durable after access acceptance
 
 After platform prerequisites, access acceptance, and the browser check pass, complete
-review of the activation change under the operator-approved rollout sequence. It sets the NocoDB Flux Kustomization to `spec.suspend: false`,
-adds the Homepage **Platform → NocoDB** tile, enables the Gatus health endpoint and
-NocoDB alert rules, and enrolls `verification.nocodb` in both verification campaigns.
+review of the activation change under the operator-approved rollout sequence. It sets
+the NocoDB Flux Kustomization to `spec.suspend: false`, adds the Homepage
+**Platform → NocoDB** tile, enables the Gatus **Automation → nocodb** health endpoint
+and NocoDB alert rules, and enrolls `verification.nocodb` in both verification campaigns.
 Homepage discovers the tile from the NocoDB HTTPRoute; it needs no API credential.
 
 Run `mise exec -- just test ci-publish` from the clean candidate. The human operator

@@ -843,8 +843,9 @@ change plan.
 
 ## Monitoring and logs
 
-Gatus checks `https://nocodb.lab.supermorphic.com/api/v1/health` through the private
-route. Homepage discovers a **Platform → NocoDB** tile from the private HTTPRoute's
+Gatus lists NocoDB in **Automation** and checks
+`https://nocodb.lab.supermorphic.com/api/v1/health` through the private route. Homepage
+discovers a **Platform → NocoDB** tile from the private HTTPRoute's
 `gethomepage.dev/*` annotations, links to `https://nocodb.lab.supermorphic.com`, and
 selects the `app.kubernetes.io/name=nocodb` pod. It has no API widget or credential.
 Application logs flow through the existing Alloy collection path.
