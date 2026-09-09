@@ -31,12 +31,12 @@ yq -e '(.spec.suspend | type) == "!!bool"' "$source_ks" >/dev/null ||
 source_suspend="$(yq -r '.spec.suspend' "$source_ks")"
 active_gatus_name_count="$(yq -r '[.config.endpoints[]? | select(.name == "nocodb")] | length' "$gatus_values")"
 active_gatus_contract_count="$(yq -r '[.config.endpoints[]? | select(
-  .name == "nocodb" and .group == "Platform" and
+  .name == "nocodb" and .group == "Automation" and
   .url == "https://nocodb.lab.supermorphic.com/api/v1/health" and
   .interval == "1m" and (.conditions | join(",")) == "[STATUS] == 200"
 )] | length' "$gatus_values")"
 activation_endpoint_count="$(yq -r '[.config.endpoints[]? | select(
-  .name == "nocodb" and .group == "Platform" and
+  .name == "nocodb" and .group == "Automation" and
   .url == "https://nocodb.lab.supermorphic.com/api/v1/health" and
   .interval == "1m" and (.conditions | join(",")) == "[STATUS] == 200"
 )] | length' "$gatus_activation_values")"
@@ -271,7 +271,7 @@ if [[ "$monitoring_required" == true ]]; then
   actual_rules="$(yq -p=json -r '.spec.groups[]? | select(.name == "nocodb") | .rules[]?.alert' - <<<"$rule" | LC_ALL=C sort)"
   [[ "$actual_rules" == "$expected_rules" ]] || fail 'NocoDB PrometheusRule does not expose the exact nine-alert contract.'
 
-  [[ "$(query_value 'gatus_results_endpoint_success{name="nocodb", group="Platform"}')" == '1' ]] ||
+  [[ "$(query_value 'gatus_results_endpoint_success{name="nocodb", group="Automation"}')" == '1' ]] ||
     fail 'NocoDB Gatus success metric is absent or unhealthy.'
 
   rules_response="$(flux_alerts_prometheus_get "$prometheus_base_url" "$prometheus_resolve" '/api/v1/rules?type=alert')"

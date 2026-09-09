@@ -275,7 +275,7 @@ alertmanager|Observability|https://alertmanager.lab.supermorphic.com/-/healthy|1
 test-reports|Observability|https://tests.lab.supermorphic.com/|1m|[STATUS] == 200
 echo|Platform|https://echo.lab.supermorphic.com/|1m|[STATUS] == 200
 portainer|Platform|https://portainer.lab.supermorphic.com/|1m|[STATUS] == 200
-nocodb|Platform|https://nocodb.lab.supermorphic.com/api/v1/health|1m|[STATUS] == 200
+nocodb|Automation|https://nocodb.lab.supermorphic.com/api/v1/health|1m|[STATUS] == 200
 ntfy|Platform|http://ntfy.ntfy.svc.cluster.local/v1/health|1m|[STATUS] == 200|[BODY].healthy == true
 longhorn-ui|Storage|http://longhorn-frontend.longhorn-system.svc.cluster.local/|2m|[STATUS] == 200
 plex|Media|https://plex.lab.supermorphic.com/identity|1m|[STATUS] == 200

@@ -3,7 +3,7 @@
 config:
   endpoints:
     - name: nocodb
-      group: Platform
+      group: Automation
       url: "https://nocodb.lab.supermorphic.com/api/v1/health"
       interval: 1m
       conditions:

@@ -31,7 +31,7 @@ for forbidden_curl_option in \
 done
 
 for allowed in \
-  'gatus_results_endpoint_success{name="nocodb", group="Platform"}' \
+  'gatus_results_endpoint_success{name="nocodb", group="Automation"}' \
   'automation_data_postgresql_backup_last_success_timestamp_seconds'; do
   rg -Fq -- "$allowed" "$verifier" || {
     echo "NocoDB verification contract test failed: missing required observation: $allowed" >&2
@@ -181,7 +181,7 @@ case "$url" in
     fi ;;
   'https://prometheus.lab.supermorphic.com/api/v1/query')
     case "$data_argument" in
-      'query=gatus_results_endpoint_success{name="nocodb", group="Platform"}'|\
+      'query=gatus_results_endpoint_success{name="nocodb", group="Automation"}'|\
       'query=automation_data_postgresql_backup_last_success_timestamp_seconds{namespace="automation-data",service="automation-data-postgresql"}') ;;
       *) echo "Unexpected Prometheus query: $data_argument" >&2; exit 65 ;;
     esac

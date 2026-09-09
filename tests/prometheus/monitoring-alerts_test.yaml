@@ -17,7 +17,7 @@ tests:
   - name: NocoDB black-box down and missing-probe alerts obey their windows
     interval: 1m
     input_series:
-      - series: 'gatus_results_endpoint_success{name="nocodb",group="Platform"}'
+      - series: 'gatus_results_endpoint_success{name="nocodb",group="Automation"}'
         values: '1x3 0x8 1x8'
     alert_rule_test:
       - eval_time: 7m
@@ -29,7 +29,7 @@ tests:
       - eval_time: 9m
         alertname: NocoDBDown
         exp_alerts:
-          - exp_labels: {severity: critical, name: nocodb, group: Platform}
+          - exp_labels: {severity: critical, name: nocodb, group: Automation}
             exp_annotations: {summary: NocoDB is unavailable through the internal gateway}
       - eval_time: 14m
         alertname: NocoDBDown
@@ -50,7 +50,7 @@ tests:
       - eval_time: 15m
         alertname: NocoDBProbeMissing
         exp_alerts:
-          - exp_labels: {severity: warning, name: nocodb, group: Platform}
+          - exp_labels: {severity: warning, name: nocodb, group: Automation}
             exp_annotations: {summary: NocoDB black-box probe data is missing}
 
   - name: NocoDB Deployment unavailability uses the exact workload selector and recovers
