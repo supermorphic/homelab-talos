@@ -7,6 +7,8 @@ state_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-lease-test.XXXXXX")"
 trap 'rm -rf -- "$state_dir"' EXIT
 state_file="$state_dir/lease.json"
 force_create_error=false
+force_get_error=false
+operation_log="$state_dir/operations.log"
 
 lease_kubectl() {
   local _kubeconfig="$1"
@@ -22,8 +24,10 @@ lease_kubectl() {
       *) shift ;;
     esac
   done
+  printf '%s\n' "$operation" >>"$operation_log"
   case "$operation" in
     get)
+      [[ "$force_get_error" == 'false' ]] || return 1
       [[ -f "$state_file" ]] || return 1
       cat "$state_file"
       ;;
@@ -96,5 +100,28 @@ if lease_error="$(acquire_test_lease fake-kubeconfig rejected-run 1 2>&1)"; then
 fi
 rg -q 'API rejected test Lease fixture' <<<"$lease_error"
 rg -q 'Could not acquire test Lease' <<<"$lease_error"
+
+# Publication and other fixed-lock callers can require a Git-precreated Lease.
+# A missing object or transient read error must never fall through to create,
+# including when the supplied kubeconfig could create it.
+: >"$operation_log"
+if acquire_test_lease fake-kubeconfig existing-only-missing 1 existing-only \
+  >"$state_dir/existing-only-missing.out" 2>&1; then
+  echo 'Existing-only acquisition created a missing Lease.' >&2
+  exit 1
+fi
+[[ "$(<"$operation_log")" == 'get' ]]
+
+force_create_error=false
+acquire_test_lease fake-kubeconfig existing-only-fixture
+: >"$operation_log"
+force_get_error=true
+if acquire_test_lease fake-kubeconfig existing-only-transient 1 existing-only \
+  >"$state_dir/existing-only-transient.out" 2>&1; then
+  echo 'Existing-only acquisition accepted a failed Lease read.' >&2
+  exit 1
+fi
+[[ "$(<"$operation_log")" == 'get' ]]
+force_get_error=false
 
 echo 'Kubernetes test Lease unit tests passed.'

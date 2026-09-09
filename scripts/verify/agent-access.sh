@@ -10,6 +10,7 @@ kubeconfig="$1"
 talosconfig="$2"
 observer='homelab-observer'
 diagnostic='homelab-diagnostic'
+publisher='homelab-report-publisher'
 talos_node='192.168.90.10'
 talos_endpoints='192.168.90.10,192.168.90.11,192.168.90.12'
 kc=(kubectl --kubeconfig "$kubeconfig")
@@ -21,14 +22,18 @@ service_account_groups=(
 
 observer_context=false
 diagnostic_context=false
+publisher_context=false
 "${kc[@]}" config get-contexts "$observer" --no-headers >/dev/null 2>&1 && observer_context=true
 "${kc[@]}" config get-contexts "$diagnostic" --no-headers >/dev/null 2>&1 && diagnostic_context=true
-if [[ "$observer_context" == true && "$diagnostic_context" == true ]]; then
+"${kc[@]}" config get-contexts "$publisher" --no-headers >/dev/null 2>&1 && publisher_context=true
+if [[ "$observer_context" == true && "$diagnostic_context" == true &&
+  "$publisher_context" == true ]]; then
   credential_layout='named-contexts'
-elif [[ "$observer_context" == false && "$diagnostic_context" == false ]]; then
+elif [[ "$observer_context" == false && "$diagnostic_context" == false &&
+  "$publisher_context" == false ]]; then
   credential_layout='admin-impersonation'
 else
-  echo 'Agent access verification requires both scoped contexts or neither.' >&2
+  echo 'Agent access verification requires all three scoped contexts or none.' >&2
   exit 1
 fi
 
@@ -39,7 +44,8 @@ assert_can_i() {
   local resource="$4"
   local namespace="${5:-}"
   local subresource="${6:-}"
-  local -a identity_args namespace_args
+  local resource_name="${7:-}"
+  local -a identity_args namespace_args resource_name_args
   local action actual scope status
   if [[ "$credential_layout" == 'named-contexts' ]]; then
     identity_args=(--context "$context")
@@ -59,13 +65,17 @@ assert_can_i() {
     namespace_args=(--namespace "$namespace")
     scope="namespace $namespace"
   fi
+  resource_name_args=()
+  if [[ -n "$resource_name" ]]; then
+    resource_name_args=(--resource-name "$resource_name")
+  fi
   set +e
   if [[ -n "$subresource" ]]; then
     actual="$("${kc[@]}" "${identity_args[@]}" auth can-i "$verb" "$resource" \
-      --subresource "$subresource" "${namespace_args[@]}")"
+      --subresource "$subresource" "${namespace_args[@]}" "${resource_name_args[@]}")"
   else
     actual="$("${kc[@]}" "${identity_args[@]}" auth can-i "$verb" "$resource" \
-      "${namespace_args[@]}")"
+      "${namespace_args[@]}" "${resource_name_args[@]}")"
   fi
   status="$?"
   set -e
@@ -160,6 +170,41 @@ for context in "$observer" "$diagnostic"; do
   done
 done
 
+# Publisher: only the named report Deployment rollout, report Pods and exec, the
+# named Flux source, and the pre-created publication Lease are available.
+for verb in get list watch; do
+  assert_can_i "$publisher" yes "$verb" deployments.apps test-reports '' test-reports
+done
+assert_can_i "$publisher" yes get pods test-reports
+assert_can_i "$publisher" yes list pods test-reports
+assert_can_i "$publisher" yes create pods test-reports exec
+assert_can_i "$publisher" yes get gitrepositories.source.toolkit.fluxcd.io \
+  flux-system '' flux-system
+assert_can_i "$publisher" yes get leases.coordination.k8s.io \
+  flux-system '' homelab-test-report-publish-lock
+assert_can_i "$publisher" yes update leases.coordination.k8s.io \
+  flux-system '' homelab-test-report-publish-lock
+
+assert_can_i "$publisher" no get secrets test-reports
+assert_can_i "$publisher" no create pods test-reports portforward
+assert_can_i "$publisher" no create pods kube-system exec
+assert_can_i "$publisher" no create configmaps test-reports
+assert_can_i "$publisher" no patch deployments.apps test-reports '' test-reports
+assert_can_i "$publisher" no delete pods test-reports
+assert_can_i "$publisher" no list gitrepositories.source.toolkit.fluxcd.io flux-system
+assert_can_i "$publisher" no get gitrepositories.source.toolkit.fluxcd.io \
+  flux-system '' another-source
+assert_can_i "$publisher" no create leases.coordination.k8s.io \
+  flux-system '' homelab-test-report-publish-lock
+assert_can_i "$publisher" no patch leases.coordination.k8s.io \
+  flux-system '' homelab-test-report-publish-lock
+assert_can_i "$publisher" no update leases.coordination.k8s.io \
+  flux-system '' another-lock
+assert_can_i "$publisher" no update leases.coordination.k8s.io flux-system
+assert_can_i "$publisher" no bind clusterroles.rbac.authorization.k8s.io ''
+assert_can_i "$publisher" no escalate clusterroles.rbac.authorization.k8s.io ''
+assert_can_i "$publisher" no impersonate users ''
+
 # Observer: Secret bodies, interactive subresources, and mutations stay denied.
 assert_can_i "$observer" no get secrets kube-system
 assert_can_i "$observer" no create pods kube-system exec
@@ -201,4 +246,4 @@ talosctl services --nodes "$talos_node" --endpoints "$talos_endpoints" \
   exit 1
 }
 
-echo "Agent access verification passed using $credential_layout: observer and diagnostic Kubernetes boundaries match, and Talos reader inspection succeeds."
+echo "Agent access verification passed using $credential_layout: observer, diagnostic, and report publisher Kubernetes boundaries match, and Talos reader inspection succeeds."

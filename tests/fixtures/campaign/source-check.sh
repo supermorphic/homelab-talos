@@ -7,7 +7,7 @@ count=0
 count=$((count + 1))
 printf '%s\n' "$count" >"$state_file"
 
-source_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+source_sha="${CAMPAIGN_TEST_SOURCE_SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
 if [[ -n "${CAMPAIGN_TEST_DRIFT_AT:-}" &&
   "$count" -ge "$CAMPAIGN_TEST_DRIFT_AT" ]]; then
   source_sha='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'

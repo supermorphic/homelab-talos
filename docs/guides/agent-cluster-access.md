@@ -8,9 +8,10 @@ repository policy or executable behavior.
 
 [`AGENTS.md`](../../AGENTS.md) defines the authority boundary. Agents may use approved
 repository workflows to create task-scoped credentials and perform scoped verification
-without asking the operator to run those workflows for them. An agent must not adopt or
-use a write, administrator, elevated, or break-glass credential unless the operator
-explicitly authorizes that credential for the specific task.
+without asking the operator to run those workflows for them. This includes the dedicated
+publisher identity through recorded acceptance. An agent must not adopt or use other write,
+administrator, elevated, or break-glass credentials unless the operator explicitly
+authorizes that credential for the specific task.
 
 Linked worktrees start without cluster credentials. This prevents credentials from being
 copied into every checkout and makes the authority available to a task explicit. Most
@@ -62,8 +63,8 @@ credential used by that workflow.
 **Location matters.** The recipe selects one of two credential paths from the checkout
 location:
 
-- In a linked worktree, it creates only `homelab-observer`, `homelab-diagnostic`, and a
-  Talos `os:reader` identity.
+- In a linked worktree, it creates `homelab-observer`, `homelab-diagnostic`,
+  `homelab-report-publisher`, and a Talos `os:reader` identity.
 - In the main clone, it uses the existing Talos `os:admin` identity to download and
   replace the ignored Kubernetes administrator kubeconfig. Its current context is
   `homelab-admin`; the client certificate authenticates the Kubernetes user `admin` in
@@ -77,8 +78,9 @@ produces different Kubernetes authority depending on where it runs.
 In a linked worktree, `mise exec -- just talos kubeconfig` creates two ignored files with
 mode `0600`:
 
-- `.kube/config` contains 30-day Kubernetes token credentials for exactly two contexts:
-  `homelab-observer` and `homelab-diagnostic`. `homelab-observer` is the current context.
+- `.kube/config` contains 30-day Kubernetes token credentials for exactly three contexts:
+  `homelab-observer`, `homelab-diagnostic`, and `homelab-report-publisher`.
+  `homelab-observer` is the current context.
 - `.talos/config` contains a 90-day Talos credential with exactly the `os:reader` role.
 
 The installer uses the approved repository workflow to mint the scoped credentials. It
@@ -93,7 +95,7 @@ uses RBAC to decide whether that identity may perform the requested verb on the 
 resource. For example, a rule can allow `get` on Pods while denying `delete` on
 Deployments. An operation is denied when no applicable RBAC rule grants it.
 
-Both scoped Kubernetes identities inherit the built-in `view` role and the explicit
+The observer and diagnostic identities inherit the built-in `view` role and the explicit
 read permissions listed in the reference section below. Neither identity can read
 Kubernetes Secret bodies or use ordinary mutation verbs. The diagnostic identity adds
 only `create` on the `pods/exec` and `pods/portforward` subresources.
@@ -105,8 +107,9 @@ use of `exec` or `port-forward`.
 
 ## Observer and diagnostic
 
-The two Kubernetes identities separate routine inspection from the interactive
-capabilities needed by a small number of approved verifiers:
+The observer and diagnostic identities separate routine inspection from the interactive
+capabilities needed by a small number of approved verifiers. The third identity is used
+only for retained evidence publication:
 
 ```text
 observer
@@ -114,6 +117,9 @@ observer
 
 diagnostic
   → agent discretion only through approved named verifier workflows
+
+report-publisher
+  → guarded recorded-acceptance publication only
 
 anything broader or ad hoc
   → operator boundary
@@ -143,6 +149,19 @@ Within an approved task, an agent may:
   `homelab-diagnostic`.
 - Run the approved scoped verification campaign directly after its required preflight;
   the separate plan is an optional preview.
+- Run recorded acceptance for approved scoped verifiers with
+  `mise exec -- just test acceptance <suite-id|scoped-verification>`. The coordinator
+  selects `homelab-report-publisher` only for publication; no operator confirmation is
+  required for that approved evidence mutation.
+
+The publisher identity has namespace-limited report reads and pod execution, read access
+to the named Flux source, and get/update on
+`flux-system/homelab-test-report-publish-lock`. Git creates that Lease. It has no Secret
+reads, general workload writes, cluster-wide pod execution, or general Lease creation.
+It does not inherit `view` and must never be selected for suite execution. The publisher
+keeps secret scans, deployed-source checks, serialization, and guarded atomic installation.
+Feature-branch evidence remains candidate evidence. See
+[recorded acceptance](test-campaign-operations.md#record-initiative-and-infrequent-acceptance).
 
 If an approved verifier fails because its scoped identity lacks permission, stop at that
 boundary. Do not switch to an administrator credential or expand RBAC to make the check
@@ -154,7 +173,7 @@ The autonomous cases above include approved observer reads as well as approved s
 verifiers. Before performing any other scoped cluster operation, the agent must stop and
 surface the proposed action to the operator when it would:
 
-- Mutate live cluster state through these scoped credentials or verification workflows.
+- Mutate live cluster state beyond the approved recorded-acceptance publication path.
 - Perform an ad-hoc `kubectl exec`.
 - Perform an ad-hoc `kubectl port-forward`.
 - Expose or inspect sensitive runtime or process data outside an approved verifier.
@@ -298,9 +317,9 @@ The plan and run fail closed unless all of these conditions hold:
 
 - The checkout is a clean linked Git worktree.
 - `.kube/config` and `.talos/config` are inside that worktree and have mode `0600`.
-- The kubeconfig contains exactly the `homelab-observer` and `homelab-diagnostic`
-  contexts and token users, with `homelab-observer` current and no administrator
-  identity.
+- The kubeconfig contains exactly the `homelab-observer`, `homelab-diagnostic`, and
+  `homelab-report-publisher` contexts and token users, with `homelab-observer` current
+  and no administrator identity.
 - The Talos credential has exactly the `os:reader` role.
 
 The scoped campaign runs every catalog member assigned to the observer or diagnostic
@@ -323,6 +342,11 @@ disagree with the repository:
   suite commands, and access-tier assignments.
 - [`kubernetes/apps/kube-system/agent-access/app/rbac.yaml`](../../kubernetes/apps/kube-system/agent-access/app/rbac.yaml)
   defines the deployed Kubernetes permissions.
+- [`publisher-access.yaml`](../../kubernetes/apps/monitoring/test-reports/app/publisher-access.yaml)
+  defines the report namespace permissions. It deploys with the report namespace so
+  observer bootstrap does not depend on Test Reports availability.
+- [`report-publication-lease.yaml`](../../kubernetes/apps/kube-system/agent-access/app/report-publication-lease.yaml)
+  creates the named publication Lease without managing its runtime holder fields.
 - [`talos/mod.just`](../../talos/mod.just) and
   [`scripts/repository/install-worktree-credentials.sh`](../../scripts/repository/install-worktree-credentials.sh)
   implement credential installation.
