@@ -149,6 +149,18 @@ class PublicationTests(unittest.TestCase):
             json.loads((evidence / "publication.json").read_text())["result"], "passed"
         )
 
+    def test_candidate_diff_selects_automation_in_addition_to_core(self):
+        source = self.repo / "kubernetes/apps/automation/n8n/app/values.yaml"
+        source.parent.mkdir(parents=True)
+        source.write_text("example: true\n")
+        self.git("add", ".")
+        self.git("commit", "-m", "automation input")
+        with patch.object(ci_publish, "execute", return_value=0):
+            evidence = ci_publish.publish(self.repo)
+        receipt = json.loads((evidence / "publication.json").read_text())
+        self.assertEqual(receipt["groups"], ["core", "automation"])
+        self.assertNotEqual(receipt["base_sha"], receipt["head_sha"])
+
     def test_failed_group_still_reconciles_but_never_writes_pass_receipt(self):
         calls = []
 

@@ -24,8 +24,8 @@ mod kube "kubernetes"
 [group("Testing")]
 mod test "tests"
 
-# Cluster-independent, secret-free validation contract. Run locally before opening a
-# PR; GitHub Actions runs the exact same command on PRs targeting main. Requires
+# Canonical full validation fallback, independent of the cluster and secret-free.
+# For PR publication use `just test ci-publish`; GitHub selects the same groups. Requires
 # the mise toolchain and network egress (Helm pulls public charts) but NO kubeconfig,
 # SOPS age key, or cluster access. Cluster-dependent checks (*-verify, *-status,
 # bootstrap, pihole-status) are intentionally excluded. AGENTS.md defines their
