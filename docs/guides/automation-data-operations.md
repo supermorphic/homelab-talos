@@ -192,7 +192,7 @@ For each new domain, the workflow creates:
 
 - `<domain>_owner`, a stable `NOLOGIN` object owner;
 - `<domain>_migrator`, a login that can assume the owner for reviewed DDL;
-- `<domain>_runtime`, a CRUD-only login;
+- `<domain>_runtime`, a restricted login with initial CRUD defaults;
 - the matching database and schema, grants, and default privileges; and
 - n8n credentials named `automation-data/<domain>/migrator` and
   `automation-data/<domain>/runtime`.
@@ -201,6 +201,12 @@ The request supplies a domain and a fixed operation, not arbitrary SQL. Supporte
 operations create/reconcile a domain, rotate one login credential, and validate a
 domain. The workflow does not expose `DROP DATABASE`, `DROP ROLE`, destructive schema
 replacement, or bulk data deletion.
+
+Application migrations may reduce object and default grants. Platform validation
+checks the permitted privilege ceiling, not blanket CRUD on all application tables.
+It does not certify an application's exact grants or functional behavior. Do not use
+provision/reconcile to repair a customized application's grants: these operations still
+apply broad initial grants. Use the application's reviewed migration workflow instead.
 
 **Expected result:** The acceptance command passes, the domain and both n8n credentials
 exist, unchanged reconciliation preserves their credentials, explicit rotation changes
@@ -283,10 +289,12 @@ the run label and Kubernetes object UID before deletion, including after a Job f
 and the command does not retrieve a Secret.
 
 On installed `026-nocodb-v1`, this command also reconciles the reviewed metadata
-function from the shared `nocodb-metadata.sql` source. It permits never-ready registry
+function from `nocodb-metadata.sql` and the validation functions from
+`domain-validation.sql`. Validation permits application-owned restrictions while
+rejecting excess runtime authority. Metadata provisioning permits never-ready registry
 rows without databases, but rejects missing databases for formerly ready domains before
 changing the metadata login. It preserves domain rows, credentials, and the backup
-format. A changed function body advances `installed_at` to require a subsequent backup;
+format. Any changed reviewed function body advances `installed_at` to require a subsequent backup;
 an unchanged rerun preserves that timestamp.
 
 After the command passes, create another complete automation-data logical backup. Keep

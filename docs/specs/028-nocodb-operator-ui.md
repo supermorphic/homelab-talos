@@ -447,8 +447,11 @@ never-ready registry rows without databases, rejects missing formerly ready data
 before metadata mutation, and revokes metadata access to existing managed databases.
 The command preserves domain data and credentials and advances `installed_at` only
 when the function body changes, requiring a subsequent complete backup. Bootstrap
-preflight compares the installed function body with the reviewed SQL in addition to
-checking revision and backup freshness.
+preflight compares the installed metadata and domain-validation function bodies with
+the reviewed SQL in addition to checking revision and backup freshness. The existing
+upgrade also installs `domain-validation.sql`, which validates runtime privilege
+ceilings without requiring access to every application-owned object. It does not
+change application grants or initial provisioning defaults.
 
 A single-row `platform_operations.platform_schema_revision` table records it as platform migration
 metadata. The fixed read-only oracle is

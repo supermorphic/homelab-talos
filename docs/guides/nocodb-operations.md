@@ -186,7 +186,8 @@ plus a complete logical backup whose `completed_at` is at or after the revision'
 before NocoDB resume. The Job does not expose a general SQL surface or retrieve Secret
 values, and bootstrap removes only the Job with its exact run marker.
 
-Preflight also compares the installed metadata function body with the reviewed SQL.
+Preflight also compares the installed metadata and domain-validation function bodies
+with the reviewed SQL.
 If it differs, run the confirmed `automation-data-upgrade` command from deployed main,
 then obtain a new complete backup and affected provisioning/restore evidence before
 retrying bootstrap. The schema revision remains `026-nocodb-v1`; revision alone does

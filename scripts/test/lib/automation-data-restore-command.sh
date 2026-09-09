@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# shellcheck source=scripts/test/lib/automation-data-permission-restore.sh
+source scripts/test/lib/automation-data-permission-restore.sh
+
 automation_data_restore_job_command() {
   cat <<'EOF'
 restore_fail() {
@@ -56,6 +59,9 @@ validate_bundle() {
   mv /tmp/restore-databases-base64.sorted /tmp/restore-databases-base64
   return 0
 }
+EOF
+  automation_data_permission_restore_helpers
+  cat <<'EOF'
 
 printf '%s\n' 'restore_stage=artifact-selection'
 selected=''
@@ -145,6 +151,34 @@ printf '%s' "$restored_registry_base64" | base64 -d > /tmp/restore-actual-regist
   restore_fail registry-decode
 cmp -s "$selected/registry.tsv" /tmp/restore-actual-registry ||
   restore_fail registry-mismatch
+
+printf '%s\n' 'restore_stage=permission-restore-comparison'
+awk -F '\t' 'NR > 1 && $6 == "ready" { print $1 "\t" $2 }' \
+  "$selected/registry.tsv" > /tmp/restore-ready-domains ||
+  restore_fail permission-restore-comparison
+while IFS="$(printf '\t')" read -r domain database_name extra; do
+  test -n "$domain" || continue
+  test -n "$database_name" -a -z "${extra:-}" ||
+    restore_fail permission-restore-comparison
+  printf '%s\n' "$domain" | grep -Eq '^[a-z][a-z0-9_]{0,47}$' ||
+    restore_fail permission-restore-comparison
+  printf '%s\n' "$database_name" | grep -Eq '^[a-z][a-z0-9_]{0,47}$' ||
+    restore_fail permission-restore-comparison
+  encoded_database="$(printf '%s' "$database_name" | base64 | tr -d '\n')" ||
+    restore_fail permission-restore-comparison
+  dump_path="$(awk -F '\t' -v encoded="$encoded_database" '
+    $1 == "database" && $2 == encoded { count += 1; path = $3 }
+    END { if (count == 1) print path; else exit 1 }
+  ' "$selected/manifest.tsv")" || {
+    printf 'restore_permission_fidelity_failure domain=%s\n' "$domain" >&2
+    restore_fail permission-restore-comparison
+  }
+  if ! automation_data_compare_restored_permissions \
+    "$selected/$dump_path" "$database_name"; then
+    printf 'restore_permission_fidelity_failure domain=%s\n' "$domain" >&2
+    restore_fail permission-restore-comparison
+  fi
+done < /tmp/restore-ready-domains
 
 printf '%s\n' 'restore_stage=permission-validation'
 permission_contract="$(psql --dbname=automation_data_control --set=ON_ERROR_STOP=1 --tuples-only --no-align --command="
