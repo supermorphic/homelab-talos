@@ -58,13 +58,12 @@ assert_planner_argv() {
 	done
 }
 
-# The authoritative full CI job and its unfiltered pull-request trigger remain
-# present while the split-all jobs and advisory merge gate collect parity evidence.
+# The required workflow always starts; selected groups replace the duplicate full job.
 mise exec -- yq -e '((.on.pull_request.branches | length) == 1) and
   .on.pull_request.branches[0] == "main" and
   (.on.pull_request | has("paths") | not) and
   (.on.pull_request | has("paths-ignore") | not) and
-  (.jobs.ci != null) and (.jobs.plan != null) and
+  (.jobs.ci == null) and (.jobs.plan != null) and
   (.jobs.groups != null) and (.jobs."merge-gate" != null)' "$workflow" >/dev/null
 
 mise exec -- yq -e '
@@ -72,8 +71,7 @@ mise exec -- yq -e '
   (.on | has("workflow_dispatch")) and
   .on.workflow_dispatch == null and
   .permissions.contents == "read" and
-  (.permissions | length) == 1 and
-  (.jobs.ci.steps | map(select(.run == "mise exec -- just ci")) | length) == 1
+  (.permissions | length) == 1
 ' "$workflow" >/dev/null
 
 # These GitHub expressions are literal workflow values, not shell expansions.
@@ -86,9 +84,6 @@ CHECKOUT_ACTION="$checkout_action" MISE_ACTION="$mise_action" MISE_VERSION="$mis
   (.jobs.plan.steps[] | select(.uses == strenv(CHECKOUT_ACTION)) | .with."fetch-depth") == 0 and
   (.jobs.plan.steps[] | select(.uses == strenv(CHECKOUT_ACTION)) | .with."persist-credentials") == false and
   (.jobs.plan.steps | map(select(.uses == strenv(MISE_ACTION))) | length) == 1 and
-  (.jobs.ci.steps | map(select(
-    .uses == strenv(MISE_ACTION) and .with.version == strenv(MISE_VERSION)
-  )) | length) == 1 and
   (.jobs.plan.steps | map(select(
     .uses == strenv(MISE_ACTION) and .with.version == strenv(MISE_VERSION)
   )) | length) == 1 and
@@ -102,8 +97,8 @@ CHECKOUT_ACTION="$checkout_action" MISE_ACTION="$mise_action" MISE_VERSION="$mis
 
 # The planner commands are executed with synthetic event values so argument order is
 # validated at the command boundary rather than inferred from independent text matches.
-assert_planner_argv "$workflow" pull_request 'mise exec -- just test ci-plan-full' \
-	exec -- just test ci-plan-full \
+assert_planner_argv "$workflow" pull_request 'mise exec -- just test ci-plan' \
+	exec -- just test ci-plan \
 	1111111111111111111111111111111111111111 \
 	2222222222222222222222222222222222222222 \
 	"$fixture_root/runner-temp/ci-plan.json"
@@ -165,7 +160,40 @@ UPLOAD_ACTION="$upload_action" mise exec -- yq -e '
   )) | length) == 1
 ' "$workflow" >/dev/null
 
-# Split-all execution is explicit and bounded. Every matrix child consumes the
+# Execute the exported matrix boundary with real plans. A hard-coded full/core
+# output or a swallowed malformed-plan failure must not pass this contract.
+selection_script="$(mise exec -- yq -r '.jobs.plan.steps[] |
+  select(.id == "selection") | .run' "$workflow")"
+candidate="$(git rev-parse HEAD)"
+for mode in selective full; do
+	plan_args=()
+	expected_groups='groups=["core"]'
+	if [[ "$mode" == full ]]; then
+		plan_args=(--full)
+		expected_groups='groups=["core","observability","automation","ci-framework"]'
+	fi
+	mise exec -- uv run --locked python scripts/test/ci_plan.py plan \
+		--base "$candidate" --head "$candidate" --impact tests/impact.yaml \
+		--catalog tests/catalog.yaml --output "$fixture_root/runner-temp/ci-plan.json" \
+		"${plan_args[@]}"
+	: >"$fixture_root/output"
+	RUNNER_TEMP="$fixture_root/runner-temp" GITHUB_OUTPUT="$fixture_root/output" \
+		bash -euo pipefail -c "$selection_script"
+	[[ "$(<"$fixture_root/output")" == "$expected_groups" ]] || {
+		echo "The workflow did not export the $mode plan groups." >&2
+		exit 1
+	}
+done
+printf '{}\n' >"$fixture_root/runner-temp/ci-plan.json"
+: >"$fixture_root/output"
+if RUNNER_TEMP="$fixture_root/runner-temp" GITHUB_OUTPUT="$fixture_root/output" \
+	bash -euo pipefail -c "$selection_script" >/dev/null 2>&1; then
+	echo 'The workflow accepted a malformed matrix plan.' >&2
+	exit 1
+fi
+[[ ! -s "$fixture_root/output" ]]
+
+# Selected execution is bounded. Every matrix child consumes the
 # same immutable plan and candidate and retains its own diagnostic trees.
 # shellcheck disable=SC2016
 CHECKOUT_ACTION="$checkout_action" MISE_ACTION="$mise_action" \
@@ -174,8 +202,8 @@ DOWNLOAD_ACTION="$download_action" UPLOAD_ACTION="$upload_action" \
   .jobs.groups.needs == "plan" and
   .jobs.groups.strategy."fail-fast" == false and
   .jobs.groups.strategy."max-parallel" == 4 and
-  (.jobs.groups.strategy.matrix.group | join(" ")) ==
-    "core observability automation ci-framework" and
+  .jobs.groups.strategy.matrix.group == "${{ fromJSON(needs.plan.outputs.groups) }}" and
+  .jobs.plan.outputs.groups == "${{ steps.selection.outputs.groups }}" and
   (.jobs.groups.steps | map(select(.uses == strenv(CHECKOUT_ACTION))) | length) == 1 and
   (.jobs.groups.steps[] | select(.uses == strenv(CHECKOUT_ACTION)) | .with.ref) ==
     "${{ github.event_name == '\''pull_request'\'' && github.event.pull_request.head.sha || github.sha }}" and

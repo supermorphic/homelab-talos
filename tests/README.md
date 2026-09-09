@@ -41,10 +41,10 @@ only the catalog checks.
 
 The Stage 2 runtime selector has four execution groups: always-running `core`, plus
 `observability`, `automation`, and `ci-framework`. `full` selects their exact union.
-The provider rollout is in split-all parity: the required GitHub `ci` job still runs
-full validation. A full-bound plan also runs all four groups, and the advisory
-`merge-gate` reconciles their separate results. Selective enforcement remains a later
-rollout step.
+The provider workflow plans affected groups for pull requests and exports that plan
+to the job matrix. `core` always runs. Manual dispatch requests all four groups.
+The required `merge-gate` reconciles their separate results; the duplicate full `ci`
+job has been removed. Full local `just ci` remains the publication gate.
 
 | File | Responsibility |
 | --- | --- |
@@ -91,7 +91,7 @@ mise exec -- uv run --locked python -m unittest scripts/test/test_ci_plan.py
 mise exec -- bash scripts/test/validate-harness-groups-test.sh
 ```
 
-The planned enforced workflow is:
+The enforced workflow is:
 
 ```text
 exact current-main base + rebased candidate head
