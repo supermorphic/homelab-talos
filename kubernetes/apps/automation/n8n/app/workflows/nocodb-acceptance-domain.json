@@ -852,7 +852,7 @@
           "parameters": [
             {
               "name": "where",
-              "value": "={{ '(run_id,eq,' + encodeURIComponent($('Normalize Acceptance Request').first().json.runId) + ')' }}"
+              "value": "={{ '(id,eq,' + encodeURIComponent(String($('Evaluate Reader Insert Denial').first().json.recordId)) + ')~and(run_id,eq,' + encodeURIComponent($('Normalize Acceptance Request').first().json.runId) + ')' }}"
             },
             {
               "name": "limit",
@@ -1036,7 +1036,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Evaluate Reader Insert Denial').first().json;\nconst cleanup = $('Confirm Probe Cleanup').first().json;\nconst cleanupRows = Array.isArray(cleanup) ? cleanup : (cleanup.list || []);\nif (cleanupRows.some((row) => row.run_id === context.runId)) throw new Error('probe_cleanup_failed');\nconst list = Array.isArray($json) ? $json : $json.list;\nif (!Array.isArray(list) || list.length !== 1 || $json.pageInfo !== undefined) throw new Error('recovery_saved_view_invalid');\nconst view = list[0];\nif (view.fk_model_id !== context.factsTableId || view.title !== 'acceptance_facts' || view.type !== 3 || view.uuid !== null || typeof view.id !== 'string' || !view.id) throw new Error('recovery_saved_view_invalid');\nreturn [{ json: { ...context, savedView: { id: view.id, tableId: view.fk_model_id, title: view.title, type: view.type } } }];"
+        "jsCode": "const context = $('Evaluate Reader Insert Denial').first().json;\nconst cleanup = $('Confirm Probe Cleanup').first().json;\nif (!Array.isArray(cleanup.list) || cleanup.list.length !== 0 ||\n  cleanup.pageInfo?.totalRows !== 0 || cleanup.pageInfo?.isLastPage !== true) throw new Error('probe_cleanup_failed');\nconst list = Array.isArray($json) ? $json : $json.list;\nif (!Array.isArray(list) || list.length !== 1 || $json.pageInfo !== undefined) throw new Error('recovery_saved_view_invalid');\nconst view = list[0];\nif (view.fk_model_id !== context.factsTableId || view.title !== 'acceptance_facts' || view.type !== 3 || view.uuid !== null || typeof view.id !== 'string' || !view.id) throw new Error('recovery_saved_view_invalid');\nreturn [{ json: { ...context, savedView: { id: view.id, tableId: view.fk_model_id, title: view.title, type: view.type } } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
