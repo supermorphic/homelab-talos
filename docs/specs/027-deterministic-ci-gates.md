@@ -282,7 +282,7 @@ categories. No runtime number overrides correctness or justifies unnecessary mac
 
 ## Implementation status
 
-Stage 2 is in selective-enforcement rollout. Pull requests plan affected groups, while
+Stage 2 selective enforcement is merged. Pull requests plan affected groups, while
 manual dispatch requests full validation. The matrix consumes the validated plan's
 groups; the duplicate provider `ci` job is removed. Full local `just ci` remains required.
 
@@ -290,8 +290,16 @@ Split-all provider execution established equivalent full and grouped evidence on
 same candidate tree. On the merged workflow, cancellation of the group jobs caused
 the always-running gate to fail; a complete retry produced passing group results and
 reconciliation. Protection now requires `merge-gate` with strict current-main checks;
-the applied rules passed independent readback. Provider verification of selective
-execution and post-enable measurement remain pending.
+the applied rules passed independent readback. The selection-enabled provider workflow
+passed with its dynamically planned full group set for a CI-framework change, without
+the duplicate full job. Reduced-group provider observations, skip-frequency and
+capacity measurements, and the local publication command remain follow-on work.
+
+The initial provider observation shows comparable core and longest-group durations.
+Selective execution can therefore save substantial aggregate validation work while
+offering smaller wall-time savings. Continue measuring both; optimize core intrinsically
+if it limits the critical path. Existing group boundaries remain appropriate, including
+automation's now-material validation cost.
 
 Operational commands and inspection examples live in
 [the testing guide](../../tests/README.md). Detailed execution evidence and remaining
