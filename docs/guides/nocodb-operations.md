@@ -462,7 +462,9 @@ writes and forbidden operator changes are denied by PostgreSQL; unchanged sync i
 idempotent; targeted rotation changes only the operator credential generation; the
 record canary has exact PostgreSQL, source, table, view, decision-row, and artifact
 identity; and feedback reports `original`, `corrected`, `corrected`, `refreshed`, and
-`corrected` in sequence. Perform the attended browser check after the API pass: confirm
+`corrected` in sequence. Each access probe checks deletion of its exact decision row.
+The feedback decision remains available through the post-rotation probe and is removed
+by the final run cleanup. Perform the attended browser check after the API pass: confirm
 that the reader is visibly read-only and that the operator can make the intended small
 edit.
 

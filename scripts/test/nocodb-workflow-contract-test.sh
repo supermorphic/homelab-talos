@@ -1496,13 +1496,49 @@ const probeContext = {
 const savedView = execute(
   'Require Recovery Saved View',
   { list: [{ id: 'view-facts', fk_model_id: 'table-facts', title: 'acceptance_facts', type: 3, uuid: null }] },
-  { 'Evaluate Reader Insert Denial': probeContext, 'Confirm Probe Cleanup': { list: [] } },
+  { 'Evaluate Reader Insert Denial': probeContext, 'Confirm Probe Cleanup': { list: [], pageInfo: { totalRows: 0, isLastPage: true } } },
 )[0].json;
+const cleanupProbeContext = { ...probeContext, runId: 'run-after-feedback', recordId: 91 };
+const recoveryViewInput = {
+  list: [{ id: 'view-facts', fk_model_id: 'table-facts', title: 'acceptance_facts', type: 3, uuid: null }],
+};
+const emptyProbeResult = { list: [], pageInfo: { totalRows: 0, isLastPage: true } };
+const afterFeedbackView = execute('Require Recovery Saved View', recoveryViewInput, {
+  'Evaluate Reader Insert Denial': cleanupProbeContext,
+  'Confirm Probe Cleanup': emptyProbeResult,
+})[0].json;
+if (afterFeedbackView.savedView.id !== 'view-facts') {
+  throw new Error('an absent exact probe record prevented post-rotation completion');
+}
+for (const invalidCleanup of [
+  { list: [{ id: 91, run_id: 'run-after-feedback' }], pageInfo: { totalRows: 1, isLastPage: true } },
+  { list: [{ id: '91', run_id: 'run-after-feedback' }], pageInfo: { totalRows: 1, isLastPage: true } },
+  { list: [{ id: 92, run_id: 'run-after-feedback', decision: 'corrected' }], pageInfo: { totalRows: 1, isLastPage: true } },
+  { list: [], pageInfo: { totalRows: 1, isLastPage: true } },
+  { list: [], pageInfo: { totalRows: 0, isLastPage: false } },
+  { list: [] },
+  { error: 'request_failed' },
+]) {
+  if (!rejects('Require Recovery Saved View', recoveryViewInput, {
+    'Evaluate Reader Insert Denial': cleanupProbeContext,
+    'Confirm Probe Cleanup': invalidCleanup,
+  }, /probe_cleanup_failed/)) {
+    throw new Error('a non-empty or malformed probe cleanup result passed as deletion evidence');
+  }
+}
+const probeWhereExpression = byName['Confirm Probe Cleanup'].parameters.queryParameters.parameters
+  .find((parameter) => parameter.name === 'where').value;
+const probeWhere = new Function('$', `return (${probeWhereExpression.slice(3, -2)});`)(
+  (name) => ({ first: () => ({ json: cleanupProbeContext }) }),
+);
+if (probeWhere !== '(id,eq,91)~and(run_id,eq,run-after-feedback)') {
+  throw new Error('probe cleanup query must select only the exact probe record within its run');
+}
 for (const view of [
   { id: 'view-other', fk_model_id: 'table-facts', title: 'Grid', type: 3, uuid: null },
   { id: 'view-facts', fk_model_id: 'table-decisions', title: 'acceptance_facts', type: 3, uuid: null },
 ]) {
-  if (!rejects('Require Recovery Saved View', { list: [view] }, { 'Evaluate Reader Insert Denial': probeContext, 'Confirm Probe Cleanup': { list: [] } }, /recovery_saved_view_invalid/)) {
+  if (!rejects('Require Recovery Saved View', { list: [view] }, { 'Evaluate Reader Insert Denial': probeContext, 'Confirm Probe Cleanup': { list: [], pageInfo: { totalRows: 0, isLastPage: true } } }, /recovery_saved_view_invalid/)) {
     throw new Error('mismatched recovery view identity was accepted');
   }
 }
@@ -1602,7 +1638,7 @@ const chainedView = execute('Require Recovery Saved View', {
   list: [{ id: 'view-facts', fk_model_id: 'table-facts', title: 'acceptance_facts', type: 3, uuid: null }],
 }, {
   'Evaluate Reader Insert Denial': chainedReaderDenial,
-  'Confirm Probe Cleanup': { list: [], pageInfo: { totalRows: 0 } },
+  'Confirm Probe Cleanup': { list: [], pageInfo: { totalRows: 0, isLastPage: true } },
 })[0].json;
 const chainedFact = execute(
   'Require Recovery Fact', { list: [factFixture] }, { 'Require Recovery Saved View': chainedView },

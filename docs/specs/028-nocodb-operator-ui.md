@@ -1085,6 +1085,14 @@ remain agent-run under repository policy.
 
 ## Implementation status
 
+The 2026-09-09 acceptance correction scopes each probe's cleanup query to its decision
+record ID and run ID. A retained feedback decision from the same run no longer prevents
+the post-rotation probe from completing. The cleanup assertion requires an empty
+result with consistent pagination; a remaining record or malformed response fails.
+Final run cleanup removes the feedback decision. Offline regression coverage checks
+the bounded query and executes the actual workflow Code node against valid empty,
+non-empty, and malformed responses; this does not establish live acceptance.
+
 The 2026-09-08 backup correction emits actual tab and newline separators from the
 quoted PostgreSQL capture query. A populated PostgreSQL integration regression checks
 that the resulting registry is 15-column TSV. Bundle acceptance retains checksum,
