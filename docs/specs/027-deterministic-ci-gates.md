@@ -282,10 +282,16 @@ categories. No runtime number overrides correctness or justifies unnecessary mac
 
 ## Implementation status
 
-Stage 2 is in split-all parity rollout. A full-bound plan runs all four groups and the
-advisory `merge-gate` reconciles their separate results. Full `ci` remains authoritative.
-Provider parity proof, the protection transition, and selective enforcement remain
-pending.
+Stage 2 is in selective-enforcement rollout. Pull requests plan affected groups, while
+manual dispatch requests full validation. The matrix consumes the validated plan's
+groups; the duplicate provider `ci` job is removed. Full local `just ci` remains required.
+
+Split-all provider execution established equivalent full and grouped evidence on the
+same candidate tree. On the merged workflow, cancellation of the group jobs caused
+the always-running gate to fail; a complete retry produced passing group results and
+reconciliation. Protection now requires `merge-gate` with strict current-main checks;
+the applied rules passed independent readback. Provider verification of selective
+execution and post-enable measurement remain pending.
 
 Operational commands and inspection examples live in
 [the testing guide](../../tests/README.md). Detailed execution evidence and remaining

@@ -41,10 +41,10 @@ only the catalog checks.
 
 The Stage 2 runtime selector has four execution groups: always-running `core`, plus
 `observability`, `automation`, and `ci-framework`. `full` selects their exact union.
-The provider rollout is in split-all parity: the required GitHub `ci` job still runs
-full validation. A full-bound plan also runs all four groups, and the advisory
-`merge-gate` reconciles their separate results. Selective enforcement remains a later
-rollout step.
+The provider workflow plans affected groups for pull requests and exports that plan
+to the job matrix. `core` always runs. Manual dispatch requests all four groups.
+The required `merge-gate` reconciles their separate results; the duplicate full `ci`
+job has been removed. Full local `just ci` remains the publication gate.
 
 | File | Responsibility |
 | --- | --- |
@@ -91,7 +91,7 @@ mise exec -- uv run --locked python -m unittest scripts/test/test_ci_plan.py
 mise exec -- bash scripts/test/validate-harness-groups-test.sh
 ```
 
-The planned enforced workflow is:
+The enforced workflow is:
 
 ```text
 exact current-main base + rebased candidate head
@@ -101,6 +101,18 @@ exact current-main base + rebased candidate head
 The full `mise exec -- just ci` command remains available and required locally under
 current repository policy. See [Spec 027](../docs/specs/027-deterministic-ci-gates.md)
 for the shadow, split-all, and selective rollout checkpoints and protection transition.
+
+### Retrying a provider run
+
+Use **Re-run all jobs** when retrying this workflow, or run
+`mise exec -- gh run rerun <run-id>`. Do not select only failed jobs or an individual
+group or gate. Plans and result artifacts include the workflow run attempt in their
+names. A partial retry starts a new attempt without recreating successful dependencies'
+artifacts, so the group or gate cannot download its required inputs and fails safely.
+A complete retry produces a fresh plan and every required result in the same attempt.
+
+After editing or rebasing the candidate, use the new PR run. Retrying an older run
+validates its original revision, not the updated branch.
 
 ## Offline harness execution
 
