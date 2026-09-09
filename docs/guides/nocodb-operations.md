@@ -171,7 +171,11 @@ NOCODB_BOOTSTRAP_CONFIRM='bootstrap:nocodb' mise exec -- just bootstrap nocodb
 
 Bootstrap verifies the issue-317 prerequisite evidence, encrypted Secret, deployed
 revision, and live suspension twice before mutation. Provisioning and restore reports
-retain the Git SHA at which they ran. A report from an older SHA remains eligible only
+retain the Git SHA at which they ran. The publisher rejects dirty checkouts. Bootstrap
+accepts passed published runs from deployed main or its ancestors, including reports
+marked as candidates because main advanced before publication. The dashboard's
+`authoritative` flag does not determine bootstrap eligibility.
+A report from an older SHA remains eligible only
 when its complete platform, backup, policy, workflow, restore, and shared lifecycle
 source dependencies equal deployed `origin/main`; missing Git objects, comparison
 errors, or changed relevant source stop bootstrap. Documentation-only changes do not

@@ -402,7 +402,7 @@ require_attended_evidence() {
     (.runs | type == "array") and
     all(.runs[] | select(
       provisioning_evidence or restore_evidence
-    ) | select(.result == "passed" and .authoritative == true);
+    ) | select(.result == "passed");
       (.git_sha | type) == "string" and
       (.git_sha | test("^[0-9a-f]{40}$")) and valid_end)
   ' "$evidence" >/dev/null || {
@@ -424,7 +424,7 @@ require_attended_evidence() {
       .scenario == "full-chain";
     [.runs[] | select(
       (provisioning_evidence or restore_evidence) and
-      .result == "passed" and .authoritative == true
+      .result == "passed"
     ) | [
       (if provisioning_evidence then
         "test.automation-data-provisioning"
@@ -445,6 +445,18 @@ require_attended_evidence() {
         echo "Refusing NocoDB bootstrap: applicable provisioning and restore evidence cannot be established because Git object $evidence_sha is unavailable locally." >&2
         return 1
       }
+      # Publication rejects dirty runs. Its current-main authority flag is for
+      # dashboards, not dependency-equivalent evidence from merged history.
+      if git merge-base --is-ancestor "$evidence_sha" "$captured_main_sha"; then
+        :
+      else
+        diff_status=$?
+        if [[ "$diff_status" == 1 ]]; then
+          continue
+        fi
+        echo 'Refusing NocoDB bootstrap: applicable provisioning and restore evidence ancestry could not be checked.' >&2
+        return 1
+      fi
       common_evidence_paths=(
         .justfile
         .mise.toml

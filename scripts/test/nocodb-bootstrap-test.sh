@@ -119,6 +119,12 @@ case "$*" in
       printf '%s\n' "$FAKE_REMOTE_MAIN"
     fi
     ;;
+  "merge-base --is-ancestor ${FAKE_EVIDENCE_SHA} ${FAKE_REMOTE_MAIN}"|\
+  "merge-base --is-ancestor ${FAKE_NEWER_EVIDENCE_SHA} ${FAKE_REMOTE_MAIN}"|\
+  "merge-base --is-ancestor ${FAKE_REMOTE_MAIN} ${FAKE_REMOTE_MAIN}")
+    [[ "${FAKE_FAILURE:-}" != evidence-unmerged ]] || exit 1
+    [[ "${FAKE_FAILURE:-}" != evidence-ancestry-error ]] || exit 128
+    ;;
   "diff --quiet ${FAKE_REMOTE_MAIN} --"*)
     count=0
     [[ ! -f "$FAKE_CASE_ROOT/source-check-count" ]] || count="$(<"$FAKE_CASE_ROOT/source-check-count")"
@@ -132,7 +138,7 @@ case "$*" in
   "diff --quiet ${FAKE_REMOTE_MAIN} ${FAKE_REMOTE_MAIN} --"*) ;;
   "diff --quiet ${FAKE_EVIDENCE_SHA} ${FAKE_REMOTE_MAIN} --"*)
     case "${FAKE_FAILURE:-}" in
-      evidence-provisioning-source)
+      evidence-provisioning-source|evidence-candidate-changed)
         [[ "$*" != *'scripts/test/scenarios/automation-data-provisioning.sh'* ]] || exit 1
         ;;
       evidence-backup-source|evidence-sql-source)
@@ -403,10 +409,24 @@ case "$url" in
         ;;
     esac
     extra_run=''
+    case "${FAKE_FAILURE:-}" in
+      evidence-candidate*) evidence_revision="$FAKE_EVIDENCE_SHA" ;;
+    esac
     if [[ "${FAKE_FAILURE:-}" == evidence-newest-unsuitable ]]; then
       extra_run=",{\"source\":\"test\",\"suite\":\"platform\",\"tier\":\"integration\",\"target\":\"automation-data-restore-drill\",\"scenario\":\"full-chain\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$FAKE_NEWER_EVIDENCE_SHA\",\"end\":\"2026-09-04T12:00:00Z\"}"
     fi
     printf '%s\n' "{\"schema_version\":1,\"runs\":[{\"source\":\"test\",\"suite\":\"platform\",\"tier\":\"integration\",\"target\":\"automation-data\",\"scenario\":\"provisioning\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$evidence_revision\",\"end\":\"2026-09-04T08:00:00Z\"},{\"source\":\"test\",\"suite\":\"platform\",\"tier\":\"integration\",\"target\":\"automation-data\",\"scenario\":\"provisioning\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$evidence_revision\",\"end\":\"$provision_end\"},{\"source\":\"test\",\"suite\":\"platform\",\"tier\":\"integration\",\"target\":\"automation-data-restore-drill\",\"scenario\":\"full-chain\",\"result\":\"passed\",\"authoritative\":true,\"git_sha\":\"$evidence_revision\",\"end\":\"$restore_end\"}$extra_run]}" >"$output"
+    case "${FAKE_FAILURE:-}" in
+      evidence-candidate*|evidence-unmerged|evidence-ancestry-error)
+        jq --arg mode "${FAKE_FAILURE:-}" '
+          .runs[].authoritative = false |
+          if $mode == "evidence-candidate-failed" then .runs[].result = "failed"
+          elif $mode == "evidence-candidate-invalid-time" then .runs[].end = "invalid"
+          else . end
+        ' "$output" >"$output.candidate"
+        mv "$output.candidate" "$output"
+        ;;
+    esac
     ;;
   'https://nocodb.lab.supermorphic.com/api/v1/health')
     [[ "$method" == GET && -z "$body" ]] || exit 69
@@ -716,6 +736,20 @@ for failure in evidence-stale evidence-equal evidence-invalid-time; do
   assert_contains 'provisioning and restore evidence'
   assert_no_activation
   assert_no_suspend
+done
+
+case_name='published historical candidates remain eligible when merged dependencies are unchanged'
+run_case evidence-candidate
+assert_status 0
+assert_event "git merge-base --is-ancestor $evidence_sha $remote_main"
+assert_event "git diff --quiet $evidence_sha $remote_main --"
+
+for failure in evidence-candidate-changed evidence-candidate-failed \
+  evidence-candidate-invalid-time evidence-unmerged evidence-ancestry-error; do
+  case_name="inapplicable candidate evidence is rejected: $failure"
+  run_case "$failure"
+  assert_failure
+  assert_no_activation
 done
 
 case_name='unrelated documentation changes preserve original-SHA evidence eligibility'

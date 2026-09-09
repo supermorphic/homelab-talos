@@ -9,6 +9,11 @@ ordinary reading and small, reviewed corrections or decisions without making Noc
 system of record or the bulk-change engine.
 
 PostgreSQL remains authoritative. n8n remains the orchestration and bulk-change boundary.
+Bootstrap prerequisite evidence may come from a passed, clean published run on an
+ancestor of deployed main when all relevant dependencies are unchanged. The report
+publisher's exact-current-main `authoritative` flag controls dashboard promotion, not
+bootstrap evidence eligibility. Unmerged revisions and failed ancestry checks are not
+accepted; restore evidence must still be newer than provisioning evidence.
 NocoDB is a removable interface over database privileges defined by each domain.
 
 This design extends the platform in
