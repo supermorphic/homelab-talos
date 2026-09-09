@@ -1102,6 +1102,58 @@ rg -q 'managed_database_missing' "$integration_root/private/missing-ready.log" |
   "SELECT md5(rolpassword) FROM pg_authid WHERE rolname = 'nocodb_metadata';")" ]] ||
   fail 'missing database refusal changed the metadata password'
 
+# Run the actual restore permission gate against real role behavior. Reporting only
+# an aggregate false would conceal which domain and invariant require diagnosis.
+# shellcheck source=scripts/test/lib/automation-data-restore-command.sh
+source scripts/test/lib/automation-data-restore-command.sh
+permission_gate="$(automation_data_restore_job_command | sed -n \
+  '/^printf.*restore_stage=permission-validation/,/^restored_catalog_state=/{
+    /^restored_catalog_state=/d
+    p
+  }')"
+# shellcheck disable=SC2016 # The positional parameter belongs to the container shell.
+permission_gate='restore_fail() { printf "restore_failure=%s\n" "$1" >&2; exit 1; }
+'"$permission_gate"
+podman exec --env PGUSER=postgres "$fresh_container" /bin/sh -ceu "$permission_gate" \
+  >"$integration_root/permission-good.log" 2>&1 || fail 'valid domain failed restore permission gate'
+psql_query "$fresh_container" automation_data_control '
+  ALTER ROLE authority_fixture_owner LOGIN;
+  ALTER ROLE authority_fixture_runtime CREATEROLE;
+' >/dev/null
+if podman exec --env PGUSER=postgres "$fresh_container" /bin/sh -ceu "$permission_gate" \
+  >"$integration_root/permission-bad.log" 2>&1; then
+  fail 'restore permission gate accepted invalid role attributes'
+fi
+for check in ownerNoLogin runtimeRoleManagementDenied; do
+  rg -Fxq "restore_permission_failure domain=authority_fixture check=$check" \
+    "$integration_root/permission-bad.log" || fail "restore did not identify $check"
+done
+[[ "$(rg -c '^restore_permission_failure ' "$integration_root/permission-bad.log")" == 2 ]] ||
+  fail 'restore diagnosed checks that did not fail'
+! rg -qi 'credential|password|verifier' "$integration_root/permission-bad.log" ||
+  fail 'restore permission gate printed sensitive fields'
+
+# A malformed validator response must fail closed without dumping its JSON.
+psql_query "$fresh_container" automation_data_control "
+  CREATE OR REPLACE FUNCTION platform_operations.validate_domain(p_domain text)
+  RETURNS jsonb LANGUAGE plpgsql AS \$fixture\$
+  BEGIN
+    RETURN jsonb_build_object(
+      'state', 'ready', 'ownerNoLogin', NULL,
+      'credential', 'synthetic-private-value'
+    );
+  END;
+  \$fixture\$;
+" >/dev/null
+if podman exec --env PGUSER=postgres "$fresh_container" /bin/sh -ceu "$permission_gate" \
+  >"$integration_root/permission-malformed.log" 2>&1; then
+  fail 'restore permission gate accepted missing or null assertions'
+fi
+[[ "$(rg -c '^restore_permission_failure ' "$integration_root/permission-malformed.log")" == 15 ]] ||
+  fail 'restore did not diagnose every missing or null permission assertion'
+! rg -q 'synthetic-private-value|credential' "$integration_root/permission-malformed.log" ||
+  fail 'restore permission gate exposed an unrelated validator field'
+
 printf '%s\n' \
 	'role_oids_unchanged=true' \
 	'existing_grants_unchanged=true' \

@@ -147,30 +147,43 @@ cmp -s "$selected/registry.tsv" /tmp/restore-actual-registry ||
   restore_fail registry-mismatch
 
 printf '%s\n' 'restore_stage=permission-validation'
-permission_contract="$(psql --dbname=automation_data_control --tuples-only --no-align --command="
-SELECT COALESCE(bool_and(
-  validation.result->>'state' = 'ready' AND
-  (validation.result->>'ownerNoLogin')::boolean AND
-  (validation.result->>'migratorCanSetOwner')::boolean AND
-  (validation.result->>'runtimeCannotSetOwner')::boolean AND
-  (validation.result->>'migratorControlConnectDenied')::boolean AND
-  (validation.result->>'runtimeControlConnectDenied')::boolean AND
-  (validation.result->>'migratorDomainConnectAllowed')::boolean AND
-  (validation.result->>'runtimeDomainConnectAllowed')::boolean AND
-  (validation.result->>'runtimePrivilegesValid')::boolean AND
-  (validation.result->>'defaultPrivilegesValid')::boolean AND
-  (validation.result->>'crossDomainConnectDenied')::boolean AND
-  (validation.result->>'migratorDdlValid')::boolean AND
-  (validation.result->>'runtimeCrudValid')::boolean AND
-  (validation.result->>'runtimeDdlDenied')::boolean AND
-  (validation.result->>'runtimeOwnerAssumptionDenied')::boolean AND
-  (validation.result->>'runtimeRoleManagementDenied')::boolean
-), true)::text
-FROM platform_operations.managed_domains AS managed
-CROSS JOIN LATERAL platform_operations.validate_domain(managed.domain) AS validation(result)
-WHERE managed.state = 'ready';
+permission_contract="$(psql --dbname=automation_data_control --set=ON_ERROR_STOP=1 --tuples-only --no-align --command="
+WITH validations AS MATERIALIZED (
+  SELECT managed.domain, platform_operations.validate_domain(managed.domain) AS result
+  FROM platform_operations.managed_domains AS managed
+  WHERE managed.state = 'ready'
+), failed_checks AS (
+  SELECT validation.domain, expected.name
+  FROM validations AS validation
+  CROSS JOIN (VALUES
+    ('state', to_jsonb('ready'::text)),
+    ('ownerNoLogin', 'true'::jsonb),
+    ('migratorCanSetOwner', 'true'::jsonb),
+    ('runtimeCannotSetOwner', 'true'::jsonb),
+    ('migratorControlConnectDenied', 'true'::jsonb),
+    ('runtimeControlConnectDenied', 'true'::jsonb),
+    ('migratorDomainConnectAllowed', 'true'::jsonb),
+    ('runtimeDomainConnectAllowed', 'true'::jsonb),
+    ('runtimePrivilegesValid', 'true'::jsonb),
+    ('defaultPrivilegesValid', 'true'::jsonb),
+    ('crossDomainConnectDenied', 'true'::jsonb),
+    ('migratorDdlValid', 'true'::jsonb),
+    ('runtimeCrudValid', 'true'::jsonb),
+    ('runtimeDdlDenied', 'true'::jsonb),
+    ('runtimeOwnerAssumptionDenied', 'true'::jsonb),
+    ('runtimeRoleManagementDenied', 'true'::jsonb)
+  ) AS expected(name, value)
+  WHERE (validation.result->expected.name) IS DISTINCT FROM expected.value
+)
+SELECT COALESCE(string_agg(
+  'restore_permission_failure domain=' || domain || ' check=' || name,
+  E'\\n' ORDER BY domain, name
+), 'true') FROM failed_checks;
 ")" || restore_fail permission-query
-test "$permission_contract" = true || restore_fail permission-validation
+if test "$permission_contract" != true; then
+  printf '%s\n' "$permission_contract" >&2
+  restore_fail permission-validation
+fi
 
 restored_catalog_state="$(psql --dbname=automation_data_control --tuples-only --no-align --command="
 WITH operation_tables AS (

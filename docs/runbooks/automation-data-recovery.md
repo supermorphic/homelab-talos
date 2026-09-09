@@ -67,6 +67,13 @@ drill when the database or credential chain also needs proof.
 
 ## Logical bundle restore
 
+When a drill reports `restore_failure=permission-validation`, inspect the preceding
+`restore_permission_failure domain=<domain> check=<check-name>` lines. They identify
+failed or missing assertions without printing credentials or the full validator result.
+Permission-denied `NOTICE` lines can be expected negative probes; they do not identify
+the failed assertion. Keep the drill failed until the named checks pass. Do not broaden
+production grants based only on a failed drill.
+
 An automation-data bundle is complete only when its directory name has the exact
 `automation-data-YYYYmmddTHHMMSSZ` form and it contains:
 
