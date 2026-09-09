@@ -44,7 +44,7 @@ The Stage 2 runtime selector has four execution groups: always-running `core`, p
 The provider workflow plans affected groups for pull requests and exports that plan
 to the job matrix. `core` always runs. Manual dispatch requests all four groups.
 The required `merge-gate` reconciles their separate results; the duplicate full `ci`
-job has been removed. Full local `just ci` remains the publication gate.
+job has been removed. The local publication gate uses the same plan and groups.
 
 | File | Responsibility |
 | --- | --- |
@@ -98,9 +98,36 @@ exact current-main base + rebased candidate head
   -> ci-plan -> core + selected groups -> ci-group -> ci-reconcile -> merge-gate
 ```
 
-The full `mise exec -- just ci` command remains available and required locally under
-current repository policy. See [Spec 027](../docs/specs/027-deterministic-ci-gates.md)
+The full `mise exec -- just ci` command remains available. See
+[Spec 027](../docs/specs/027-deterministic-ci-gates.md)
 for the shadow, split-all, and selective rollout checkpoints and protection transition.
+
+### Local publication gate
+
+Commit your candidate, leave the worktree clean, and run
+`mise exec -- just test ci-publish` before opening or updating a PR. The command fetches
+`origin/main`, requires it to be an ancestor of the candidate, and runs the groups
+selected by the same impact map used on GitHub. For example, ordinary spec edits
+select core; an automation-owned edit also selects automation; shared framework edits
+select all groups. Documentation with declared consumers can select more than core.
+
+Groups run sequentially locally, preserving each harness's bounded concurrency.
+`mise exec -- just test ci-publish-full` escalates to all groups. No command option
+allows choosing a reduced group set or supplying an older base.
+
+Keep this worktree untouched while validation runs. The command rejects staged,
+unstaged, and untracked changes and checks the branch/head again during and after
+execution. It fetches main again before success; if main advanced, rebase and rerun.
+Fetch failures cannot fall back to stale remote tracking refs. The wrapper needs network
+access to Git; the validation groups remain offline, secret-free, and cluster-independent.
+
+Each invocation retains its plan, separate canonical group results, reconciliation,
+and final `publication.json` receipt under ignored `.tmp/ci-publication/`. A receipt
+applies only to its recorded branch, head, and base. Failed or cancelled runs do not
+produce a passing publication receipt. A successful group reconciliation alone is not
+publication approval if the final candidate/base checks fail. Never reuse an earlier
+receipt after edits or rebase. The command does not push or modify branch protection;
+the pre-push fetch and remote-branch checks in AGENTS.md still apply.
 
 ### Retrying a provider run
 

@@ -10,6 +10,14 @@ validate group="all":
 catalog-validate:
     @scripts/test/validate-catalog.sh
 
+# Validate a clean committed publication candidate against freshly fetched main.
+ci-publish:
+    @uv run --locked python scripts/test/ci_publish.py
+
+# Escalate local publication validation to every retained offline group.
+ci-publish-full:
+    @uv run --locked python scripts/test/ci_publish.py --full
+
 # Plan deterministic validation groups for an exact base and candidate head.
 ci-plan base head output:
     @uv run --locked python scripts/test/ci_plan.py plan --base {{quote(base)}} \

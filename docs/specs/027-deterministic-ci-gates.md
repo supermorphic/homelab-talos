@@ -29,8 +29,8 @@ cost—not achieving an arbitrary two-minute runtime.
   not reused as fresh evidence.
 - CI changes do not obtain cluster/deployment credentials, a privileged socket, or
   unnecessary host access.
-- Existing root policy still requires full local CI before PR publication. Local selective
-  validation would require a separate explicit policy decision after the remote gate is proven.
+- Local publication uses the same repository-owned plan and groups under root policy.
+  Full `just ci` remains available; authors cannot manually select a reduced path.
 
 ## Decision rationale
 
@@ -238,18 +238,24 @@ protection change; never bypass validation or leave a nonexistent required check
 
 ### Local publication validation
 
-After remote selective enforcement is proven, extend the same repository-owned plan,
-group execution, and reconciliation to one local publication command. Agents must not
-choose reduced validation themselves. Keep `just ci` as the explicit full fallback.
-The local command must validate the candidate being published, reject stale results,
-and recompute its plan after rebases or further candidate changes. Ordinary documentation
-uses core unless a declared consumer requires additional groups; a rebase alone is not
-a full-validation classification.
+`mise exec -- just test ci-publish` validates a clean, committed feature-branch candidate
+against freshly fetched `origin/main`. The base must be an ancestor of the candidate.
+The command reuses the planner, sequential grouped execution, and canonical reconciliation;
+it creates no second classification system. Full escalation uses `ci-publish-full`.
+Ordinary documentation uses core unless a declared consumer requires more validation.
 
-Adoption requires an explicit update to `AGENTS.md` together with the command, not an
-informal exception to the current full-local-CI rule. Focused checks may support edit
-iterations, but publication must satisfy the repository's then-current gate. This local
-extension is planned, not enabled by the shadow rollout.
+Every invocation produces fresh evidence in a separate ignored directory. Candidate
+checks reject staged, unstaged, and untracked changes; branch/head checks repeat during
+execution and before success. The worktree must remain untouched during validation.
+A final remote refresh must still match the planned base. Failed fetch, changed candidate,
+new main, failed execution, or failed reconciliation cannot produce a passing publication
+receipt. Inherited test catalog/runner overrides cannot reduce publication validation.
+
+The receipt binds branch, head, base, plan identity, and groups. It is an audit result,
+not a reusable pass cache. Later edits/rebases require a new invocation. Existing
+pre-push remote checks still apply because main can advance after command completion.
+AGENTS.md adopts this command in the same implementation; full `just ci` remains the
+offline fallback. The publication wrapper's Git refresh requires network access.
 
 ### Evidence requirements
 
@@ -282,16 +288,25 @@ categories. No runtime number overrides correctness or justifies unnecessary mac
 
 ## Implementation status
 
-Stage 2 is in selective-enforcement rollout. Pull requests plan affected groups, while
+Stage 2 selective enforcement is merged. Pull requests plan affected groups, while
 manual dispatch requests full validation. The matrix consumes the validated plan's
-groups; the duplicate provider `ci` job is removed. Full local `just ci` remains required.
+groups; the duplicate provider `ci` job is removed. Local publication uses the same
+planner and grouped execution, with clean-candidate and fresh-base checks in root policy.
 
 Split-all provider execution established equivalent full and grouped evidence on the
 same candidate tree. On the merged workflow, cancellation of the group jobs caused
 the always-running gate to fail; a complete retry produced passing group results and
 reconciliation. Protection now requires `merge-gate` with strict current-main checks;
-the applied rules passed independent readback. Provider verification of selective
-execution and post-enable measurement remain pending.
+the applied rules passed independent readback. The selection-enabled provider workflow
+passed with its dynamically planned full group set for a CI-framework change, without
+the duplicate full job. Reduced-group provider observations, skip-frequency and
+capacity measurements remain follow-on work.
+
+The initial provider observation shows comparable core and longest-group durations.
+Selective execution can therefore save substantial aggregate validation work while
+offering smaller wall-time savings. Continue measuring both; optimize core intrinsically
+if it limits the critical path. Existing group boundaries remain appropriate, including
+automation's now-material validation cost.
 
 Operational commands and inspection examples live in
 [the testing guide](../../tests/README.md). Detailed execution evidence and remaining
