@@ -53,6 +53,15 @@ if [[ " $* " == *' create token homelab-diagnostic '* ]]; then
   printf '%s\n' 'fake-diagnostic-token'
   exit 0
 fi
+if [[ " $* " == *' create token homelab-report-publisher '* ]]; then
+  [[ "$kubeconfig" == "$EXPECTED_MAIN_KUBECONFIG" ]] || {
+    echo "publisher token used wrong kubeconfig: $kubeconfig" >&2
+    exit 66
+  }
+  [[ "${FAKE_FAIL_STAGE:-}" != 'publisher-token' ]] || exit 73
+  printf '%s\n' 'fake-publisher-token'
+  exit 0
+fi
 
 if [[ " $* " == *' config view '* ]]; then
   case "$*" in
@@ -76,6 +85,9 @@ if [[ " $* " == *' config view '* ]]; then
       ;;
     *'jsonpath={.users[?(@.name == "homelab-diagnostic")].user.token}'*)
       yq -r '.users[] | select(.name == "homelab-diagnostic") | .user.token' "$kubeconfig"
+      ;;
+    *'jsonpath={.users[?(@.name == "homelab-report-publisher")].user.token}'*)
+      yq -r '.users[] | select(.name == "homelab-report-publisher") | .user.token' "$kubeconfig"
       ;;
     *)
       echo "unexpected fake kubectl config query: $*" >&2
@@ -279,6 +291,8 @@ cp "$repo_root/.justfile" "$main_case/.justfile"
 cp "$repo_root/talos/mod.just" "$main_case/talos/mod.just"
 cp "$repo_root/.just/repository.just" "$main_case/.just/repository.just"
 cp "$repo_root/.just/bootstrap.just" "$main_case/.just/bootstrap.just"
+cp "$repo_root/.just/node.just" "$main_case/.just/node.just"
+cp "$repo_root/.just/cluster.just" "$main_case/.just/cluster.just"
 cp "$repo_root/kubernetes/mod.just" "$main_case/kubernetes/mod.just"
 cp "$repo_root/tests/mod.just" "$main_case/tests/mod.just"
 cp "$repo_root/scripts/lib/common.sh" "$main_case/scripts/lib/common.sh"
@@ -351,10 +365,11 @@ talosconfig="$success_worktree/.talos/config"
 [[ "$(yq -r '.clusters[0].cluster.server' "$kubeconfig")" == 'https://192.168.90.20:6443' ]]
 [[ "$(yq -r '.clusters[0].cluster."certificate-authority-data"' "$kubeconfig")" == 'bWFpbi1jYS1kYXRh' ]]
 [[ "$(yq -r '.current-context' "$kubeconfig")" == 'homelab-observer' ]]
-[[ "$(yq -r '.contexts[].name' "$kubeconfig" | sort)" == $'homelab-diagnostic\nhomelab-observer' ]]
-[[ "$(yq -r '.users[].name' "$kubeconfig" | sort)" == $'homelab-diagnostic\nhomelab-observer' ]]
+[[ "$(yq -r '.contexts[].name' "$kubeconfig" | sort)" == $'homelab-diagnostic\nhomelab-observer\nhomelab-report-publisher' ]]
+[[ "$(yq -r '.users[].name' "$kubeconfig" | sort)" == $'homelab-diagnostic\nhomelab-observer\nhomelab-report-publisher' ]]
 [[ "$(yq -r '.users[] | select(.name == "homelab-observer") | .user.token' "$kubeconfig")" == 'fake-observer-token' ]]
 [[ "$(yq -r '.users[] | select(.name == "homelab-diagnostic") | .user.token' "$kubeconfig")" == 'fake-diagnostic-token' ]]
+[[ "$(yq -r '.users[] | select(.name == "homelab-report-publisher") | .user.token' "$kubeconfig")" == 'fake-publisher-token' ]]
 if rg -q 'main-admin-token-must-not-be-copied|homelab-admin' "$kubeconfig"; then
   echo 'Worktree kubeconfig copied a main-clone admin identity.' >&2
   exit 1
@@ -363,11 +378,12 @@ fi
 [[ "$(file_mode "$talosconfig")" == '600' ]]
 rg -q '^--kubeconfig .* --namespace kube-system create token homelab-observer --duration=720h ' "$success_worktree/calls.log"
 rg -q '^--kubeconfig .* --namespace kube-system create token homelab-diagnostic --duration=720h ' "$success_worktree/calls.log"
+rg -q '^--kubeconfig .* --namespace kube-system create token homelab-report-publisher --duration=720h ' "$success_worktree/calls.log"
 rg -Fq -- '--roles os:reader --crt-ttl 2160h --talosconfig ' "$success_worktree/calls.log"
 rg -Fq -- '--nodes 192.168.90.10 --endpoints 192.168.90.10\,192.168.90.11\,192.168.90.12 ' "$success_worktree/calls.log"
 
 # Every external staging failure preserves both originals and removes temp files.
-for failed_stage in observer-token diagnostic-token talos-new; do
+for failed_stage in observer-token diagnostic-token publisher-token talos-new; do
   case_root="$fixture/failure-$failed_stage"
   main_root="$case_root/main"
   worktree_root="$case_root/worktree"

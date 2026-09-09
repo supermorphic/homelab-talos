@@ -55,13 +55,15 @@ Authority is based on what an operation can do, not which command spells it.
   workflows.
 - Persistent changes to Flux-managed Kubernetes state go through Git so the desired
   state, review record, and live reconciliation remain aligned.
-- Agents may use approved workflows to mint the task-scoped observer, diagnostic, and
-  Talos reader credential set. Observer and Talos reader operations are read-only.
+- Agents may use approved workflows to mint the task-scoped observer, diagnostic,
+  report-publisher, and Talos reader credential set. Observer and Talos reader operations are read-only.
   Diagnostic access is reduced privilege and is authorized only through approved named
-  verifiers or separate specific operator authorization. Seeking or using elevated,
-  write, administrative, or break-glass credentials requires explicit operator
+  verifiers or separate specific operator authorization. Recorded acceptance separately
+  authorizes the report-publisher identity to retain canonical evidence. Seeking or using
+  other elevated, write, administrative, or break-glass credentials requires explicit operator
   authorization for the specific task. Secret creation, privileged platform rollout,
-  and destructive or persistent out-of-band cluster changes remain operator-run.
+  and destructive or persistent out-of-band cluster changes beyond that guarded evidence
+  publication remain operator-run.
 - Merge and auto-merge always require explicit authorization for that specific merge.
 
 This boundary permits useful read-only and reduced-privilege work without pretending
@@ -82,11 +84,14 @@ Credentials are separated by scope and checkout location.
   credentials for bootstrap and recovery.
 - A feature worktree begins without cluster credentials. When scoped verification needs
   cluster access, the agent may use the approved repository workflow to mint the
-  observer and diagnostic Kubernetes contexts and the Talos reader credential into that
-  worktree without operator intervention. The diagnostic context may be used only by an
+  observer, diagnostic, and report-publisher Kubernetes contexts and the Talos reader
+  credential into that worktree without operator intervention. The diagnostic context may be used only by an
   approved named verifier or with separate specific operator authorization. Any
-  elevated, write, administrative, or break-glass credential requires explicit
-  authorization for the specific task.
+  other elevated, write, administrative, or break-glass credential requires explicit
+  authorization for the specific task. The report-publisher identity is used only by the
+  approved recorded-acceptance publication path described in
+  [the test reporting standard](011-test-reporting-standard.md#recorded-acceptance-evolution--issue-371).
+  This is separate authority to retain evidence, not permission to execute suite mutations.
 - Observer access covers the bounded resource reads needed by registered verifiers and
   denies Secret reads and mutation. Diagnostic access adds the named pod subresources
   required by specific verifiers. It is reduced privilege, not a claim of read-only

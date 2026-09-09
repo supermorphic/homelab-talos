@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Guarded operator publisher. Structured archive state belongs to Python; this
+# Guarded report publisher. Structured archive state belongs to Python; this
 # shell owns the confirmation, deployed-source guard, Lease, and kubectl stream.
 set -euo pipefail
 
@@ -17,7 +17,13 @@ run_id="$1"
   exit 2
 }
 expected_confirmation="publish:test-report:$run_id"
-[[ "${TEST_REPORT_PUBLISH_CONFIRM:-}" == "$expected_confirmation" ]] || {
+publication_context="${TEST_REPORT_PUBLICATION_CONTEXT:-manual}"
+case "$publication_context" in
+  manual|recorded-acceptance) ;;
+  *) echo "Unknown report publication context: $publication_context" >&2; exit 2 ;;
+esac
+[[ "$publication_context" == 'recorded-acceptance' ||
+  "${TEST_REPORT_PUBLISH_CONFIRM:-}" == "$expected_confirmation" ]] || {
   echo 'Refusing to publish test evidence.' >&2
   echo "Set TEST_REPORT_PUBLISH_CONFIRM='$expected_confirmation' after reviewing the run." >&2
   exit 1
@@ -31,6 +37,7 @@ reports_root="${TEST_REPORTS_ROOT:-$repo_root/.test-reports}"
 run_dir="$results_root/$run_id"
 report_dir="$reports_root/$run_id"
 kubeconfig="${KUBECONFIG:-$repo_root/.kube/config}"
+[[ "$kubeconfig" == /* ]] || kubeconfig="$repo_root/$kubeconfig"
 report_url="https://tests.lab.supermorphic.com/reports/$run_id/awesome/"
 
 write_publish_result() {
@@ -82,6 +89,14 @@ gitleaks dir --redact --no-banner --max-archive-depth 1 "$run_dir"
   exit 1
 }
 
+source scripts/test/lib/report-publication.sh
+linked_worktree=false
+[[ "$(git rev-parse --git-dir)" == "$(git rev-parse --git-common-dir)" ]] || linked_worktree=true
+if [[ "$linked_worktree" == true ]]; then
+  scripts/test/scoped-campaign-preflight.sh "$repo_root" "$kubeconfig" "$repo_root/.talos/config"
+fi
+select_report_publication_context "$kubeconfig" "$linked_worktree"
+
 source scripts/lib/rollout.sh
 require_deployed_source 'test report publication' \
   tests/mod.just \
@@ -90,9 +105,20 @@ require_deployed_source 'test report publication' \
   scripts/test/generate-allure-report.sh \
   scripts/lib/lease.sh \
   scripts/test/publish-report.sh \
+  scripts/test/lib/report-publication.sh \
+  scripts/test/scoped-campaign-preflight.sh \
   scripts/test/report_publish.py \
   scripts/test/validate-run.sh \
+  kubernetes/apps/kube-system/agent-access \
   kubernetes/apps/monitoring/test-reports
+
+# Git creates this exact Lease. A missing Lease must not trigger an attempt to
+# create an arbitrary coordination resource with scoped credentials.
+publication_kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
+  get lease homelab-test-report-publish-lock --output name >/dev/null || {
+  echo 'The publication Lease is unavailable; wait for the Git-managed agent-access deployment.' >&2
+  exit 1
+}
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/homelab-report-publish.XXXXXX")"
 lease_acquired=false
@@ -113,15 +139,16 @@ trap 'exit 143' TERM
 
 export TEST_LEASE_NAMESPACE='flux-system'
 export TEST_LEASE_NAME='homelab-test-report-publish-lock'
+export TEST_LEASE_KUBECTL=publication_kubectl
 source scripts/lib/lease.sh
-acquire_test_lease "$kubeconfig" "publish:$run_id"
+acquire_test_lease "$kubeconfig" "publish:$run_id" 5 existing-only
 lease_acquired=true
 start_test_lease_renewal "$kubeconfig" "publish:$run_id" "$lease_failure"
 
-kubectl --kubeconfig "$kubeconfig" --namespace test-reports \
+publication_kubectl --kubeconfig "$kubeconfig" --namespace test-reports \
   rollout status deployment/test-reports --timeout=3m
 for document in catalog.json state.json history.jsonl; do
-  kubectl --kubeconfig "$kubeconfig" --namespace test-reports \
+  publication_kubectl --kubeconfig "$kubeconfig" --namespace test-reports \
     exec deployment/test-reports -c caddy -- \
     cat "/srv/state/current/$document" >"$workspace/$document"
 done
@@ -132,7 +159,7 @@ read_deployed_revisions() {
   read -r origin_main_sha _ <<<"$remote_ref"
   [[ "$origin_main_sha" =~ ^[0-9a-f]{40}$ ]]
   flux_revision="$(
-    kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
+    publication_kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
       get gitrepository flux-system \
       --output jsonpath='{.status.artifact.revision}'
   )"
@@ -151,6 +178,8 @@ require_authoritative_revisions() {
 }
 
 read_deployed_revisions
+prepared_origin_sha="$origin_main_sha"
+prepared_flux_sha="$flux_main_sha"
 if [[ "${TEST_REPORT_REQUIRE_AUTHORITATIVE:-false}" == 'true' ]]; then
   require_authoritative_revisions
 fi
@@ -178,7 +207,7 @@ prepare_result="$(
     --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 )"
 if [[ "$(yq -r '.status' - <<<"$prepare_result")" == 'idempotent' ]]; then
-  echo "Report is already published with identical canonical content: $run_id"
+  echo "Report is already published with identical canonical content: $run_id at $report_url"
   release_test_lease "$kubeconfig" "publish:$run_id"
   lease_acquired=false
   write_publish_result idempotent
@@ -193,12 +222,17 @@ gitleaks dir --redact --no-banner --max-archive-depth 1 "$bundle"
   echo 'Publication Lease renewal failed before the cluster stream.' >&2
   exit 1
 }
+read_deployed_revisions
+[[ "$origin_main_sha" == "$prepared_origin_sha" && "$flux_main_sha" == "$prepared_flux_sha" ]] || {
+  echo 'Publication source revisions changed during preparation; retry the retained local run.' >&2
+  exit 1
+}
 if [[ "${TEST_REPORT_REQUIRE_AUTHORITATIVE:-false}" == 'true' ]]; then
-  read_deployed_revisions
   require_authoritative_revisions
 fi
+verify_test_lease_holder "$kubeconfig" "publish:$run_id"
 
-kubectl --kubeconfig "$kubeconfig" --namespace test-reports \
+publication_kubectl --kubeconfig "$kubeconfig" --namespace test-reports \
   exec -i deployment/test-reports -c caddy -- \
   /bin/sh /opt/test-reports/install-report.sh "$run_id" "$generation" \
   <"$archive"
@@ -208,7 +242,7 @@ kubectl --kubeconfig "$kubeconfig" --namespace test-reports \
 }
 
 remote_digest="$(
-  kubectl --kubeconfig "$kubeconfig" --namespace test-reports \
+  publication_kubectl --kubeconfig "$kubeconfig" --namespace test-reports \
     exec deployment/test-reports -c caddy -- \
     sha256sum "/srv/artifacts/$run_id.tar.gz" |
     awk '{print $1}'

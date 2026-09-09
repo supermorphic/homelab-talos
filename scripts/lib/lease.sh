@@ -81,12 +81,20 @@ acquire_test_lease() {
   local kubeconfig="$1"
   local holder="$2"
   local attempts="${3:-5}"
+  local creation_policy="${4:-create-if-missing}"
   local lease_json existing_holder resource_version now operation_error=''
 
   [[ "$holder" =~ ^[a-zA-Z0-9_.:-]+$ ]] || {
     echo "Unsafe test Lease holder identity: $holder" >&2
     return 2
   }
+  case "$creation_policy" in
+    create-if-missing|existing-only) ;;
+    *)
+      echo "Unknown test Lease creation policy: $creation_policy" >&2
+      return 2
+      ;;
+  esac
   for ((attempt = 1; attempt <= attempts; attempt++)); do
     if lease_json="$(lease_kubectl "$kubeconfig" --namespace "$TEST_LEASE_NAMESPACE" \
       get lease "$TEST_LEASE_NAME" --output json 2>/dev/null)"; then
@@ -105,6 +113,9 @@ acquire_test_lease() {
       )"; then
         return 0
       fi
+    elif [[ "$creation_policy" == 'existing-only' ]]; then
+      echo "Required pre-created test Lease $TEST_LEASE_NAMESPACE/$TEST_LEASE_NAME is unavailable." >&2
+      return 1
     else
       now="$(lease_now)"
       if operation_error="$(

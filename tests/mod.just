@@ -65,6 +65,13 @@ report-open run:
 publish run:
     @scripts/test/publish-report.sh {{quote(run)}}
 
+# Retain one already-finalized canonical run as intentional acceptance evidence.
+# This explicit context supplies publication intent and preserves candidate status.
+acceptance-publish run:
+    @TEST_REPORT_PUBLICATION_CONTEXT=recorded-acceptance \
+      TEST_REPORT_REQUIRE_AUTHORITATIVE=false \
+      scripts/test/publish-report.sh {{quote(run)}}
+
 # Preview an ordered campaign and print its exact plan-bound confirmation.
 campaign-plan campaign:
     @scripts/test/run-campaign.sh plan {{quote(campaign)}}
@@ -86,6 +93,20 @@ campaign campaign:
 # Resume only a campaign stopped by publication failure; completed suites are not rerun.
 campaign-resume campaign_run:
     @scripts/test/run-campaign.sh resume {{quote(campaign_run)}}
+
+# Preview one intentional recorded acceptance selection. A selection is one exact
+# catalog suite ID or the fixed scoped-verification campaign.
+acceptance-plan selection:
+    @scripts/test/run-campaign.sh acceptance-plan {{quote(selection)}}
+
+# Run and automatically retain one intentional acceptance selection. Linked
+# worktrees are restricted to scoped verifiers and non-mutating shared suites.
+acceptance selection:
+    @scripts/test/run-campaign.sh acceptance-run {{quote(selection)}}
+
+# Retry publication and continue an unchanged recorded acceptance journal.
+acceptance-resume campaign_run:
+    @scripts/test/run-campaign.sh acceptance-resume {{quote(campaign_run)}}
 
 # Render the latest canonical run as a GitHub-compatible Markdown summary.
 summary-latest:
