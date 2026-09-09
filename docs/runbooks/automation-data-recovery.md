@@ -67,12 +67,26 @@ drill when the database or credential chain also needs proof.
 
 ## Logical bundle restore
 
+Before permission probes, the drill compares each ready domain's restored ACLs,
+default ACLs, and application-object owners with its original dump. This preserves
+deliberately restricted access without requiring every domain to use the same grants.
+`restore_failure=permission-restore-comparison` and
+`restore_permission_fidelity_failure domain=<domain>` mean this comparison could not
+complete or found a difference. They do not print dump contents. Keep the drill failed;
+do not change production grants to make the comparison pass.
+
 When a drill reports `restore_failure=permission-validation`, inspect the preceding
 `restore_permission_failure domain=<domain> check=<check-name>` lines. They identify
 failed or missing assertions without printing credentials or the full validator result.
 Permission-denied `NOTICE` lines can be expected negative probes; they do not identify
 the failed assertion. Keep the drill failed until the named checks pass. Do not broaden
 production grants based only on a failed drill.
+
+The platform validator accepts application-owned restrictions while checking the
+platform privilege limits. To install updated validator functions, use the guarded
+upgrade in the [operations guide](../guides/automation-data-operations.md), then capture
+a fresh backup before repeating the drill. An older bundle retains its captured
+validator functions; upgrading the live database does not change that bundle.
 
 An automation-data bundle is complete only when its directory name has the exact
 `automation-data-YYYYmmddTHHMMSSZ` form and it contains:

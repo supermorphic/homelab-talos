@@ -271,8 +271,31 @@ cluster roles or connect to another domain database.
 
 ### Domain runtime
 
-Each normal workflow uses a CRUD-only login for one database. It cannot change schema,
-assume the owner role, manage roles, or connect to another domain database.
+Each normal workflow uses a restricted runtime login for one database. Initial
+provisioning supplies CRUD defaults. Application migrations may narrow direct object
+and default grants, including using controlled functions instead of direct table writes.
+The runtime login cannot change schema, assume the owner role, manage roles, or connect
+to another domain database.
+
+Platform validation checks a privilege ceiling, not mandatory access to every
+application table or sequence. The existing `runtimePrivilegesValid` and
+`defaultPrivilegesValid` fields retain their names but accept narrower grants. They
+reject forbidden table/column privileges and grant options on application relations,
+sequences, routines, and their corresponding defaults. The CRUD behavior probe grants access only to
+its own temporary table, independently of application default grants. Application
+repositories own exact grants and business-behavior acceptance; no per-domain exception
+or application object list belongs in this platform validator.
+
+The reviewed validator functions share `domain-validation.sql` between initialization
+and the existing guarded platform upgrade. Updating installed functions preserves
+application grants, data, and credentials; a changed body advances backup freshness
+without changing the schema revision or backup format. NocoDB preflight checks the
+installed validator bodies as well as the metadata function.
+
+This validation correction does not change initial provisioning or reconciliation.
+Do not use provision/reconcile as post-bootstrap application-grant repair: those
+operations retain their initial broad-grant behavior. Application migrations remain
+the authority for intentional restrictions.
 
 ### Optional NocoDB access
 
@@ -562,7 +585,10 @@ The attended full-chain restore drill:
    `database`, `role`, and `executionId`.
 9. Proves that the runtime credential authenticates without revealing its password and
    separately validates restored migrator/runtime permission separation for every ready
-   domain. Failed or missing permission assertions report only the domain and fixed
+   domain. Before running probes, compare restored application ownership and permissions
+   against the original custom archive; preserve both granted and deliberately absent
+   access. This is generic restore fidelity, not proof of application business behavior.
+   Failed or missing permission assertions report only the domain and fixed
    check name; validator credential fields are not printed. These diagnostics preserve
    the failing permission-validation stage and prevent post-recovery backup on failure.
 10. Creates and validates a fresh logical bundle from the restored instance.

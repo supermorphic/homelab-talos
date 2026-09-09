@@ -35,6 +35,7 @@ control_sql="$temp_dir/combined-platform-control.sql"
   cat "$platform_control_sql"
   cat "$extension_sql"
   cat "$postgresql_app/scripts/nocodb-metadata.sql"
+  cat "$postgresql_app/scripts/domain-validation.sql"
 } >"$control_sql"
 
 namespace_contract="$(yq ea -r '
@@ -141,7 +142,7 @@ init_config_contract="$(yq ea -r '
     (.data."platform-control.sql" | length > 0)] | join("|")
 ' "$temp_dir/postgresql.yaml")"
 [[ "$init_config_contract" == \
-  'init-platform.sh,migrate-control.sh,nocodb-extension.sql,nocodb-metadata.sql,platform-control.sql|true|true|true|true' ]] || \
+  'domain-validation.sql,init-platform.sh,migrate-control.sh,nocodb-extension.sql,nocodb-metadata.sql,platform-control.sql|true|true|true|true' ]] || \
   fail 'rendered init ConfigMap does not contain all executable platform sources'
 
 init_mount_contract="$(yq ea -r '
@@ -150,7 +151,7 @@ init_mount_contract="$(yq ea -r '
   [.volumeMounts[] | select(.name == "init") |
     [.mountPath, .subPath, .readOnly] | join("|")] | sort | .[]
 ' "$temp_dir/postgresql.yaml")"
-[[ "$init_mount_contract" == $'/docker-entrypoint-initdb.d/00-init-platform.sh|init-platform.sh|true\n/scripts/nocodb-extension.sql|nocodb-extension.sql|true\n/scripts/nocodb-metadata.sql|nocodb-metadata.sql|true\n/scripts/platform-control.sql|platform-control.sql|true' ]] ||
+[[ "$init_mount_contract" == $'/docker-entrypoint-initdb.d/00-init-platform.sh|init-platform.sh|true\n/scripts/domain-validation.sql|domain-validation.sql|true\n/scripts/nocodb-extension.sql|nocodb-extension.sql|true\n/scripts/nocodb-metadata.sql|nocodb-metadata.sql|true\n/scripts/platform-control.sql|platform-control.sql|true' ]] ||
   fail 'PostgreSQL does not mount every fixed fresh-initialization source'
 
 [[ "$(yq -r '.spec.suspend' "$postgresql_ks")" == false ]] || \

@@ -85,8 +85,8 @@ rg -Fq -- "scripts/upgrade/automation-data.sh '.kube/config'" <<<"$recipe" ||
   select(.kind == "Kustomization") |
   [.configMapGenerator[] | select(.name == "automation-data-postgresql-upgrade") |
     (.files | sort | join(","))] | join("")
-' "$kustomization")" == 'nocodb-extension.sql=scripts/nocodb-extension.sql,nocodb-metadata.sql=scripts/nocodb-metadata.sql,upgrade-nocodb.sql=scripts/upgrade-nocodb.sql' ]] ||
-	fail 'upgrade ConfigMap does not contain the three fixed reviewed SQL sources'
+' "$kustomization")" == 'domain-validation.sql=scripts/domain-validation.sql,nocodb-extension.sql=scripts/nocodb-extension.sql,nocodb-metadata.sql=scripts/nocodb-metadata.sql,upgrade-nocodb.sql=scripts/upgrade-nocodb.sql' ]] ||
+	fail 'upgrade ConfigMap does not contain the four fixed reviewed SQL sources'
 
 rg -Fq '\ir nocodb-extension.sql' "$control_sql" ||
 	fail 'fresh initialization does not load the shared NocoDB definitions'
@@ -125,7 +125,7 @@ jq -e '
   [.[] | select(
     .kind == "ConfigMap" and
     (.metadata.name | startswith("automation-data-postgresql-upgrade-")) and
-    ((.data | keys | sort) == ["nocodb-extension.sql", "nocodb-metadata.sql", "upgrade-nocodb.sql"])
+    ((.data | keys | sort) == ["domain-validation.sql", "nocodb-extension.sql", "nocodb-metadata.sql", "upgrade-nocodb.sql"])
   )] | if length == 1 then .[0] else error("expected one rendered upgrade ConfigMap") end
 ' "$rendered_package_json" >"$UPGRADE_TEST_EXPECTED_CONFIGMAP"
 export UPGRADE_TEST_EXPECTED_CONFIGMAP_NAME
@@ -1045,11 +1045,32 @@ restore_bundle "$new_bundle" 026-nocodb-v1
 ) >"$integration_root/preflight.yaml"
 preflight_script="$(yq -r '.spec.template.spec.containers[0].args[0]' "$integration_root/preflight.yaml")"
 preflight_digest="$(yq -r '.spec.template.spec.containers[0].env[] | select(.name == "NOCODB_METADATA_BODY_MD5") | .value' "$integration_root/preflight.yaml")"
+validator_digest="$(yq -r '.spec.template.spec.containers[0].env[] | select(.name == "NOCODB_VALIDATOR_BODY_MD5") | .value' "$integration_root/preflight.yaml")"
 psql_query "$old_container" automation_data_control \
   'UPDATE platform_operations.logical_backup_status SET completed_at = clock_timestamp();' >/dev/null
 podman exec --env PGUSER=postgres --env PGDATABASE=automation_data_control \
+  --env "NOCODB_VALIDATOR_BODY_MD5=$validator_digest" \
   --env "NOCODB_METADATA_BODY_MD5=$preflight_digest" "$old_container" \
   /bin/sh -ceu "$preflight_script" >"$integration_root/preflight-result"
+git show a1990885b513:kubernetes/apps/automation-data/postgresql/app/scripts/platform-control.sql |
+  awk '/^CREATE OR REPLACE FUNCTION platform_internal.validate_role_behavior\(/ ||
+       /^CREATE OR REPLACE FUNCTION platform_operations.validate_domain\(/ { selected=1 }
+    selected { print } /^\$function\$;/ { selected=0 }' |
+  podman exec -i "$old_container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
+    --username postgres --dbname automation_data_control >/dev/null
+if podman exec --env PGUSER=postgres --env PGDATABASE=automation_data_control \
+  --env "NOCODB_VALIDATOR_BODY_MD5=$validator_digest" \
+  --env "NOCODB_METADATA_BODY_MD5=$preflight_digest" "$old_container" \
+  /bin/sh -ceu "$preflight_script" >"$integration_root/preflight-old-validator" 2>&1; then
+  fail 'preflight accepted historical validator bodies with current metadata and backup'
+fi
+psql_file "$old_container" automation_data_control /candidate/upgrade-nocodb.sql >"$rerun_output"
+psql_query "$old_container" automation_data_control \
+  'UPDATE platform_operations.logical_backup_status SET completed_at = clock_timestamp();' >/dev/null
+podman exec --env PGUSER=postgres --env PGDATABASE=automation_data_control \
+  --env "NOCODB_VALIDATOR_BODY_MD5=$validator_digest" \
+  --env "NOCODB_METADATA_BODY_MD5=$preflight_digest" "$old_container" \
+  /bin/sh -ceu "$preflight_script" >"$integration_root/preflight-upgraded-validator"
 git show 2d2820f1299b68c6e54f7a6672c2f9c367bad281:kubernetes/apps/automation-data/postgresql/app/scripts/nocodb-extension.sql |
   awk '/^CREATE OR REPLACE FUNCTION platform_operations.provision_nocodb_metadata\(/ { selected=1 }
     selected { print } /^\$function\$;/ { selected=0 }' |
@@ -1058,6 +1079,7 @@ git show 2d2820f1299b68c6e54f7a6672c2f9c367bad281:kubernetes/apps/automation-dat
 historical_body="$(psql_query "$old_container" automation_data_control \
   "SELECT md5(prosrc) FROM pg_proc WHERE oid = 'platform_operations.provision_nocodb_metadata(text)'::regprocedure;")"
 if podman exec --env PGUSER=postgres --env PGDATABASE=automation_data_control \
+  --env "NOCODB_VALIDATOR_BODY_MD5=$validator_digest" \
   --env "NOCODB_METADATA_BODY_MD5=$preflight_digest" "$old_container" \
   /bin/sh -ceu "$preflight_script" >"$integration_root/preflight-old-result" 2>&1; then
   fail 'preflight accepted the historical defective function with a current backup'
@@ -1115,7 +1137,75 @@ permission_gate="$(automation_data_restore_job_command | sed -n \
 permission_gate='restore_fail() { printf "restore_failure=%s\n" "$1" >&2; exit 1; }
 '"$permission_gate"
 podman exec --env PGUSER=postgres "$fresh_container" /bin/sh -ceu "$permission_gate" \
-  >"$integration_root/permission-good.log" 2>&1 || fail 'valid domain failed restore permission gate'
+  >"$integration_root/permission-good.log" 2>&1 || {
+  sed -n '1,25p' "$integration_root/permission-good.log" >&2
+  fail 'valid domain failed restore permission gate'
+}
+psql_query "$fresh_container" authority_fixture '
+  SET ROLE authority_fixture_owner;
+  CREATE TABLE app.restricted_records (id bigint GENERATED ALWAYS AS IDENTITY, value text);
+  CREATE FUNCTION app.read_record_count() RETURNS bigint LANGUAGE sql SECURITY DEFINER
+    SET search_path = pg_catalog, app AS '\''SELECT count(*) FROM app.restricted_records'\'';
+  REVOKE ALL ON FUNCTION app.read_record_count() FROM PUBLIC;
+  GRANT EXECUTE ON FUNCTION app.read_record_count() TO authority_fixture_runtime;
+  REVOKE ALL ON ALL TABLES IN SCHEMA app FROM authority_fixture_runtime;
+  REVOKE ALL ON ALL SEQUENCES IN SCHEMA app FROM authority_fixture_runtime;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA app REVOKE ALL ON TABLES FROM authority_fixture_runtime;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA app REVOKE ALL ON SEQUENCES FROM authority_fixture_runtime;
+' >/dev/null
+podman exec --env PGUSER=postgres "$fresh_container" /bin/sh -ceu "$permission_gate" \
+  >"$integration_root/permission-restricted.log" 2>&1 ||
+  fail 'platform rejected application-owned restrictions on objects and defaults'
+[[ "$(psql_query "$fresh_container" authority_fixture \
+  "SELECT NOT has_table_privilege('authority_fixture_runtime', 'app.restricted_records', 'SELECT,INSERT,UPDATE,DELETE')
+    AND NOT has_sequence_privilege('authority_fixture_runtime', 'app.restricted_records_id_seq', 'USAGE,SELECT,UPDATE');")" == t ]] ||
+  fail 'validation broadened application-owned permissions'
+[[ "$(podman exec "$fresh_container" psql --no-psqlrc --quiet --set=ON_ERROR_STOP=1 \
+  --username postgres --dbname authority_fixture --tuples-only --no-align \
+  --command='SET SESSION AUTHORIZATION authority_fixture_runtime; SELECT app.read_record_count();')" == 0 ]] ||
+  fail 'restricted runtime could not use its application-owned controlled function'
+psql_query "$fresh_container" authority_fixture \
+  'GRANT TRUNCATE ON app.restricted_records TO authority_fixture_runtime;' >/dev/null
+if podman exec --env PGUSER=postgres "$fresh_container" /bin/sh -ceu "$permission_gate" \
+  >"$integration_root/permission-excess.log" 2>&1; then
+  fail 'platform accepted a forbidden runtime table privilege'
+fi
+rg -Fxq 'restore_permission_failure domain=authority_fixture check=runtimePrivilegesValid' \
+  "$integration_root/permission-excess.log" || fail 'excess runtime privilege was not diagnosed'
+psql_query "$fresh_container" authority_fixture \
+  'REVOKE TRUNCATE ON app.restricted_records FROM authority_fixture_runtime;' >/dev/null
+for mutation in column-grant-option sequence-grant-option function-grant-option default-truncate default-function-grant-option; do
+  case "$mutation" in
+    column-grant-option)
+      grant_sql='GRANT SELECT (value) ON app.restricted_records TO authority_fixture_runtime WITH GRANT OPTION;'
+      revoke_sql='REVOKE ALL (value) ON app.restricted_records FROM authority_fixture_runtime;'
+      expected_check=runtimePrivilegesValid ;;
+    sequence-grant-option)
+      grant_sql='GRANT USAGE ON SEQUENCE app.restricted_records_id_seq TO authority_fixture_runtime WITH GRANT OPTION;'
+      revoke_sql='REVOKE ALL ON SEQUENCE app.restricted_records_id_seq FROM authority_fixture_runtime;'
+      expected_check=runtimePrivilegesValid ;;
+    function-grant-option)
+      grant_sql='GRANT EXECUTE ON FUNCTION app.read_record_count() TO authority_fixture_runtime WITH GRANT OPTION;'
+      revoke_sql='REVOKE GRANT OPTION FOR EXECUTE ON FUNCTION app.read_record_count() FROM authority_fixture_runtime;'
+      expected_check=runtimePrivilegesValid ;;
+    default-truncate)
+      grant_sql='ALTER DEFAULT PRIVILEGES FOR ROLE authority_fixture_owner IN SCHEMA app GRANT TRUNCATE ON TABLES TO authority_fixture_runtime;'
+      revoke_sql='ALTER DEFAULT PRIVILEGES FOR ROLE authority_fixture_owner IN SCHEMA app REVOKE TRUNCATE ON TABLES FROM authority_fixture_runtime;'
+      expected_check=defaultPrivilegesValid ;;
+    default-function-grant-option)
+      grant_sql='ALTER DEFAULT PRIVILEGES FOR ROLE authority_fixture_owner IN SCHEMA app GRANT EXECUTE ON FUNCTIONS TO authority_fixture_runtime WITH GRANT OPTION;'
+      revoke_sql='ALTER DEFAULT PRIVILEGES FOR ROLE authority_fixture_owner IN SCHEMA app REVOKE ALL ON FUNCTIONS FROM authority_fixture_runtime;'
+      expected_check=defaultPrivilegesValid ;;
+  esac
+  psql_query "$fresh_container" authority_fixture "$grant_sql" >/dev/null
+  if podman exec --env PGUSER=postgres "$fresh_container" /bin/sh -ceu "$permission_gate" \
+    >"$integration_root/permission-$mutation.log" 2>&1; then
+    fail "platform accepted $mutation"
+  fi
+  rg -Fxq "restore_permission_failure domain=authority_fixture check=$expected_check" \
+    "$integration_root/permission-$mutation.log" || fail "$mutation failed for an unrelated reason"
+  psql_query "$fresh_container" authority_fixture "$revoke_sql" >/dev/null
+done
 psql_query "$fresh_container" automation_data_control '
   ALTER ROLE authority_fixture_owner LOGIN;
   ALTER ROLE authority_fixture_runtime CREATEROLE;

@@ -260,6 +260,65 @@ set -euo pipefail
 printf 'pg_restore' >>"$RESTORE_LOG"
 printf '\t%s' "$@" >>"$RESTORE_LOG"
 printf '\n' >>"$RESTORE_LOG"
+archive=''
+output_file=''
+restrict_key=''
+list_requested=false
+for argument in "$@"; do
+  case "$argument" in
+    --list) list_requested=true ;;
+    --file=*) output_file="${argument#--file=}" ;;
+    --restrict-key=*) restrict_key="${argument#--restrict-key=}" ;;
+    --*) ;;
+    *) archive="$argument" ;;
+  esac
+done
+if [[ "$list_requested" == true ]]; then
+  if [[ "$archive" == */candidate.dump ]]; then
+    printf '%s\n' \
+      '901; 1259 8101 TABLE app records domain_one_owner' \
+      '902; 2615 8102 SCHEMA - app domain_one_owner' \
+      '903; 0 0 ACL app TABLE records domain_one_owner' \
+      '904; 0 0 DEFAULT ACL app DEFAULT PRIVILEGES FOR TABLES domain_one_owner'
+  else
+    printf '%s\n' \
+      '101; 1259 7101 TABLE app records domain_one_owner' \
+      '102; 2615 7102 SCHEMA - app domain_one_owner' \
+      '103; 0 0 ACL app TABLE records domain_one_owner' \
+      '104; 0 0 DEFAULT ACL app DEFAULT PRIVILEGES FOR TABLES domain_one_owner'
+  fi
+elif [[ -n "$output_file" ]]; then
+  {
+    printf '%s\n' '-- PostgreSQL database dump'
+    if [[ "$archive" == */candidate.dump ]]; then
+      printf '%s\n' '-- Dumped from database version 17.11' '-- Dumped by pg_dump version 17.11'
+    else
+      printf '%s\n' '-- Dumped from database version 17.10' '-- Dumped by pg_dump version 17.10'
+    fi
+    printf '\\restrict %s\n' "$restrict_key"
+    printf '%s\n' 'GRANT SELECT ON TABLE app.records TO domain_one_runtime;'
+    if [[ "$archive" == */candidate.dump && "${RESTORE_PERMISSION_MISMATCH:-false}" == true ]]; then
+      printf '%s\n' 'GRANT UPDATE ON TABLE app.records TO domain_one_runtime;'
+    fi
+    printf '\\unrestrict %s\n' "$restrict_key"
+  } >"$output_file"
+fi
+EOF
+  cat >"$root/bin/pg_dump" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'pg_dump' >>"$RESTORE_LOG"
+printf '\t%s' "$@" >>"$RESTORE_LOG"
+printf '\n' >>"$RESTORE_LOG"
+[[ "${RESTORE_PERMISSION_DUMP_FAILURE:-false}" != true ]] || exit 53
+output_file=''
+for argument in "$@"; do
+  case "$argument" in
+    --file=*) output_file="${argument#--file=}" ;;
+  esac
+done
+[[ -n "$output_file" ]]
+printf '%s\n' 'synthetic candidate archive' >"$output_file"
 EOF
   cat >"$root/bin/backup" <<'EOF'
 #!/usr/bin/env bash
@@ -277,7 +336,7 @@ printf 'post recovery dump\n' >"$bundle/databases/db-cG9zdGdyZXM.dump"
 )
 printf 'backup\n' >>"$RESTORE_LOG"
 EOF
-  chmod +x "$root/bin/psql" "$root/bin/pg_restore" "$root/bin/backup"
+  chmod +x "$root/bin/psql" "$root/bin/pg_restore" "$root/bin/pg_dump" "$root/bin/backup"
   : >"$root/commands.log"
   printf '%s\n' "$root"
 }
@@ -285,6 +344,7 @@ EOF
 run_restore() {
   local root="$1" validation_result="${2:-true}" nocodb_validation_result="${3:-true}"
   local platform_revision="${4:-026-nocodb-v1}" oracle_failure="${5:-false}"
+  local permission_mismatch="${6:-false}" permission_dump_failure="${7:-false}"
   local output status=0 command
   command="$(automation_data_restore_job_command)"
   output="$(
@@ -304,6 +364,8 @@ run_restore() {
       NOCODB_VALIDATION_RESULT="$nocodb_validation_result" \
       RESTORED_PLATFORM_REVISION="$platform_revision" \
       ORACLE_FAILURE="$oracle_failure" \
+      RESTORE_PERMISSION_MISMATCH="$permission_mismatch" \
+      RESTORE_PERMISSION_DUMP_FAILURE="$permission_dump_failure" \
       REAL_SHA256SUM="$real_sha256sum" \
       /bin/sh -ceu "$command" 2>&1
   )" || status="$?"
@@ -340,7 +402,7 @@ run_restore "$success"
 rg -Fq 'selected_bundle=automation-data-20260826T003000Z' "$success/output" ||
   fail 'newest complete checksum-valid bundle was not selected'
 for stage in artifact-selection globals-restore database-restore catalog-validation \
-  permission-validation post-recovery-backup complete; do
+  permission-restore-comparison permission-validation post-recovery-backup complete; do
   rg -Fq "restore_stage=$stage" "$success/output" || fail "missing stage $stage"
 done
 ! rg -qi 'synthetic globals|synthetic-.*password|credential.*data' "$success/output" ||
@@ -349,8 +411,10 @@ globals_line="$(rg -n $'^psql\t.*--file=' "$success/commands.log" | head -n 1 | 
 first_database_line="$(rg -n $'^pg_restore\t--exit-on-error' \
   "$success/commands.log" | head -n 1 | cut -d: -f1)"
 [[ "$globals_line" -lt "$first_database_line" ]] || fail 'globals were not restored first'
-[[ "$(rg -c '^pg_restore' "$success/commands.log")" == '6' ]] ||
-  fail 'every database archive was not inspected and restored'
+[[ "$(rg -c '^pg_restore' "$success/commands.log")" == '10' ]] ||
+  fail 'every database archive was not inspected, restored, and permission-compared'
+[[ "$(rg -c '^pg_dump' "$success/commands.log")" == '1' ]] ||
+  fail 'restore permissions were not compared once for the single ready domain'
 rg -Fq 'backup' "$success/commands.log" || fail 'fresh post-recovery backup was not invoked'
 rg -Fq 'post_recovery_bundle=automation-data-20260828T003000Z' "$success/output" ||
   fail 'fresh post-recovery bundle was not validated'
@@ -468,5 +532,37 @@ rg -Fxq 'restore_failure=permission-query' "$permission_query_failure/output" ||
   fail 'permission query failure was misclassified as a failed assertion'
 ! rg -q '^backup$' "$permission_query_failure/commands.log" ||
   fail 'permission query failure reached fresh backup'
+
+permission_restore_mismatch="$(new_case permission-restore-mismatch)"
+create_bundle "$permission_restore_mismatch/backups" 20260827T003000Z
+run_restore "$permission_restore_mismatch" true true 026-nocodb-v1 false true
+[[ "$(<"$permission_restore_mismatch/status")" != '0' ]] ||
+  fail 'archive/restored permission mismatch was accepted'
+rg -Fxq 'restore_permission_fidelity_failure domain=domain_one' \
+  "$permission_restore_mismatch/output" ||
+  fail 'permission fidelity mismatch did not identify only its domain'
+rg -Fxq 'restore_failure=permission-restore-comparison' \
+  "$permission_restore_mismatch/output" ||
+  fail 'permission fidelity mismatch did not preserve its failure stage'
+! rg -q '^backup$' "$permission_restore_mismatch/commands.log" ||
+  fail 'permission fidelity mismatch reached fresh backup'
+! rg -qi 'synthetic globals|synthetic-.*password|credential.*data|GRANT UPDATE' \
+  "$permission_restore_mismatch/output" ||
+  fail 'permission fidelity mismatch exposed SQL or credential data'
+
+permission_restore_dump_failure="$(new_case permission-restore-dump-failure)"
+create_bundle "$permission_restore_dump_failure/backups" 20260827T003000Z
+run_restore "$permission_restore_dump_failure" true true 026-nocodb-v1 false false true
+[[ "$(<"$permission_restore_dump_failure/status")" != '0' ]] ||
+  fail 'permission candidate dump failure was accepted'
+rg -Fxq 'restore_permission_fidelity_failure domain=domain_one' \
+  "$permission_restore_dump_failure/output" ||
+  fail 'permission candidate dump failure exposed more than its domain'
+rg -Fxq 'restore_failure=permission-restore-comparison' \
+  "$permission_restore_dump_failure/output" ||
+  fail 'permission candidate dump failure did not preserve its failure stage'
+! rg -qi 'synthetic globals|synthetic-.*password|credential.*data|pg_dump' \
+  "$permission_restore_dump_failure/output" ||
+  fail 'permission candidate dump failure exposed SQL, credentials, or tool details'
 
 echo 'automation-data restore command behavior passed.'

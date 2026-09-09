@@ -118,6 +118,10 @@ spec:
               subPath: platform-control.sql
               readOnly: true
             - name: init
+              mountPath: /scripts/domain-validation.sql
+              subPath: domain-validation.sql
+              readOnly: true
+            - name: init
               mountPath: /scripts/nocodb-extension.sql
               subPath: nocodb-extension.sql
               readOnly: true
