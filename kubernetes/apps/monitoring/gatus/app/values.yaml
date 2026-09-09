@@ -264,6 +264,12 @@ config:
       interval: 10m
       conditions:
         - "[STATUS] == 200"
+    - name: nocodb
+      group: Platform
+      url: "https://nocodb.lab.supermorphic.com/api/v1/health"
+      interval: 1m
+      conditions:
+        - "[STATUS] == 200"
     - name: n8n-readiness
       group: Automation
       url: "https://n8n.lab.supermorphic.com/healthz/readiness"

@@ -101,9 +101,10 @@ Foundation workflows preserve the same boundary:
 | `just bootstrap foundation` | Guard and reconcile the nine suspended foundation units in dependency order |
 | `just kube foundation-verify` | Prove the complete DNS-to-trusted-HTTPS path plus Talos and etcd health |
 
-The staged NocoDB operator UI uses the automation-data PostgreSQL and private n8n
-boundaries. Its Git-managed Flux Kustomization remains suspended until attended access,
-logical-backup, and isolated restore acceptance pass:
+The NocoDB operator UI uses the automation-data PostgreSQL and private n8n boundaries.
+The activation candidate enables its Flux Kustomization, Homepage tile, Gatus health
+check, alerts, and verification campaigns together. Merge remains gated on attended
+access, logical-backup, and isolated restore acceptance:
 
 | Command | Behavior |
 |---|---|

@@ -4,16 +4,16 @@ This guide stages and operates the private NocoDB interface for selected
 automation-data PostgreSQL domains. NocoDB is an optional operator interface. PostgreSQL
 remains the authority boundary, and n8n remains the workflow and bulk-change boundary.
 
-The NocoDB package is present in Git with its Flux Kustomization suspended. The live
-bootstrap, source acceptance, logical backup, and restore drill have not run. Do not
-claim that NocoDB is active or recoverable until the attended rollout in this guide has
-completed and its evidence has been reviewed.
+The activation change sets the NocoDB Flux Kustomization to `spec.suspend: false`
+and enrolls Homepage, Gatus, alerts, and recurring verification together. On 2026-09-09,
+the operator completed bootstrap, source provisioning, access acceptance, and the browser
+check. The successful access run is
+`20260909T181605Z-3d4e74fd0a3c-operator-0b9528a0`.
 
-The repository procedures are reconciled with the tested offline and disposable local
-implementation described in [specification 028](../specs/028-nocodb-operator-ui.md).
-Before activation, complete the operator-run existing-platform upgrade and attended
-cluster acceptance for the deployed revision. This local evidence does not prove live
-access, browser behavior, backup publication, restore behavior, or activation.
+The activation PR is prepared in advance of the attended restore drill. Keep it in draft
+until a complete post-acceptance backup and successful isolated restore evidence have
+been reviewed. Live durable activation and recovery are not yet established by the
+access result. Record the restore result before merging the activation change.
 
 Use [Staged activation](#staged-activation) for the first deployment and
 [Routine operation](#routine-operation) afterward. For failure classification and
@@ -21,7 +21,9 @@ recovery, use [Recover NocoDB](../runbooks/nocodb-recovery.md).
 
 ## Before you start
 
-Start activation only when all of these conditions are true:
+For a first installation, stage the NocoDB Kustomization with `spec.suspend: true`
+and leave monitoring and verification unenrolled until the attended steps pass.
+Start the attended rollout only when all of these conditions are true:
 
 - the automation-data platform bootstrap, provisioning acceptance, current complete
   backup, and full-chain restore drill have passed for the deployed revision;
@@ -492,10 +494,17 @@ publishes a fresh logical bundle; and all run-owned resources are absent after c
 
 ### 9. Make activation durable only after acceptance
 
-After all prerequisite, access, backup, and restore evidence passes, prepare a reviewed
-Git change that sets the NocoDB Flux Kustomization to `spec.suspend: false`. Run the full
-repository gate, merge only with explicit operator authorization, and wait for Flux
-source parity. Until that change merges, the source of truth remains suspended.
+After all prerequisite, access, backup, and restore evidence passes, complete review of
+the activation change. It sets the NocoDB Flux Kustomization to `spec.suspend: false`,
+adds the Homepage **Platform → NocoDB** tile, enables the Gatus health endpoint and
+NocoDB alert rules, and enrolls `verification.nocodb` in both verification campaigns.
+Homepage discovers the tile from the NocoDB HTTPRoute; it needs no API credential.
+
+Run `mise exec -- just test ci-publish` from the clean candidate, merge only with
+explicit operator authorization, and wait for Flux source parity. Then run
+`mise exec -- just kube nocodb-verify`, confirm the Homepage link opens the private UI,
+and confirm the Gatus NocoDB endpoint is healthy. Record and publish the final evidence.
+Until that change merges, deployed Git intent remains suspended.
 
 ## Routine operation
 

@@ -282,6 +282,10 @@ case_canonical_alias_duplicate_selection() {
 
 case_staged_nocodb_alias_selection() {
   reset_tree
+  yq -i '.spec.suspend = true' \
+    "$tree_root/kubernetes/apps/automation-data/nocodb/ks.yaml"
+  yq -i 'del(.resources[] | select(. == "./nocodb.yaml"))' \
+    "$tree_root/kubernetes/apps/monitoring/alerts/app/kustomization.yaml"
   yq -i '.resources += ["../app/nocodb.yaml"]' \
     "$tree_root/kubernetes/apps/monitoring/alerts/app/kustomization.yaml"
   expect_full_fail 'staged NocoDB rule selected through a parent alias' \

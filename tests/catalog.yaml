@@ -116,6 +116,7 @@ campaigns:
       - verification.foundation
       - verification.n8n
       - verification.automation-data
+      - verification.nocodb
       - verification.storage
       - verification.csi-driver-smb
       - verification.media-storage
@@ -178,6 +179,7 @@ campaigns:
       - verification.foundation
       - verification.n8n
       - verification.automation-data
+      - verification.nocodb
       - verification.storage
       - verification.csi-driver-smb
       - verification.media-storage

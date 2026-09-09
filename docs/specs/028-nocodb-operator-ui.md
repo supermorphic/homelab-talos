@@ -37,7 +37,8 @@ migrator and runtime login credentials. The implemented extension keeps optional
 reader and operator state in the separate, single-purpose `managed_nocodb_sources`
 registry. The accepted platform is already active: specification 025 records successful
 provisioning and full-chain recovery acceptance on 2026-09-05, and its Flux
-Kustomization has `spec.suspend: false`. NocoDB remains suspended and unaccepted.
+Kustomization has `spec.suspend: false`. NocoDB durable activation remains gated on its
+own acceptance and restore evidence.
 Introducing NocoDB must upgrade that existing platform without recreating its database,
 changing existing domain credentials, or interrupting its backup contract.
 
@@ -843,7 +844,10 @@ change plan.
 ## Monitoring and logs
 
 Gatus checks `https://nocodb.lab.supermorphic.com/api/v1/health` through the private
-route. Application logs flow through the existing Alloy collection path.
+route. Homepage discovers a **Platform → NocoDB** tile from the private HTTPRoute's
+`gethomepage.dev/*` annotations, links to `https://nocodb.lab.supermorphic.com`, and
+selects the `app.kubernetes.io/name=nocodb` pod. It has no API widget or credential.
+Application logs flow through the existing Alloy collection path.
 
 Monitoring enrollment follows intended activation. The staged package must not enable
 an unavailable-endpoint check, expected-absence alerts, or recurring NocoDB verification
@@ -1053,7 +1057,7 @@ Rollout follows dependency and authority order:
    containing NocoDB metadata, source state, and the persistent domain canaries.
 8. Run the confirmed NocoDB metadata restore drill.
 9. After acceptance passes, make the reviewed Git activation change: set NocoDB's
-   `spec.suspend: false`, enroll its monitoring and recurring verification together,
+   `spec.suspend: false`, enroll Homepage, monitoring, and recurring verification together,
    verify their active behavior, and record dated results in this specification.
 
 Initial administrator login, n8n credential binding, workflow publication, and commands
@@ -1105,13 +1109,18 @@ database-inventory, and error-record checks and reports a fixed diagnostic token
 removing a failed helper Job. Retained bundles are not rewritten; acceptance must create
 a fresh bundle after the corrected backup writer is deployed.
 
-As of 2026-09-05, the repository contains the staged NocoDB package, optional
-automation-data roles and single source registry, secret-free n8n workflows, lifecycle
-commands, monitoring, offline contract tests, operations guide, and recovery runbook.
-The NocoDB Flux Kustomization is selected by its parent and remains
-`spec.suspend: true`. No NocoDB bootstrap, source sync, access acceptance,
-or restore drill has run against the live cluster. No active service or recovery
-capability is claimed.
+On 2026-09-09, the operator completed live bootstrap, source provisioning, and access
+acceptance with cleanup in run `20260909T181605Z-3d4e74fd0a3c-operator-0b9528a0`.
+The operator also confirmed read-only browsing and temporary decision creation, editing,
+read-back, and deletion in the browser. This establishes access and browser acceptance.
+
+The activation candidate sets `spec.suspend: false`, adds the Homepage tile and Gatus
+endpoint, selects the nine NocoDB alert rules, and enrolls both verification campaigns.
+It is prepared as a draft while the operator waits for a complete post-acceptance backup
+and runs the isolated restore drill. Restore evidence and specific merge authorization
+remain required before publication to main; durable live activation and recoverability
+are not claimed by this candidate. Update this record with the restore and post-merge
+verification results before declaring rollout complete.
 
 The 2026-09-05 integration audit revised this design after the initial implementation.
 The fixed existing-platform upgrade and old/new backup compatibility pass disposable
@@ -1142,11 +1151,10 @@ backup passed. The final lifecycle regression also exercised independent reader 
 operator credential rotation and ran the production restore request helper against the
 separate restored application. Run-owned resources were absent after each run.
 
-This local evidence does not establish live Gateway or Cilium behavior, Longhorn
-recovery, or browser usability. Attended cluster acceptance and activation remain
-outstanding. No native attachment workaround or live activation has been performed. The
-publication plan remains under `.tmp/plans/027-nocodb-publication.md`; it is not a
-committed design artifact.
+The local evidence alone does not establish live behavior. The later 2026-09-09
+attended access and browser results are recorded above. Isolated live restore and
+durable activation verification remain outstanding. No native attachment workaround is
+part of the implemented design.
 
 ## Rejected alternatives
 

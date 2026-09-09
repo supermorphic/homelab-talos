@@ -6,6 +6,13 @@ metadata:
   name: nocodb
   annotations:
     external-dns.k8s.io/audience: internal
+    gethomepage.dev/enabled: "true"
+    gethomepage.dev/name: "NocoDB"
+    gethomepage.dev/description: "Automation data and operator decisions"
+    gethomepage.dev/group: "Platform"
+    gethomepage.dev/icon: "nocodb.svg"
+    gethomepage.dev/href: "https://nocodb.lab.supermorphic.com"
+    gethomepage.dev/pod-selector: "app.kubernetes.io/name=nocodb"
 spec:
   hostnames:
     - nocodb.lab.supermorphic.com
