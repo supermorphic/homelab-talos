@@ -248,6 +248,7 @@ elif [[ "$command_text" == *'025-baseline'* && "$command_text" == *'026-nocodb-v
 elif [[ "$command_text" == *'managed_nocodb_sources'* && "$command_text" == *'validate_nocodb_access'* ]]; then
   printf '%s\n' "${NOCODB_VALIDATION_RESULT:-true}"
 elif [[ "$command_text" == *'managed_domains'* && "$command_text" == *'validate_domain'* ]]; then
+  [[ "${VALIDATION_RESULT:-true}" != query-error ]] || exit 52
   printf '%s\n' "${VALIDATION_RESULT:-true}"
 elif [[ "$command_text" == *'managed_domains'* ]]; then
   printf '%s\n' "$RESTORED_REGISTRY_BASE64"
@@ -442,5 +443,30 @@ rg -Fq 'restore_failure=nocodb-permission-validation' "$nocodb_permission_failur
   fail 'invalid NocoDB source access did not fail its restore validation'
 ! rg -q '^backup$' "$nocodb_permission_failure/commands.log" ||
   fail 'invalid NocoDB source access reached fresh backup'
+
+permission_failure="$(new_case permission-failure)"
+create_bundle "$permission_failure/backups" 20260827T003000Z
+permission_detail='restore_permission_failure domain=domain_one check=ownerNoLogin'
+run_restore "$permission_failure" "$permission_detail"
+[[ "$(<"$permission_failure/status")" != '0' ]] ||
+  fail 'failed domain permissions were accepted'
+rg -Fxq "$permission_detail" "$permission_failure/output" ||
+  fail 'failed permission check did not identify its domain and check'
+rg -Fxq 'restore_failure=permission-validation' "$permission_failure/output" ||
+  fail 'permission diagnostics changed the failure stage'
+! rg -q '^backup$' "$permission_failure/commands.log" ||
+  fail 'failed domain permissions reached fresh backup'
+! rg -qi 'synthetic globals|synthetic-.*password|credential.*data' "$permission_failure/output" ||
+  fail 'permission diagnostics exposed globals or credential data'
+
+permission_query_failure="$(new_case permission-query-failure)"
+create_bundle "$permission_query_failure/backups" 20260827T003000Z
+run_restore "$permission_query_failure" query-error
+[[ "$(<"$permission_query_failure/status")" != '0' ]] ||
+  fail 'permission query failure was accepted'
+rg -Fxq 'restore_failure=permission-query' "$permission_query_failure/output" ||
+  fail 'permission query failure was misclassified as a failed assertion'
+! rg -q '^backup$' "$permission_query_failure/commands.log" ||
+  fail 'permission query failure reached fresh backup'
 
 echo 'automation-data restore command behavior passed.'

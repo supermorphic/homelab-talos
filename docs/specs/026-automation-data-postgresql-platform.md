@@ -562,7 +562,9 @@ The attended full-chain restore drill:
    `database`, `role`, and `executionId`.
 9. Proves that the runtime credential authenticates without revealing its password and
    separately validates restored migrator/runtime permission separation for every ready
-   domain.
+   domain. Failed or missing permission assertions report only the domain and fixed
+   check name; validator credential fields are not printed. These diagnostics preserve
+   the failing permission-validation stage and prevent post-recovery backup on failure.
 10. Creates and validates a fresh logical bundle from the restored instance.
 11. Removes and proves absence of all run-owned workloads, policies, Services, and two
     temporary 20 GiB data claims. It creates no HTTPRoute.
