@@ -698,7 +698,49 @@ kubectl --kubeconfig "$kubeconfig" --namespace automation-data rollout status \
   deployment/nocodb --timeout=15m
 
 health_response="$temp_dir/health.json"
-curl_request 'NocoDB health check' GET "$nocodb_url/api/v1/health" none '' "$health_response"
+echo 'Waiting for the internal Gateway to accept the NocoDB route.' >&2
+for route_condition in Accepted ResolvedRefs; do
+  kubectl --kubeconfig "$kubeconfig" --namespace automation-data wait \
+    "--for=jsonpath={.status.parents[?(@.parentRef.name==\"internal\")].conditions[?(@.type==\"$route_condition\")].status}=True" \
+    httproute/nocodb --timeout=2m || {
+    echo "NocoDB internal route did not become $route_condition; check namespace Gateway admission." >&2
+    exit 1
+  }
+done
+kubectl --kubeconfig "$kubeconfig" --namespace automation-data get httproute nocodb \
+  --output json >"$temp_dir/route.json"
+jq -e '
+  .metadata.generation as $generation |
+  [.status.parents[]? | select(
+    .parentRef.name == "internal" and .parentRef.namespace == "networking" and
+    .parentRef.sectionName == "https" and
+    .controllerName == "gateway.envoyproxy.io/gatewayclass-controller"
+  )] as $parents |
+  ($parents | length) == 1 and
+  all(["Accepted", "ResolvedRefs"][]; . as $type |
+    any($parents[0].conditions[]?;
+      .type == $type and .status == "True" and .observedGeneration == $generation))
+' "$temp_dir/route.json" >/dev/null || {
+  echo 'NocoDB internal route acceptance is missing, stale, or unresolved.' >&2
+  exit 1
+}
+
+for dns_attempt in {1..13}; do
+  if curl_request 'NocoDB health check' GET "$nocodb_url/api/v1/health" none '' "$health_response"; then
+    break
+  else
+    health_status=$?
+  fi
+  # Retry only hostname resolution while ExternalDNS publishes the accepted route.
+  # Do not retry authentication, TLS, HTTP, or malformed application responses.
+  [[ "$health_status" == 6 ]] || exit "$health_status"
+  [[ "$dns_attempt" -lt 13 ]] || {
+    echo 'NocoDB DNS lookup did not become ready; check ExternalDNS, Pi-hole, and the workstation resolver.' >&2
+    exit 6
+  }
+  echo 'Waiting for NocoDB DNS publication and resolver propagation.' >&2
+  sleep 10
+done
 jq -e '.message == "OK"' "$health_response" >/dev/null || {
   echo 'NocoDB health response did not satisfy the fixed contract.' >&2
   exit 1

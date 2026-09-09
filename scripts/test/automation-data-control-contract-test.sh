@@ -43,11 +43,12 @@ namespace_contract="$(yq ea -r '
   [
     .metadata.labels."pod-security.kubernetes.io/audit",
     .metadata.labels."pod-security.kubernetes.io/enforce",
-    .metadata.labels."pod-security.kubernetes.io/warn"
+    .metadata.labels."pod-security.kubernetes.io/warn",
+    .metadata.labels."gateway.supermorphic.com/access"
   ] | join(",")
 ' "$temp_dir/namespace.yaml")"
-[[ "$namespace_contract" == 'restricted,restricted,restricted' ]] || \
-  fail 'namespace does not enforce the restricted Pod Security profile'
+[[ "$namespace_contract" == 'restricted,restricted,restricted,internal' ]] || \
+  fail 'namespace must enforce restricted Pod Security and admit the internal Gateway'
 
 pvc_contract="$(yq ea -r '
   [select(.kind == "PersistentVolumeClaim") | [

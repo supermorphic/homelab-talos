@@ -203,6 +203,13 @@ database and `nocodb_metadata` login, waits for the one NocoDB pod, enables invi
 signup and restricted workspace creation, and creates the n8n Header Auth credential
 named **NocoDB Operator API**. It reads the created credential back by non-secret ID.
 
+The `automation-data` namespace carries `gateway.supermorphic.com/access: internal`
+so Envoy Gateway watches its HTTPRoute. ExternalDNS publishes the accepted internal
+route to Pi-hole. After rollout, bootstrap waits for route acceptance and resolved
+references, checks their current generation, then retries DNS lookup failures up to
+13 times with ten-second intervals. Other health failures stop immediately. These
+checks finish before bootstrap reads administrator credentials or calls sign-in.
+
 The NocoDB Community API token is broad and non-expiring. Bootstrap stores it directly
 in n8n and never prints it. A deliberate broad NocoDB-token rotation workflow is not
 implemented.
