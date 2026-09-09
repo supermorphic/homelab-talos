@@ -1461,7 +1461,7 @@ if (!rejects('Evaluate Reader Insert Denial', {
   statusCode: 400, body: { error: 'ERR_DUPLICATE_RECORD', message: 'duplicate key' }, context: negativeOne,
 }, {}, /reader_insert_denial_invalid/)) throw new Error('duplicate residue created a false reader-denial pass');
 
-const cleanupContext = { operation: 'cleanup', runId: 'run-one', cleanupPageCount: 0, removedCount: 0 };
+const cleanupContext = { operation: 'cleanup', runId: 'run-one', factsTableId: 'table-facts', decisionTableId: 'table-decisions', cleanupPageCount: 0, removedCount: 0 };
 const cleanupPage = execute('Prepare Cleanup Page', {
   ...cleanupContext, rows: [{ id: 1, run_id: 'run-one' }, { id: 2, run_id: 'run-one' }],
 })[0].json;
@@ -1732,17 +1732,27 @@ for (const invalid of [
   }
 }
 
-const cleanupFactContext = {
-  ...cleanupAbsent, factsTableId: 'table-facts', decisionTableId: 'table-decisions', factId: prepared.factId,
-};
+const cleanupFactContext = execute('Prepare Cleanup Fact', cleanupAbsent, {
+  'Require Cleanup Absent': cleanupAbsent,
+})[0].json;
+const cleanupReadUrl = new Function('$', 'return (' + byName['Read Cleanup Fact'].parameters.url.slice(3, -2) + ');')(
+  () => ({ first: () => ({ json: cleanupFactContext }) }),
+);
+if (cleanupReadUrl !== 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/table-facts/records') {
+  throw new Error('cleanup node handoff lost the facts table identity');
+}
 const factAbsent = execute('Require Cleanup Fact Absent', {
   list: [], pageInfo: { totalRows: 0, isLastPage: true },
 }, { 'Prepare Cleanup Fact': cleanupFactContext })[0].json;
-if (factAbsent.factId !== prepared.factId || factAbsent.runId !== cleanupAbsent.runId) {
+const retainedReadUrl = new Function('$json', 'return (' + byName['Read Retained Recovery Fact'].parameters.url.slice(3, -2) + ');')(factAbsent);
+if (retainedReadUrl !== 'http://nocodb.automation-data.svc.cluster.local:8080/api/v2/tables/table-facts/records') {
+  throw new Error('cleanup node handoff lost the retained-canary table identity');
+}
+if (factAbsent.factId !== cleanupFactContext.factId || factAbsent.runId !== cleanupAbsent.runId) {
   throw new Error('exact cleanup fact absence did not retain context');
 }
 if (!rejects('Require Cleanup Fact Absent', {
-  list: [{ id: prepared.factId, run_id: cleanupAbsent.runId, fact: 'refreshed' }],
+  list: [{ id: cleanupFactContext.factId, run_id: cleanupAbsent.runId, fact: 'refreshed' }],
   pageInfo: { totalRows: 1, isLastPage: true },
 }, { 'Prepare Cleanup Fact': cleanupFactContext }, /cleanup_fact_absence_invalid/)) {
   throw new Error('remaining exact feedback fact was accepted as absent');

@@ -1093,6 +1093,11 @@ Final run cleanup removes the feedback decision. Offline regression coverage che
 the bounded query and executes the actual workflow Code node against valid empty,
 non-empty, and malformed responses; this does not establish live acceptance.
 
+Final cleanup preserves the discovered facts table ID through decision-absence
+verification so the feedback-fact and retained-canary reads target the correct table.
+The regression executes consecutive cleanup Code nodes and evaluates the downstream
+request URL without supplying missing context between nodes.
+
 The 2026-09-08 backup correction emits actual tab and newline separators from the
 quoted PostgreSQL capture query. A populated PostgreSQL integration regression checks
 that the resulting registry is 15-column TSV. Bundle acceptance retains checksum,

@@ -919,7 +919,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $json.context || $('Prepare Cleanup Page').last().json;\nconst body = $json.body;\nif ($json.statusCode !== 200 || !body || !Array.isArray(body.list) || !body.pageInfo || body.list.length !== 0 || Number(body.pageInfo.totalRows) !== 0) throw new Error('cleanup_absence_invalid');\nreturn [{ json: { ok: true, operation: 'cleanup', runId: context.runId, domain: 'issue334_acceptance', removedCount: context.removedCount } }];"
+        "jsCode": "const context = $json.context || $('Prepare Cleanup Page').last().json;\nconst body = $json.body;\nif ($json.statusCode !== 200 || !body || !Array.isArray(body.list) || !body.pageInfo || body.list.length !== 0 || Number(body.pageInfo.totalRows) !== 0) throw new Error('cleanup_absence_invalid');\nreturn [{ json: { factsTableId: context.factsTableId, ok: true, operation: 'cleanup', runId: context.runId, domain: 'issue334_acceptance', removedCount: context.removedCount } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
