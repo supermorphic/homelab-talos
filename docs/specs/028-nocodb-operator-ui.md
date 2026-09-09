@@ -188,6 +188,14 @@ read the existing automation-data provisioner Secret and the separate NocoDB Sec
 without copying credentials across namespaces. Workload labels and Cilium policy still
 isolate NocoDB from the PostgreSQL, backup, and exporter workloads in that namespace.
 
+The namespace must carry `gateway.supermorphic.com/access: internal` for Envoy Gateway
+discovery and internal listener admission. The HTTPRoute's internal ExternalDNS
+annotation then enables Pi-hole publication. Bootstrap waits for `Accepted` and
+`ResolvedRefs` on the internal HTTPS parent and verifies the current route generation
+before health checks. It retries only DNS resolution failures, at most 13 attempts ten
+seconds apart, before administrator credential access. Route or DNS failure preserves
+the existing owned-suspension cleanup behavior.
+
 The automation-data platform gains the optional roles, fixed provisioning functions, and
 NocoDB source registry. Following the existing workflow-template layout, the n8n package
 owns the secret-free source-provisioning workflow template and the egress needed for the

@@ -355,6 +355,17 @@ case "$*" in
   *'rollout status deployment/nocodb '*)
     [[ "${FAKE_FAILURE:-}" != rollout ]] || exit 75
     ;;
+  *'wait --for=jsonpath='*'httproute/nocodb '*)
+    [[ "${FAKE_FAILURE:-}" != route-timeout ]] || exit 1
+    ;;
+  *'get httproute nocodb --output json')
+    jq -n --arg failure "${FAKE_FAILURE:-}" '{metadata:{generation:2},status:{parents:[{
+      parentRef:{name:"internal",namespace:"networking",sectionName:"https"},
+      controllerName:"gateway.envoyproxy.io/gatewayclass-controller",
+      conditions:[{type:"Accepted",status:"True",observedGeneration:(if $failure=="route-stale" then 1 else 2 end)},
+        {type:"ResolvedRefs",status:(if $failure=="route-unresolved" then "False" else "True" end),observedGeneration:2}]
+    }]}}'
+    ;;
   *'get secret nocodb-credentials --output jsonpath={.data.NC_ADMIN_EMAIL}')
     printf '%s' "$FAKE_ADMIN_EMAIL" | base64
     ;;
@@ -430,6 +441,12 @@ case "$url" in
     ;;
   'https://nocodb.lab.supermorphic.com/api/v1/health')
     [[ "$method" == GET && -z "$body" ]] || exit 69
+    if [[ "${FAKE_FAILURE:-}" == health-dns-delayed || "${FAKE_FAILURE:-}" == health-dns-timeout ]]; then
+      count=0
+      [[ ! -f "$FAKE_CASE_ROOT/dns-attempts" ]] || count="$(<"$FAKE_CASE_ROOT/dns-attempts")"
+      printf '%s\n' "$((count + 1))" >"$FAKE_CASE_ROOT/dns-attempts"
+      [[ "${FAKE_FAILURE:-}" != health-dns-timeout && "$count" -gt 0 ]] || exit 6
+    fi
     [[ "${FAKE_FAILURE:-}" != health ]] || exit 76
     printf '%s\n' '{"message":"OK"}' >"$output"
     ;;
@@ -558,7 +575,11 @@ case "$url" in
 esac
 printf 'curl %s %s\n' "$method" "$url" >>"$FAKE_NOCODB_EVENT_LOG"
 EOF
-chmod 700 "$stub_bin/git" "$stub_bin/just" "$stub_bin/flux" "$stub_bin/kubectl" "$stub_bin/curl" "$stub_bin/platform-preflight"
+cat >"$stub_bin/sleep" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod 700 "$stub_bin/sleep" "$stub_bin/git" "$stub_bin/just" "$stub_bin/flux" "$stub_bin/kubectl" "$stub_bin/curl" "$stub_bin/platform-preflight"
 
 case_name=''
 OUT=''
@@ -657,7 +678,8 @@ run_case() { # <failure|none> <confirmation|exact> <cleanup-failure> <preserve-a
   [[ "$preserve_api_state" == true ]] || reset_api_state "$failure"
   rm -f -- "$case_root/source-check-count" "$case_root/prerequisite-count" \
     "$case_root/suspend-check-count" "$case_root/remote-check-count" \
-    "$case_root/flux-revision-count" "$case_root/platform-preflight-count"
+    "$case_root/flux-revision-count" "$case_root/platform-preflight-count" \
+    "$case_root/dns-attempts"
   set +e
   if [[ "$confirmation" == exact ]]; then
     OUT="$(cd "$case_root" && PATH="$stub_bin:$PATH" FAKE_CASE_ROOT="$case_root" \
@@ -955,6 +977,22 @@ run_case reconcile
 assert_failure
 assert_cleanup_suspend
 assert_no_delete
+
+case_name='DNS propagation after route acceptance is retried before sign-in'
+run_case health-dns-delayed
+assert_status 0
+[[ "$(<"$case_root/dns-attempts")" == 2 ]] || fail 'DNS was not retried exactly once'
+
+for failure in route-timeout route-stale route-unresolved health-dns-timeout; do
+  case_name="route and DNS failures stop before credentials: $failure"
+  run_case "$failure"
+  assert_failure
+  assert_cleanup_suspend
+  ! rg -q 'get secret nocodb-credentials --output jsonpath=\{.data.NC_ADMIN' "$event_log" || fail 'admin credentials read before route readiness'
+  if [[ "$failure" == health-dns-timeout ]]; then
+    [[ "$(<"$case_root/dns-attempts")" == 13 ]] || fail 'persistent DNS failure did not stop at 13 attempts'
+  fi
+done
 
 for failure in metadata-job helmrelease rollout health signin settings-update \
   settings-readback token token-probe credential credential-readback-id \
