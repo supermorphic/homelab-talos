@@ -16,9 +16,9 @@ fail() {
 [[ -f "$activation_values" ]] || fail 'Staged NocoDB Gatus activation definition is missing.'
 [[ -f "$rule" ]] || fail 'NocoDB PrometheusRule is missing.'
 
-[[ "$(yq -r '[.config.endpoints[] | select(.name == "nocodb")] | length' "$values")" == '0' ]] ||
-  fail 'Staged NocoDB must not be enrolled in active Gatus values.'
-endpoint="$(yq -o=json -I=0 '.config.endpoints[] | select(.name == "nocodb")' "$activation_values")"
+[[ "$(yq -r '[.config.endpoints[] | select(.name == "nocodb")] | length' "$values")" == '1' ]] ||
+  fail 'Active NocoDB must have exactly one Gatus endpoint.'
+endpoint="$(yq -o=json -I=0 '.config.endpoints[] | select(.name == "nocodb")' "$values")"
 [[ "$(yq -r '.group' <<<"$endpoint")" == 'Platform' ]] || fail 'NocoDB Gatus group must be Platform.'
 [[ "$(yq -r '.url' <<<"$endpoint")" == 'https://nocodb.lab.supermorphic.com/api/v1/health' ]] || fail 'NocoDB Gatus URL is incorrect.'
 [[ "$(yq -r '.interval' <<<"$endpoint")" == '1m' ]] || fail 'NocoDB Gatus interval must be 1m.'
@@ -46,8 +46,14 @@ done
 ! rg -q 'persistentvolumeclaim|kubelet_volume_stats' "$rule" ||
   fail 'NocoDB alerts must not observe application-local storage'
 
-! rg -Fxq '  - ./nocodb.yaml' "$kustomization" || fail 'Staged NocoDB PrometheusRule must not be selected.'
+rg -Fxq '  - ./nocodb.yaml' "$kustomization" || fail 'Active NocoDB PrometheusRule must be selected.'
 ! rg -q 'ServiceMonitor|alloy|loki' "$repo_root/kubernetes/apps/automation-data/nocodb" ||
   fail 'NocoDB must not add a ServiceMonitor or a second log agent.'
+
+for campaign in verification scoped-verification; do
+  [[ "$(CAMPAIGN="$campaign" yq -r '[.campaigns[strenv(CAMPAIGN)].members[] |
+    select(. == "verification.nocodb")] | length' "$repo_root/tests/catalog.yaml")" == 1 ]] ||
+    fail "NocoDB must appear exactly once in $campaign."
+done
 
 echo 'NocoDB Gatus and Prometheus alert contracts passed.'

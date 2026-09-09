@@ -253,7 +253,7 @@ check_media_endpoint 'seerr-radarr-service-read' \
 require_equal 'Media Integration endpoint methods and bodies' \
   "$(yq -r '[.config.endpoints[] | select(.group == "Media Integration") | select(.method != "GET" or has("body"))] | length' "$values")" '0'
 
-legacy_endpoint_names='alertmanager,echo,flaresolverr,grafana,letsencrypt-acme,lidarr,longhorn-ui,ntfy,plex,portainer,prometheus,prowlarr,qbittorrent-vpn,radarr,seerr,sonarr,tautulli,test-reports'
+legacy_endpoint_names='alertmanager,echo,flaresolverr,grafana,letsencrypt-acme,lidarr,longhorn-ui,nocodb,ntfy,plex,portainer,prometheus,prowlarr,qbittorrent-vpn,radarr,seerr,sonarr,tautulli,test-reports'
 require_equal 'Existing Level 1 endpoint names' \
   "$(yq -r '[.config.endpoints[] | select(.group != "Media Integration" and
     .name != "n8n-readiness" and .name != "n8n-webhook-e2e" and
@@ -275,6 +275,7 @@ alertmanager|Observability|https://alertmanager.lab.supermorphic.com/-/healthy|1
 test-reports|Observability|https://tests.lab.supermorphic.com/|1m|[STATUS] == 200
 echo|Platform|https://echo.lab.supermorphic.com/|1m|[STATUS] == 200
 portainer|Platform|https://portainer.lab.supermorphic.com/|1m|[STATUS] == 200
+nocodb|Platform|https://nocodb.lab.supermorphic.com/api/v1/health|1m|[STATUS] == 200
 ntfy|Platform|http://ntfy.ntfy.svc.cluster.local/v1/health|1m|[STATUS] == 200|[BODY].healthy == true
 longhorn-ui|Storage|http://longhorn-frontend.longhorn-system.svc.cluster.local/|2m|[STATUS] == 200
 plex|Media|https://plex.lab.supermorphic.com/identity|1m|[STATUS] == 200

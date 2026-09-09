@@ -201,7 +201,7 @@ esac
 EOF
 chmod +x "$fixture/bin/kubectl" "$fixture/bin/curl"
 
-staged_source="$repo_root"
+staged_source="$fixture/staged-source"
 durable_source="$fixture/durable-source"
 mkdir -p "$durable_source/scripts/lib" \
   "$durable_source/kubernetes/apps/automation-data/nocodb" \
@@ -219,6 +219,18 @@ cp "$repo_root/kubernetes/apps/monitoring/alerts/app/kustomization.yaml" \
   "$repo_root/kubernetes/apps/monitoring/alerts/app/nocodb.yaml" \
   "$durable_source/kubernetes/apps/monitoring/alerts/app/"
 cp "$repo_root/tests/catalog.yaml" "$durable_source/tests/catalog.yaml"
+cp -R "$durable_source" "$staged_source"
+yq -i '.spec.suspend = true' \
+  "$staged_source/kubernetes/apps/automation-data/nocodb/ks.yaml"
+yq -i 'del(.config.endpoints[] | select(.name == "nocodb"))' \
+  "$staged_source/kubernetes/apps/monitoring/gatus/app/values.yaml"
+yq -i 'del(.resources[] | select(. == "./nocodb.yaml"))' \
+  "$staged_source/kubernetes/apps/monitoring/alerts/app/kustomization.yaml"
+yq -i 'del(.campaigns.verification.members[] | select(. == "verification.nocodb")) |
+  del(.campaigns."scoped-verification".members[] | select(. == "verification.nocodb"))' \
+  "$staged_source/tests/catalog.yaml"
+# Build the durable fixture from the explicit staged baseline, not ambient Git intent.
+cp -R "$staged_source/." "$durable_source/"
 yq -i '.spec.suspend = false' \
   "$durable_source/kubernetes/apps/automation-data/nocodb/ks.yaml"
 # shellcheck disable=SC2016 # yq evaluates its own variables.

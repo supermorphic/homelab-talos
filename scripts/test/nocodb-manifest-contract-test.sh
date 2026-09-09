@@ -152,11 +152,18 @@ fi
 [[ "$(yq -r '[.resources[]] | sort | join(",")' kubernetes/apps/automation-data/nocodb/app/kustomization.yaml)" == "$expected_resources" ]] ||
   fail 'the NocoDB app kustomization resource set is incorrect'
 
+route='kubernetes/apps/automation-data/nocodb/app/httproute.yaml'
+[[ "$(yq -r '[.metadata.annotations."gethomepage.dev/enabled",
+  .metadata.annotations."gethomepage.dev/name", .metadata.annotations."gethomepage.dev/group",
+  .metadata.annotations."gethomepage.dev/href", .metadata.annotations."gethomepage.dev/pod-selector"] |
+  join(",")' "$route")" == 'true,NocoDB,Platform,https://nocodb.lab.supermorphic.com,app.kubernetes.io/name=nocodb' ]] ||
+  fail 'NocoDB Homepage discovery must link its private route and select its pod.'
+
 ks='kubernetes/apps/automation-data/nocodb/ks.yaml'
-[[ "$(yq -r '[.spec.path, .spec.suspend, .spec.wait, .spec.decryption.provider, .spec.decryption.secretRef.name] | join(",")' "$ks")" == './kubernetes/apps/automation-data/nocodb/app,true,true,sops,sops-age' ]] ||
-  fail 'the staged NocoDB Flux Kustomization contract is incorrect'
+[[ "$(yq -r '[.spec.path, .spec.suspend, .spec.wait, .spec.decryption.provider, .spec.decryption.secretRef.name] | join(",")' "$ks")" == './kubernetes/apps/automation-data/nocodb/app,false,true,sops,sops-age' ]] ||
+  fail 'the active NocoDB Flux Kustomization contract is incorrect'
 [[ "$(yq -r '[.spec.dependsOn[].name] | sort | join(",")' "$ks")" == 'automation-data,automation-data-postgresql,cilium,internal-gateway,longhorn' ]] ||
-  fail 'the staged NocoDB Flux dependencies are incorrect'
+  fail 'the NocoDB Flux dependencies are incorrect'
 [[ "$(yq -r '[.spec.url, .spec.ref.digest] | join(",")' kubernetes/apps/automation-data/nocodb/app/ocirepository.yaml)" == 'oci://ghcr.io/nocodb/charts/nocodb,sha256:b2aa331863ec002e5001db33c2ac257bc0f1df690396c340e3e38e6978fece6c' ]] ||
   fail 'the NocoDB OCI chart digest pin is incorrect'
 [[ "$(yq -r '[.spec.chartRef.kind, .spec.chartRef.name, .spec.releaseName, .spec.valuesFrom[0].name, .spec.valuesFrom[0].valuesKey] | join(",")' kubernetes/apps/automation-data/nocodb/app/helmrelease.yaml)" == 'OCIRepository,nocodb-chart,nocodb,nocodb-values,values.yaml' ]] ||

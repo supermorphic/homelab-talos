@@ -24,7 +24,6 @@ spec:
     kind: GitRepository
     name: flux-system
     namespace: flux-system
-  # The package references a runtime Secret added by the separate Task 3 workflow.
-  suspend: true
+  suspend: false
   timeout: 15m
   wait: true

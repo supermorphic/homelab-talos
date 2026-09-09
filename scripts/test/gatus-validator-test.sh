@@ -40,8 +40,8 @@ assert_production_activated_render() {
   }
   [[ "$(yq ea -r '[select(.kind == "ConfigMap" and .metadata.name == "gatus") |
     .data."config.yaml" | from_yaml | .endpoints[]? |
-    select(.name == "nocodb")] | length' "$render")" == '0' ]] || {
-    echo 'Staged NocoDB must be absent from the active Gatus render.' >&2
+    select(.name == "nocodb")] | length' "$render")" == '1' ]] || {
+    echo 'Active Gatus must render exactly one NocoDB health endpoint.' >&2
     exit 1
   }
 }

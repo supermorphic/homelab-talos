@@ -41,8 +41,8 @@ platform_graph="$(yq -r '[.resources[]] | sort | join(",")' \
   fail 'the automation-data Flux package graph is incomplete'
 [[ "$(yq -r '.spec.suspend' kubernetes/apps/automation-data/postgresql/ks.yaml)" == false ]] ||
   fail 'the accepted automation-data PostgreSQL package must remain active'
-[[ "$(yq -r '.spec.suspend' kubernetes/apps/automation-data/nocodb/ks.yaml)" == true ]] ||
-  fail 'the NocoDB package must remain staged'
+[[ "$(yq -r '.spec.suspend' kubernetes/apps/automation-data/nocodb/ks.yaml)" == false ]] ||
+  fail 'the NocoDB package must retain durable activation intent'
 
 exporter='kubernetes/apps/automation-data/postgresql/app/sql-exporter.yml'
 mapfile -t metrics < <(

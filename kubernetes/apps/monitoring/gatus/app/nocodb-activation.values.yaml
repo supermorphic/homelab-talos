@@ -1,5 +1,5 @@
-# Retained activation source for the staged NocoDB health check. Copy this exact endpoint
-# into values.yaml only with the reviewed durable NocoDB activation change.
+# Retained canonical endpoint for first-install staging and verifier fixtures.
+# Active values.yaml enrolls this endpoint with durable NocoDB activation.
 config:
   endpoints:
     - name: nocodb
