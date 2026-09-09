@@ -216,11 +216,18 @@ solely to satisfy these style rules.
 
 ## Validation
 
-- Before opening or updating a pull request, run `mise exec -- just ci`.
+- Before opening or updating a pull request, commit the candidate and run
+  `mise exec -- just test ci-publish` from a clean feature worktree. The command fetches
+  current `origin/main`, computes the repository-owned validation plan, executes every
+  selected group, and reconciles fresh results. Do not edit this worktree while it runs.
+  Use `mise exec -- just test ci-publish-full` to escalate to every group.
 - `just ci` is the canonical full, cluster-independent, secret-free validation gate.
   Cluster-dependent verification, status, preflight, and diagnostic workflows remain
   outside it.
-- After a required rebase, rerun affected validation, including `mise exec -- just ci`.
+- After a required rebase or any later candidate edit, rerun
+  `mise exec -- just test ci-publish`. A passing result applies only to its recorded
+  head and base. If the pre-push fetch finds newer main, rebase and rerun the gate.
+  Do not choose reduced groups manually or reuse an earlier candidate's passing result.
 - Commit-time hooks provide staged-file feedback. Use `mise exec -- just repo lint` when
   repository-wide hook coverage is useful.
 - Follow the relevant testing documentation for additional task-specific or scoped live
