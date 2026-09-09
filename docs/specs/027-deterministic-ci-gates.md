@@ -288,7 +288,7 @@ categories. No runtime number overrides correctness or justifies unnecessary mac
 
 ## Implementation status
 
-Stage 2 selective enforcement is merged. Pull requests plan affected groups, while
+Stage 2 implementation and rollout are complete. Pull requests plan affected groups, while
 manual dispatch requests full validation. The matrix consumes the validated plan's
 groups; the duplicate provider `ci` job is removed. Local publication uses the same
 planner and grouped execution, with clean-candidate and fresh-base checks in root policy.
@@ -299,14 +299,26 @@ the always-running gate to fail; a complete retry produced passing group results
 reconciliation. Protection now requires `merge-gate` with strict current-main checks;
 the applied rules passed independent readback. The selection-enabled provider workflow
 passed with its dynamically planned full group set for a CI-framework change, without
-the duplicate full job. Reduced-group provider observations, skip-frequency and
-capacity measurements remain follow-on work.
+the duplicate full job. A subsequent automation change ran only core and automation,
+omitted unrelated groups, and passed required reconciliation. The local publication
+command also passed end to end on the same candidate as full local CI, with identical
+test identities and outcomes, including final candidate and remote-base checks.
+
+Root policy adopts the local command; no separate operator adoption step is required.
+Long-term skip-frequency, runtime variance, capacity, and serialized merge-drain
+measurements remain normal operational observations, not unfinished rollout prerequisites.
 
 The initial provider observation shows comparable core and longest-group durations.
 Selective execution can therefore save substantial aggregate validation work while
 offering smaller wall-time savings. Continue measuring both; optimize core intrinsically
 if it limits the critical path. Existing group boundaries remain appropriate, including
 automation's now-material validation cost.
+
+Local group execution is sequential while each harness retains bounded parallelism.
+Parallel local groups are feasible, but unlike isolated provider runners they share
+one host with other worktrees. Any increase should measure aggregate worker/resource
+usage and wall time before selecting a bound. It is optional tuning, not a correctness
+requirement or a prerequisite for this initiative's closeout.
 
 Operational commands and inspection examples live in
 [the testing guide](../../tests/README.md). Detailed execution evidence and remaining
