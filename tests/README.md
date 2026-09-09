@@ -41,8 +41,10 @@ only the catalog checks.
 
 The Stage 2 runtime selector has four execution groups: always-running `core`, plus
 `observability`, `automation`, and `ci-framework`. `full` selects their exact union.
-The provider rollout is still advisory shadow planning: the required GitHub `ci` job
-runs full validation. Split jobs and selective enforcement are later rollout steps.
+The provider rollout is in split-all parity: the required GitHub `ci` job still runs
+full validation. A full-bound plan also runs all four groups, and the advisory
+`merge-gate` reconciles their separate results. Selective enforcement remains a later
+rollout step.
 
 | File | Responsibility |
 | --- | --- |

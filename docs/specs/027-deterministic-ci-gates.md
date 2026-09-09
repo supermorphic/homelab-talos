@@ -282,10 +282,10 @@ categories. No runtime number overrides correctness or justifies unnecessary mac
 
 ## Implementation status
 
-Stage 2 is in shadow-planning rollout. Group decomposition, planning, grouped result
-contracts, reconciliation groundwork, and independent ownership checks are implemented.
-Full `ci` remains authoritative. Split-all parity, the protection transition, and
-selective enforcement remain pending.
+Stage 2 is in split-all parity rollout. A full-bound plan runs all four groups and the
+advisory `merge-gate` reconciles their separate results. Full `ci` remains authoritative.
+Provider parity proof, the protection transition, and selective enforcement remain
+pending.
 
 Operational commands and inspection examples live in
 [the testing guide](../../tests/README.md). Detailed execution evidence and remaining
