@@ -102,9 +102,10 @@ Foundation workflows preserve the same boundary:
 | `just kube foundation-verify` | Prove the complete DNS-to-trusted-HTTPS path plus Talos and etcd health |
 
 The NocoDB operator UI uses the automation-data PostgreSQL and private n8n boundaries.
-The activation candidate enables its Flux Kustomization, Homepage tile, Gatus health
-check, alerts, and verification campaigns together. Merge remains gated on attended
-access, logical-backup, and isolated restore acceptance:
+Durable activation enables its Flux Kustomization, Homepage tile, Gatus health check,
+alerts, and verification campaigns together after attended access and browser acceptance.
+The operator-approved rollout completes the isolated restore drill last; recoverability
+remains unverified until that drill passes:
 
 | Command | Behavior |
 |---|---|

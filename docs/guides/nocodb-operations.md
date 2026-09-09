@@ -10,10 +10,11 @@ the operator completed bootstrap, source provisioning, access acceptance, and th
 check. The successful access run is
 `20260909T181605Z-3d4e74fd0a3c-operator-0b9528a0`.
 
-The activation PR is prepared in advance of the attended restore drill. Keep it in draft
-until a complete post-acceptance backup and successful isolated restore evidence have
-been reviewed. Live durable activation and recovery are not yet established by the
-access result. Record the restore result before merging the activation change.
+On 2026-09-09, the operator authorized durable activation after successful access and
+browser acceptance, with the isolated restore drill as the final rollout step. The human
+operator reviews and merges the activation change. Verify activation, then complete the
+drill using a post-acceptance
+logical backup. Recovery remains unverified until that drill and its cleanup pass.
 
 Use [Staged activation](#staged-activation) for the first deployment and
 [Routine operation](#routine-operation) afterward. For failure classification and
@@ -470,7 +471,22 @@ by the final run cleanup. Perform the attended browser check after the API pass:
 that the reader is visibly read-only and that the operator can make the intended small
 edit.
 
-### 8. Wait for a complete logical backup and run the restore drill
+### 8. Make activation durable after access acceptance
+
+After platform prerequisites, access acceptance, and the browser check pass, complete
+review of the activation change under the operator-approved rollout sequence. It sets the NocoDB Flux Kustomization to `spec.suspend: false`,
+adds the Homepage **Platform → NocoDB** tile, enables the Gatus health endpoint and
+NocoDB alert rules, and enrolls `verification.nocodb` in both verification campaigns.
+Homepage discovers the tile from the NocoDB HTTPRoute; it needs no API credential.
+
+Run `mise exec -- just test ci-publish` from the clean candidate. The human operator
+reviews and merges the PR, then waits for Flux source parity. Then run
+`mise exec -- just kube nocodb-verify`, confirm the Homepage link opens the private UI,
+and confirm the Gatus NocoDB endpoint is healthy. Record and publish the final evidence.
+After activation verification, complete the backup and restore step below. Do not
+claim recoverability or close the rollout issue until the isolated drill passes.
+
+### 9. Wait for a complete logical backup and run the restore drill
 
 The automation-data logical CronJob runs at `00:30 Etc/UTC`. Wait until one complete,
 checksum-valid logical bundle contains the NocoDB metadata, source registry, optional
@@ -491,20 +507,6 @@ see [Isolated metadata recovery](../runbooks/nocodb-recovery.md#isolated-metadat
 **Expected result:** Restored metadata, source identities, PostgreSQL grants, saved view,
 operator decision, and artifact metadata/reference pass; the isolated restored database
 publishes a fresh logical bundle; and all run-owned resources are absent after cleanup.
-
-### 9. Make activation durable only after acceptance
-
-After all prerequisite, access, backup, and restore evidence passes, complete review of
-the activation change. It sets the NocoDB Flux Kustomization to `spec.suspend: false`,
-adds the Homepage **Platform → NocoDB** tile, enables the Gatus health endpoint and
-NocoDB alert rules, and enrolls `verification.nocodb` in both verification campaigns.
-Homepage discovers the tile from the NocoDB HTTPRoute; it needs no API credential.
-
-Run `mise exec -- just test ci-publish` from the clean candidate, merge only with
-explicit operator authorization, and wait for Flux source parity. Then run
-`mise exec -- just kube nocodb-verify`, confirm the Homepage link opens the private UI,
-and confirm the Gatus NocoDB endpoint is healthy. Record and publish the final evidence.
-Until that change merges, deployed Git intent remains suspended.
 
 ## Routine operation
 

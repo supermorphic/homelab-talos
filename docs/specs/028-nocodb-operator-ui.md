@@ -37,8 +37,8 @@ migrator and runtime login credentials. The implemented extension keeps optional
 reader and operator state in the separate, single-purpose `managed_nocodb_sources`
 registry. The accepted platform is already active: specification 025 records successful
 provisioning and full-chain recovery acceptance on 2026-09-05, and its Flux
-Kustomization has `spec.suspend: false`. NocoDB durable activation remains gated on its
-own acceptance and restore evidence.
+Kustomization has `spec.suspend: false`. NocoDB durable activation follows its
+access acceptance; the operator-approved rollout completes isolated restore last.
 Introducing NocoDB must upgrade that existing platform without recreating its database,
 changing existing domain credentials, or interrupting its backup contract.
 
@@ -68,8 +68,8 @@ The cluster already supplies these relevant patterns:
   the automation-data backup system. Keep workflow artifacts external to NocoDB.
 - Keep NocoDB optional for each domain and removable without affecting authoritative
   domain data or normal n8n workflows.
-- Prove read, controlled-edit, rotation, denial, backup, and restore behavior against a
-  synthetic domain before activation.
+- Prove read, controlled-edit, rotation, and denial behavior against a synthetic domain
+  before activation. Prove backup and restore before rollout completion or recovery claims.
 
 ## Non-goals
 
@@ -1053,12 +1053,15 @@ Rollout follows dependency and authority order:
 6. Import, bind, and publish the private source workflow. Provision the synthetic domain
    before binding its existing migrator credential to the acceptance workflow; publish
    that workflow only after every required credential exists and is bound.
-7. Run access and browser acceptance. Wait for a complete automation-data logical backup
-   containing NocoDB metadata, source state, and the persistent domain canaries.
-8. Run the confirmed NocoDB metadata restore drill.
-9. After acceptance passes, make the reviewed Git activation change: set NocoDB's
-   `spec.suspend: false`, enroll Homepage, monitoring, and recurring verification together,
-   verify their active behavior, and record dated results in this specification.
+7. Run access and browser acceptance.
+8. Under the operator-approved 2026-09-09 sequence, the human operator merges the reviewed
+   activation change:
+   set NocoDB's `spec.suspend: false`, enroll Homepage, monitoring, and recurring
+   verification together, and verify their active behavior.
+9. Wait for a complete automation-data logical backup containing NocoDB metadata,
+   source state, and persistent domain canaries. Run the confirmed isolated NocoDB
+   metadata restore drill as the final step. Record dated results and claim recovery
+   only after the drill and cleanup pass.
 
 Initial administrator login, n8n credential binding, workflow publication, and commands
 that read sensitive runtime state or call administrative APIs remain attended operator
@@ -1114,13 +1117,13 @@ acceptance with cleanup in run `20260909T181605Z-3d4e74fd0a3c-operator-0b9528a0`
 The operator also confirmed read-only browsing and temporary decision creation, editing,
 read-back, and deletion in the browser. This establishes access and browser acceptance.
 
-The activation candidate sets `spec.suspend: false`, adds the Homepage tile and Gatus
+The activation change sets `spec.suspend: false`, adds the Homepage tile and Gatus
 endpoint, selects the nine NocoDB alert rules, and enrolls both verification campaigns.
-It is prepared as a draft while the operator waits for a complete post-acceptance backup
-and runs the isolated restore drill. Restore evidence and specific merge authorization
-remain required before publication to main; durable live activation and recoverability
-are not claimed by this candidate. Update this record with the restore and post-merge
-verification results before declaring rollout complete.
+On 2026-09-09, the operator chose to merge activation before the isolated restore
+drill and make the drill the final rollout step. The human operator performs the merge;
+agents prepare and validate the candidate for review. This changes rollout order only;
+it does not establish recoverability. Post-merge activation verification and the
+isolated restore result must be recorded before declaring rollout complete.
 
 The 2026-09-05 integration audit revised this design after the initial implementation.
 The fixed existing-platform upgrade and old/new backup compatibility pass disposable
