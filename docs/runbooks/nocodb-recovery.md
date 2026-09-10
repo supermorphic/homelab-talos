@@ -5,15 +5,12 @@ root does not recover through normal reconciliation. NocoDB is an
 optional operator interface over automation-data PostgreSQL. Preserve the authoritative
 domain databases and normal n8n workflows while diagnosing it.
 
-The repository contains the recovery workflow, but live recovery remains unproved until
-the attended NocoDB access test, complete logical backup, and restore drill pass. Do not
-describe an unrun drill as established recoverability.
-
-This runbook is reconciled with the tested offline and disposable local implementation
-in [specification 028](../specs/028-nocodb-operator-ui.md). Its local restore proof does
-not establish live backup publication, Longhorn recovery, Gateway access, or browser
-behavior. Require the attended checks below before using the result as live rollout or
-recovery acceptance.
+The operator completed and published the attended isolated metadata restore drill on
+2026-09-10. See the dated live acceptance record in
+[specification 028](../specs/028-nocodb-operator-ui.md#implementation-status).
+The drill establishes logical metadata recovery with fresh application scratch. It does
+not establish Longhorn volume recovery or recovery of externally stored file bytes.
+Use the attended checks below for subsequent recovery acceptance.
 
 ## Recovery roots and limits
 

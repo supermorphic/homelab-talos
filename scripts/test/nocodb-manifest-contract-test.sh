@@ -25,8 +25,14 @@ deployment_count="$(yq ea -r 'select(.kind == "Deployment") | .metadata.name' "$
 [[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "nocodb") | .spec.template.spec.containers[] | select(.name == "nocodb") | .image' "$helm_render")" == \
   'docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9' ]] ||
   fail 'the NocoDB image digest is not selected'
-[[ "$(yq ea -r 'select(.kind == "Service" and .metadata.name == "nocodb") | [.spec.type, .spec.ports[0].port] | join(",")' "$helm_render")" == 'ClusterIP,8080' ]] ||
+[[ "$(yq ea -r 'select(.kind == "Service" and .metadata.name == "nocodb") | [.spec.type, (.spec.ports | length), .spec.ports[0].port, (.spec.ports[0].protocol // "TCP")] | join(",")' "$helm_render")" == 'ClusterIP,1,8080,TCP' ]] ||
   fail 'the rendered NocoDB Service must expose only ClusterIP TCP/8080'
+[[ "$(yq ea -r 'select(.kind == "Service" and .metadata.name == "nocodb") | .spec.ports[0].targetPort' "$helm_render")" == 'http' ]] ||
+  fail 'the rendered NocoDB Service must target the named http port'
+[[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "nocodb") |
+  [.spec.template.spec.containers[] | select(.name == "nocodb") | .ports[]? |
+    select(.name == "http" and .containerPort == 8080 and (.protocol // "TCP") == "TCP")] | length' "$helm_render")" == '1' ]] ||
+  fail 'the rendered NocoDB container must map http to TCP/8080'
 render_has_native_storage() { # <render>
   if yq ea -e 'select(.kind == "PersistentVolumeClaim")' "$1" >/dev/null 2>&1; then
     return 0

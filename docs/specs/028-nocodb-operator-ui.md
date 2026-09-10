@@ -1093,6 +1093,25 @@ remain agent-run under repository policy.
 
 ## Implementation status
 
+On 2026-09-10, the operator reported a successful attended metadata restore drill
+and confirmed publication of
+[run `20260910T021529Z-cd9bd5cb9dc6-operator-ff7075a6`](https://tests.lab.supermorphic.com/reports/20260910T021529Z-cd9bd5cb9dc6-operator-ff7075a6/awesome/).
+The drill used `automation-data-20260910T003011Z` and completed canonical report
+validation. This completes the isolated live metadata recovery acceptance.
+
+The Service verification correction accepts the pinned chart's named `http` target
+and independently checks that the application Pod maps it to TCP/8080 and that the
+single EndpointSlice couples that Ready Pod with TCP/8080. The Service exposes
+exactly one TCP port. Numeric target 8080 remains supported.
+Regression coverage rejects incorrect target names, target numbers, container port
+mappings, extra Service ports, wrong protocols, unrelated Pods, and split endpoint/port
+observations. The pinned chart render also checks the named mapping.
+The corrected candidate passed the scoped live `nocodb-verify` workflow on 2026-09-10:
+Flux and Helm readiness, the Pod, Service, route, policy, Gatus, alert rules, and
+logical-backup freshness passed. This pre-commit diagnostic run is not a publishable
+clean-revision report. A fresh post-merge activation verification remains required
+for rollout closeout.
+
 The 2026-09-10 restore-report correction writes bounded recovery evidence to
 `diagnostics/nocodb-restore-evidence.json`. The canonical run root retains only its
 six required entries. The scenario regression checks the actual output location and
@@ -1163,8 +1182,8 @@ operator credential rotation and ran the production restore request helper again
 separate restored application. Run-owned resources were absent after each run.
 
 The local evidence alone does not establish live behavior. The later 2026-09-09
-attended access and browser results are recorded above. Isolated live restore and
-durable activation verification remain outstanding. No native attachment workaround is
+attended access and browser results are recorded above. The 2026-09-10 isolated live restore result is recorded above;
+durable activation verification remains outstanding. No native attachment workaround is
 part of the implemented design.
 
 ## Rejected alternatives

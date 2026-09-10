@@ -73,7 +73,11 @@ case " $* " in
     if [[ "${FIXTURE_CASE:-healthy}" == redis-pod && " $* " == *' get pods --output json '* ]]; then
       printf '%s\n' '{"items":[{"metadata":{"name":"nocodb","labels":{"app.kubernetes.io/name":"nocodb"}},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"redis","labels":{"app.kubernetes.io/name":"redis"}}}]}'
     else
-      printf '%s\n' '{"items":[{"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}}]}'
+      pod_port=8080
+      pod_port_name=http
+      [[ "${FIXTURE_CASE:-healthy}" != wrong-container-port ]] || pod_port=9090
+      [[ "${FIXTURE_CASE:-healthy}" != missing-named-port ]] || pod_port_name=other
+      printf '{"items":[{"metadata":{"name":"nocodb-a"},"spec":{"containers":[{"name":"nocodb","ports":[{"name":"%s","containerPort":%s,"protocol":"TCP"}]}]},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}}]}\n' "$pod_port_name" "$pod_port"
     fi ;;
   *' get services '*)
     if [[ "${FIXTURE_CASE:-healthy}" == redis-service ]]; then
@@ -82,9 +86,29 @@ case " $* " in
       printf '%s\n' '{"items":[{"metadata":{"name":"nocodb","labels":{"app.kubernetes.io/name":"nocodb"}}},{"metadata":{"name":"automation-data-postgresql","labels":{"app.kubernetes.io/name":"automation-data-postgresql"}}}]}'
     fi ;;
   *' get service nocodb '*)
-    printf '%s\n' '{"spec":{"type":"ClusterIP","clusterIP":"10.0.0.1","selector":{"app.kubernetes.io/name":"nocodb"},"ports":[{"port":8080,"targetPort":8080}]}}' ;;
+    target_port='"http"'
+    case "${FIXTURE_CASE:-healthy}" in
+      numeric-target-port) target_port=8080 ;;
+      wrong-target-name) target_port='"other"' ;;
+      wrong-target-number) target_port=9090 ;;
+    esac
+    service_protocol=TCP
+    extra_port=''
+    [[ "${FIXTURE_CASE:-healthy}" != wrong-service-protocol ]] || service_protocol=UDP
+    [[ "${FIXTURE_CASE:-healthy}" != extra-service-port ]] || extra_port=',{"port":9090,"targetPort":9090}'
+    printf '{"spec":{"type":"ClusterIP","clusterIP":"10.0.0.1","selector":{"app.kubernetes.io/name":"nocodb"},"ports":[{"port":8080,"targetPort":%s,"protocol":"%s"}%s]}}\n' "$target_port" "$service_protocol" "$extra_port" ;;
   *' get endpointslice '*)
-    printf '%s\n' '{"items":[{"endpoints":[{"conditions":{"ready":true},"targetRef":{"kind":"Pod","name":"nocodb-a"}}],"ports":[{"port":8080}]}]}' ;;
+    endpoint_port=8080
+    [[ "${FIXTURE_CASE:-healthy}" != wrong-endpoint-port ]] || endpoint_port=9090
+    endpoint_protocol=TCP
+    endpoint_pod=nocodb-a
+    [[ "${FIXTURE_CASE:-healthy}" != wrong-endpoint-protocol ]] || endpoint_protocol=UDP
+    [[ "${FIXTURE_CASE:-healthy}" != wrong-endpoint-pod ]] || endpoint_pod=unrelated
+    if [[ "${FIXTURE_CASE:-healthy}" == split-endpoint-slices ]]; then
+      printf '%s\n' '{"items":[{"endpoints":[{"conditions":{"ready":true},"targetRef":{"kind":"Pod","name":"nocodb-a"}}],"ports":[{"port":9090,"protocol":"TCP"}]},{"endpoints":[],"ports":[{"port":8080,"protocol":"TCP"}]}]}'
+    else
+      printf '{"items":[{"endpoints":[{"conditions":{"ready":true},"targetRef":{"kind":"Pod","name":"%s"}}],"ports":[{"port":%s,"protocol":"%s"}]}]}\n' "$endpoint_pod" "$endpoint_port" "$endpoint_protocol"
+    fi ;;
   *' get httproute nocodb '*)
     printf '%s\n' '{"metadata":{"generation":1},"spec":{"hostnames":["nocodb.lab.supermorphic.com"],"parentRefs":[{"group":"gateway.networking.k8s.io","kind":"Gateway","name":"internal","namespace":"networking","sectionName":"https"}]},"status":{"parents":[{"conditions":[{"type":"Accepted","status":"True","observedGeneration":1},{"type":"ResolvedRefs","status":"True","observedGeneration":1}]}]}}' ;;
   *' get ciliumnetworkpolicy nocodb '*)
@@ -319,6 +343,11 @@ for fixture_case in worker redis-pod redis-service policy-broadened policy-extra
   policy-extra-expression policy-extra-l7 policy-extra-rule; do
   expect_fixture_failure "$staged_source" active attended "$fixture_case"
 done
+for fixture_case in wrong-target-name wrong-target-number wrong-container-port missing-named-port wrong-endpoint-port \
+  extra-service-port wrong-service-protocol wrong-endpoint-protocol wrong-endpoint-pod split-endpoint-slices; do
+  expect_fixture_failure "$durable_source" active '' "$fixture_case"
+done
+run_verifier "$durable_source" active '' numeric-target-port >/dev/null
 expect_fixture_failure "$durable_source" active '' rules-unhealthy
 expect_fixture_failure "$durable_source" active '' gatus-down
 
