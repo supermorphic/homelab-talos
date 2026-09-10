@@ -1093,6 +1093,13 @@ remain agent-run under repository policy.
 
 ## Implementation status
 
+The 2026-09-10 restore-report correction writes bounded recovery evidence to
+`diagnostics/nocodb-restore-evidence.json`. The canonical run root retains only its
+six required entries. The scenario regression checks the actual output location and
+recovery evidence fields. An earlier attended run passed its restore assertions and
+cleanup but failed report finalization because this file was at the root; that broken
+report does not establish a finalized passing test run.
+
 The 2026-09-09 acceptance correction scopes each probe's cleanup query to its decision
 record ID and run ID. A retained feedback decision from the same run no longer prevents
 the post-rotation probe from completing. The cleanup assertion requires an empty

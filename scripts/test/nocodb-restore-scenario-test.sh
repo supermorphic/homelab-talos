@@ -298,6 +298,15 @@ IFS=$'\t' read -r case_name status state < <(run_case valid)
 if [[ "$status" -ne 0 ]]; then
 	record_failure "valid metadata-only lifecycle exited $status: $(tail -n 1 "$state/stderr.log")"
 else
+	evidence="$state/20260905T010000Z-restore-valid/diagnostics/nocodb-restore-evidence.json"
+	[[ -f "$evidence" ]] || record_failure 'restore evidence is missing from diagnostics'
+	[[ ! -e "$state/20260905T010000Z-restore-valid/nocodb-restore-evidence.json" ]] ||
+		record_failure 'restore evidence polluted the canonical run root'
+	if [[ -f "$evidence" ]]; then
+		jq -e '.workspaceBaseViewSourcesAndRecordsValidated == true and
+		  .productionMutation == false and (.selectedAutomationDataBundle | startswith("automation-data-"))' \
+		  "$evidence" >/dev/null || record_failure 'restore diagnostics omitted recovery evidence'
+	fi
 	preflight="$(event_line create-preflight "$state/events.log")"
 	database_create="$(event_line create-database "$state/events.log")"
 	restore_create="$(event_line create-restore-job "$state/events.log")"
