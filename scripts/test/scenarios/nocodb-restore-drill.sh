@@ -538,6 +538,6 @@ RUN_HASH="$run_hash" SELECTED_BUNDLE="$selected_bundle" \
     "workspaceBaseViewSourcesAndRecordsValidated":true,
     "postRecoveryBundle":strenv(POST_RECOVERY_BUNDLE),
     "productionMutation":false
-  }' >"$run_dir/nocodb-restore-evidence.json"
+  }' >"$run_dir/diagnostics/nocodb-restore-evidence.json"
 write_phase assertion passed 'isolated NocoDB metadata, encrypted sources, privilege denials, saved view, record references, and fresh backup passed'
 echo "NocoDB metadata restore drill passed with $selected_bundle; cleanup will remove all run-owned resources."
