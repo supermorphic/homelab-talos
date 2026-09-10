@@ -167,13 +167,27 @@ service="$("${kc[@]}" --namespace "$namespace" get service nocodb --output json)
 yq -p=json -e '
   .spec.type == "ClusterIP" and .spec.clusterIP != "" and .spec.clusterIP != "None" and
   .spec.selector."app.kubernetes.io/name" == "nocodb" and
-  ([.spec.ports[]? | select(.port == 8080 and (.targetPort | tostring) == "8080")] | length) == 1
+  (.spec.ports | length) == 1 and
+  .spec.ports[0].port == 8080 and (.spec.ports[0].protocol // "TCP") == "TCP" and
+  (.spec.ports[0].targetPort == 8080 or .spec.ports[0].targetPort == "http")
 ' - >/dev/null <<<"$service" || fail 'NocoDB Service does not match the private port-8080 contract.'
 
-endpoints="$("${kc[@]}" --namespace "$namespace" get endpointslice --selector kubernetes.io/service-name=nocodb --output json)"
+# The pinned chart names the application port http. Validate its numeric mapping
+# independently of the Service and the resolved EndpointSlice observation.
 yq -p=json -e '
-  ([.items[]?.endpoints[]? | select(.conditions.ready == true and .targetRef.kind == "Pod" and .targetRef.name != "")] | length) == 1 and
-  ([.items[]?.ports[]? | select(.port == 8080)] | length) == 1
+  ([.items[0].spec.containers[]? | select(.name == "nocodb") |
+    .ports[]? | select(.name == "http" and .containerPort == 8080 and
+      (.protocol // "TCP") == "TCP")] | length) == 1
+' - >/dev/null <<<"$pods" || fail 'NocoDB application Pod does not map http to TCP/8080.'
+
+endpoints="$("${kc[@]}" --namespace "$namespace" get endpointslice --selector kubernetes.io/service-name=nocodb --output json)"
+NOCODB_READY_POD="$(yq -p=json -r '.items[0].metadata.name' - <<<"$pods")" yq -p=json -e '
+  (.items | length) == 1 and
+  (.items[0].endpoints | length) == 1 and (.items[0].ports | length) == 1 and
+  .items[0].endpoints[0].conditions.ready == true and
+  .items[0].endpoints[0].targetRef.kind == "Pod" and
+  .items[0].endpoints[0].targetRef.name == strenv(NOCODB_READY_POD) and
+  .items[0].ports[0].port == 8080 and (.items[0].ports[0].protocol // "TCP") == "TCP"
 ' - >/dev/null <<<"$endpoints" || fail 'NocoDB Service has no exact ready port-8080 endpoint.'
 
 route="$("${kc[@]}" --namespace "$namespace" get httproute nocodb --output json)"
