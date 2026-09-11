@@ -91,6 +91,9 @@ def validate_existing(catalog: dict[str, Any], state: dict[str, Any]) -> None:
             raise PublishError(f"remote publication state {field} must be an object")
     if not isinstance(state.get("last_success", {}), dict):
         raise PublishError("remote publication state last_success must be an object")
+    last_failure = state.get("last_failure")
+    if last_failure is not None:
+        parse_utc(last_failure, "stored last failure")
     for run_id, digest in state["seen_runs"].items():
         if not RUN_ID_PATTERN.fullmatch(run_id) or not re.fullmatch(r"[0-9a-f]{64}", digest):
             raise PublishError(f"remote publication state has an invalid seen run: {run_id}")
@@ -393,6 +396,24 @@ def update_counters(state: dict[str, Any], entry: dict[str, Any]) -> None:
             current, "stored last success"
         ):
             last_success[key] = entry["end"]
+    if entry.get("authoritative") and entry["result"] in {"failed", "broken"}:
+        current = state.get("last_failure")
+        if current is None or parse_utc(entry["end"], "entry end") > parse_utc(
+            current, "stored last failure"
+        ):
+            state["last_failure"] = entry["end"]
+
+
+def migrate_state(state: dict[str, Any], entries: list[dict[str, Any]]) -> None:
+    """Add durable summary state that older archive generations did not store."""
+    state.setdefault("last_failure", None)
+    for entry in entries:
+        if entry.get("authoritative") and entry.get("result") in {"failed", "broken"}:
+            current = state["last_failure"]
+            if current is None or parse_utc(entry["end"], "catalog end") > parse_utc(
+                current, "stored last failure"
+            ):
+                state["last_failure"] = entry["end"]
 
 
 def prom_escape(value: str) -> str:
@@ -531,18 +552,23 @@ def render_metrics(entries: list[dict[str, Any]], state: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_homepage(entries: list[dict[str, Any]]) -> dict[str, Any]:
-    markers = {"passed": "✓", "failed": "✗", "broken": "✗", "skipped": "!"}
+def render_homepage(entries: list[dict[str, Any]], state: dict[str, Any]) -> dict[str, Any]:
+    markers = {
+        "passed": "✓ PASS",
+        "failed": "✗ FAIL",
+        "broken": "✗ BROKEN",
+        "skipped": "! SKIP",
+    }
+    authoritative = sorted(
+        (entry for entry in entries if entry.get("authoritative")),
+        key=lambda entry: (entry["end"], entry["run_id"]),
+        reverse=True,
+    )
+    latest = authoritative[0] if authoritative else None
     return {
-        "items": [
-            {
-                "name": f"{markers[entry['result']]} {label}",
-                "end": entry["end"],
-                "result": entry["result"],
-                "path": f"/latest/{slug}/",
-            }
-            for slug, label, entry in latest_rollups(entries)
-        ]
+        "latest": markers[latest["result"]] if latest is not None else None,
+        "last_run": latest["end"] if latest is not None else None,
+        "last_failure": state.get("last_failure"),
     }
 
 
@@ -674,10 +700,12 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             "runs_total": {},
             "cases_total": {},
             "last_success": {},
+            "last_failure": None,
         },
     )
     validate_existing(catalog, state)
     state.setdefault("last_success", {})
+    migrate_state(state, catalog["runs"])
     existing_digest = state["seen_runs"].get(run_id)
     if existing_digest is not None:
         if existing_digest != digest:
@@ -724,7 +752,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     }
     write_json(generation_root / "catalog.json", catalog_output)
     write_json(generation_root / "state.json", state)
-    write_json(generation_root / "api" / "homepage.json", render_homepage(retained))
+    write_json(generation_root / "api" / "homepage.json", render_homepage(retained, state))
     (generation_root / "api" / "metrics.prom").write_text(
         render_metrics(retained, state), encoding="utf-8"
     )

@@ -18,7 +18,7 @@ if [[ " $* " == *' config get-contexts '* ]]; then
     [[ "$argument" != homelab-* ]] || context="$argument"
   done
   case "${FAKE_LAYOUT}:${context}" in
-    named:homelab-observer|named:homelab-diagnostic|partial:homelab-observer) exit 0 ;;
+    named:homelab-observer|named:homelab-diagnostic|named:homelab-report-publisher|partial:homelab-observer) exit 0 ;;
     *) exit 1 ;;
   esac
 fi
@@ -37,14 +37,18 @@ subresource=''
 namespace=''
 all_namespaces=false
 diagnostic=false
+publisher=false
+resource_name=''
 for ((index = 0; index < ${#args[@]}; index++)); do
   case "${args[$index]}" in
     --context|--as)
       identity="${args[$((index + 1))]}"
       [[ "$identity" != *homelab-diagnostic ]] || diagnostic=true
+      [[ "$identity" != *homelab-report-publisher ]] || publisher=true
       ;;
     --context=*|--as=*)
       [[ "${args[$index]}" != *homelab-diagnostic ]] || diagnostic=true
+      [[ "${args[$index]}" != *homelab-report-publisher ]] || publisher=true
       ;;
     can-i)
       verb="${args[$((index + 1))]}"
@@ -64,6 +68,12 @@ for ((index = 0; index < ${#args[@]}; index++)); do
       ;;
     --all-namespaces|-A)
       all_namespaces=true
+      ;;
+    --resource-name)
+      resource_name="${args[$((index + 1))]}"
+      ;;
+    --resource-name=*)
+      resource_name="${args[$index]#--resource-name=}"
       ;;
   esac
 done
@@ -111,12 +121,26 @@ case "$resource" in
 esac
 
 answer=yes
-case "$verb:$resource:$subresource" in
-  create:pods:exec|create:pods:portforward)
-    [[ "$diagnostic" == true ]] || answer=no
-    ;;
-  get:secrets:*|create:*:*|patch:*:*|delete:*:*|bind:*:*|escalate:*:*|impersonate:*:*) answer=no ;;
-esac
+if [[ "$publisher" == true ]]; then
+  answer=no
+  case "$verb:$resource:$subresource:$namespace:$resource_name" in
+    get:deployments.apps::test-reports:test-reports|list:deployments.apps::test-reports:test-reports|\
+    watch:deployments.apps::test-reports:test-reports|\
+    get:pods::test-reports:|list:pods::test-reports:|create:pods:exec:test-reports:|\
+    get:gitrepositories.source.toolkit.fluxcd.io::flux-system:flux-system|\
+    get:leases.coordination.k8s.io::flux-system:homelab-test-report-publish-lock|\
+    update:leases.coordination.k8s.io::flux-system:homelab-test-report-publish-lock)
+      answer=yes
+      ;;
+  esac
+else
+  case "$verb:$resource:$subresource" in
+    create:pods:exec|create:pods:portforward)
+      [[ "$diagnostic" == true ]] || answer=no
+      ;;
+    get:secrets:*|create:*:*|patch:*:*|delete:*:*|bind:*:*|escalate:*:*|impersonate:*:*) answer=no ;;
+  esac
+fi
 printf '%s\n' "$answer"
 [[ "$answer" == yes ]] || exit 1
 EOF
@@ -153,6 +177,7 @@ if rg -q -- '--as(=| )' "$named_log"; then
 fi
 rg -q -- '--context homelab-observer' "$named_log"
 rg -q -- '--context homelab-diagnostic' "$named_log"
+rg -q -- '--context homelab-report-publisher' "$named_log"
 for context in homelab-observer homelab-diagnostic; do
   for verb in get list watch; do
     rg -q -- "--context $context auth can-i $verb priorityclasses.scheduling.k8s.io --all-namespaces" "$named_log"
@@ -172,6 +197,34 @@ rg -q -- '--context homelab-observer auth can-i patch leases.coordination.k8s.io
   "$named_log"
 rg -q -- '--context homelab-observer auth can-i patch replicas.longhorn.io --namespace longhorn-system' \
   "$named_log"
+rg -q -- '--context homelab-report-publisher auth can-i get deployments.apps --namespace test-reports --resource-name test-reports' \
+  "$named_log"
+rg -q -- '--context homelab-report-publisher auth can-i watch deployments.apps --namespace test-reports --resource-name test-reports' \
+  "$named_log"
+rg -q -- '--context homelab-report-publisher auth can-i list deployments.apps --namespace test-reports --resource-name test-reports' \
+  "$named_log"
+rg -q -- '--context homelab-report-publisher auth can-i create pods --subresource exec --namespace test-reports' \
+  "$named_log"
+rg -q -- '--context homelab-report-publisher auth can-i get gitrepositories.source.toolkit.fluxcd.io --namespace flux-system --resource-name flux-system' \
+  "$named_log"
+rg -q -- '--context homelab-report-publisher auth can-i update leases.coordination.k8s.io --namespace flux-system --resource-name homelab-test-report-publish-lock' \
+  "$named_log"
+rg -q -- '--context homelab-report-publisher auth can-i create leases.coordination.k8s.io --namespace flux-system --resource-name homelab-test-report-publish-lock' \
+  "$named_log"
+rg -q -- '--context homelab-report-publisher auth can-i create pods --subresource exec --namespace kube-system' \
+  "$named_log"
+rg -q -- '--context homelab-report-publisher auth can-i get secrets --namespace test-reports' \
+  "$named_log"
+rg -q -- '--context homelab-report-publisher auth can-i create pods --subresource portforward --namespace test-reports' \
+  "$named_log"
+rg -q -- '--context homelab-report-publisher auth can-i list gitrepositories.source.toolkit.fluxcd.io --namespace flux-system' \
+  "$named_log"
+rg -q -- '--context homelab-report-publisher auth can-i get gitrepositories.source.toolkit.fluxcd.io --namespace flux-system --resource-name another-source' \
+  "$named_log"
+rg -q -- '--context homelab-report-publisher auth can-i update leases.coordination.k8s.io --namespace flux-system --resource-name another-lock' \
+  "$named_log"
+rg -q -- '--context homelab-report-publisher auth can-i update leases.coordination.k8s.io --namespace flux-system ' \
+  "$named_log"
 
 admin_log="$(run_layout admin)"
 if rg -q -- '--context(=| )' "$admin_log"; then
@@ -179,7 +232,7 @@ if rg -q -- '--context(=| )' "$admin_log"; then
   exit 1
 fi
 while IFS= read -r call; do
-  rg -q -- '--as=system:serviceaccount:kube-system:homelab-(observer|diagnostic)' <<<"$call"
+  rg -q -- '--as=system:serviceaccount:kube-system:homelab-(observer|diagnostic|report-publisher)' <<<"$call"
   rg -q -- '--as-group=system:authenticated' <<<"$call"
   rg -q -- '--as-group=system:serviceaccounts ' <<<"$call"
   rg -q -- '--as-group=system:serviceaccounts:kube-system' <<<"$call"
@@ -190,13 +243,15 @@ for context in homelab-observer homelab-diagnostic; do
       "$admin_log"
   done
 done
+rg -q -- '--as=system:serviceaccount:kube-system:homelab-report-publisher .* auth can-i get gitrepositories.source.toolkit.fluxcd.io --namespace flux-system --resource-name flux-system' \
+  "$admin_log"
 
 if PATH="$fixture/bin:$PATH" FAKE_LAYOUT=partial FAKE_CALL_LOG="$fixture/partial.log" \
   "$verifier" "$fixture/kubeconfig" "$fixture/talosconfig" >"$fixture/partial.out" 2>&1; then
   echo 'Partial scoped context layout unexpectedly passed.' >&2
   exit 1
 fi
-rg -q 'requires both scoped contexts or neither' "$fixture/partial.out"
+rg -q 'requires all three scoped contexts or none' "$fixture/partial.out"
 
 for talos_failure in version services; do
   talos_failure_output="$fixture/talos-$talos_failure.out"

@@ -138,6 +138,9 @@ describes the operation.
 - Integration, E2E, resilience, conformance, and mutating probes use run ownership,
   confirmation, evidence, cleanup, and recovery appropriate to their risk. Scoped
   observational campaigns need no confirmation and never fall back to broader credentials.
+  Explicit recorded acceptance adds guarded publication of canonical child evidence through
+  the dedicated publisher identity. It supplies publication intent without an operator
+  prompt; it does not authorize suite mutations or make individual verifiers publish.
   The standalone abrupt electrical-loss test deliberately omits pre-loss cordon and drain.
 - Secret writers, certificate refresh, render, generation, and local credential setup keep
   precise artifact names. Run cleanup keeps `cleanup` and binds the exact owned target.

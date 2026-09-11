@@ -33,6 +33,35 @@ cluster_role_binding(name, service_accounts, role_name) := {
 	],
 }
 
+role(name, namespace, rules) := {
+	"apiVersion": "rbac.authorization.k8s.io/v1",
+	"kind": "Role",
+	"metadata": {"name": name, "namespace": namespace},
+	"rules": rules,
+}
+
+role_binding(name, namespace, service_account, service_account_namespace, role_name) := {
+	"apiVersion": "rbac.authorization.k8s.io/v1",
+	"kind": "RoleBinding",
+	"metadata": {"name": name, "namespace": namespace},
+	"roleRef": {
+		"apiGroup": "rbac.authorization.k8s.io",
+		"kind": "Role",
+		"name": role_name,
+	},
+	"subjects": [{
+		"kind": "ServiceAccount",
+		"name": service_account,
+		"namespace": service_account_namespace,
+	}],
+}
+
+lease(name, namespace) := {
+	"apiVersion": "coordination.k8s.io/v1",
+	"kind": "Lease",
+	"metadata": {"name": name, "namespace": namespace},
+}
+
 read_requirements := {
 	"apiextensions.k8s.io": {"customresourcedefinitions"},
 	"apiregistration.k8s.io": {"apiservices"},
@@ -68,6 +97,7 @@ read_rules := [{
 valid_fixture := [
 	service_account("homelab-observer"),
 	service_account("homelab-diagnostic"),
+	service_account("homelab-report-publisher"),
 	cluster_role_binding("homelab-observer-view", ["homelab-observer"], "view"),
 	cluster_role_binding("homelab-diagnostic-view", ["homelab-diagnostic"], "view"),
 	cluster_role("homelab-observer-extra", array.concat(
@@ -92,6 +122,45 @@ valid_fixture := [
 		["homelab-diagnostic"],
 		"homelab-diagnostic-extra",
 	),
+	role("homelab-report-publisher-test-reports", "test-reports", [
+		{
+			"apiGroups": ["apps"],
+			"resources": ["deployments"],
+			"resourceNames": ["test-reports"],
+			"verbs": ["get", "list", "watch"],
+		},
+		{"apiGroups": [""], "resources": ["pods"], "verbs": ["get", "list"]},
+		{"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["create"]},
+	]),
+	role_binding(
+		"homelab-report-publisher-test-reports",
+		"test-reports",
+		"homelab-report-publisher",
+		"kube-system",
+		"homelab-report-publisher-test-reports",
+	),
+	role("homelab-report-publisher-flux-system", "flux-system", [
+		{
+			"apiGroups": ["source.toolkit.fluxcd.io"],
+			"resources": ["gitrepositories"],
+			"resourceNames": ["flux-system"],
+			"verbs": ["get"],
+		},
+		{
+			"apiGroups": ["coordination.k8s.io"],
+			"resources": ["leases"],
+			"resourceNames": ["homelab-test-report-publish-lock"],
+			"verbs": ["get", "update"],
+		},
+	]),
+	role_binding(
+		"homelab-report-publisher-flux-system",
+		"flux-system",
+		"homelab-report-publisher",
+		"kube-system",
+		"homelab-report-publisher-flux-system",
+	),
+	lease("homelab-test-report-publish-lock", "flux-system"),
 ]
 
 combined_fixture := [{
@@ -172,6 +241,126 @@ test_diagnostic_receives_view if {
 	count(messages_matching(messages, "homelab-diagnostic must be bound to view")) == 1
 }
 
+test_publisher_service_account_is_required if {
+	messages := deny with input as fixture_without("homelab-report-publisher")
+	count(messages_matching(messages, "ServiceAccount homelab-report-publisher is missing")) == 1
+}
+
+test_publisher_report_role_rejects_secret_reads if {
+	messages := deny with input as fixture_with_rule(
+		"homelab-report-publisher-test-reports",
+		[""],
+		["secrets"],
+		["get"],
+	)
+	count(messages_matching(messages, "publisher test-reports Role contains a forbidden RBAC rule")) == 1
+}
+
+test_publisher_report_role_rejects_port_forward if {
+	messages := deny with input as fixture_with_rule(
+		"homelab-report-publisher-test-reports",
+		[""],
+		["pods/portforward"],
+		["create"],
+	)
+	count(messages_matching(messages, "publisher test-reports Role contains a forbidden RBAC rule")) == 1
+}
+
+test_publisher_report_role_rejects_general_mutation if {
+	messages := deny with input as fixture_with_rule(
+		"homelab-report-publisher-test-reports",
+		[""],
+		["configmaps"],
+		["create"],
+	)
+	count(messages_matching(messages, "publisher test-reports Role contains a forbidden RBAC rule")) == 1
+}
+
+test_publisher_flux_role_rejects_lease_create if {
+	messages := deny with input as fixture_with_rule(
+		"homelab-report-publisher-flux-system",
+		["coordination.k8s.io"],
+		["leases"],
+		["create"],
+	)
+	count(messages_matching(messages, "publisher flux-system Role contains a forbidden RBAC rule")) == 1
+}
+
+test_publisher_report_role_and_binding_reject_namespace_mutated_duplicates if {
+	fixture_input := array.concat(combined_fixture, [
+		{
+			"path": "reviewer/misplaced-publisher-role.yaml",
+			"contents": role("homelab-report-publisher-test-reports", "kube-system", [
+				{
+					"apiGroups": ["apps"],
+					"resources": ["deployments"],
+					"resourceNames": ["test-reports"],
+					"verbs": ["get", "list", "watch"],
+				},
+				{"apiGroups": [""], "resources": ["pods"], "verbs": ["get", "list"]},
+				{"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["create"]},
+			]),
+		},
+		{
+			"path": "reviewer/misplaced-publisher-binding.yaml",
+			"contents": role_binding(
+				"homelab-report-publisher-test-reports",
+				"kube-system",
+				"homelab-report-publisher",
+				"kube-system",
+				"homelab-report-publisher-test-reports",
+			),
+		},
+	])
+	messages := deny with input as fixture_input
+	count(messages_matching(messages, "publisher Role homelab-report-publisher-test-reports must be in namespace test-reports")) == 1
+	count(messages_matching(messages, "publisher RoleBinding homelab-report-publisher-test-reports must exactly bind the publisher in namespace test-reports")) == 1
+	count(messages_matching(messages, "publisher Role homelab-report-publisher-test-reports must occur exactly once")) == 1
+	count(messages_matching(messages, "publisher RoleBinding homelab-report-publisher-test-reports must occur exactly once")) == 1
+}
+
+test_publisher_report_role_and_binding_reject_exact_duplicates if {
+	fixture_input := array.concat(valid_fixture, [
+		role("homelab-report-publisher-test-reports", "test-reports", [
+			{
+				"apiGroups": ["apps"],
+				"resources": ["deployments"],
+				"resourceNames": ["test-reports"],
+				"verbs": ["get", "list", "watch"],
+			},
+			{"apiGroups": [""], "resources": ["pods"], "verbs": ["get", "list"]},
+			{"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["create"]},
+		]),
+		role_binding(
+			"homelab-report-publisher-test-reports",
+			"test-reports",
+			"homelab-report-publisher",
+			"kube-system",
+			"homelab-report-publisher-test-reports",
+		),
+	])
+	messages := deny with input as fixture_input
+	count(messages_matching(messages, "publisher Role homelab-report-publisher-test-reports must occur exactly once")) == 1
+	count(messages_matching(messages, "publisher RoleBinding homelab-report-publisher-test-reports must occur exactly once")) == 1
+}
+
+test_each_publisher_role_binding_must_be_exact if {
+	fixture_input := array.concat(valid_fixture, [role_binding(
+		"homelab-report-publisher-test-reports",
+		"test-reports",
+		"homelab-diagnostic",
+		"kube-system",
+		"homelab-report-publisher-test-reports",
+	)])
+	messages := deny with input as fixture_input
+	count(messages_matching(messages, "publisher RoleBinding homelab-report-publisher-test-reports must exactly bind the publisher in namespace test-reports")) == 1
+}
+
+test_publication_lease_is_precreated if {
+	messages := deny with input as fixture_without("homelab-test-report-publish-lock")
+	count(messages_matching(messages, "publication Lease flux-system/homelab-test-report-publish-lock is missing")) == 1
+}
+
 test_observer_cannot_read_secrets if {
 	messages := deny with input as fixture_with_rule("homelab-observer-extra", [""], ["secrets"], ["get"])
 	count(messages) == 1
@@ -221,7 +410,7 @@ test_observer_cannot_receive_an_additional_binding if {
 test_expected_role_cannot_use_aggregation if {
 	fixture_input := json.patch(valid_fixture, [{
 		"op": "add",
-		"path": "/4/aggregationRule",
+		"path": "/5/aggregationRule",
 		"value": {"clusterRoleSelectors": [{"matchLabels": {"rbac.example.com/aggregate": "true"}}]},
 	}])
 	messages := deny with input as fixture_input

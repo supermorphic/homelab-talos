@@ -466,6 +466,10 @@ def dispatch_contract(root: Path, canonical: dict[str, Any]) -> None:
 
 
 def campaign_contract(root: Path, canonical: dict[str, Any]) -> None:
+    assert (
+        "test.automation-data-provisioning" not in canonical["campaigns"]["integration"]["members"]
+    ), "Periodic restore assurance must not rotate credentials without paired backups."
+
     def remove_campaign(data: dict[str, Any]) -> None:
         del data["campaigns"]["weekly"]
 
