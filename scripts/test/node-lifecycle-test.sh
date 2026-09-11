@@ -672,6 +672,47 @@ pvc_uid='replacement-pvc-uid'
 assert_fails 'A rebound PVC was accepted as the original workload volume.' \
   verify_workload_replacements fake-kubeconfig nuc1 "$workload_inventory"
 
+# Completed Pods are historical inventory, not failover demand.
+completed_inventory="$state_dir/completed-inventory.json"
+printf '%s\n' '{"items":[{"metadata":{"namespace":"automation-data","name":"bootstrap-old","ownerReferences":[{"controller":true,"kind":"Job","uid":"job-uid","name":"bootstrap"}]},"status":{"phase":"Succeeded"}}]}' >"$completed_inventory"
+verify_workload_replacements fake-kubeconfig nuc1 "$completed_inventory"
+# A node-local Longhorn instance manager has no same-owner survivor replacement.
+printf '%s\n' '{"items":[{"metadata":{"namespace":"longhorn-system","name":"im","labels":{"longhorn.io/component":"instance-manager","longhorn.io/node":"nuc1"},"ownerReferences":[{"controller":true,"apiVersion":"longhorn.io/v1beta2","kind":"InstanceManager","uid":"im-uid"}]},"spec":{"nodeName":"nuc1"},"status":{"phase":"Running"}}]}' >"$completed_inventory"
+verify_workload_replacements fake-kubeconfig nuc1 "$completed_inventory"
+yq '.items[0].metadata.namespace = "default"' "$completed_inventory" >"$state_dir/not-longhorn.json"
+assert_fails 'An unrelated InstanceManager owner bypassed replacement checks.' \
+  verify_workload_replacements fake-kubeconfig nuc1 "$state_dir/not-longhorn.json"
+
+# A Job may complete after inventory capture; use its UID and Complete condition.
+printf '%s\n' '{"items":[{"metadata":{"namespace":"automation-data","name":"bootstrap-running","labels":{"job-name":"bootstrap"},"ownerReferences":[{"controller":true,"kind":"Job","uid":"job-uid","name":"bootstrap"}]},"status":{"phase":"Running"}}]}' >"$completed_inventory"
+job_uid='job-uid'
+job_complete=True
+job_candidates='{"items":[]}'
+drain_kubectl() {
+  case "$*" in
+    'fake-kubeconfig --namespace automation-data get job bootstrap --output json')
+      JOB_UID="$job_uid" COMPLETE="$job_complete" yq -n -o=json '{"metadata":{"uid":strenv(JOB_UID)},"status":{"conditions":[{"type":"Complete","status":strenv(COMPLETE)}]}}' ;;
+    'fake-kubeconfig --namespace automation-data get pods --selector job-name=bootstrap --output json')
+      printf '%s\n' "$job_candidates" ;;
+    *) return 2 ;;
+  esac
+}
+verify_workload_replacements fake-kubeconfig nuc1 "$completed_inventory"
+job_uid='another-job'
+assert_fails 'A different Job UID satisfied the original workload.' \
+  verify_workload_replacements fake-kubeconfig nuc1 "$completed_inventory"
+job_uid='job-uid'
+job_complete=False
+assert_fails 'An incomplete Job without a Ready replacement was accepted.' \
+  verify_workload_replacements fake-kubeconfig nuc1 "$completed_inventory"
+complete_job_after_poll() { job_complete=True; }
+NODE_WORKLOAD_REPLACEMENT_ATTEMPTS=2 NODE_SLEEP=complete_job_after_poll \
+  wait_for_workload_replacements fake-kubeconfig nuc1 "$completed_inventory"
+job_complete=False
+NODE_WORKLOAD_REPLACEMENT_ATTEMPTS=1 \
+  assert_fails 'Replacement wait accepted an unfinished Job after its deadline.' \
+    wait_for_workload_replacements fake-kubeconfig nuc1 "$completed_inventory"
+
 plex_values='kubernetes/apps/media/plex/app/values.yaml'
 [[ "$(yq -r '.controllers.plex.strategy' "$plex_values")" == 'Recreate' ]]
 [[ "$(yq -r '.controllers.plex.pod.terminationGracePeriodSeconds' "$plex_values")" == '120' ]]

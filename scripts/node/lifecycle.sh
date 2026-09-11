@@ -207,7 +207,7 @@ run_maintenance_enter_transaction() {
   apply_longhorn_maintenance_state "$kubeconfig" "$node" "$record" || return 1
   capture_drain_inventory "$kubeconfig" "$node" "$inventory_file" || return 1
   perform_kubernetes_drain "$kubeconfig" "$node" || return 1
-  verify_workload_replacements "$kubeconfig" "$node" "$inventory_file" || return 1
+  wait_for_workload_replacements "$kubeconfig" "$node" "$inventory_file" || return 1
   verify_no_drainable_workloads "$kubeconfig" "$node" || return 1
   evacuate_longhorn_replicas "$kubeconfig" "$node" || return 1
   repeat_disruption_safety "$kubeconfig" "$talosconfig" "$node" "$holder" || return 1
@@ -222,7 +222,7 @@ run_reboot_transaction() {
   persist_node_containment "$kubeconfig" "$node" "$record" || return 1
   capture_drain_inventory "$kubeconfig" "$node" "$inventory_file" || return 1
   perform_kubernetes_drain "$kubeconfig" "$node" || return 1
-  verify_workload_replacements "$kubeconfig" "$node" "$inventory_file" || return 1
+  wait_for_workload_replacements "$kubeconfig" "$node" "$inventory_file" || return 1
   verify_no_drainable_workloads "$kubeconfig" "$node" || return 1
   verify_short_absence_longhorn_safety "$kubeconfig" "$node" || return 1
   repeat_disruption_safety "$kubeconfig" "$talosconfig" "$node" "$holder" || return 1
