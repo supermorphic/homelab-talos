@@ -140,6 +140,11 @@ verify_workload_replacements() {
   [[ -f "$inventory_file" ]] || return 1
   while IFS= read -r pod_json; do
     [[ -n "$pod_json" ]] || continue
+    # Static Pods are represented by mirrors owned by the local Node. The kubelet,
+    # not a workload controller on a survivor, manages their lifecycle.
+    if [[ "$(yq -r '.metadata.annotations."kubernetes.io/config.mirror" != null' <<<"$pod_json")" == true ]]; then
+      continue
+    fi
     case "$(yq -r '.status.phase // ""' <<<"$pod_json")" in
       Succeeded|Failed) continue ;;
     esac
