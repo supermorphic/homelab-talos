@@ -1319,8 +1319,8 @@ actual_canary_fields="$(jq -c '
   exit 1
 }
 [[ "$(jq -r '[.settings.saveDataErrorExecution, .settings.saveDataSuccessExecution] | join(",")' \
-  "$n8n_workflow")" == 'all,all' ]] || {
-  echo 'Platform Canary must save successful and failed executions.' >&2
+  "$n8n_workflow")" == 'all,none' ]] || {
+  echo 'Platform Canary must retain failed executions and discard routine successful executions.' >&2
   exit 1
 }
 workflow_path="$(jq -r '.nodes[] | select(.type == "n8n-nodes-base.webhook") | .parameters.path' \

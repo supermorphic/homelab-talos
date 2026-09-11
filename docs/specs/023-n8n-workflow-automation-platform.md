@@ -158,7 +158,8 @@ n8n is configured with:
 - `N8N_EDITOR_BASE_URL=https://n8n.lab.supermorphic.com/`;
 - one trusted reverse-proxy hop;
 - Prometheus metrics on an internal-only endpoint;
-- successful and failed execution persistence;
+- successful and failed execution persistence by default, with the Platform Canary
+  retaining only failed production executions during steady-state monitoring;
 - execution-data pruning after 14 days or 10,000 retained executions, whichever bound
   removes data first; and
 - telemetry and unattended application updates disabled.
@@ -414,26 +415,43 @@ Node Finishes** and a deterministic final Edit Fields node. The response include
 request correlation value and `$execution.id`. The workflow contains no Respond to
 Webhook node, career logic, SQL node, domain persistence, or external side effect.
 
-This precise response mode is part of the persistence contract. In pinned n8n 2.36.7
-regular mode, the last-node response waits for the post-execution promise. The execution
-lifecycle awaits its `workflowExecuteAfter` hooks, including the PostgreSQL execution
-update, before resolving that promise. The successful response therefore represents a
-completed normal execution whose configured success record has been persisted. This
-makes PostgreSQL part of the canary semantics without adding an artificial database
-query.
+In pinned n8n 2.36.7 regular mode, the last-node response waits for the post-execution
+promise. The execution lifecycle awaits its `workflowExecuteAfter` hooks before resolving
+that promise. The workflow explicitly sets `saveDataSuccessExecution: none` and
+`saveDataErrorExecution: all`. For a successful production execution, the retention hook
+deletes the in-flight execution instead of retaining its completed record. The response
+still contains `$execution.id` from the real workflow run. PostgreSQL remains part of the
+normal execution lifecycle, but the response does not promise a retrievable success
+record. Other workflows keep their existing retention settings.
 
-Acceptance must verify the implementation behavior rather than infer it only from source.
-It sends a unique correlation value, records the returned execution ID, and then retrieves
-that execution through the private n8n history or API. The record must be successful and
-contain the matching correlation value immediately after the response completes. If the
-pinned runtime requires polling because persistence is asynchronous, implementation must
-stop and revise this contract before merge rather than claim that the response acknowledges
-completed persistence.
+Attended acceptance temporarily sets successful production retention to `all` on the
+exact workflow and instance under test. It sends a unique correlation value, records the
+returned execution ID, and immediately retrieves that successful execution through private
+n8n history or API with the matching correlation. This checks retained execution evidence
+when deliberately requested. If the record is not immediately available, stop and
+investigate rather than claim the checkpoint passed. After inspection, restore success
+retention to `none`, including on failure, and verify a subsequent successful production
+request returns the same response contract without leaving a completed history record.
+Initial activation, upgrades, off-network acceptance, and attended recovery use this
+procedure. Automated restore and persistence tests continue checking their authenticated
+response and recovered-state contracts without requiring saved canary successes.
+
+Existing saved successes remain until normal pruning. Failed executions retain evidence
+within the shared pruning bounds; rejection before workflow execution begins does not
+guarantee a history record. Gatus continues running during the short acceptance window,
+so it may leave a few retained successes while temporary success retention is enabled.
 
 The template contains no authentication value. After the initial deployment, the
 operator creates the n8n owner account through the private UI, imports the template,
 creates and binds its header-auth credential using the SOPS-managed canary value, and
 publishes it. This one-time bootstrap avoids a persistent privileged bootstrap API key.
+Flux distributes the template but does not update the published workflow in n8n's
+database. Existing installations and older restored dumps require the operator to
+reconcile these settings through private n8n access. Source validation enforces `all,none`
+for failure and success retention. Live acceptance separately checks the published
+settings, a retained acceptance success, a subsequent unretained success, and at least
+two healthy five-minute Gatus checks without new completed success records. Record
+failure retention as configured but unexercised unless a failed execution is inspected.
 
 Gatus checks `https://n8n.lab.supermorphic.com/healthz/readiness` every minute as
 `Automation / n8n-readiness`. It requires HTTP 200 and `status: ok`, which proves that the
@@ -444,7 +462,8 @@ activation. Before activation, the active Gatus Helm values contain neither the 
 Secret reference nor the webhook E2E endpoint. Their complete exact values remain in a
 Git-owned staged activation fragment and are copied into active values only in the
 reviewed public-route activation change. Gatus then verifies the status and correlation
-response. A separate negative acceptance request without valid authentication must fail.
+response and a non-empty execution ID. A separate negative acceptance request without
+valid authentication must fail.
 Gatus never checks the public n8n UI because no such route exists.
 
 ## Error and retry behavior
@@ -452,9 +471,9 @@ Gatus never checks the public n8n UI because no such route exists.
 The public Gateway returns no backend route for unmatched paths. n8n rejects missing or
 invalid canary authentication before a successful execution. The chart readiness probe
 uses `/healthz/readiness`, which checks database connectivity and migrations before Envoy
-can send traffic to the pod. If PostgreSQL becomes unavailable during a canary run, the
-required execution-persistence update cannot complete and the request cannot satisfy the
-successful last-node response contract.
+can send traffic to the pod. The canary exercises the normal database-backed execution
+lifecycle; retained success records are an attended acceptance check. A green probe is
+not a guarantee that every database failure would produce a retained failed execution.
 
 When a workflow enables saved failures, n8n retains those records within the 14-day
 and 10,000-execution retention bounds. Prometheus alerts on platform failure patterns; the UI remains the detailed
@@ -677,9 +696,12 @@ Combined read-only and attended live acceptance verifies:
 3. The public hostname serves only the HTTPRoute's approved exact paths after their
    activation checkpoints; all other paths have no public backend route. Each
    integration completes the acceptance procedure in its owning repository.
-4. An authenticated canary request returns its correlation value and execution ID only
-   after a matching successful execution is immediately retrievable from n8n history;
-   invalid authentication fails without a successful execution.
+4. An authenticated canary request returns its correlation value and execution ID.
+   Temporary acceptance retention makes the matching successful execution immediately
+   retrievable from n8n history. After restoring steady-state retention, subsequent
+   successes leave no completed history records while Gatus stays healthy; failures
+   remain configured for retention. Invalid authentication fails without a successful
+   execution.
 5. Controlled n8n and PostgreSQL pod restarts preserve configuration, workflow, database,
    and required filesystem state.
 6. A logical backup creates a validated final artifact and advances the Prometheus
@@ -771,6 +793,8 @@ actual configuration fields, rendered resources, runbook, and validated cluster 
   sequence](https://github.com/n8n-io/n8n/blob/n8n%402.36.7/packages/cli/src/webhooks/webhook-helpers.ts)
 - [n8n 2.36.7 execution persistence
   hooks](https://github.com/n8n-io/n8n/blob/n8n%402.36.7/packages/cli/src/execution-lifecycle/execution-lifecycle-hooks.ts)
+- [n8n 2.36.7 workflow retention
+  settings](https://github.com/n8n-io/n8n/blob/n8n%402.36.7/packages/cli/src/execution-lifecycle/to-save-settings.ts)
 - [n8n PostgreSQL
   configuration](https://docs.n8n.io/hosting/configuration/supported-databases-settings/)
 - [n8n queue mode](https://docs.n8n.io/hosting/scaling/queue-mode/)
