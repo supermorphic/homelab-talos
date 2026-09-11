@@ -35,9 +35,13 @@ verify_expected_node_health() {
   pressures="$(yq -r '
     .items[] as $node |
     ["MemoryPressure", "DiskPressure", "PIDPressure"][] as $type |
-    ([$node.status.conditions[]? | select(.type == $type) | .status][0] // "Missing") as $status |
-    select($status != "False") |
-    $node.metadata.name + " " + $type + "=" + $status
+    {
+      "node": $node.metadata.name,
+      "type": $type,
+      "status": ([$node.status.conditions[]? | select(.type == $type) | .status][0] // "Missing")
+    } |
+    select(.status != "False") |
+    .node + " " + .type + "=" + .status
   ' <<<"$nodes_json")"
   [[ -z "$pressures" ]] || {
     printf 'Node pressure blocks disruption:\n%s\n' "$pressures" >&2

@@ -179,6 +179,43 @@ assert_fails 'The linked worktree was accepted as an operator checkout.' \
   run_operator_checkout_fixture linked
 run_operator_checkout_fixture standalone
 
+health_nodes_fixture=''
+node_kubectl() {
+  local _kubeconfig="$1"
+  shift
+  [[ "$*" == 'get nodes --output json' ]] || return 2
+  printf '%s\n' "$health_nodes_fixture"
+}
+
+health_nodes_json() {
+  local nuc1_memory_pressure="$1"
+  NUC1_MEMORY_PRESSURE="$nuc1_memory_pressure" yq --null-input --output-format json '
+    {
+      "items": ["nuc1", "nuc2", "nuc3"] | map({
+        "metadata": {"name": .},
+        "spec": {"unschedulable": false},
+        "status": {"conditions": [
+          {"type": "Ready", "status": "True"},
+          {"type": "MemoryPressure", "status": "False"},
+          {"type": "DiskPressure", "status": "False"},
+          {"type": "PIDPressure", "status": "False"}
+        ]}
+      })
+    } |
+    .items[0].status.conditions[1].status = strenv(NUC1_MEMORY_PRESSURE)
+  '
+}
+
+health_nodes_fixture="$(health_nodes_json False)"
+verify_expected_node_health fake-kubeconfig
+health_nodes_fixture="$(health_nodes_json True)"
+assert_fails 'Memory pressure did not block node maintenance.' \
+  verify_expected_node_health fake-kubeconfig
+health_nodes_fixture="$(health_nodes_json False | \
+  yq 'del(.items[0].status.conditions[] | select(.type == "PIDPressure"))')"
+assert_fails 'A missing pressure condition did not block node maintenance.' \
+  verify_expected_node_health fake-kubeconfig
+
 node_state="$state_dir/node-state.json"
 yq --null-input --output-format json '
   {
