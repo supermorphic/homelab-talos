@@ -97,12 +97,12 @@ perform_kubernetes_drain() {
   local kubeconfig="$1"
   local node="$2"
   local discovery
-  discovery="$(drain_kubectl "$kubeconfig" get --raw /apis/policy/v1)" || {
-    echo 'Cannot verify the Kubernetes policy/v1 Eviction API.' >&2
+  discovery="$(drain_kubectl "$kubeconfig" get --raw /api/v1)" || {
+    echo 'Cannot verify the Kubernetes core/v1 pods/eviction resource.' >&2
     return 1
   }
   [[ "$(yq -r '[.resources[]? | select(.name == "pods/eviction" and .kind == "Eviction")] | length' - <<<"$discovery")" -eq 1 ]] || {
-    echo 'Refusing drain because the policy/v1 Pod eviction resource is unavailable.' >&2
+    echo 'Refusing drain because the core/v1 pods/eviction resource is unavailable.' >&2
     return 1
   }
   drain_kubectl "$kubeconfig" drain "$node" \

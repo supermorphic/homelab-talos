@@ -16,6 +16,7 @@ expected_document_names := {
 }
 
 required_read_rules := {
+	"": {"persistentvolumes"},
 	"apiextensions.k8s.io": {"customresourcedefinitions"},
 	"apiregistration.k8s.io": {"apiservices"},
 	"aquasecurity.github.io": {"vulnerabilityreports"},

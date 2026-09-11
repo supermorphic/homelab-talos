@@ -69,7 +69,7 @@ for ((index = 0; index < ${#args[@]}; index++)); do
 done
 
 case "$resource" in
-  nodes|customresourcedefinitions.apiextensions.k8s.io|apiservices.apiregistration.k8s.io|\
+  nodes|persistentvolumes|customresourcedefinitions.apiextensions.k8s.io|apiservices.apiregistration.k8s.io|\
   clusterissuers.cert-manager.io|ciliumclusterwidenetworkpolicies.cilium.io|\
   ciliumidentities.cilium.io|ciliumnodes.cilium.io|gatewayclasses.gateway.networking.k8s.io|\
   nodes.metrics.k8s.io|clusterrolebindings.rbac.authorization.k8s.io|\
@@ -155,6 +155,7 @@ rg -q -- '--context homelab-observer' "$named_log"
 rg -q -- '--context homelab-diagnostic' "$named_log"
 for context in homelab-observer homelab-diagnostic; do
   for verb in get list watch; do
+    rg -q -- "--context $context auth can-i $verb persistentvolumes --all-namespaces" "$named_log"
     rg -q -- "--context $context auth can-i $verb priorityclasses.scheduling.k8s.io --all-namespaces" "$named_log"
     rg -q -- "--context $context auth can-i $verb referencegrants.gateway.networking.k8s.io --namespace automation" \
       "$named_log"

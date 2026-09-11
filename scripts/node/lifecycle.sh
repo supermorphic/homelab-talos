@@ -70,12 +70,18 @@ preflight_kubernetes_drain() {
   local kubeconfig="$1"
   local node="$2"
   local discovery
-  discovery="$(drain_kubectl "$kubeconfig" get --raw /apis/policy/v1)" || return 1
-  [[ "$(yq -r '[.resources[]? | select(.name == "pods/eviction" and .kind == "Eviction")] | length' - <<<"$discovery")" -eq 1 ]] || return 1
+  discovery="$(drain_kubectl "$kubeconfig" get --raw /api/v1)" || {
+    echo 'Cannot read Kubernetes core/v1 API discovery.' >&2
+    return 1
+  }
+  [[ "$(yq -r '[.resources[]? | select(.name == "pods/eviction" and .kind == "Eviction")] | length' - <<<"$discovery")" -eq 1 ]] || {
+    echo 'Kubernetes core/v1 does not advertise the pods/eviction resource.' >&2
+    return 1
+  }
   drain_kubectl "$kubeconfig" drain "$node" \
     --ignore-daemonsets \
     --delete-emptydir-data \
-    --dry-run=server \
+    --dry-run=client \
     --timeout="${NODE_DRAIN_PREFLIGHT_TIMEOUT:-2m}"
 }
 

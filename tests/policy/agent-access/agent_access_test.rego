@@ -34,6 +34,7 @@ cluster_role_binding(name, service_accounts, role_name) := {
 }
 
 read_requirements := {
+	"": {"persistentvolumes"},
 	"apiextensions.k8s.io": {"customresourcedefinitions"},
 	"apiregistration.k8s.io": {"apiservices"},
 	"aquasecurity.github.io": {"vulnerabilityreports"},

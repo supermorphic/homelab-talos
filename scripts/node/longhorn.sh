@@ -130,7 +130,7 @@ restore_longhorn_maintenance_state() {
 verify_short_absence_longhorn_safety() {
   local kubeconfig="$1"
   local node="$2"
-  local policy volumes replicas affected volume off_target
+  local policy volumes replicas affected volume state robustness desired actual off_target
   policy="$(longhorn_kubectl "$kubeconfig" get settings.longhorn.io node-drain-policy \
     --output jsonpath='{.value}')" || return 1
   [[ "$policy" == 'block-if-contains-last-replica' ]] || {
@@ -147,10 +147,31 @@ verify_short_absence_longhorn_safety() {
   ' <<<"$replicas" | sort -u)"
   while IFS= read -r volume; do
     [[ -n "$volume" ]] || continue
-    [[ "$(VOLUME="$volume" yq -r '.items[] | select(.metadata.name == strenv(VOLUME)) | .status.robustness' - <<<"$volumes")" == 'healthy' ]] || {
-      echo "Longhorn volume $volume is not healthy enough for a node disruption." >&2
-      return 1
-    }
+    state="$(VOLUME="$volume" yq -r '.items[] | select(.metadata.name == strenv(VOLUME)) | .status.state' - <<<"$volumes")"
+    robustness="$(VOLUME="$volume" yq -r '.items[] | select(.metadata.name == strenv(VOLUME)) | .status.robustness' - <<<"$volumes")"
+    desired="$(VOLUME="$volume" yq -r '.items[] | select(.metadata.name == strenv(VOLUME)) | .spec.numberOfReplicas' - <<<"$volumes")"
+    actual="$(VOLUME="$volume" yq -r '
+      [.items[] |
+        select(.spec.volumeName == strenv(VOLUME)) |
+        select(.spec.failedAt == null or .spec.failedAt == "")] | length
+    ' <<<"$replicas")"
+    case "$state:$robustness" in
+      attached:healthy) ;;
+      detached:unknown)
+        [[ "$desired" =~ ^[1-9][0-9]*$ && "$actual" =~ ^[0-9]+$ ]] || {
+          echo "Detached Longhorn volume $volume has an invalid replica count." >&2
+          return 1
+        }
+        [[ "$actual" -ge "$desired" ]] || {
+          echo "Detached Longhorn volume $volume does not have all desired replicas." >&2
+          return 1
+        }
+        ;;
+      *)
+        echo "Longhorn volume $volume is not healthy enough for a node disruption." >&2
+        return 1
+        ;;
+    esac
     off_target="$(NODE="$node" VOLUME="$volume" yq -r '
       [.items[] |
         select(.spec.volumeName == strenv(VOLUME)) |
