@@ -43,6 +43,62 @@ All operator shell blocks are compatible with interactive zsh and modern Bash. A
 that can terminate early runs in a subshell, so `exit` stops that block without closing
 the operator's parent shell.
 
+## Platform Canary execution retention
+
+The checked-in Platform Canary workflow sets `saveDataSuccessExecution: none` and
+`saveDataErrorExecution: all`. Routine successful production requests execute normally
+and return `status`, `correlation`, and a non-empty `executionId`, but their completed
+execution records are not retained in history. The ID identifies the run; it is not a
+promise that a history record remains available. Failed executions remain subject to the
+normal 14-day and 10,000-execution pruning bounds. Requests rejected before a workflow
+execution starts, such as invalid authentication, need not create a failed history record.
+Other workflows retain their existing settings.
+
+### Retain an attended acceptance execution
+
+Use this temporary mode whenever an activation, upgrade, recovery, or off-network
+checkpoint requires opening a successful execution in history:
+
+1. In the private editor, open the exact `Platform Canary` workflow being tested. For an
+   isolated recovery instance, use only operator-approved private access to that instance.
+2. In **Settings**, set **Save successful production executions** to **Save** (`all`)
+   and keep **Save failed production executions** at **Save** (`all`). Save the settings
+   and confirm the published workflow uses them before sending the request.
+3. Send the authenticated request to the production `/webhook/platform-canary` path on
+   the intended instance, with a unique correlation. A manual editor run or test webhook
+   does not satisfy this checkpoint. Require the exact response contract, then immediately
+   open the returned execution ID and require `Succeeded` with the same correlation.
+4. Record the checkpoint result in private operator notes without headers or tokens.
+   After inspection, restore **Save successful production executions** to **Do not save**
+   (`none`), save, and confirm the published settings. Restore this setting even if the
+   acceptance request or a later check fails. Failures must still be saved.
+5. Require a subsequent successful production request to return the response contract
+   while its completed execution is absent from history. Existing saved successes remain
+   until normal pruning; changing the setting does not remove earlier evidence.
+
+Keep the retention window short. Gatus continues its five-minute schedule and may leave
+a few saved successes during this window. Do not change its endpoint, interval, or
+response assertions for acceptance.
+
+### Reconcile an existing published canary
+
+Flux distributes the workflow JSON as a template ConfigMap; it does not import or update
+the workflow stored in n8n's database. After the template change merges and Flux reaches
+the merged revision, the operator must update the existing published `Platform Canary`
+through its private editor. Preserve its workflow identity, nodes, Header Auth binding,
+and webhook path. Use the attended acceptance procedure above, finishing with success
+retention `none` and failure retention `all`.
+
+Observe at least two subsequent five-minute Gatus checks: both must be green, and no new
+completed successful Platform Canary records from those checks should remain in history.
+Confirm **Save failed production executions** remains **Save** and inspect any available
+failed canary execution. If no failed execution is available, record failure retention
+as configured but not exercised; an authentication rejection does not test this behavior.
+Run `mise exec -- just kube n8n-verify` with current task-scoped credentials to confirm
+monitoring health. This verifier cannot inspect workflow retention or execution history.
+Record live reconciliation and acceptance separately from source validation; a passing
+source check alone does not establish the published workflow's behavior.
+
 ## Activation flow
 
 Complete these Git transitions in order. Do not start the next transition until the
@@ -211,18 +267,24 @@ these attended steps:
    credential title and the HTTP header name are different fields.
 4. Bind `Platform Canary Header` to the imported workflow's `Webhook` node. Do not add
    the value to the workflow JSON.
-5. Publish the `Platform Canary` workflow.
+5. Set **Save successful production executions** to **Save** (`all`) for the
+   [attended acceptance execution](#retain-an-attended-acceptance-execution), then publish
+   the `Platform Canary` workflow. Keep failed production execution retention at `all`.
 6. Send one authenticated request through the private path available to the operator.
    Require the JSON response to contain `status: ok`, the submitted correlation, and a
    non-empty execution ID.
 7. Immediately open that execution ID in n8n execution history. Require `Succeeded` and
    the same correlation before continuing.
+8. Restore successful production execution retention to `none`, save the settings, and
+   confirm a subsequent successful private production request is absent from completed
+   history as described in the acceptance procedure.
 
 **Private canary checkpoint:** Do not create or merge the Private workload activation PR
 until the authenticated private request has returned the expected response and the
 matching execution is visibly `Succeeded` with the same correlation in n8n execution
-history. If either check fails, stop with `public-webhook-route` suspended, correct the
-private workflow or runtime fault, and repeat both checks.
+history, and steady-state retention has been restored and checked. If a check fails,
+stop with `public-webhook-route` suspended, correct the private workflow or runtime
+fault, and repeat the checkpoint.
 
 The bootstrap logical backup predates this attended workflow and credential setup. Before
 running the restore drill in activation acceptance, require a later successful scheduled
@@ -369,6 +431,11 @@ changes, or recovery changes. For initial activation, start only after Phase 3 m
 and route verification succeeds. For later changes, start after the intended Git revision
 has reconciled and the affected workloads are ready.
 
+Complete the [attended canary checkpoint](#retain-an-attended-acceptance-execution) on
+the private production route, then restore success retention to `none`. The automated
+restore and persistence tests below validate authenticated responses and recovered state;
+they do not require a saved successful canary execution and can run in steady-state mode.
+
 The verifier and smoke suite are read-only. The restore drill and persistence test mutate
 temporary or run-owned cluster state, use the shared test Lease, and require their exact
 confirmations:
@@ -401,8 +468,9 @@ restore drill proves a temporary PostgreSQL restore can decrypt retained credent
 persistence test recreates the n8n and PostgreSQL pods and proves volume, canary, and
 backup recovery. This is a focused acceptance sequence, not a new campaign.
 
-**Complete when:** All four commands succeed, including the temporary restore and
-persistence recovery checks.
+**Complete when:** The attended canary checkpoint passes, steady-state retention is
+restored and checked, and all four commands succeed, including the temporary restore
+and persistence recovery checks.
 
 **Stop if:** Any command fails. Do not continue to off-network acceptance or declare the
 change accepted. Preserve bounded failure output, correct the fault, and rerun the
@@ -425,6 +493,11 @@ canary succeeds and has a matching successful n8n execution. The same webhook wi
 authentication fails. The editor, REST API, metrics, test webhook, unrelated webhook, and
 root paths remain unavailable. The positive and negative checks below prove both sides of
 that boundary.
+
+Before disconnecting, enable the temporary
+[acceptance retention mode](#retain-an-attended-acceptance-execution). Keep trusted private
+editor access available on a separate client to inspect the returned execution immediately
+and restore success retention to `none` afterward, including on failure.
 
 Disconnect the test client from the LAN and private VPN. Load the token with a silent
 prompt and use a permission-restricted curl configuration so the header value does not
@@ -470,6 +543,7 @@ appear in process arguments:
     '.status == "ok" and .correlation == strenv(CORRELATION) and
       (.executionId | type == "!!str" and length > 0)' \
     "$check_dir/response.json"
+  mise exec -- yq -r '.executionId' "$check_dir/response.json"
 )
 ```
 
@@ -500,6 +574,8 @@ history record. Save no token or response payload in Git or test artifacts.
 **Complete when:** The authenticated response contains the expected status, correlation,
 and execution ID; the matching history record is visibly successful; the unauthenticated
 request fails with an allowed status; and every non-production path returns `404`.
+Restore success retention to `none` and confirm subsequent successful Gatus checks leave
+no completed success records before closing acceptance.
 
 **Stop if:** Any positive or negative assertion fails. Remove the router TCP/443 forwarding
 rule first to contain public exposure, then investigate without weakening the exact route

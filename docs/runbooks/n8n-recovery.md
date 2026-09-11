@@ -109,6 +109,8 @@ The drill fails unless it can start an isolated temporary n8n instance with the 
 key and database password through `secretKeyRef`, call the restored published canary with
 the namespace-local credential, and remove its temporary database and Kubernetes
 resources. It does not create an HTTPRoute or modify the production database.
+The drill checks the authenticated response contract, not retained successful execution
+history, and works with the canary's steady-state success retention set to `none`.
 
 Stop if the drill fails. Preserve its canonical test result and fix artifact, key,
 credential, policy, or cleanup faults before production recovery.
@@ -137,9 +139,16 @@ preserved. The target database must not already exist; create it empty, restore 
 
 Do not cut the production Deployment over yet. Start an isolated, cluster-internal n8n
 instance at the pinned version against the restored database. Give it no HTTPRoute.
+Through operator-approved private access to that isolated instance, temporarily enable
+successful production execution retention using the
+[attended acceptance procedure](../guides/n8n-operations.md#retain-an-attended-acceptance-execution).
 Require an authenticated Platform Canary response with the submitted correlation and a
 non-empty execution ID. Open the matching successful execution history record. This
 proves the retained key can decrypt the restored Header Auth credential.
+Restore success retention to `none` and keep failure retention at `all`, including if
+acceptance fails. Verify another successful request leaves no completed success record
+before cutover. A restored older dump may contain the previous `all` success setting;
+reconcile it explicitly rather than assuming the current Git template changed the database.
 
 ### 4. Cut over and validate
 
