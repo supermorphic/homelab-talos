@@ -298,6 +298,9 @@ must retain the same PVC and PV identity, complete required detach and attach op
 and mount its storage before it is accepted. This is transaction-specific verification
 of affected workloads, not application health added to the general cluster contract.
 
+Static mirror Pods identified by `kubernetes.io/config.mirror` do not require a
+surviving replacement, consistently with drain inventory and capacity checks.
+Their control-plane availability is covered by the Talos, etcd, and foundation gates.
 Pods already in `Succeeded` or `Failed` phase at inventory capture do not require
 replacement. An active Job can instead satisfy recovery with its `Complete=True`
 condition, provided the live Job UID matches the captured controller UID. Otherwise

@@ -552,6 +552,19 @@ mirror_pods='{
 }'
 validate_drain_pods "$mirror_pods" >/dev/null
 
+mirror_inventory="$state_dir/mirror-inventory.json"
+yq -o=json '
+  .items[0].metadata.ownerReferences = [{"apiVersion":"v1","kind":"Node","name":"nuc1","uid":"node-uid","controller":true}] |
+  .items[0].metadata.labels = {"component":"kube-apiserver"} |
+  .items[0].spec.nodeName = "nuc1" |
+  .items[0].status.phase = "Running"
+' <<<"$mirror_pods" >"$mirror_inventory"
+verify_workload_replacements fake-kubeconfig nuc1 "$mirror_inventory"
+yq 'del(.items[0].metadata.annotations."kubernetes.io/config.mirror")' \
+  "$mirror_inventory" >"$state_dir/non-mirror-inventory.json"
+assert_fails 'A Node owner without a mirror annotation bypassed replacement checks.' \
+  verify_workload_replacements fake-kubeconfig nuc1 "$state_dir/non-mirror-inventory.json"
+
 captured_inventory="$state_dir/captured-inventory.json"
 drain_kubectl() {
   local _kubeconfig="$1"
