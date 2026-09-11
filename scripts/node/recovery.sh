@@ -158,7 +158,7 @@ perform_recovery_acceptance() {
   verify_etcd_recovery "$talosconfig" || return 1
   verify_cilium_recovery "$kubeconfig" "$node" || return 1
   if [[ -n "$inventory_file" ]]; then
-    verify_workload_replacements "$kubeconfig" "$node" "$inventory_file" || return 1
+    wait_for_workload_replacements "$kubeconfig" "$node" "$inventory_file" || return 1
   fi
   recovery_just kube foundation-verify || return 1
 }

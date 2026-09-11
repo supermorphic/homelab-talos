@@ -298,6 +298,16 @@ must retain the same PVC and PV identity, complete required detach and attach op
 and mount its storage before it is accepted. This is transaction-specific verification
 of affected workloads, not application health added to the general cluster contract.
 
+Pods already in `Succeeded` or `Failed` phase at inventory capture do not require
+replacement. An active Job can instead satisfy recovery with its `Complete=True`
+condition, provided the live Job UID matches the captured controller UID. Otherwise
+its Ready survivor replacement is required. Longhorn-managed InstanceManager Pods
+in `longhorn-system` are node-local infrastructure: eviction remains subject to their
+PDB, and Longhorn evacuation/convergence provides their acceptance evidence.
+Replacement observations retry for up to 60 attempts, five seconds apart, to allow
+controllers and readiness probes to converge after drain. Exhaustion preserves
+containment and prevents shutdown.
+
 For Plex, these generic checks use its existing `/identity` readiness probe, require the
 same Longhorn-backed configuration volume to attach on the landing node, and require the
 SMB media volume to mount. Its 120-second termination grace period allows an orderly

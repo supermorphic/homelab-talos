@@ -136,16 +136,38 @@ verify_workload_replacements() {
   local node="$2"
   local inventory_file="$3"
   local pod_json namespace pod_name kind owner_uid selector candidates replacement claims claim
-  local claim_json pvc pv expected_pvc_uid expected_volume expected_volume_uid
+  local claim_json pvc pv expected_pvc_uid expected_volume expected_volume_uid job_name job
   [[ -f "$inventory_file" ]] || return 1
   while IFS= read -r pod_json; do
     [[ -n "$pod_json" ]] || continue
+    case "$(yq -r '.status.phase // ""' <<<"$pod_json")" in
+      Succeeded|Failed) continue ;;
+    esac
     kind="$(yq -r '[.metadata.ownerReferences[]? | select(.controller == true) | .kind][0] // ""' <<<"$pod_json")"
     [[ -n "$kind" && "$kind" != 'DaemonSet' ]] || continue
     namespace="$(yq -r '.metadata.namespace' <<<"$pod_json")"
     pod_name="$(yq -r '.metadata.name' <<<"$pod_json")"
+    if [[ "$namespace:$kind" == 'longhorn-system:InstanceManager' &&
+      "$(yq -r '[.metadata.ownerReferences[]? | select(.controller == true) | .apiVersion][0]' <<<"$pod_json")" == 'longhorn.io/v1beta2' &&
+      "$(yq -r '.metadata.labels."longhorn.io/component"' <<<"$pod_json")" == 'instance-manager' &&
+      "$(yq -r '.metadata.labels."longhorn.io/node"' <<<"$pod_json")" == "$node" ]]; then
+      # Longhorn evacuation and convergence validate this node-local infrastructure.
+      continue
+    fi
     owner_uid="$(yq -r '[.metadata.ownerReferences[]? | select(.controller == true) | .uid][0] // ""' <<<"$pod_json")"
     [[ -n "$owner_uid" ]] || return 1
+    if [[ "$kind" == Job ]]; then
+      job_name="$(yq -r '[.metadata.ownerReferences[]? | select(.controller == true) | .name][0] // ""' <<<"$pod_json")"
+      [[ -n "$job_name" ]] || return 1
+      job="$(drain_kubectl "$kubeconfig" --namespace "$namespace" get job "$job_name" --output json)" || return 1
+      [[ "$(yq -r '.metadata.uid' <<<"$job")" == "$owner_uid" ]] || {
+        echo "Job identity changed for $namespace/$job_name." >&2
+        return 1
+      }
+      if [[ "$(yq -r '[.status.conditions[]? | select(.type == "Complete") | .status][0] // "False"' <<<"$job")" == True ]]; then
+        continue
+      fi
+    fi
     selector="$(yq -r '.metadata.labels // {} | to_entries | map(.key + "=" + .value) | join(",")' <<<"$pod_json")"
     [[ -n "$selector" ]] || {
       echo "Cannot identify a replacement for $namespace/$pod_name without labels." >&2
@@ -198,4 +220,18 @@ verify_workload_replacements() {
       return 1
     }
   done < <(yq -o=json -I=0 '.homelabLifecycle.claims[]?' "$inventory_file")
+}
+
+wait_for_workload_replacements() {
+  local kubeconfig="$1" node="$2" inventory_file="$3"
+  local attempt attempts="${NODE_WORKLOAD_REPLACEMENT_ATTEMPTS:-60}"
+  [[ "$attempts" =~ ^[1-9][0-9]*$ ]] || return 1
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    verify_workload_replacements "$kubeconfig" "$node" "$inventory_file" && return 0
+    if [[ "$attempt" -lt "$attempts" ]]; then
+      "${NODE_SLEEP:-sleep}" "${NODE_WORKLOAD_REPLACEMENT_POLL_SECONDS:-5}"
+    fi
+  done
+  echo "Workload recovery did not complete after $attempts observations for $node." >&2
+  return 1
 }
