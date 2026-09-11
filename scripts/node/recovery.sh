@@ -108,13 +108,17 @@ verify_cilium_recovery() {
 
 verify_longhorn_convergence() {
   local kubeconfig="$1"
-  local nodes volumes replicas unhealthy replica_shortfall
+  local nodes volumes replicas unhealthy replica_shortfall volume desired actual
   nodes="$(recovery_kubectl "$kubeconfig" --namespace longhorn-system \
     get nodes.longhorn.io --output json)" || return 1
   [[ "$(yq -r '[.items[] | select([.status.conditions[]? | select(.type == "Ready") | .status][0] == "True")] | length' - <<<"$nodes")" == '3' ]] || return 1
   volumes="$(recovery_kubectl "$kubeconfig" --namespace longhorn-system \
     get volumes.longhorn.io --output json)" || return 1
-  unhealthy="$(yq -r '.items[] | select(.status.robustness != "healthy") | .metadata.name' - <<<"$volumes")"
+  unhealthy="$(yq -r '
+    .items[] |
+    {"name": .metadata.name, "health": ([.status.state, .status.robustness] | join(":"))} |
+    select(.health != "attached:healthy" and .health != "detached:unknown") | .name
+  ' <<<"$volumes")"
   [[ -z "$unhealthy" ]] || {
     printf 'Longhorn volumes have not converged:\n%s\n' "$unhealthy" >&2
     return 1
@@ -128,7 +132,10 @@ verify_longhorn_convergence() {
     [[ -n "$volume" ]] || continue
     desired="$(VOLUME="$volume" yq -r '.items[] | select(.metadata.name == strenv(VOLUME)) | .spec.numberOfReplicas' - <<<"$volumes")"
     actual="$(awk -v name="$volume" '$2 == name {print $1}' <<<"$replica_shortfall")"
-    [[ "${actual:-0}" -ge "$desired" ]] || return 1
+    [[ "$desired" =~ ^[1-9][0-9]*$ && "${actual:-0}" -ge "$desired" ]] || {
+      echo "Longhorn volume $volume has not reached its desired replica count." >&2
+      return 1
+    }
   done < <(yq -r '.items[].metadata.name' - <<<"$volumes")
 }
 
