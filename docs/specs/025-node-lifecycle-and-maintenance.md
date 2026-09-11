@@ -396,10 +396,17 @@ current != during and current != before
 When `before` equals `during`, the lifecycle did not own a change. Recovery requires the
 value to remain unchanged and does not rewrite it.
 
-The entry-time Longhorn mutation uses the resource version read while constructing the
-record. When both fields belong to the same Longhorn Node object, they change in one
-optimistic-concurrency patch. Recovery uses the current resource version, reads back the
-result, and waits for storage convergence before final Node acceptance.
+After containment, maintenance entry reads the Longhorn Node again and compares the
+owned settings with the recorded before values. It uses this fresh resource version
+for the atomic update of both settings. Status updates between record construction
+and containment do not invalidate unchanged settings; conflicts during the update
+still fail closed. Recovery also uses the current resource version and reads back
+the result before final Node acceptance.
+
+Evacuation and recovery accept attached healthy volumes and detached unknown volumes
+only with the configured non-failed replica count. Evacuation additionally requires
+no remaining non-failed replica on the target. Command entrypoints run in subshells
+so failure cleanup retains its local Lease and temporary-file state until EXIT.
 
 The required recovery order is:
 

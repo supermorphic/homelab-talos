@@ -202,11 +202,9 @@ observe_node_reboot() {
 run_maintenance_enter_transaction() {
   local kubeconfig="$1" talosconfig="$2" node="$3" node_ip="$4"
   local holder="$5" record="$6" inventory_file="$7"
-  local longhorn_resource_version="${8:-}"
   repeat_pre_containment_safety "$kubeconfig" "$talosconfig" "$node" "$holder" || return 1
   persist_node_containment "$kubeconfig" "$node" "$record" || return 1
-  apply_longhorn_maintenance_state "$kubeconfig" "$node" "$record" \
-    "$longhorn_resource_version" || return 1
+  apply_longhorn_maintenance_state "$kubeconfig" "$node" "$record" || return 1
   capture_drain_inventory "$kubeconfig" "$node" "$inventory_file" || return 1
   perform_kubernetes_drain "$kubeconfig" "$node" || return 1
   verify_workload_replacements "$kubeconfig" "$node" "$inventory_file" || return 1
@@ -247,7 +245,7 @@ run_maintenance_exit_transaction() {
   remove_node_containment_and_uncordon "$kubeconfig" "$node" "$record" recovery-accepted || return 1
 }
 
-node_lifecycle_main() {
+node_lifecycle_main() (
   [[ "$#" -eq 4 ]] || {
     echo 'Usage: lifecycle.sh <maintenance-check|maintenance-enter|maintenance-exit|reboot> <node> <kubeconfig> <talosconfig>' >&2
     return 2
@@ -288,15 +286,13 @@ node_lifecycle_main() {
 
   case "$action" in
     maintenance-enter)
-      local longhorn_state longhorn_resource_version
+      local longhorn_state
       run_disruption_preflight "$kubeconfig" "$talosconfig" "$NODE_NAME" "$NODE_IP" "$inventory_file"
       require_exact_confirmation NODE_MAINTENANCE_CONFIRM "enter:${NODE_NAME}:${NODE_IP}"
       longhorn_state="$(read_longhorn_node "$kubeconfig" "$NODE_NAME")"
-      longhorn_resource_version="$(yq -r '.metadata.resourceVersion // ""' - <<<"$longhorn_state")"
-      [[ -n "$longhorn_resource_version" ]]
       record="$(build_maintenance_lifecycle_record_from_state "$longhorn_state")"
       run_maintenance_enter_transaction "$kubeconfig" "$talosconfig" "$NODE_NAME" \
-        "$NODE_IP" "$holder" "$record" "$inventory_file" "$longhorn_resource_version"
+        "$NODE_IP" "$holder" "$record" "$inventory_file"
       ;;
     reboot)
       run_disruption_preflight "$kubeconfig" "$talosconfig" "$NODE_NAME" "$NODE_IP" "$inventory_file"
@@ -327,7 +323,7 @@ node_lifecycle_main() {
   lease_acquired=false
   rm -rf -- "$temp_dir"
   trap - EXIT INT TERM
-}
+)
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   node_lifecycle_main "$@"

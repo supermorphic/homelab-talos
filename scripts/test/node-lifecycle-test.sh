@@ -37,6 +37,46 @@ assert_fails_with() {
     fail "$description: missing diagnostic '$expected' in: $output"
 }
 
+
+# Exercise the real entrypoint in a child shell so EXIT traps run after failure.
+cat >"$state_dir/cleanup-fixture.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source scripts/node/lifecycle.sh
+source scripts/node/resize-longhorn.sh
+resolve_node_target() { NODE_NAME=nuc1; NODE_IP=192.0.2.1; }
+require_operator_checkout() { :; }
+acquire_test_lease() { :; }
+start_test_lease_renewal() { :; }
+stop_test_lease_renewal() { echo stopped >> "$FIXTURE_LOG"; }
+release_test_lease() { echo released >> "$FIXTURE_LOG"; }
+assert_cluster_disruption_admissible() { :; }
+read_node_lifecycle_record() { echo '{"schemaVersion":1,"kind":"reboot"}'; }
+require_exact_confirmation() { :; }
+run_maintenance_exit_transaction() { return 23; }
+run_resize_longhorn_transaction() { return 23; }
+if [[ "$FIXTURE_ACTION" == resize ]]; then
+  cd "$FIXTURE_DIR"
+  resize_longhorn_main nuc1 "$FIXTURE_LOG" "$FIXTURE_LOG"
+else
+  node_lifecycle_main maintenance-exit nuc1 "$FIXTURE_LOG" "$FIXTURE_LOG"
+fi
+EOF
+mkdir -p "$state_dir/clusterconfig"
+: >"$state_dir/clusterconfig/nuc1.yaml"
+for fixture_action in lifecycle resize; do
+  : >"$state_dir/cleanup.log"
+  cleanup_status=0
+  FIXTURE_ACTION="$fixture_action" FIXTURE_DIR="$state_dir" FIXTURE_LOG="$state_dir/cleanup.log" \
+    bash "$state_dir/cleanup-fixture.sh" >"$state_dir/cleanup-output" 2>&1 || cleanup_status=$?
+  [[ "$cleanup_status" == 23 ]] || fail "$fixture_action cleanup lost the original failure status."
+  rg -q '^released$' "$state_dir/cleanup.log" || fail "$fixture_action cleanup did not release its Lease."
+  if rg -q 'unbound variable' "$state_dir/cleanup-output"; then
+    fail "$fixture_action cleanup used expired local variables."
+  fi
+done
+
+
 reboot_record='{"schemaVersion":1,"kind":"reboot"}'
 abrupt_record='{"schemaVersion":1,"kind":"abrupt-loss"}'
 maintenance_record='{
@@ -343,6 +383,7 @@ yq --null-input --output-format json '
   }
 ' >"$longhorn_state"
 longhorn_replace_count=0
+longhorn_write_conflict=false
 longhorn_kubectl() {
   local _kubeconfig="$1"
   shift
@@ -356,6 +397,7 @@ longhorn_kubectl() {
     replace)
       [[ "$1 $2" == '--filename -' ]] || return 2
       replacement="$(cat)"
+      [[ "$longhorn_write_conflict" == false ]] || return 1
       current_version="$(yq -r '.metadata.resourceVersion' "$longhorn_state")"
       [[ "$(yq -r '.metadata.resourceVersion' - <<<"$replacement")" == "$current_version" ]] || return 1
       NEXT_VERSION="$((current_version + 1))" \
@@ -369,24 +411,29 @@ longhorn_kubectl() {
 }
 
 captured_record="$(build_maintenance_lifecycle_record fake-kubeconfig nuc1)"
-captured_resource_version="$(yq -r '.metadata.resourceVersion' "$longhorn_state")"
+yq '.metadata.resourceVersion = "21" | .status.conditions = []' "$longhorn_state" >"$state_dir/longhorn-next.json"
+mv "$state_dir/longhorn-next.json" "$longhorn_state"
 [[ "$(yq -o=json -I=0 '.' - <<<"$captured_record")" == \
   "$(yq -o=json -I=0 '.' - <<<"$maintenance_record")" ]]
-apply_longhorn_maintenance_state fake-kubeconfig nuc1 "$captured_record" \
-  "$captured_resource_version"
+apply_longhorn_maintenance_state fake-kubeconfig nuc1 "$captured_record"
 [[ "$(yq -r '[.spec.allowScheduling, .spec.evictionRequested] | join(" ")' "$longhorn_state")" == 'false true' ]]
 restore_longhorn_maintenance_state fake-kubeconfig nuc1 "$captured_record"
 [[ "$(yq -r '[.spec.allowScheduling, .spec.evictionRequested] | join(" ")' "$longhorn_state")" == 'true false' ]]
 restored_replace_count="$longhorn_replace_count"
 restore_longhorn_maintenance_state fake-kubeconfig nuc1 "$captured_record"
 [[ "$longhorn_replace_count" == "$restored_replace_count" ]]
-assert_fails 'A stale Longhorn resourceVersion was accepted for maintenance entry.' \
-  apply_longhorn_maintenance_state fake-kubeconfig nuc1 "$captured_record" \
-    "$captured_resource_version"
+apply_longhorn_maintenance_state fake-kubeconfig nuc1 "$captured_record"
+restore_longhorn_maintenance_state fake-kubeconfig nuc1 "$captured_record"
+longhorn_write_conflict=true
+assert_fails 'A Longhorn write conflict did not stop maintenance entry.' \
+  apply_longhorn_maintenance_state fake-kubeconfig nuc1 "$captured_record"
+longhorn_write_conflict=false
 
 yq '.spec.allowScheduling = false | .spec.evictionRequested = false' \
   "$longhorn_state" >"$state_dir/longhorn-conflict.json"
 mv "$state_dir/longhorn-conflict.json" "$longhorn_state"
+assert_fails 'Changed Longhorn owned settings were overwritten during entry.' \
+  apply_longhorn_maintenance_state fake-kubeconfig nuc1 "$captured_record"
 restore_longhorn_maintenance_state fake-kubeconfig nuc1 "$captured_record"
 [[ "$(yq -r '[.spec.allowScheduling, .spec.evictionRequested] | join(" ")' "$longhorn_state")" == 'true false' ]]
 
@@ -420,7 +467,30 @@ longhorn_kubectl() {
   esac
 }
 verify_short_absence_longhorn_safety fake-kubeconfig nuc2
+recovery_kubectl() {
+  case "$*" in
+    'fake-kubeconfig --namespace longhorn-system get nodes.longhorn.io --output json')
+      printf '%s\n' '{"items":[{"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}'
+      ;;
+    'fake-kubeconfig --namespace longhorn-system get volumes.longhorn.io --output json')
+      printf '%s\n' "$short_absence_volumes" ;;
+    'fake-kubeconfig --namespace longhorn-system get replicas.longhorn.io --output json')
+      printf '%s\n' "$short_absence_replicas" ;;
+    *) return 2 ;;
+  esac
+}
+verify_longhorn_convergence fake-kubeconfig
+short_absence_volumes="$(yq '.items[0].status = {"state":"attached","robustness":"healthy"}' <<<"$short_absence_volumes")"
+verify_longhorn_convergence fake-kubeconfig
+short_absence_volumes="$(yq '.items[0].status = {"state":"detached","robustness":"unknown"}' <<<"$short_absence_volumes")"
+longhorn_evacuation_complete fake-kubeconfig nuc1
+assert_fails 'Evacuation accepted replicas still on the target.' \
+  longhorn_evacuation_complete fake-kubeconfig nuc2
 short_absence_replicas="$(yq 'del(.items[1])' <<<"$short_absence_replicas")"
+assert_fails 'Recovery accepted a detached volume with a missing replica.' \
+  verify_longhorn_convergence fake-kubeconfig
+assert_fails 'Evacuation accepted a detached volume with a missing replica.' \
+  longhorn_evacuation_complete fake-kubeconfig nuc1
 assert_fails 'A detached Longhorn volume with a missing replica was accepted.' \
   verify_short_absence_longhorn_safety fake-kubeconfig nuc2
 short_absence_replicas='{"items":[

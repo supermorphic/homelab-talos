@@ -18,7 +18,7 @@ run_resize_longhorn_transaction() {
   resize_just bootstrap _resize-longhorn-raw "$node" || return 1
 }
 
-resize_longhorn_main() {
+resize_longhorn_main() (
   [[ "$#" -eq 3 ]] || {
     echo 'Usage: resize-longhorn.sh <node> <kubeconfig> <talosconfig>' >&2
     return 2
@@ -60,7 +60,7 @@ resize_longhorn_main() {
   lease_acquired=false
   rm -rf -- "$temp_dir"
   trap - EXIT INT TERM
-}
+)
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   resize_longhorn_main "$@"

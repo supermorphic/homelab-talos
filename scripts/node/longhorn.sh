@@ -76,15 +76,9 @@ apply_longhorn_maintenance_state() {
   local kubeconfig="$1"
   local node="$2"
   local record="$3"
-  local expected_resource_version="${4:-}"
   local state current_allow current_eviction before_allow before_eviction replacement
   [[ "$(lifecycle_record_kind "$record")" == 'maintenance' ]] || return 1
   state="$(read_longhorn_node "$kubeconfig" "$node")" || return 1
-  if [[ -n "$expected_resource_version" &&
-    "$(yq -r '.metadata.resourceVersion // ""' - <<<"$state")" != "$expected_resource_version" ]]; then
-    echo "Longhorn node $node changed after its maintenance record was constructed." >&2
-    return 1
-  fi
   current_allow="$(yq -r '.spec.allowScheduling' - <<<"$state")"
   current_eviction="$(yq -r '.spec.evictionRequested' - <<<"$state")"
   before_allow="$(yq -r '.longhorn.allowScheduling.before' - <<<"$record")"
@@ -200,14 +194,17 @@ longhorn_evacuation_complete() {
   [[ -z "$remaining" ]] || return 1
   while IFS= read -r volume; do
     [[ -n "$volume" ]] || continue
-    [[ "$(VOLUME="$volume" yq -r '.items[] | select(.metadata.name == strenv(VOLUME)) | .status.robustness' - <<<"$volumes")" == 'healthy' ]] || return 1
+    case "$(VOLUME="$volume" yq -r '.items[] | select(.metadata.name == strenv(VOLUME)) | [.status.state, .status.robustness] | join(":")' - <<<"$volumes")" in
+      attached:healthy|detached:unknown) ;;
+      *) return 1 ;;
+    esac
     desired="$(VOLUME="$volume" yq -r '.items[] | select(.metadata.name == strenv(VOLUME)) | .spec.numberOfReplicas' - <<<"$volumes")"
     actual="$(VOLUME="$volume" yq -r '
       [.items[] |
         select(.spec.volumeName == strenv(VOLUME)) |
         select(.spec.failedAt == null or .spec.failedAt == "")] | length
     ' <<<"$replicas")"
-    [[ "$actual" -ge "$desired" ]] || return 1
+    [[ "$desired" =~ ^[1-9][0-9]*$ && "$actual" -ge "$desired" ]] || return 1
   done < <(yq -r '.items[].metadata.name' - <<<"$volumes")
 }
 
