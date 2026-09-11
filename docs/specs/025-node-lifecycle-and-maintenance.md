@@ -242,11 +242,15 @@ An established-node disruption is admitted only when:
 Remaining-node capacity is concrete admission evidence. Each survivor must report
 `Ready=True`, `MemoryPressure=False`, `DiskPressure=False`, `PIDPressure=False`, and no
 active `NetworkUnavailable` condition. For workloads expected to fail over, preflight
-checks eligible surviving placement after node selectors, affinity, taints, storage
-topology, and extended-resource requirements. It compares requested CPU, memory,
+checks eligible surviving placement after node selectors, affinity, taints, topology
+spread, and extended-resource requirements. It compares requested CPU, memory,
 ephemeral storage, pod slots, and extended resources with surviving allocatable capacity
-minus requests from existing non-terminal pods. This conservative calculation does not
-replace actual scheduler recovery as the post-disruption oracle.
+minus requests from existing non-terminal pods. Required pod affinity, required pod
+anti-affinity, and hard topology-spread constraints use the current survivor domains and
+the placements selected for other displaced pods. Selector forms that need namespace or
+scheduler state unavailable to this check fail closed. This conservative calculation
+does not replace actual scheduler recovery as the post-disruption oracle.
+Longhorn checks provide the separate storage-placement evidence.
 
 While one node has persistent lifecycle state, only `maintenance-exit` for that same
 target can begin. Another reboot, maintenance entry, resize, join retry, or disruptive
@@ -280,6 +284,12 @@ The drain does not use `--disable-eviction`, `--force`, a PDB bypass, or direct 
 as fallback. It permits normal deletion of declared `emptyDir` data after reporting the
 inventory because that storage is node-local and cannot survive reboot or maintenance.
 A workload that relies on `emptyDir` for durable state violates its deployment contract.
+
+The observational preflight confirms that Kubernetes core `/api/v1` discovery advertises
+`pods/eviction`. It uses `kubectl drain --dry-run=client`, so scoped credentials can
+exercise pod discovery and drain classification without node-patch or eviction authority.
+The operator-run transaction repeats API discovery and performs the real eviction only
+after it has persisted lifecycle containment.
 
 For each controller-owned workload that preflight classifies as expected to continue
 during the target's absence, drain completion requires an actual replacement Pod on an
@@ -329,6 +339,10 @@ For every affected volume, preflight requires:
   automatically evacuating all target replicas merely because the Node is cordoned;
 - successful Kubernetes eviction without bypassing Longhorn PDB protection; and
 - safe detachment from the target or attachment on the rescheduled workload node.
+
+Longhorn reports a detached volume with `robustness=unknown`. Preflight accepts that
+combination only when every desired non-failed replica exists and at least one is stored
+away from the target. Attached volumes must report `healthy`.
 
 Reusable target replicas remain in place for Longhorn's short-outage recovery behavior.
 Post-reboot acceptance verifies their reuse or safe convergence.
@@ -729,6 +743,7 @@ cluster verify
 The observer receives only missing `get`, `list`, and `watch` access for:
 
 - the shared Lease;
+- PersistentVolumes, for PVC and PV identity checks;
 - Longhorn Replicas; and
 - Longhorn Settings.
 

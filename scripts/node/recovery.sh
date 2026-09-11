@@ -72,16 +72,26 @@ verify_etcd_recovery() {
   local members status alarms names rows leaders
   members="$(recovery_talosctl etcd members --nodes "$NODE_CLUSTER_ENDPOINTS" \
     --endpoints "$NODE_CLUSTER_ENDPOINTS" --talosconfig "$talosconfig")" || return 1
-  names="$(awk 'NR > 1 && NF {print $3}' <<<"$members" | sort)"
-  [[ "$names" == $'nuc1\nnuc2\nnuc3' ]] || return 1
+  names="$(awk 'NR > 1 && NF {print $3}' <<<"$members" | sort -u)"
+  [[ "$names" == $'nuc1\nnuc2\nnuc3' ]] || {
+    printf 'Expected etcd members nuc1, nuc2, and nuc3; found:\n%s\n' \
+      "${names:-none}" >&2
+    return 1
+  }
   status="$(recovery_talosctl etcd status --nodes "$NODE_CLUSTER_ENDPOINTS" \
     --endpoints "$NODE_CLUSTER_ENDPOINTS" --talosconfig "$talosconfig")" || return 1
   rows="$(awk 'NR > 1 && NF {count++} END {print count + 0}' <<<"$status")"
   leaders="$(awk 'BEGIN {FS="[[:space:]][[:space:]]+"} NR > 1 && NF {print $5}' <<<"$status" | sort -u | awk 'NF {count++} END {print count + 0}')"
-  [[ "$rows" == '3' && "$leaders" == '1' ]] || return 1
+  [[ "$rows" == '3' && "$leaders" == '1' ]] || {
+    echo "Expected three etcd status rows with one leader; found $rows rows and $leaders leaders." >&2
+    return 1
+  }
   alarms="$(recovery_talosctl etcd alarm list --nodes "$NODE_CLUSTER_ENDPOINTS" \
     --endpoints "$NODE_CLUSTER_ENDPOINTS" --talosconfig "$talosconfig")" || return 1
-  [[ "$(awk 'NR > 1 && NF {count++} END {print count + 0}' <<<"$alarms")" == '0' ]] || return 1
+  [[ "$(awk 'NR > 1 && NF {count++} END {print count + 0}' <<<"$alarms")" == '0' ]] || {
+    echo 'Active etcd alarms block node lifecycle operations.' >&2
+    return 1
+  }
 }
 
 verify_cilium_recovery() {

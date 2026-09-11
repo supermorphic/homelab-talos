@@ -83,6 +83,7 @@ assert_can_i() {
 # proves the declared RBAC rule semantics, including all Flux source/notification kinds.
 cluster_read_resources=(
   nodes
+  persistentvolumes
   customresourcedefinitions.apiextensions.k8s.io
   apiservices.apiregistration.k8s.io
   clusterissuers.cert-manager.io

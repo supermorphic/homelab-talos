@@ -25,6 +25,18 @@ assert_fails() {
   fi
 }
 
+assert_fails_with() {
+  local description="$1"
+  local expected="$2"
+  shift 2
+  local output
+  if output="$("$@" 2>&1)"; then
+    fail "$description"
+  fi
+  rg -Fq -- "$expected" <<<"$output" ||
+    fail "$description: missing diagnostic '$expected' in: $output"
+}
+
 reboot_record='{"schemaVersion":1,"kind":"reboot"}'
 abrupt_record='{"schemaVersion":1,"kind":"abrupt-loss"}'
 maintenance_record='{
@@ -179,6 +191,88 @@ assert_fails 'The linked worktree was accepted as an operator checkout.' \
   run_operator_checkout_fixture linked
 run_operator_checkout_fixture standalone
 
+health_nodes_fixture=''
+node_kubectl() {
+  local _kubeconfig="$1"
+  shift
+  [[ "$*" == 'get nodes --output json' ]] || return 2
+  printf '%s\n' "$health_nodes_fixture"
+}
+
+health_nodes_json() {
+  local nuc1_memory_pressure="$1"
+  NUC1_MEMORY_PRESSURE="$nuc1_memory_pressure" yq --null-input --output-format json '
+    {
+      "items": ["nuc1", "nuc2", "nuc3"] | map({
+        "metadata": {"name": .},
+        "spec": {"unschedulable": false},
+        "status": {"conditions": [
+          {"type": "Ready", "status": "True"},
+          {"type": "MemoryPressure", "status": "False"},
+          {"type": "DiskPressure", "status": "False"},
+          {"type": "PIDPressure", "status": "False"}
+        ]}
+      })
+    } |
+    .items[0].status.conditions[1].status = strenv(NUC1_MEMORY_PRESSURE)
+  '
+}
+
+health_nodes_fixture="$(health_nodes_json False)"
+verify_expected_node_health fake-kubeconfig
+health_nodes_fixture="$(health_nodes_json True)"
+assert_fails 'Memory pressure did not block node maintenance.' \
+  verify_expected_node_health fake-kubeconfig
+health_nodes_fixture="$(health_nodes_json False | \
+  yq 'del(.items[0].status.conditions[] | select(.type == "PIDPressure"))')"
+assert_fails 'A missing pressure condition did not block node maintenance.' \
+  verify_expected_node_health fake-kubeconfig
+
+etcd_members_fixture='NODE ID HOSTNAME PEER CLIENT LEARNER
+192.0.2.10 member-2 nuc2 peer-2 client-2 false
+192.0.2.10 member-3 nuc3 peer-3 client-3 false
+192.0.2.10 member-1 nuc1 peer-1 client-1 false
+192.0.2.11 member-2 nuc2 peer-2 client-2 false
+192.0.2.11 member-3 nuc3 peer-3 client-3 false
+192.0.2.11 member-1 nuc1 peer-1 client-1 false
+192.0.2.12 member-2 nuc2 peer-2 client-2 false
+192.0.2.12 member-3 nuc3 peer-3 client-3 false
+192.0.2.12 member-1 nuc1 peer-1 client-1 false'
+healthy_etcd_members_fixture="$etcd_members_fixture"
+etcd_status_fixture='NODE  MEMBER  DB SIZE  IN USE  LEADER  RAFT INDEX
+192.0.2.10  member-1  1 MB  1 MB  member-3  10
+192.0.2.11  member-2  1 MB  1 MB  member-3  10
+192.0.2.12  member-3  1 MB  1 MB  member-3  10'
+healthy_etcd_status_fixture="$etcd_status_fixture"
+etcd_alarms_fixture=''
+recovery_talosctl() {
+  case "$1 $2" in
+    'etcd members') printf '%s\n' "$etcd_members_fixture" ;;
+    'etcd status') printf '%s\n' "$etcd_status_fixture" ;;
+    'etcd alarm')
+      [[ "$3" == 'list' ]] || return 2
+      printf '%s' "$etcd_alarms_fixture"
+      ;;
+    *) return 2 ;;
+  esac
+}
+
+verify_etcd_recovery fake-talosconfig
+etcd_members_fixture="$(printf '%s\n' "$etcd_members_fixture" | awk '$3 != "nuc3"')"
+assert_fails_with 'A missing etcd member did not block node maintenance.' \
+  'Expected etcd members nuc1, nuc2, and nuc3' \
+  verify_etcd_recovery fake-talosconfig
+etcd_members_fixture="$healthy_etcd_members_fixture"
+etcd_status_fixture="$(printf '%s\n' "$etcd_status_fixture" | awk '$2 != "member-3"')"
+assert_fails_with 'A missing etcd status row did not block node maintenance.' \
+  'Expected three etcd status rows with one leader' \
+  verify_etcd_recovery fake-talosconfig
+etcd_status_fixture="$healthy_etcd_status_fixture"
+etcd_alarms_fixture=$'NODE  MEMBER  ALARM\n192.0.2.10  member-1  NOSPACE\n'
+assert_fails_with 'An active etcd alarm did not block node maintenance.' \
+  'Active etcd alarms block node lifecycle operations' \
+  verify_etcd_recovery fake-talosconfig
+
 node_state="$state_dir/node-state.json"
 yq --null-input --output-format json '
   {
@@ -304,6 +398,39 @@ assert_fails 'Conflicting live Longhorn state was overwritten.' \
   restore_longhorn_maintenance_state fake-kubeconfig nuc1 "$captured_record"
 [[ "$longhorn_replace_count" == "$conflict_replace_count" ]]
 
+short_absence_volumes='{"items":[{
+  "metadata":{"name":"detached-volume"},
+  "spec":{"numberOfReplicas":2},
+  "status":{"state":"detached","robustness":"unknown"}
+}]}'
+short_absence_replicas='{"items":[
+  {"metadata":{"name":"replica-nuc2"},"spec":{"nodeID":"nuc2","volumeName":"detached-volume","failedAt":""}},
+  {"metadata":{"name":"replica-nuc3"},"spec":{"nodeID":"nuc3","volumeName":"detached-volume","failedAt":""}}
+]}'
+longhorn_kubectl() {
+  local _kubeconfig="$1"
+  shift
+  case "$*" in
+    'get settings.longhorn.io node-drain-policy --output jsonpath={.value}')
+      printf '%s\n' 'block-if-contains-last-replica'
+      ;;
+    'get volumes.longhorn.io --output json') printf '%s\n' "$short_absence_volumes" ;;
+    'get replicas.longhorn.io --output json') printf '%s\n' "$short_absence_replicas" ;;
+    *) return 2 ;;
+  esac
+}
+verify_short_absence_longhorn_safety fake-kubeconfig nuc2
+short_absence_replicas="$(yq 'del(.items[1])' <<<"$short_absence_replicas")"
+assert_fails 'A detached Longhorn volume with a missing replica was accepted.' \
+  verify_short_absence_longhorn_safety fake-kubeconfig nuc2
+short_absence_replicas='{"items":[
+  {"metadata":{"name":"replica-nuc2"},"spec":{"nodeID":"nuc2","volumeName":"detached-volume","failedAt":""}},
+  {"metadata":{"name":"replica-nuc3"},"spec":{"nodeID":"nuc3","volumeName":"detached-volume","failedAt":""}}
+]}'
+short_absence_volumes="$(yq '.items[0].spec.numberOfReplicas = null' <<<"$short_absence_volumes")"
+assert_fails 'A detached Longhorn volume without a valid replica target was accepted.' \
+  verify_short_absence_longhorn_safety fake-kubeconfig nuc2
+
 controlled_pods='{
   "items": [
     {
@@ -383,7 +510,7 @@ drain_kubectl() {
   local _kubeconfig="$1"
   shift
   printf '%s\n' "$*" >>"$drain_calls"
-  if [[ "$*" == 'get --raw /apis/policy/v1' ]]; then
+  if [[ "$*" == 'get --raw /api/v1' ]]; then
     if [[ "$eviction_available" == 'true' ]]; then
       printf '%s\n' '{"resources":[{"name":"pods/eviction","kind":"Eviction"}]}'
     else
@@ -391,6 +518,23 @@ drain_kubectl() {
     fi
   fi
 }
+
+preflight_kubernetes_drain fake-kubeconfig nuc1
+preflight_drain_command="$(tail -1 "$drain_calls")"
+rg -q '^get --raw /api/v1$' "$drain_calls"
+if rg -q '^get --raw /apis/policy/v1$' "$drain_calls"; then
+  fail 'Pod eviction discovery used the policy API group instead of core/v1.'
+fi
+rg -q -- '--dry-run=client' <<<"$preflight_drain_command"
+if rg -q -- '--dry-run=server' <<<"$preflight_drain_command"; then
+  fail "Scoped maintenance preflight requested mutation authority: $preflight_drain_command"
+fi
+
+eviction_available=false
+assert_fails_with 'Preflight ran without the core/v1 pods/eviction resource.' \
+  'Kubernetes core/v1 does not advertise the pods/eviction resource' \
+  preflight_kubernetes_drain fake-kubeconfig nuc1
+eviction_available=true
 
 perform_kubernetes_drain fake-kubeconfig nuc1
 drain_command="$(tail -1 "$drain_calls")"
@@ -499,18 +643,58 @@ capacity_nodes="$state_dir/capacity-nodes.json"
 capacity_pods="$state_dir/capacity-pods.json"
 cat >"$capacity_nodes" <<'EOF'
 {"items":[
-  {"metadata":{"name":"nuc1","labels":{"kubernetes.io/hostname":"nuc1"}},"status":{"allocatable":{"cpu":"4000m","memory":"8Gi","pods":"110","gpu.intel.com/i915":"1"}}},
-  {"metadata":{"name":"nuc2","labels":{"kubernetes.io/hostname":"nuc2"}},"status":{"allocatable":{"cpu":"4000m","memory":"8Gi","pods":"110","gpu.intel.com/i915":"1"}}},
-  {"metadata":{"name":"nuc3","labels":{"kubernetes.io/hostname":"nuc3"}},"status":{"allocatable":{"cpu":"4000m","memory":"8Gi","pods":"110","gpu.intel.com/i915":"1"}}}
+  {"metadata":{"name":"nuc1","labels":{"kubernetes.io/hostname":"nuc1","fixture/placement":"nuc1"}},"status":{"allocatable":{"cpu":"4000m","memory":"8Gi","pods":"110","gpu.intel.com/i915":"1"}}},
+  {"metadata":{"name":"nuc2","labels":{"kubernetes.io/hostname":"nuc2","fixture/placement":"nuc2"}},"status":{"allocatable":{"cpu":"4000m","memory":"8Gi","pods":"110","gpu.intel.com/i915":"1"}}},
+  {"metadata":{"name":"nuc3","labels":{"kubernetes.io/hostname":"nuc3","fixture/placement":"nuc3"}},"status":{"allocatable":{"cpu":"4000m","memory":"8Gi","pods":"110","gpu.intel.com/i915":"1"}}}
 ]}
 EOF
 cat >"$capacity_pods" <<'EOF'
 {"items":[
   {"metadata":{"namespace":"media","name":"plex","ownerReferences":[{"kind":"ReplicaSet","controller":true}]},"spec":{"nodeName":"nuc1","containers":[{"resources":{"requests":{"cpu":"100m","memory":"512Mi","gpu.intel.com/i915":"1"}}}]},"status":{"phase":"Running"}},
+  {"metadata":{"namespace":"tailscale","name":"router-0","labels":{"app":"router"},"ownerReferences":[{"kind":"StatefulSet","controller":true}]},"spec":{"nodeName":"nuc2","containers":[{"resources":{"requests":{"cpu":"1m","memory":"1Mi"}}}],"topologySpreadConstraints":[{"maxSkew":1,"topologyKey":"kubernetes.io/hostname","whenUnsatisfiable":"DoNotSchedule","labelSelector":{"matchLabels":{"app":"router"}}}]},"status":{"phase":"Running"}},
+  {"metadata":{"namespace":"tailscale","name":"router-1","labels":{"app":"router"},"ownerReferences":[{"kind":"StatefulSet","controller":true}]},"spec":{"nodeName":"nuc1","containers":[{"resources":{"requests":{"cpu":"1m","memory":"1Mi"}}}],"topologySpreadConstraints":[{"maxSkew":1,"topologyKey":"kubernetes.io/hostname","whenUnsatisfiable":"DoNotSchedule","labelSelector":{"matchLabels":{"app":"router"}}}]},"status":{"phase":"Running"}},
+  {"metadata":{"namespace":"kube-system","name":"cilium-nuc2","labels":{"k8s-app":"cilium"},"ownerReferences":[{"kind":"DaemonSet","controller":true}]},"spec":{"nodeName":"nuc2","containers":[{"resources":{"requests":{"cpu":"100m","memory":"100Mi"}}}]},"status":{"phase":"Running"}},
+  {"metadata":{"namespace":"kube-system","name":"cilium-nuc3","labels":{"k8s-app":"cilium"},"ownerReferences":[{"kind":"DaemonSet","controller":true}]},"spec":{"nodeName":"nuc3","containers":[{"resources":{"requests":{"cpu":"100m","memory":"100Mi"}}}]},"status":{"phase":"Running"}},
+  {"metadata":{"namespace":"kube-system","name":"operator-0","labels":{"app":"operator"},"ownerReferences":[{"kind":"ReplicaSet","controller":true}]},"spec":{"nodeName":"nuc2","containers":[{"resources":{"requests":{"cpu":"10m","memory":"10Mi"}}}]},"status":{"phase":"Running"}},
+  {"metadata":{"namespace":"kube-system","name":"operator-1","labels":{"app":"operator"},"ownerReferences":[{"kind":"ReplicaSet","controller":true}]},"spec":{"nodeName":"nuc1","containers":[{"resources":{"requests":{"cpu":"10m","memory":"10Mi"}}}],"affinity":{"podAntiAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":[{"labelSelector":{"matchLabels":{"app":"operator"}},"topologyKey":"kubernetes.io/hostname"}]}}},"status":{"phase":"Running"}},
+  {"metadata":{"namespace":"kube-system","name":"relay","labels":{"app":"relay"},"ownerReferences":[{"kind":"ReplicaSet","controller":true}]},"spec":{"nodeName":"nuc1","containers":[{"resources":{"requests":{"cpu":"10m","memory":"10Mi"}}}],"affinity":{"podAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":[{"labelSelector":{"matchLabels":{"k8s-app":"cilium"}},"topologyKey":"kubernetes.io/hostname"}]}}},"status":{"phase":"Running"}},
   {"metadata":{"namespace":"default","name":"existing","ownerReferences":[{"kind":"ReplicaSet","controller":true}]},"spec":{"nodeName":"nuc2","containers":[{"resources":{"requests":{"cpu":"500m","memory":"1Gi"}}}]},"status":{"phase":"Running"}}
 ]}
 EOF
 mise exec -- python scripts/node/capacity.py nuc1 "$capacity_nodes" "$capacity_pods" >/dev/null
+yq '.items += [
+  {"metadata":{"namespace":"tailscale","name":"router-extra-1","labels":{"app":"router"},"ownerReferences":[{"kind":"StatefulSet","controller":true}]},"spec":{"nodeName":"nuc2","containers":[{"resources":{"requests":{"cpu":"1m","memory":"1Mi"}}}]},"status":{"phase":"Running"}},
+  {"metadata":{"namespace":"tailscale","name":"router-extra-2","labels":{"app":"router"},"ownerReferences":[{"kind":"StatefulSet","controller":true}]},"spec":{"nodeName":"nuc2","containers":[{"resources":{"requests":{"cpu":"1m","memory":"1Mi"}}}]},"status":{"phase":"Running"}}
+]' "$capacity_pods" >"$state_dir/capacity-existing-skew.json"
+mise exec -- python scripts/node/capacity.py nuc1 \
+  "$capacity_nodes" "$state_dir/capacity-existing-skew.json" >/dev/null
+yq 'del(.items[] | select(.metadata.labels."k8s-app" == "cilium"))' \
+  "$capacity_pods" >"$state_dir/capacity-affinity-blocked.json"
+assert_fails 'Unsatisfied required pod affinity was accepted.' \
+  mise exec -- python scripts/node/capacity.py nuc1 \
+    "$capacity_nodes" "$state_dir/capacity-affinity-blocked.json"
+yq '.items += [{"metadata":{"namespace":"kube-system","name":"operator-extra","labels":{"app":"operator"},"ownerReferences":[{"kind":"ReplicaSet","controller":true}]},"spec":{"nodeName":"nuc3","containers":[{"resources":{"requests":{"cpu":"10m","memory":"10Mi"}}}]},"status":{"phase":"Running"}}]' \
+  "$capacity_pods" >"$state_dir/capacity-anti-affinity-blocked.json"
+assert_fails 'Unsatisfied required pod anti-affinity was accepted.' \
+  mise exec -- python scripts/node/capacity.py nuc1 \
+    "$capacity_nodes" "$state_dir/capacity-anti-affinity-blocked.json"
+yq '(.items[] | select(.metadata.name == "router-1") | .spec.nodeSelector) = {"fixture/placement":"nuc2"} |
+  (.items[] | select(.metadata.name == "router-1") | .spec.topologySpreadConstraints[0].nodeAffinityPolicy) = "Ignore"' \
+  "$capacity_pods" >"$state_dir/capacity-spread-blocked.json"
+assert_fails 'Unsatisfied hard topology spread was accepted.' \
+  mise exec -- python scripts/node/capacity.py nuc1 \
+    "$capacity_nodes" "$state_dir/capacity-spread-blocked.json"
+yq '(.items[] | select(.metadata.name == "nuc2") | .status.allocatable."gpu.intel.com/i915") = "0"' \
+  "$capacity_nodes" >"$state_dir/capacity-existing-anti-affinity-nodes.json"
+yq '.items += [{
+  "metadata":{"namespace":"media","name":"existing-guard","labels":{"app":"guard"},"ownerReferences":[{"kind":"ReplicaSet","controller":true}]},
+  "spec":{"nodeName":"nuc3","containers":[{"resources":{"requests":{"cpu":"1m","memory":"1Mi"}}}],"affinity":{"podAntiAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":[{"labelSelector":{"matchLabels":{}},"namespaces":["media"],"topologyKey":"kubernetes.io/hostname"}]}}},
+  "status":{"phase":"Running"}
+}]' "$capacity_pods" >"$state_dir/capacity-existing-anti-affinity-pods.json"
+assert_fails 'Required anti-affinity declared by an existing Pod was accepted.' \
+  mise exec -- python scripts/node/capacity.py nuc1 \
+    "$state_dir/capacity-existing-anti-affinity-nodes.json" \
+    "$state_dir/capacity-existing-anti-affinity-pods.json"
 yq '(.items[] | select(.metadata.name != "nuc1") | .status.allocatable."gpu.intel.com/i915") = "0"' \
   "$capacity_nodes" >"$state_dir/capacity-blocked.json"
 assert_fails 'Insufficient extended-resource headroom was accepted.' \

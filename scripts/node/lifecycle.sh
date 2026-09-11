@@ -35,9 +35,13 @@ verify_expected_node_health() {
   pressures="$(yq -r '
     .items[] as $node |
     ["MemoryPressure", "DiskPressure", "PIDPressure"][] as $type |
-    ([$node.status.conditions[]? | select(.type == $type) | .status][0] // "Missing") as $status |
-    select($status != "False") |
-    $node.metadata.name + " " + $type + "=" + $status
+    {
+      "node": $node.metadata.name,
+      "type": $type,
+      "status": ([$node.status.conditions[]? | select(.type == $type) | .status][0] // "Missing")
+    } |
+    select(.status != "False") |
+    .node + " " + .type + "=" + .status
   ' <<<"$nodes_json")"
   [[ -z "$pressures" ]] || {
     printf 'Node pressure blocks disruption:\n%s\n' "$pressures" >&2
@@ -66,12 +70,18 @@ preflight_kubernetes_drain() {
   local kubeconfig="$1"
   local node="$2"
   local discovery
-  discovery="$(drain_kubectl "$kubeconfig" get --raw /apis/policy/v1)" || return 1
-  [[ "$(yq -r '[.resources[]? | select(.name == "pods/eviction" and .kind == "Eviction")] | length' - <<<"$discovery")" -eq 1 ]] || return 1
+  discovery="$(drain_kubectl "$kubeconfig" get --raw /api/v1)" || {
+    echo 'Cannot read Kubernetes core/v1 API discovery.' >&2
+    return 1
+  }
+  [[ "$(yq -r '[.resources[]? | select(.name == "pods/eviction" and .kind == "Eviction")] | length' - <<<"$discovery")" -eq 1 ]] || {
+    echo 'Kubernetes core/v1 does not advertise the pods/eviction resource.' >&2
+    return 1
+  }
   drain_kubectl "$kubeconfig" drain "$node" \
     --ignore-daemonsets \
     --delete-emptydir-data \
-    --dry-run=server \
+    --dry-run=client \
     --timeout="${NODE_DRAIN_PREFLIGHT_TIMEOUT:-2m}"
 }
 

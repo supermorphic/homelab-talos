@@ -1,10 +1,8 @@
-#!/usr/bin/env python3
 """Conservative survivor placement and request-headroom check for node lifecycle."""
 
 from __future__ import annotations
 
 import json
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -75,9 +73,7 @@ def pod_requests(pod: dict[str, Any]) -> dict[str, int]:
         init_max = max_resources(init_max, request_map(container))
     total = max_resources(regular, init_max)
     overhead = pod.get("spec", {}).get("overhead", {})
-    return add_resources(
-        total, {name: quantity(value, name) for name, value in overhead.items()}
-    )
+    return add_resources(total, {name: quantity(value, name) for name, value in overhead.items()})
 
 
 def controlled_kind(pod: dict[str, Any]) -> str:
@@ -125,14 +121,8 @@ def expression_matches(expression: dict[str, Any], labels: dict[str, str]) -> bo
     return False
 
 
-def affinity_matches(pod: dict[str, Any], node: dict[str, Any]) -> bool:
+def node_affinity_matches(pod: dict[str, Any], node: dict[str, Any]) -> bool:
     affinity = pod.get("spec", {}).get("affinity", {})
-    if affinity.get("podAffinity", {}).get("requiredDuringSchedulingIgnoredDuringExecution"):
-        raise CapacityError("required pod affinity needs scheduler evidence")
-    if affinity.get("podAntiAffinity", {}).get(
-        "requiredDuringSchedulingIgnoredDuringExecution"
-    ):
-        raise CapacityError("required pod anti-affinity needs scheduler evidence")
     terms = (
         affinity.get("nodeAffinity", {})
         .get("requiredDuringSchedulingIgnoredDuringExecution", {})
@@ -152,23 +142,209 @@ def affinity_matches(pod: dict[str, Any], node: dict[str, Any]) -> bool:
     return False
 
 
-def eligible(pod: dict[str, Any], node: dict[str, Any]) -> bool:
+def node_selector_matches(pod: dict[str, Any], node: dict[str, Any]) -> bool:
     labels = node.get("metadata", {}).get("labels", {})
-    for key, value in pod.get("spec", {}).get("nodeSelector", {}).items():
-        if labels.get(key) != value:
-            return False
-    if any(
-        constraint.get("whenUnsatisfiable") == "DoNotSchedule"
-        for constraint in pod.get("spec", {}).get("topologySpreadConstraints", [])
-    ):
-        raise CapacityError("hard topology spread needs scheduler evidence")
+    return all(
+        labels.get(key) == value
+        for key, value in pod.get("spec", {}).get("nodeSelector", {}).items()
+    )
+
+
+def taints_allow(pod: dict[str, Any], node: dict[str, Any]) -> bool:
     tolerations = pod.get("spec", {}).get("tolerations", [])
     for taint in node.get("spec", {}).get("taints", []):
         if taint.get("effect") in ("NoSchedule", "NoExecute") and not tolerates(
             taint, tolerations
         ):
             return False
-    return affinity_matches(pod, node)
+    return True
+
+
+def base_eligible(pod: dict[str, Any], node: dict[str, Any]) -> bool:
+    return (
+        node_selector_matches(pod, node)
+        and node_affinity_matches(pod, node)
+        and taints_allow(pod, node)
+    )
+
+
+def selector_matches(selector: dict[str, Any], labels: dict[str, str]) -> bool:
+    if any(labels.get(key) != value for key, value in selector.get("matchLabels", {}).items()):
+        return False
+    return all(
+        expression_matches(expression, labels)
+        for expression in selector.get("matchExpressions", [])
+    )
+
+
+def term_namespaces(term: dict[str, Any], pod: dict[str, Any]) -> set[str]:
+    if term.get("namespaceSelector") is not None:
+        raise CapacityError("affinity namespaceSelector needs scheduler evidence")
+    namespaces = term.get("namespaces", [])
+    if namespaces:
+        return {str(namespace) for namespace in namespaces}
+    return {str(pod.get("metadata", {}).get("namespace", ""))}
+
+
+def affinity_term_matches(
+    term: dict[str, Any],
+    pod: dict[str, Any],
+    candidate: str,
+    survivors: dict[str, dict[str, Any]],
+    pods: dict[str, Any],
+    placements: dict[int, str],
+) -> bool:
+    if term.get("matchLabelKeys") or term.get("mismatchLabelKeys"):
+        raise CapacityError("affinity matchLabelKeys needs scheduler evidence")
+    topology_key = term.get("topologyKey", "")
+    candidate_domain = survivors[candidate].get("metadata", {}).get("labels", {}).get(topology_key)
+    if not topology_key or candidate_domain is None:
+        return False
+    namespaces = term_namespaces(term, pod)
+    selector = term.get("labelSelector", {})
+    for existing in pods.get("items", []):
+        if existing.get("metadata", {}).get("namespace", "") not in namespaces:
+            continue
+        if existing.get("status", {}).get("phase") in ("Succeeded", "Failed"):
+            continue
+        if not selector_matches(selector, existing.get("metadata", {}).get("labels", {})):
+            continue
+        node_name = placements.get(id(existing), existing.get("spec", {}).get("nodeName", ""))
+        if node_name not in survivors:
+            continue
+        domain = survivors[node_name].get("metadata", {}).get("labels", {}).get(topology_key)
+        if domain == candidate_domain:
+            return True
+    return False
+
+
+def interpod_affinity_allows(
+    pod: dict[str, Any],
+    candidate: str,
+    survivors: dict[str, dict[str, Any]],
+    pods: dict[str, Any],
+    placements: dict[int, str],
+) -> bool:
+    affinity = pod.get("spec", {}).get("affinity", {})
+    required_affinity = affinity.get("podAffinity", {}).get(
+        "requiredDuringSchedulingIgnoredDuringExecution", []
+    )
+    if not all(
+        affinity_term_matches(term, pod, candidate, survivors, pods, placements)
+        for term in required_affinity
+    ):
+        return False
+    required_anti_affinity = affinity.get("podAntiAffinity", {}).get(
+        "requiredDuringSchedulingIgnoredDuringExecution", []
+    )
+    if any(
+        affinity_term_matches(term, pod, candidate, survivors, pods, placements)
+        for term in required_anti_affinity
+    ):
+        return False
+
+    incoming_labels = pod.get("metadata", {}).get("labels", {})
+    incoming_namespace = str(pod.get("metadata", {}).get("namespace", ""))
+    for existing in pods.get("items", []):
+        if existing.get("status", {}).get("phase") in ("Succeeded", "Failed"):
+            continue
+        existing_node = placements.get(id(existing), existing.get("spec", {}).get("nodeName", ""))
+        if existing_node not in survivors:
+            continue
+        terms = (
+            existing.get("spec", {})
+            .get("affinity", {})
+            .get("podAntiAffinity", {})
+            .get("requiredDuringSchedulingIgnoredDuringExecution", [])
+        )
+        for term in terms:
+            if term.get("matchLabelKeys") or term.get("mismatchLabelKeys"):
+                raise CapacityError("affinity matchLabelKeys needs scheduler evidence")
+            if incoming_namespace not in term_namespaces(term, existing):
+                continue
+            if not selector_matches(term.get("labelSelector", {}), incoming_labels):
+                continue
+            topology_key = term.get("topologyKey", "")
+            candidate_domain = (
+                survivors[candidate].get("metadata", {}).get("labels", {}).get(topology_key)
+            )
+            existing_domain = (
+                survivors[existing_node].get("metadata", {}).get("labels", {}).get(topology_key)
+            )
+            if (
+                topology_key
+                and candidate_domain is not None
+                and candidate_domain == existing_domain
+            ):
+                return False
+    return True
+
+
+def topology_spread_allows(
+    pod: dict[str, Any],
+    candidate: str,
+    survivors: dict[str, dict[str, Any]],
+    pods: dict[str, Any],
+    placements: dict[int, str],
+) -> bool:
+    for constraint in pod.get("spec", {}).get("topologySpreadConstraints", []):
+        if constraint.get("whenUnsatisfiable") != "DoNotSchedule":
+            continue
+        if constraint.get("matchLabelKeys"):
+            raise CapacityError("topology spread matchLabelKeys needs scheduler evidence")
+        affinity_policy = constraint.get("nodeAffinityPolicy", "Honor")
+        taints_policy = constraint.get("nodeTaintsPolicy", "Ignore")
+        if affinity_policy not in ("Honor", "Ignore"):
+            raise CapacityError("invalid topology spread nodeAffinityPolicy")
+        if taints_policy not in ("Honor", "Ignore"):
+            raise CapacityError("invalid topology spread nodeTaintsPolicy")
+        topology_key = constraint.get("topologyKey", "")
+        max_skew = constraint.get("maxSkew")
+        if not topology_key or not isinstance(max_skew, int) or max_skew < 1:
+            raise CapacityError("invalid hard topology spread constraint")
+        eligible_nodes = [
+            node
+            for node in survivors.values()
+            if (
+                affinity_policy == "Ignore"
+                or (node_selector_matches(pod, node) and node_affinity_matches(pod, node))
+            )
+            and (taints_policy == "Ignore" or taints_allow(pod, node))
+        ]
+        domains = {
+            node.get("metadata", {}).get("labels", {}).get(topology_key)
+            for node in eligible_nodes
+            if node.get("metadata", {}).get("labels", {}).get(topology_key)
+        }
+        candidate_domain = (
+            survivors[candidate].get("metadata", {}).get("labels", {}).get(topology_key)
+        )
+        if candidate_domain not in domains:
+            return False
+        counts = {domain: 0 for domain in domains}
+        selector = constraint.get("labelSelector", {})
+        namespace = pod.get("metadata", {}).get("namespace", "")
+        for existing in pods.get("items", []):
+            if existing.get("metadata", {}).get("namespace", "") != namespace:
+                continue
+            if existing.get("status", {}).get("phase") in ("Succeeded", "Failed"):
+                continue
+            if not selector_matches(selector, existing.get("metadata", {}).get("labels", {})):
+                continue
+            node_name = placements.get(id(existing), existing.get("spec", {}).get("nodeName", ""))
+            if node_name not in survivors:
+                continue
+            domain = survivors[node_name].get("metadata", {}).get("labels", {}).get(topology_key)
+            if domain in counts:
+                counts[domain] += 1
+        counts[candidate_domain] += 1
+        min_domains = constraint.get("minDomains", 1)
+        if not isinstance(min_domains, int) or isinstance(min_domains, bool) or min_domains < 1:
+            raise CapacityError("invalid hard topology spread minDomains")
+        minimum = min(counts.values()) if len(domains) >= min_domains else 0
+        if counts[candidate_domain] - minimum > max_skew:
+            return False
+    return True
 
 
 def fits(requests: dict[str, int], available: dict[str, int]) -> bool:
@@ -187,8 +363,7 @@ def evaluate(target: str, nodes: dict[str, Any], pods: dict[str, Any]) -> None:
     for name, node in survivors.items():
         allocatable = node.get("status", {}).get("allocatable", {})
         available[name] = {
-            resource: quantity(value, resource)
-            for resource, value in allocatable.items()
+            resource: quantity(value, resource) for resource, value in allocatable.items()
         }
         available[name]["pods"] = available[name].get("pods", 0)
 
@@ -209,9 +384,7 @@ def evaluate(target: str, nodes: dict[str, Any], pods: dict[str, Any]) -> None:
     for pod in pods.get("items", []):
         if pod.get("spec", {}).get("nodeName") != target:
             continue
-        if pod.get("metadata", {}).get("annotations", {}).get(
-            "kubernetes.io/config.mirror"
-        ):
+        if pod.get("metadata", {}).get("annotations", {}).get("kubernetes.io/config.mirror"):
             continue
         kind = controlled_kind(pod)
         if kind == "DaemonSet":
@@ -223,13 +396,17 @@ def evaluate(target: str, nodes: dict[str, Any], pods: dict[str, Any]) -> None:
         displaced.append(pod)
 
     displaced.sort(key=lambda pod: sum(pod_requests(pod).values()), reverse=True)
+    placements: dict[int, str] = {}
     for pod in displaced:
         requests = pod_requests(pod)
         requests["pods"] = 1
         candidates = [
             name
             for name, node in survivors.items()
-            if eligible(pod, node) and fits(requests, available[name])
+            if base_eligible(pod, node)
+            and interpod_affinity_allows(pod, name, survivors, pods, placements)
+            and topology_spread_allows(pod, name, survivors, pods, placements)
+            and fits(requests, available[name])
         ]
         if not candidates:
             identity = f"{pod['metadata']['namespace']}/{pod['metadata']['name']}"
@@ -237,12 +414,12 @@ def evaluate(target: str, nodes: dict[str, Any], pods: dict[str, Any]) -> None:
         chosen = max(
             candidates,
             key=lambda name: sum(
-                available[name].get(resource, 0) - value
-                for resource, value in requests.items()
+                available[name].get(resource, 0) - value for resource, value in requests.items()
             ),
         )
         for resource, value in requests.items():
             available[chosen][resource] -= value
+        placements[id(pod)] = chosen
 
 
 def main() -> int:
