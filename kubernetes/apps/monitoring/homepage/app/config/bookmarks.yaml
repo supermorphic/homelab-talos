@@ -36,5 +36,5 @@
         - href: https://192.168.100.1/Login.html
           icon: router.svg
     - Room Alert Monitor:
-        - href: http://192.168.30.6
+        - href: https://room-alert.infra.supermorphic.com
           icon: mdi-temperature-fahrenheit-#FFFFFF
