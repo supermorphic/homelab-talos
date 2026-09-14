@@ -1629,7 +1629,7 @@ kubeconform -strict -summary -ignore-missing-schemas "$temp_dir/n8n-rendered.yam
   exit 1
 }
 [[ "$(yq ea -r 'select(.kind == "Deployment") | .spec.template.spec.containers[0].resources | [.requests.cpu, .requests.memory, .limits.memory] | join(",")' "$temp_dir/n8n-rendered.yaml")" == \
-    '100m,256Mi,1Gi' && \
+    '100m,1Gi,4Gi' && \
   "$(yq ea -r 'select(.kind == "Deployment") | .spec.template.spec.containers[0].resources.limits | has("cpu") | not' "$temp_dir/n8n-rendered.yaml")" == \
     'true' && \
   "$(yq ea -r 'select(.kind == "Deployment") | .spec.template.spec.automountServiceAccountToken' "$temp_dir/n8n-rendered.yaml")" == \
