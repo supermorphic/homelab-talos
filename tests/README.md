@@ -39,6 +39,13 @@ only the catalog checks.
 
 ## Deterministic CI groups and ownership checks
 
+For intentional initiative completion or assurance after bootstrap, setup, provisioning,
+or recovery, use `mise exec -- just test acceptance <suite-id|scoped-verification>`.
+The coordinator retains canonical child reports automatically, including candidate
+feature-branch evidence. Normal CI, standalone verifiers, and scoped campaigns remain
+local. See [recorded acceptance](../docs/guides/test-campaign-operations.md#record-initiative-and-infrequent-acceptance)
+for the third scoped publisher identity, authority boundaries, and publication retry.
+
 The Stage 2 runtime selector has four execution groups: always-running `core`, plus
 `observability`, `automation`, and `ci-framework`. `full` selects their exact union.
 The provider workflow plans affected groups for pull requests and exports that plan
@@ -194,6 +201,10 @@ campaign:
 - `test.n8n-persistence` -> `resilience`, `weekly`, `full`
 
 `test.automation-data-provisioning` remains a registered standalone acceptance suite.
+Run it through `mise exec -- just test acceptance test.automation-data-provisioning`
+with its existing operator credentials, confirmation, and private inputs to retain its
+canonical evidence automatically. Use `acceptance-publish <run-id>` for an existing
+finalized run.
 It is excluded from `integration`, `weekly`, and `full` because it rotates the acceptance
 runtime credential. For one-time acceptance, create both a new n8n logical dump and a new
 automation-data bundle after that rotation before starting

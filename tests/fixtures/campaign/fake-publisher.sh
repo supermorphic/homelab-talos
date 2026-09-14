@@ -4,6 +4,13 @@ set -euo pipefail
 [[ "$#" -eq 1 ]]
 run_id="$1"
 printf '%s\n' "$run_id" >>"${CAMPAIGN_TEST_PUBLISH_CALLS:?}"
+if [[ -n "${CAMPAIGN_TEST_PUBLISH_CONTEXT_CALLS:-}" ]]; then
+  printf '%s\t%s\t%s\n' \
+    "${TEST_REPORT_PUBLICATION_CONTEXT:-unset}" \
+    "${TEST_REPORT_REQUIRE_AUTHORITATIVE:-unset}" \
+    "${TEST_REPORT_PUBLISH_CONFIRM:-unset}" \
+    >>"$CAMPAIGN_TEST_PUBLISH_CONTEXT_CALLS"
+fi
 if [[ -e "${CAMPAIGN_TEST_PUBLISH_FAILURE_MARKER:-/nonexistent}" ]]; then
   echo 'Fixture publication failure.' >&2
   exit 1

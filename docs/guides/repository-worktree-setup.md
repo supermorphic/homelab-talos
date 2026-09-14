@@ -38,7 +38,7 @@ linked worktree
   → no cluster credentials by default
 
 linked worktree when approved live access is needed
-  → Kubernetes homelab-observer and homelab-diagnostic
+  → Kubernetes homelab-observer, homelab-diagnostic, and homelab-report-publisher
   → Talos os:reader
 ```
 
@@ -213,7 +213,9 @@ either administrator identity into the worktree.
 The linked-worktree path creates ignored, worktree-local files with mode `0600`:
 
 - `.kube/config` contains 30-day credentials for exactly
-  `homelab-observer` and `homelab-diagnostic`; `homelab-observer` is current.
+  `homelab-observer`, `homelab-diagnostic`, and `homelab-report-publisher`;
+  `homelab-observer` is current. Recorded acceptance selects the publisher only while
+  retaining evidence; it is never a suite-execution credential.
 - `.talos/config` contains a 90-day Talos credential with exactly the `os:reader` role.
 
 Re-run the same command from the linked worktree when an approved task needs to replace
@@ -222,8 +224,8 @@ credentials are missing, the agent stops and asks the operator to restore that
 operator-owned prerequisite; the operator still does not run the worktree command for
 the agent.
 
-See [Agent cluster access](agent-cluster-access.md) for observer and diagnostic
-permissions, approved verifier use, and the boundary for insufficient scoped access.
+See [Agent cluster access](agent-cluster-access.md) for observer, diagnostic, and publisher
+permissions, approved workflows, and the boundary for insufficient scoped access.
 
 ## Operator and agent responsibilities
 

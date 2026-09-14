@@ -141,14 +141,9 @@ class ReportPublishTests(unittest.TestCase):
             self.assertEqual(
                 homepage,
                 {
-                    "items": [
-                        {
-                            "name": "✓ Latest Overall",
-                            "end": "2026-07-27T12:00:00Z",
-                            "result": "passed",
-                            "path": "/latest/overall/",
-                        }
-                    ]
+                    "latest": "✓ PASS",
+                    "last_run": "2026-07-27T12:00:00Z",
+                    "last_failure": None,
                 },
             )
             metrics = (generation / "api" / "metrics.prom").read_text()
@@ -203,7 +198,10 @@ class ReportPublishTests(unittest.TestCase):
                 generation = args.output_dir / "generation" / result["generation"]
                 self.assertFalse((generation / "latest").exists())
                 homepage = json.loads((generation / "api" / "homepage.json").read_text())
-                self.assertEqual(homepage, {"items": []})
+                self.assertEqual(
+                    homepage,
+                    {"latest": None, "last_run": None, "last_failure": None},
+                )
 
     def test_offline_run_uses_bounded_unavailable_cluster_label(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -380,7 +378,7 @@ class ReportPublishTests(unittest.TestCase):
         self.assertIn("homelab_test_last_success_timestamp_seconds{", metrics)
         self.assertIn(f"}} {expected}", metrics)
 
-    def test_homepage_rollups_select_latest_authoritative_runs(self):
+    def test_homepage_summary_uses_latest_authoritative_run_and_durable_failure(self):
         def entry(
             run_id: str,
             end: str,
@@ -432,20 +430,130 @@ class ReportPublishTests(unittest.TestCase):
             ),
         ]
 
-        homepage = report_publish.render_homepage(entries)
-        self.assertEqual(
-            [(item["name"], item["path"]) for item in homepage["items"]],
-            [
-                ("✓ Latest Overall", "/latest/overall/"),
-                ("✗ Validate", "/latest/validation/"),
-                ("✗ Platform Smoke", "/latest/platform-smoke/"),
-                ("! Media Smoke", "/latest/media-smoke/"),
-                ("✓ Resilience", "/latest/resilience/"),
-                ("✓ Conformance", "/latest/conformance/"),
-            ],
+        homepage = report_publish.render_homepage(
+            entries,
+            {"last_failure": "2026-07-24T12:00:00Z"},
         )
-        self.assertEqual(homepage["items"][0]["end"], "2026-07-25T12:00:00Z")
-        self.assertEqual(homepage["items"][1]["result"], "failed")
+        self.assertEqual(
+            homepage,
+            {
+                "latest": "✓ PASS",
+                "last_run": "2026-07-25T12:00:00Z",
+                "last_failure": "2026-07-24T12:00:00Z",
+            },
+        )
+
+    def test_homepage_summary_is_honest_without_authoritative_history(self):
+        self.assertEqual(
+            report_publish.render_homepage([], {"last_failure": None}),
+            {"latest": None, "last_run": None, "last_failure": None},
+        )
+
+    def test_last_failure_ignores_candidates_and_out_of_order_publication(self):
+        state = {
+            "runs_total": {},
+            "cases_total": {},
+            "last_success": {},
+            "last_failure": None,
+        }
+        base = {
+            "source": "chainsaw",
+            "tier": "smoke",
+            "target": "cilium",
+            "scenario": "health",
+            "cluster": "homelab",
+            "execution_origin": "operator",
+            "result": "failed",
+            "junit": {"passed": 0, "failures": 1, "errors": 0, "skipped": 0},
+        }
+        report_publish.update_counters(
+            state,
+            {**base, "authoritative": True, "end": "2026-07-27T12:00:00Z"},
+        )
+        report_publish.update_counters(
+            state,
+            {**base, "authoritative": True, "end": "2026-07-26T12:00:00Z"},
+        )
+        report_publish.update_counters(
+            state,
+            {**base, "authoritative": False, "end": "2026-07-28T12:00:00Z"},
+        )
+        self.assertEqual(state["last_failure"], "2026-07-27T12:00:00Z")
+
+    def test_legacy_state_migrates_last_failure_from_retained_catalog(self):
+        state = {
+            "schema_version": 1,
+            "generation": "legacy",
+            "seen_runs": {},
+            "runs_total": {},
+            "cases_total": {},
+            "last_success": {},
+        }
+        entries = [
+            {
+                "run_id": "failure-old",
+                "authoritative": True,
+                "result": "failed",
+                "end": "2026-07-20T12:00:00Z",
+            },
+            {
+                "run_id": "candidate-new",
+                "authoritative": False,
+                "result": "broken",
+                "end": "2026-07-22T12:00:00Z",
+            },
+            {
+                "run_id": "failure-new",
+                "authoritative": True,
+                "result": "broken",
+                "end": "2026-07-21T12:00:00Z",
+            },
+        ]
+        report_publish.migrate_state(state, entries)
+        self.assertEqual(state["last_failure"], "2026-07-21T12:00:00Z")
+
+    def test_last_failure_survives_catalog_retention(self):
+        state = {
+            "runs_total": {},
+            "cases_total": {},
+            "last_success": {},
+            "last_failure": None,
+        }
+        failed = {
+            "source": "chainsaw",
+            "tier": "smoke",
+            "target": "cilium",
+            "scenario": "health",
+            "cluster": "homelab",
+            "execution_origin": "operator",
+            "result": "failed",
+            "authoritative": True,
+            "end": "2025-01-01T12:00:00Z",
+            "junit": {"passed": 0, "failures": 1, "errors": 0, "skipped": 0},
+        }
+        report_publish.update_counters(state, failed)
+        latest = {
+            **failed,
+            "run_id": "latest-pass",
+            "result": "passed",
+            "end": "2026-07-27T12:00:00Z",
+        }
+        retained, _ = report_publish.retain_runs(
+            [
+                {**failed, "run_id": "old-failure"},
+                latest,
+            ],
+            dt.datetime(2026, 7, 27, tzinfo=dt.UTC),
+        )
+        self.assertNotIn("old-failure", {entry["run_id"] for entry in retained})
+        self.assertEqual(
+            report_publish.render_homepage(retained, state),
+            {
+                "latest": "✓ PASS",
+                "last_run": "2026-07-27T12:00:00Z",
+                "last_failure": "2025-01-01T12:00:00Z",
+            },
+        )
 
 
 if __name__ == "__main__":

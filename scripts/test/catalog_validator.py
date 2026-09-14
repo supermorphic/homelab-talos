@@ -67,7 +67,11 @@ CI_HARNESS_GROUPS = (
     ("ci-framework", "ci-framework"),
 )
 STANDALONE_SUITES = {
+    # Provisioning rotates credentials and needs operator-paired n8n/database
+    # backups before restore. It belongs in explicit acceptance, not weekly/full.
     "test.automation-data-provisioning",
+    # Host-local disposable integration is intentional acceptance, not a live
+    # cluster campaign. Electrical loss requires attended physical target input.
     "test.nocodb-local-integration",
     "test.resilience.node-abrupt-loss",
 }
@@ -1011,6 +1015,7 @@ class CatalogValidator:
         required = {
             "homelab-observer",
             "homelab-diagnostic",
+            "homelab-report-publisher",
             "named-contexts",
             "admin-impersonation",
             "system:authenticated",
@@ -1021,7 +1026,15 @@ class CatalogValidator:
             "get pods kube-system log",
             "create pods kube-system exec",
             "create pods kube-system portforward",
+            "create pods test-reports exec",
+            "get secrets test-reports",
+            "patch deployments.apps test-reports",
+            "gitrepositories.source.toolkit.fluxcd.io",
+            "homelab-test-report-publish-lock",
+            "create leases.coordination.k8s.io",
+            "update leases.coordination.k8s.io",
             "--subresource",
+            "--resource-name",
             "patch kustomizations.kustomize.toolkit.fluxcd.io",
             "bind clusterroles.rbac.authorization.k8s.io",
             "escalate clusterroles.rbac.authorization.k8s.io",

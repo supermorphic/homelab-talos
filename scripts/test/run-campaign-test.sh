@@ -395,4 +395,296 @@ if rg -n 'TEST_SCOPED_CAMPAIGN_CONFIRM' \
   exit 1
 fi
 
+# Recorded acceptance is explicit execution intent. It freezes a clean candidate
+# source, publishes canonical child reports without an additional confirmation,
+# and keeps its journal resumable after publication failure.
+acceptance_catalog="$fixture/acceptance-catalog.yaml"
+cp tests/catalog.yaml "$acceptance_catalog"
+yq -i '
+  .campaigns."scoped-verification".members = [
+    "verification.metrics-server",
+    "verification.cilium"
+  ] |
+  (.suites[] | select(.metadata.id == "verification.metrics-server") |
+    .runner.command) = "mise exec -- just fixture acceptance-pass" |
+  (.suites[] | select(.metadata.id == "verification.cilium") |
+    .runner.command) = "mise exec -- just fixture acceptance-fail" |
+  (.suites[] | select(.metadata.id == "test.ntfy-publish") |
+    .runner.command) = "NTFY_PUBLISH_TEST_CONFIRM=test:ntfy:publish:media-critical-homelab mise exec -- just fixture acceptance-operator" |
+  (.suites[] | select(.metadata.id == "test.ntfy-publish") |
+    .metadata.mutates_cluster) = false
+  | (.suites[] | select(.metadata.id == "test.nocodb-local-integration") |
+    .runner.command) = "mise exec -- just fixture acceptance-shared"
+  | (.suites[] | select(.metadata.id == "validation.ci") |
+    .runner.command) = "mise exec -- just fixture acceptance-validation"
+' "$acceptance_catalog"
+acceptance_sha="$(git rev-parse HEAD)"
+
+run_acceptance() {
+  local root="$1"
+  local linked="$2"
+  shift 2
+  mkdir -p "$root"
+  touch "$root/commands" "$root/publishes" "$root/publish-contexts" \
+    "$root/preflight-calls"
+  PATH="$fixture/bin:$PATH" \
+  CAMPAIGN_TEST_REPO_ROOT="$repo_root" \
+  CAMPAIGN_TEST_COMMAND_CALLS="$root/commands" \
+  CAMPAIGN_TEST_PUBLISH_CALLS="$root/publishes" \
+  CAMPAIGN_TEST_PUBLISH_CONTEXT_CALLS="$root/publish-contexts" \
+  CAMPAIGN_TEST_SOURCE_STATE="$root/source-state" \
+  CAMPAIGN_TEST_SOURCE_SHA="$acceptance_sha" \
+  TEST_CATALOG_PATH="$acceptance_catalog" \
+  TEST_RESULTS_ROOT="$root/results" \
+  TEST_CAMPAIGNS_ROOT="$root/campaigns" \
+  TEST_CAMPAIGN_TEST_MODE=true \
+  TEST_ACCEPTANCE_LINKED_WORKTREE="$linked" \
+  TEST_CAMPAIGN_SKIP_LEASE=true \
+  TEST_CAMPAIGN_SOURCE_CHECK_BIN="$repo_root/tests/fixtures/campaign/source-check.sh" \
+  TEST_CAMPAIGN_PUBLISH_BIN="$repo_root/tests/fixtures/campaign/fake-publisher.sh" \
+  TEST_SCOPED_PREFLIGHT_BIN="$repo_root/tests/fixtures/campaign/pass-scoped-preflight.sh" \
+  TEST_SCOPED_PREFLIGHT_CALLS="$root/preflight-calls" \
+  TEST_CAMPAIGN_PUBLISH_ATTEMPTS=1 \
+  TEST_CAMPAIGN_RETRY_DELAY_SECONDS=0 \
+  KUBECONFIG="$fixture/kubeconfig" \
+    "$@"
+}
+
+acceptance_plan_root="$fixture/acceptance-plan"
+mkdir -p "$acceptance_plan_root"
+run_acceptance "$acceptance_plan_root" true \
+  "$repo_root/scripts/test/run-campaign.sh" acceptance-plan \
+  verification.metrics-server >"$acceptance_plan_root/plan.log"
+rg -Fqx 'Selection: verification.metrics-server' "$acceptance_plan_root/plan.log"
+rg -Fqx 'Mode: recorded acceptance (scoped worktree)' "$acceptance_plan_root/plan.log"
+rg -Fqx 'mise exec -- just test acceptance verification.metrics-server' \
+  "$acceptance_plan_root/plan.log"
+if rg -q 'TEST_.*CONFIRM' "$acceptance_plan_root/plan.log"; then
+  echo 'Recorded acceptance plan unexpectedly requested confirmation.' >&2
+  exit 1
+fi
+
+acceptance_single_root="$fixture/acceptance-single"
+mkdir -p "$acceptance_single_root"
+run_acceptance "$acceptance_single_root" true \
+  env -u TEST_EXECUTION_ORIGIN -u TEST_CAMPAIGN_CONFIRM \
+  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  verification.metrics-server >"$acceptance_single_root/run.log" 2>&1
+acceptance_single_manifest="$(find "$acceptance_single_root/campaigns" \
+  -name campaign.json -print)"
+[[ "$(yq -r '.execution_mode' "$acceptance_single_manifest")" == \
+  'recorded-acceptance-scoped' ]]
+[[ "$(yq -r '.selection_type + ":" + .selection' \
+  "$acceptance_single_manifest")" == \
+  'suite:verification.metrics-server' ]]
+[[ "$(yq -r '.status + ":" + .result' "$acceptance_single_manifest")" == \
+  'completed:passed' ]]
+[[ "$(cat "$acceptance_single_root/commands")" == 'acceptance-pass' ]]
+[[ "$(cat "$acceptance_single_root/publish-contexts")" == \
+  $'recorded-acceptance\tfalse\tunset' ]]
+rg -Fq 'https://fixture.invalid/reports/' "$acceptance_single_root/run.log"
+[[ "$(wc -l <"$acceptance_single_root/preflight-calls" | tr -d ' ')" == '1' ]]
+
+source_mismatch_root="$fixture/acceptance-source-mismatch"
+mkdir -p "$source_mismatch_root"
+yq -i '(.suites[] | select(.metadata.id == "verification.metrics-server") |
+  .runner.command) = "mise exec -- just fixture acceptance-source-mismatch"' \
+  "$acceptance_catalog"
+set +e
+run_acceptance "$source_mismatch_root" true \
+  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  verification.metrics-server >"$source_mismatch_root/run.log" 2>&1
+source_mismatch_exit="$?"
+set -e
+[[ "$source_mismatch_exit" -eq 2 ]]
+source_mismatch_manifest="$(find "$source_mismatch_root/campaigns" \
+  -name campaign.json -print)"
+[[ "$(yq -r '.status + ":" + .stop_reason' "$source_mismatch_manifest")" == \
+  'broken:unsafe-child-result' ]]
+[[ ! -s "$source_mismatch_root/publishes" ]]
+yq -i '(.suites[] | select(.metadata.id == "verification.metrics-server") |
+  .runner.command) = "mise exec -- just fixture acceptance-pass"' \
+  "$acceptance_catalog"
+
+acceptance_drift_root="$fixture/acceptance-drift"
+mkdir -p "$acceptance_drift_root"
+set +e
+CAMPAIGN_TEST_DRIFT_AT=3 run_acceptance "$acceptance_drift_root" true \
+  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  verification.metrics-server >"$acceptance_drift_root/run.log" 2>&1
+acceptance_drift_exit="$?"
+set -e
+[[ "$acceptance_drift_exit" -eq 2 ]]
+acceptance_drift_manifest="$(find "$acceptance_drift_root/campaigns" \
+  -name campaign.json -print)"
+[[ "$(yq -r '.status + ":" + .stop_reason' "$acceptance_drift_manifest")" == \
+  'stopped:source-drift-after-suite' ]]
+[[ "$(yq -r '.runs[0].publish_status' "$acceptance_drift_manifest")" == \
+  'not-published-source-drift' ]]
+[[ ! -s "$acceptance_drift_root/publishes" ]]
+
+acceptance_shared_root="$fixture/acceptance-shared"
+mkdir -p "$acceptance_shared_root"
+run_acceptance "$acceptance_shared_root" true \
+  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  test.nocodb-local-integration >"$acceptance_shared_root/run.log" 2>&1
+[[ "$(cat "$acceptance_shared_root/commands")" == 'acceptance-shared' ]]
+[[ "$(cat "$acceptance_shared_root/publish-contexts")" == \
+  $'recorded-acceptance\tfalse\tunset' ]]
+
+acceptance_validation_root="$fixture/acceptance-validation"
+mkdir -p "$acceptance_validation_root"
+run_acceptance "$acceptance_validation_root" true \
+  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  validation.ci >"$acceptance_validation_root/run.log" 2>&1
+[[ "$(cat "$acceptance_validation_root/commands")" == \
+  'acceptance-validation' ]]
+
+yq -i '(.suites[] | select(.metadata.id == "verification.metrics-server") |
+  .runner.command) = "mise exec -- just fixture acceptance-broken"' \
+  "$acceptance_catalog"
+acceptance_broken_root="$fixture/acceptance-broken"
+mkdir -p "$acceptance_broken_root"
+set +e
+run_acceptance "$acceptance_broken_root" true \
+  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  scoped-verification >"$acceptance_broken_root/run.log" 2>&1
+acceptance_broken_exit="$?"
+set -e
+[[ "$acceptance_broken_exit" -eq 2 ]]
+acceptance_broken_manifest="$(find "$acceptance_broken_root/campaigns" \
+  -name campaign.json -print)"
+[[ "$(yq -r '.status + ":" + .stop_reason' "$acceptance_broken_manifest")" == \
+  'broken:unsafe-child-result' ]]
+[[ "$(yq -r '.runs[0].result + ":" + .runs[0].publish_status' \
+  "$acceptance_broken_manifest")" == 'broken:published' ]]
+[[ "$(cat "$acceptance_broken_root/commands")" == 'acceptance-broken' ]]
+[[ "$(wc -l <"$acceptance_broken_root/publishes" | tr -d ' ')" == '1' ]]
+
+acceptance_unsafe_publish_root="$fixture/acceptance-unsafe-publish"
+mkdir -p "$acceptance_unsafe_publish_root"
+acceptance_unsafe_marker="$fixture/acceptance-unsafe-publish-marker"
+touch "$acceptance_unsafe_marker"
+set +e
+CAMPAIGN_TEST_PUBLISH_FAILURE_MARKER="$acceptance_unsafe_marker" \
+  run_acceptance "$acceptance_unsafe_publish_root" true \
+  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  scoped-verification >"$acceptance_unsafe_publish_root/run.log" 2>&1
+acceptance_unsafe_publish_exit="$?"
+set -e
+[[ "$acceptance_unsafe_publish_exit" -eq 2 ]]
+acceptance_unsafe_manifest="$(find "$acceptance_unsafe_publish_root/campaigns" \
+  -name campaign.json -print)"
+acceptance_unsafe_id="$(yq -r '.campaign_id' "$acceptance_unsafe_manifest")"
+acceptance_unsafe_run_id="$(yq -r '.runs[0].run_id' "$acceptance_unsafe_manifest")"
+[[ "$(yq -r '.status + ":" + .stop_reason' "$acceptance_unsafe_manifest")" == \
+  'broken:unsafe-child-publication-failed' ]]
+[[ "$(cat "$acceptance_unsafe_publish_root/commands")" == \
+  'acceptance-broken' ]]
+rg -Fqx "mise exec -- just test acceptance-publish $acceptance_unsafe_run_id" \
+  "$acceptance_unsafe_publish_root/run.log"
+if run_acceptance "$acceptance_unsafe_publish_root" true \
+  "$repo_root/scripts/test/run-campaign.sh" acceptance-resume \
+  "$acceptance_unsafe_id" >"$acceptance_unsafe_publish_root/resume.log" 2>&1; then
+  echo 'Unsafe recorded acceptance unexpectedly became resumable.' >&2
+  exit 1
+fi
+rm "$acceptance_unsafe_marker"
+yq -i '(.suites[] | select(.metadata.id == "verification.metrics-server") |
+  .runner.command) = "mise exec -- just fixture acceptance-pass"' \
+  "$acceptance_catalog"
+
+acceptance_campaign_root="$fixture/acceptance-campaign"
+mkdir -p "$acceptance_campaign_root"
+set +e
+run_acceptance "$acceptance_campaign_root" true \
+  env TEST_EXECUTION_ORIGIN=operator \
+  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  scoped-verification >"$acceptance_campaign_root/run.log" 2>&1
+acceptance_campaign_exit="$?"
+set -e
+[[ "$acceptance_campaign_exit" -eq 1 ]]
+acceptance_campaign_manifest="$(find "$acceptance_campaign_root/campaigns" \
+  -name campaign.json -print)"
+[[ "$(yq -r '.selection_type + ":" + .selection' \
+  "$acceptance_campaign_manifest")" == 'campaign:scoped-verification' ]]
+[[ "$(yq -r '.runs | length' "$acceptance_campaign_manifest")" == '2' ]]
+[[ "$(cat "$acceptance_campaign_root/commands")" == \
+  $'acceptance-pass\nacceptance-fail' ]]
+[[ "$(wc -l <"$acceptance_campaign_root/publish-contexts" | tr -d ' ')" == '2' ]]
+
+# A linked-worktree invocation stays scoped even if execution-origin metadata is
+# overridden. It also excludes diagnostics and intentional failure fixtures.
+for forbidden_selection in test.ntfy-publish validation.nocodb diagnostics.cluster \
+  chainsaw.smoke.cluster.diagnostics-self-test; do
+  forbidden_root="$fixture/acceptance-forbidden-${forbidden_selection//./-}"
+  mkdir -p "$forbidden_root"
+  set +e
+  run_acceptance "$forbidden_root" true \
+    env TEST_EXECUTION_ORIGIN=operator \
+    "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+    "$forbidden_selection" >"$forbidden_root/run.log" 2>&1
+  forbidden_exit="$?"
+  set -e
+  [[ "$forbidden_exit" -ne 0 ]]
+  [[ ! -s "$forbidden_root/commands" ]]
+  [[ ! -s "$forbidden_root/publishes" ]]
+done
+
+# Non-scoped operator acceptance preserves the selected suite's exact intent
+# guard before executing the catalog command, even when that command embeds it.
+operator_root="$fixture/acceptance-operator"
+mkdir -p "$operator_root"
+set +e
+run_acceptance "$operator_root" false \
+  env -u NTFY_PUBLISH_TEST_CONFIRM \
+  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  test.ntfy-publish >"$operator_root/missing-confirm.log" 2>&1
+operator_missing_exit="$?"
+set -e
+[[ "$operator_missing_exit" -ne 0 ]]
+[[ ! -s "$operator_root/commands" ]]
+NTFY_PUBLISH_TEST_CONFIRM=test:ntfy:publish:media-critical-homelab \
+  run_acceptance "$operator_root/confirmed" false \
+  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  test.ntfy-publish >"$operator_root/confirmed.log" 2>&1
+[[ "$(cat "$operator_root/confirmed/commands")" == 'acceptance-operator' ]]
+
+acceptance_resume_root="$fixture/acceptance-resume"
+mkdir -p "$acceptance_resume_root"
+touch "$acceptance_resume_root-marker"
+set +e
+CAMPAIGN_TEST_PUBLISH_FAILURE_MARKER="$acceptance_resume_root-marker" \
+  run_acceptance "$acceptance_resume_root" true \
+  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  scoped-verification >"$acceptance_resume_root-start.log" 2>&1
+acceptance_resume_start_exit="$?"
+set -e
+[[ "$acceptance_resume_start_exit" -eq 2 ]]
+acceptance_resume_manifest="$(find "$acceptance_resume_root/campaigns" \
+  -name campaign.json -print)"
+acceptance_resume_id="$(yq -r '.campaign_id' "$acceptance_resume_manifest")"
+[[ "$(yq -r '.status' "$acceptance_resume_manifest")" == 'publish-failed' ]]
+[[ "$(cat "$acceptance_resume_root/commands")" == 'acceptance-pass' ]]
+rm "$acceptance_resume_root-marker"
+set +e
+run_acceptance "$acceptance_resume_root" true \
+  "$repo_root/scripts/test/run-campaign.sh" acceptance-resume \
+  "$acceptance_resume_id" >"$acceptance_resume_root-finish.log" 2>&1
+acceptance_resume_exit="$?"
+set -e
+[[ "$acceptance_resume_exit" -eq 1 ]]
+[[ "$(cat "$acceptance_resume_root/commands")" == \
+  $'acceptance-pass\nacceptance-fail' ]] || {
+  sed -n '1,240p' "$acceptance_resume_root-finish.log" >&2
+  yq '.' "$acceptance_resume_manifest" >&2
+  exit 1
+}
+[[ "$(yq -r '.status + ":" + .result' "$acceptance_resume_manifest")" == \
+  'completed:failed' ]]
+[[ "$(yq -r '.runs[0].publish_status' "$acceptance_resume_manifest")" == \
+  'published' ]]
+[[ "$(yq -r '.runs[0].url' "$acceptance_resume_manifest")" == \
+  https://fixture.invalid/reports/*/awesome/ ]]
+
 echo 'Catalog-backed campaign coordinator tests passed.'
