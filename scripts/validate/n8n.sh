@@ -1662,6 +1662,11 @@ kubeconform -strict -summary -ignore-missing-schemas "$temp_dir/n8n-rendered.yam
 }
 
 n8n_env_query='select(.kind == "Deployment") | .spec.template.spec.containers[0].env'
+[[ "$(yq ea -r "$n8n_env_query | [.[] | select(.name == \"NODE_FUNCTION_ALLOW_BUILTIN\") | .value] | join(\",\")" "$temp_dir/n8n-rendered.yaml")" == 'url' && \
+  "$(yq ea -r "$n8n_env_query | [.[] | select(.name == \"NODE_FUNCTION_ALLOW_EXTERNAL\") | .value] | join(\",\")" "$temp_dir/n8n-rendered.yaml")" == '' ]] || {
+  echo 'n8n Code nodes must allow only the url built-in module and no external modules.' >&2
+  exit 1
+}
 [[ "$(yq ea -r "$n8n_env_query | [.[] | select(.name == \"N8N_WEBHOOK_URL\")] | length" "$temp_dir/n8n-rendered.yaml")" == \
     '1' && \
   "$(yq ea -r "$n8n_env_query | [.[] | select(.name == \"N8N_EDITOR_BASE_URL\")] | length" "$temp_dir/n8n-rendered.yaml")" == \

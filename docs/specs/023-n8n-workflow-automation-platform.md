@@ -96,6 +96,12 @@ default is overridden with the exact n8n image version. The rendered n8n workloa
 use one replica, external PostgreSQL, filesystem binary-data mode, and no queue
 components. Repository-owned HTTPRoutes replace any chart-provided ingress.
 
+Code nodes may import the Node.js built-in `url` module through
+`NODE_FUNCTION_ALLOW_BUILTIN=url`. Workflows use `require('url').URL` when they
+need standards-based URL parsing; they must not assume a global `URL` exists
+in the Code sandbox. The internal task runner inherits this setting from the
+n8n process. No external modules or wildcard built-in access are enabled.
+
 The official chart reduces local ownership of n8n-specific probes, ports, and deployment
 configuration. PostgreSQL remains a small, understandable StatefulSet rather than
 introducing a second chart with its own secret, upgrade, and lifecycle abstractions. This
