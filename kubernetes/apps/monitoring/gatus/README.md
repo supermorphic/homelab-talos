@@ -7,7 +7,7 @@ describes the authenticated media checks and their evidence limits.
 
 ## Off-cluster management services
 
-Separate host automation manages NUC #4, Caddy, DNS/TLS endpoint provisioning,
+Separate host automation manages the off-cluster host, Caddy, DNS/TLS endpoint provisioning,
 and Semaphore.
 This repository owns Homepage and Gatus as consumers of trusted HTTPS URLs.
 Neither monitoring service is required to operate or recover the management host.
@@ -29,7 +29,7 @@ the endpoint contract changes.
 | --- | --- | --- |
 | UP | UP | Both configured HTTP paths respond |
 | UP | DOWN | Investigate the Semaphore hostname, route, or application backend |
-| DOWN | DOWN | Investigate NUC #4, DNS/networking, TLS, or Caddy first |
+| DOWN | DOWN | Investigate the off-cluster host, DNS/networking, TLS, or Caddy first |
 | DOWN | UP | Investigate the edge health hostname or route |
 
 These checks do not prove database health, successful automation jobs, backups, or
