@@ -101,8 +101,8 @@ config:
       interval: 1m
       conditions:
         - "[STATUS] == 200"
-    # Off-cluster edge owned by homelab-playbook. Caddy serves this directly,
-    # independently of Semaphore. Confirm/deploy the contract in playbook #49
+    # Off-cluster edge managed by separate host automation. Caddy serves this
+    # directly, independently of Semaphore. Confirm the deployed endpoint
     # before activation; see ../README.md.
     - name: caddy
       group: Platform

@@ -7,7 +7,8 @@ describes the authenticated media checks and their evidence limits.
 
 ## Off-cluster management services
 
-`homelab-playbook` owns NUC #4, Caddy, DNS/TLS endpoint provisioning, and Semaphore.
+Separate host automation manages NUC #4, Caddy, DNS/TLS endpoint provisioning,
+and Semaphore.
 This repository owns Homepage and Gatus as consumers of trusted HTTPS URLs.
 Neither monitoring service is required to operate or recover the management host.
 
@@ -19,11 +20,10 @@ and require HTTP 200 with normal certificate and hostname verification:
 | `caddy` | `https://caddy.infra.supermorphic.com/healthz` | DNS, networking, TLS, and a static response directly from Caddy |
 | `semaphore` | `https://semaphore.infra.supermorphic.com/api/ping` | DNS, networking, TLS, Caddy proxying, and Semaphore's HTTP server |
 
-The operator-selected edge URL requires producer implementation and deployment from
-[homelab-playbook #49](https://github.com/supermorphic/homelab-playbook/issues/49).
-Before merging this consumer change, confirm that URL against the producer result.
-Reconcile any contract change in the Gatus values, validator, and this table. Producer merge
-alone does not prove deployment or reachability from the monitoring network.
+The operator-selected edge URL requires deployment through the host automation.
+Before merging this monitoring change, confirm the deployed URL and its reachability
+from the monitoring network. Update the Gatus values, validator, and this table if
+the endpoint contract changes.
 
 | Edge | Semaphore | Interpretation |
 | --- | --- | --- |
@@ -56,9 +56,9 @@ Before publication, run the clean-candidate `mise exec -- just test ci-publish`
 gate required by repository policy. Local rendering does not prove runtime DNS,
 certificate trust, or HTTP reachability from Talos.
 
-After the producer endpoint is deployed and Flux has reconciled this change,
+After the Caddy endpoint is deployed and Flux has reconciled this change,
 verify both Platform results from Gatus and the static Homepage card. Use the
 repository's scoped credentials and observational verification workflows. Confirm
-the card opens the trusted Semaphore UI. Backend-failure independence is tested
-with disposable fixtures in the producer repository; do not stop production
+the card opens the trusted Semaphore UI. Test backend-failure independence
+with disposable fixtures maintained by the host automation; do not stop production
 Semaphore for consumer acceptance.
