@@ -1,5 +1,6 @@
 # Gatus uptime dashboard. Endpoints probe the real user-facing HTTPS URLs behind
-# the internal gateway (via Pi-hole DNS), so a green board proves the full path.
+# the internal gateway (via Pi-hole DNS) or the off-cluster Caddy edge, so a green
+# board proves the configured HTTP path.
 # Storage is in-memory: uptime history resets on restart (fine for a status board)
 # and avoids a ReadWriteOnce PVC that deadlocks RollingUpdate on Longhorn.
 env:
@@ -97,6 +98,25 @@ config:
     - name: portainer
       group: Platform
       url: "https://portainer.lab.supermorphic.com/"
+      interval: 1m
+      conditions:
+        - "[STATUS] == 200"
+    # Off-cluster edge managed by separate host automation. Caddy serves this
+    # directly, independently of Semaphore. Confirm the deployed endpoint
+    # before activation; see ../README.md.
+    - name: caddy
+      group: Platform
+      url: "https://caddy.infra.supermorphic.com/healthz"
+      method: GET
+      interval: 1m
+      conditions:
+        - "[STATUS] == 200"
+    # The trusted operator path includes Caddy proxying and Semaphore's HTTP
+    # server. This unauthenticated read does not run automation or verify jobs.
+    - name: semaphore
+      group: Platform
+      url: "https://semaphore.infra.supermorphic.com/api/ping"
+      method: GET
       interval: 1m
       conditions:
         - "[STATUS] == 200"

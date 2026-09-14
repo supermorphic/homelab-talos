@@ -253,7 +253,7 @@ check_media_endpoint 'seerr-radarr-service-read' \
 require_equal 'Media Integration endpoint methods and bodies' \
   "$(yq -r '[.config.endpoints[] | select(.group == "Media Integration") | select(.method != "GET" or has("body"))] | length' "$values")" '0'
 
-legacy_endpoint_names='alertmanager,echo,flaresolverr,grafana,letsencrypt-acme,lidarr,longhorn-ui,nocodb,ntfy,plex,portainer,prometheus,prowlarr,qbittorrent-vpn,radarr,seerr,sonarr,tautulli,test-reports'
+legacy_endpoint_names='alertmanager,caddy,echo,flaresolverr,grafana,letsencrypt-acme,lidarr,longhorn-ui,nocodb,ntfy,plex,portainer,prometheus,prowlarr,qbittorrent-vpn,radarr,seerr,semaphore,sonarr,tautulli,test-reports'
 require_equal 'Existing Level 1 endpoint names' \
   "$(yq -r '[.config.endpoints[] | select(.group != "Media Integration" and
     .name != "n8n-readiness" and .name != "n8n-webhook-e2e" and
@@ -270,6 +270,8 @@ while IFS='|' read -r name group url interval conditions; do
     "$(yq -r ".config.endpoints[] | select(.name == \"$name\") | .conditions | join(\"|\")" "$values")" "$conditions"
 done <<'EOF'
 grafana|Observability|https://grafana.lab.supermorphic.com/api/health|1m|[STATUS] == 200|[BODY].database == ok
+caddy|Platform|https://caddy.infra.supermorphic.com/healthz|1m|[STATUS] == 200
+semaphore|Platform|https://semaphore.infra.supermorphic.com/api/ping|1m|[STATUS] == 200
 prometheus|Observability|https://prometheus.lab.supermorphic.com/-/healthy|1m|[STATUS] == 200
 alertmanager|Observability|https://alertmanager.lab.supermorphic.com/-/healthy|1m|[STATUS] == 200
 test-reports|Observability|https://tests.lab.supermorphic.com/|1m|[STATUS] == 200

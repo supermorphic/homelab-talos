@@ -2,4 +2,10 @@
 # Services are auto-discovered from gethomepage.dev/* annotations on each app's
 # HTTPRoute (kubernetes.yaml has gateway: true), grouped by
 # gethomepage.dev/group. Add static entries here only for things without a route.
-[]
+- Platform:
+    - Semaphore:
+        icon: semaphore.svg
+        href: https://semaphore.infra.supermorphic.com/
+        description: Infrastructure automation
+        siteMonitor: https://semaphore.infra.supermorphic.com/api/ping
+        statusStyle: basic

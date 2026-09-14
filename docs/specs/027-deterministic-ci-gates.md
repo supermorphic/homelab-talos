@@ -330,5 +330,5 @@ Runner placement and advanced evidence reuse are outside this implementation.
 The Stage 3 boundary and deployment/isolation dependency handoff remain in
 [specification 024](024-ci-runtime-and-merge-throughput-optimization.md).
 A later measured decision and new numbered implementation specification must authorize
-that work. This design does not assume NUC #4 is faster, prescribe a benchmark protocol,
+that work. This design does not assume an off-cluster runner is faster, prescribe a benchmark protocol,
 or introduce trusted cross-run attestations.
