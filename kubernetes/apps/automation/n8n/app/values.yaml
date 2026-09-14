@@ -88,6 +88,8 @@ executions:
 config:
   timezone: America/Denver
   extraEnv:
+    - name: NODE_FUNCTION_ALLOW_BUILTIN
+      value: url
     - name: N8N_WEBHOOK_URL
       value: https://hooks.lab.supermorphic.com/
     - name: N8N_EDITOR_BASE_URL
