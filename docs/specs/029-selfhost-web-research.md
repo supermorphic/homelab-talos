@@ -213,10 +213,19 @@ patch permissions, or consumer restart. Readiness covers the complete cutover;
 malformed or absent material must not start an unauthenticated process. Validate
 shutdown of the server's workers and browser children before replacement.
 
-Do not mix old-key and new-key server replicas behind one Service. A signing-key
-cutover invalidates existing JWTs, and the agent remints through the native issuer. The
-deployment workflow must prove this automatic cutover before activation. Native
-API-token replacement alone does not revoke already-issued JWTs.
+### Credential revocation semantics
+
+Once loaded by the server, administrative API-token rotation invalidates the old
+token for future issuance and administrative API access. It does not revoke
+already-issued data JWTs; those remain valid until expiry or signing-key replacement.
+
+Revoking existing JWTs before expiry requires signing-key rotation. Revocation takes
+effect when every serving worker has loaded the new key, not merely when the Secret
+changes. It invalidates all JWTs signed with the old key; the native server has no
+individual-token revocation operation. It does not retroactively cancel work already
+admitted. Do not mix old-key and new-key server replicas behind one Service.
+The agent remints through the native issuer after cutover. The deployment workflow
+must prove this automatic cutover before activation.
 
 A key can change after successful token validation. A cutover can therefore produce
 transient backend authentication/unavailable responses until background validation
