@@ -16,6 +16,6 @@ spec:
     name: flux-system
     namespace: flux-system
   # Unsuspend with native Crawl4AI; select Gatus rules only after acceptance.
-  suspend: true
+  suspend: false
   timeout: 5m
   wait: true

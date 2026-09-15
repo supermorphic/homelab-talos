@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: Secret
+metadata:
+    name: crawl4ai-bootstrap
+    namespace: web-research
+type: Opaque
+stringData:
+    api_token: ENC[AES256_GCM,data:Zlp5TQfE4ZzWgzXQ7q8h68eYXmktTBKRemM81m3bPJj/z5QbPzr42V8wibPFqw2gk7o16ba0UddsT8cckJeAUQ==,iv:fzQjT29gp+l8VnRt4O4xgQE99TZFZrU7TaxbiGreSao=,tag:plXx9gMGWficW6S/MNsQlQ==,type:str]
+    signing_key: ENC[AES256_GCM,data:q3qiNij3FlKEC881HulZ0qYE/ur6m9BWpBApjTl7Ks4cBTFFW+VF0hjDle3Rs+SqjlXjqOUH/GnHDyl8QPaxsQ==,iv:WvDHWxcw/zqiQ9nNI8mzxwVI97usVnb7jxwzMM0SmOw=,tag:o5pMEoLIN1+46c8A78iFQw==,type:str]
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSA4enU5SENybWdhRnkreFp0
+            UkhmcXlFSWJjTW1aaXhOeE5NTHpBV1UyaW1RCnpiOE5XNVNSaGxQV25BcVFZa2M0
+            UXlVWm54ZDA5ZWR1RGlXOEZocTVVTUEKLS0tIGRsQ214N0ZQYXVnK0ExNUpnYnNa
+            OTlHZEMxWmg5UEYxaTdsT2hpRmUrVTQK/gLp8mepHjfDqfhm3JTsEi/Mgfqu637+
+            PjlO9zNufNtDbTPqZ5KIt/Ias35XJAPSj0lObAwqMgR4xTqwz/rM3g==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age1da2cywfkg9hp6v39jvj9qcmqz4n8w3gm6nqj5vygu7e0zzgnp5psne9wlx
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-09-15T20:20:10Z"
+    mac: ENC[AES256_GCM,data:Z+iOlQ/xHTYbyu3DvP/1tc+aKosWFDq6ciZul8xdd0KROqF1xpyHg0P7diRLlW0cxr2WYhxgq1upJ4fMzMyj1fMTVU/OZh6JY1+c/ZRPScDjnn2JweQw2C9TNlCGrWZeQSZRF5DERyBs928PS3U66q1eruxtvPyEbuL3C/44yZA=,iv:LeeOA3y+JzgrSEaZAPQwWLKkQs1vobqjzZToPlOPbxw=,tag:Ta/IqBD6EmWt0Fc0PtsIxQ==,type:str]
+    version: 3.13.2
