@@ -247,7 +247,30 @@ configuration. The authentication agent does not replace these upstream controls
 
 Keep inline code and hooks disabled and provide no external LLM credentials. Use
 cluster-private Services and explicit Cilium caller selectors. Permit only approved
-consumer and monitoring paths. No public ingress or operator UI is needed.
+consumer, monitoring, and SearXNG private-UI paths. The SearXNG UI uses the existing
+internal Gateway; Crawl4AI remains a cluster-private API with no operator UI route.
+
+### SearXNG private UI and Homepage
+
+Expose the native SearXNG UI at `https://searxng.lab.supermorphic.com` with no login,
+as explicitly requested by the operator. Support both HTML and JSON search formats.
+Use an app-owned HTTPRoute attached to `networking/internal`, listener `https`, with
+`external-dns.k8s.io/audience: internal` and the existing wildcard certificate.
+Label the platform namespace for internal Gateway access. Permit the internal
+Gateway data plane to reach SearXNG alongside the selected automation and monitoring
+callers. Keep normal query and content logging disabled or minimized.
+
+LAN clients and authorized Tailscale clients use the same private HTTPS URL. Follow
+the existing lab-domain split-DNS and subnet-router path; no public Gateway route,
+public DNS publication, Funnel, or separate Tailscale application exposure is needed.
+The private network path provides the requested access restriction without adding
+application login. Verify access from both LAN and Tailscale during activation.
+
+Homepage discovers the UI through its existing HTTPRoute annotation mechanism.
+Use the tile name `SearXNG`, description `Private web search`, and group `Platform`,
+matching n8n and NocoDB. Set the href to the private HTTPS URL and the pod selector
+to the SearXNG workload. Do not add a duplicate static services entry or a new
+Homepage group. The existing Gatus tile already supplies the monitoring dashboard.
 
 Cilium permits cluster DNS and public HTTPS while excluding private, loopback,
 link-local, metadata, service, pod, node-management, and other reserved destinations.
@@ -365,6 +388,55 @@ monitoring. Add a ServiceMonitor only for a verified working upstream metrics
 interface. Report aggregate engine and extraction failures without queries, full
 URLs, page text, authorization headers, or consumer workflow context in logs or
 metrics labels. Review upstream monitor/cache persistence for the same privacy goal.
+
+### Gatus checks and existing monitoring precedent
+
+Use the existing Gatus workload, its ServiceMonitor, and Prometheus alert path.
+The reviewed live inventory and active Git configuration contain the same 30 check
+names/groups. Current automation precedent separates one-minute availability
+(`nocodb`, `n8n-readiness`) from five-minute synthetic execution
+(`n8n-webhook-e2e`, `automation-data-e2e`). Media Integration supplies additional
+authenticated reads, with explicitly limited evidence; its status-only native-health
+checks do not prove successful searches or downloads. This addition follows the
+automation canary model with a smaller external-request frequency.
+
+Add these stable names under Gatus group `Automation`:
+
+| Name | Interval | Request and required evidence |
+| --- | --- | --- |
+| `searxng` | 1m | GET `https://searxng.lab.supermorphic.com/healthz`; require HTTP 200. Covers private DNS, TLS, Gateway routing, and native service health, following existing application health checks. Browser acceptance separately verifies the UI. |
+| `crawl4ai-readiness` | 1m | GET the credential agent's dedicated internal readiness endpoint; require HTTP 200 and explicit ready state. It reads cached state and must not mint or validate a JWT as a side effect. |
+| `crawl4ai-e2e` | 15m | POST one fixed public HTTPS fixture URL through the same bounded Envoy crawl route as consumers. Require a successful native result, acceptable final URL/status, and an expected extracted-text marker. |
+| `searxng-search-e2e` | 30m | Make one fixed synthetic JSON search through the automation Service path. Require a valid response with at least one usable candidate URL and no total configured-engine failure. Do not depend on exact ranking or result count. |
+
+The crawl canary catches failures beyond process/token readiness: route/auth header
+delivery, public DNS/HTTPS retrieval, browser operation, and extraction. It proves
+one representative fetch, not every site's JavaScript or anti-bot behavior. The
+search canary catches engines becoming unusable while the UI remains healthy.
+One failed engine must not fail this check when another returns usable results.
+Use synthetic fixtures and queries, never consumer research or private job data.
+
+The steady-state schedule adds 96 top-level crawls and 48 searches per day, without
+automatic retries. A search fans out to the configured finite engine set; a crawl
+can fetch subresources. Use small fixtures, avoid overlap, bound time/output/work,
+and include this load in resource measurements. Scheduled canaries do not consume
+or change consumer workflow budgets. Deep SSRF, response-size, concurrency, and
+JavaScript test suites remain registered acceptance workflows, not periodic Gatus jobs.
+
+Gatus receives no Crawl4AI token. Permit only its selected workload through the
+bounded crawl route, plus read-only access to the separate agent monitoring port.
+Do not give it access to the credential-returning authorization endpoint, native
+token issuer, or raw Crawl4AI backend. Hide detailed functional-check errors in the
+Gatus UI, following existing automation and integration checks.
+
+Add availability and missing-series alert coverage with activation: the existing
+generic `GatusEndpointDown` rule does not cover group `Automation`. Treat a degraded
+refresh with a usable token as a warning, not readiness failure. Functional failures
+should persist across scheduled checks before alerting; size alert windows for the
+15m/30m cadences rather than copying the five-minute canary thresholds. Search
+failure can reflect an external engine problem, and crawler failure can reflect
+the public fixture; retain that evidence limit in alerts. Activate the checks and
+Homepage discovery with the services, rather than monitoring staged absent workloads.
 
 Measure baseline and representative CPU/memory for search, static documents,
 JavaScript-rendered documents, and a small concurrent burst before final sizing.
@@ -487,3 +559,7 @@ No service implementation, activation, or consumer follow-up issue is complete.
 - [n8n HTTP Request options](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.httprequest/)
 - [n8n pinned HTTP transport configuration](https://github.com/n8n-io/n8n/blob/f09fcad454339ae8d16d88c85e2e4a38f85b1217/packages/%40n8n/backend-network/src/http/axios/request.ts#L35-L43)
 - [n8n platform](023-n8n-workflow-automation-platform.md)
+- [Current Gatus checks](../../kubernetes/apps/monitoring/gatus/app/values.yaml)
+- [Gatus operating conventions](../../kubernetes/apps/monitoring/gatus/README.md)
+- [Media integration evidence boundaries](019-media-integration-health-gatus.md)
+- [Private lab-domain Tailscale access](../guides/tailscale-lab-domain-access.md)
