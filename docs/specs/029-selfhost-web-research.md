@@ -597,11 +597,45 @@ images and generated Gateway configuration, verifies native rotation/recovery an
 all four Gatus checks, and removes its owned Podman resources. It requires public
 internet access but no cluster credentials or production secret.
 
-These results do not establish live
-Kubernetes Secret projection, Cilium enforcement, n8n workflow continuity,
-LAN/Tailscale access, or representative deployed resource margins. Complete those
-acceptance gates before declaring the unattended platform ready or creating the
-authorized career-ops integration issue.
+### Deployed acceptance in progress
+
+On 2026-09-15, all five selected Flux units reconciled successfully. The native
+services, credential agent and dedicated Envoy were Ready without container restarts.
+The private SearXNG UI and Homepage card worked over LAN with normal TLS verification
+and no application login. The credential metrics and four credential alert rules
+were loaded and healthy. The four Gatus endpoints remain staged.
+
+A task-owned manual n8n workflow completed native search and a public HTTPS crawl
+through the actual HTTP Request node before and after automatic JWT renewal, with
+no Crawl4AI credential or consumer restart. The Crawl4AI node configuration was
+unchanged. The intervening search assertion was corrected to accept both canonical
+HTTP and HTTPS spellings of the example.com result; the crawl always used HTTPS.
+The temporary workflow was archived after the test. This establishes consumer
+continuity across normal renewal, not injected expiry or bootstrap replacement.
+
+The registered diagnostic suite passed domain-qualified search, static and rendered
+JavaScript extraction, caller Authorization replacement, excluded-route rejection,
+explicit prohibited-loopback rejection, four concurrent small crawls, and recovery.
+An oversized fixture returned the small HTTP 500 described in the response-limit
+section. A separate pinned native/proxy reproduction established the reason for
+that response before correcting the diagnostic expectation.
+
+Explicit queries reached all four intended search engines. Default settings inherited
+disabled Google and Bing entries from upstream; named engine overrides now explicitly
+enable the intended four-engine set. Partial provider failure was also observed:
+usable results remained available while one provider reported a CAPTCHA. This does
+not establish controlled total-provider-failure behavior.
+
+The operator waived the remaining live credential-recovery tests on 2026-09-15.
+Injected expiry and refresh failure, Kubernetes bootstrap/key replacement, and
+recovery during coordinated native replacement remain unverified in the cluster.
+The local lifecycle tests and observed normal live issuance/renewal still apply;
+the waiver does not turn them into evidence of live failure recovery.
+
+Remaining deployment gates include full workload-network restriction coverage,
+off-LAN Tailscale access, and deployed aggregate memory under near-cap slow-consumer
+load. Complete the required gates before activating Gatus, declaring the unattended
+platform ready, or creating the authorized career-ops issue.
 
 ## References
 
