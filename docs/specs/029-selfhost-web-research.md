@@ -156,12 +156,20 @@ The credential agent must:
    establish token validity because it is public.
 4. Renew proactively around halfway through the native lifetime, with bounded jitter
    and retry backoff. Keep a small expiry margin for clock skew and request admission.
-5. Validate cached access on admission and remint on a native `401`. A timeout,
-   `5xx`, or other ambiguous validation response denies that admission with `503`
-   while retaining an otherwise unexpired token. Only an authentication rejection
-   invalidates the cache. This detects signing-key invalidation without giving the
-   consumer a renewal protocol.
-6. Read the projected API-token file afresh for issuance rather than retaining an
+5. Serve ordinary admissions immediately from the previously validated in-memory
+   JWT, checking expiry and known invalidation locally. Do not call `GET /schema`
+   or mint a new token on every admission. Revalidate asynchronously at most once
+   per minute while actively used, with one validation in progress at a time.
+   An admission can schedule a due check but must not wait for it while its cached
+   token remains usable. Proactive renewal continues independently during idle periods.
+6. On a native validation `401`, invalidate that token generation and initiate
+   renewal. Ignore a late validation result for a token already replaced. A timeout,
+   `5xx`, or other ambiguous validation response marks health degraded without
+   evicting the token or denying otherwise usable admissions. The validation cadence
+   is not a hard cache expiry: continue using an unexpired, previously validated
+   token until its expiry margin or a confirmed invalidation. Crawl4AI still checks
+   the JWT on every actual crawl request.
+7. Read the projected API-token file afresh for issuance rather than retaining an
    environment-variable snapshot. A replacement credential is used automatically.
 
 Consumers always use the same endpoint. Each Envoy authorization call obtains the
@@ -170,16 +178,18 @@ credential, environment variable, or process. No credentials are returned to n8n
 
 ### Failure and restart behavior
 
-If proactive refresh fails, retain the last backend-validated JWT while it remains
-usable. Mark refresh health degraded and retry automatically. Do not mark a usable
-service unready merely because one early renewal attempt failed. Once no usable
+If proactive refresh or background validation fails transiently, retain the last
+backend-validated JWT while it remains usable. Mark health degraded and retry
+automatically. Do not mark a usable service unready or block admissions merely
+because an early renewal or periodic validation attempt failed. Once no usable
 credential remains, deny admission with `503 platform_auth_unavailable`. An agent
 timeout, crash, or missing endpoint also fails closed. Never fall back to anonymous
 access, inject an administrative credential, broaden permissions, or retry a crawl
 POST as part of authentication recovery.
 
-Expose token-free refresh health, last successful refresh time, seconds until usable
-expiry, and bounded failure counters. Distinguish process liveness, usable access,
+Expose token-free refresh and validation health, last successful refresh and validation
+times, seconds until usable expiry, and bounded failure counters. Distinguish process
+liveness, usable access,
 and degraded refresh health. A separate readiness endpoint returns `200` only while
 access is safely usable; liveness does not depend on a working issuer. Alert before
 expiry and on unavailable authentication;
@@ -208,10 +218,15 @@ cutover invalidates existing JWTs, and the agent remints through the native issu
 deployment workflow must prove this automatic cutover before activation. Native
 API-token replacement alone does not revoke already-issued JWTs.
 
-A key can change between an admission probe and the crawl itself. Therefore a
-cutover may produce a transient backend authentication/unavailable response; the
-next admission must recover automatically. Do not promise zero failed requests or
-replay a possibly-started crawl. If the platform's issuing authority has itself been
+A key can change after successful token validation. A cutover can therefore produce
+transient backend authentication/unavailable responses until background validation
+or renewal detects and repairs the cached credential. `ext_authz` runs before the
+crawl and does not observe its eventual `401`. Immediate invalidation applies to a
+real `401` observed by the agent; the initial design adds no response-feedback path
+to report every crawl failure back to it. Recovery is automatic after the next
+successful validation/renewal cycle, rather than guaranteed on the next admission.
+Do not promise zero failed requests or replay a possibly-started crawl.
+If the platform's issuing authority has itself been
 revoked or is unavailable, keep access closed when cached authority expires; the
 agent retries with its configured authority and cannot grant itself new authority.
 
@@ -279,6 +294,36 @@ Select the production response cap from representative complete native results,
 including their HTML and metadata overhead. A small threshold in an isolated probe
 proves enforcement behavior; it is not production resource sizing.
 
+### Aggregate Envoy memory bound
+
+The per-response cap must be paired with an enforced bound on simultaneous buffered
+responses. Establish this invariant for each Envoy pod:
+
+```text
+response_cap × max_concurrent_buffered_responses
+  + measured_Envoy_overhead + safety_margin
+  <= Envoy_memory_budget
+```
+
+The Envoy memory budget must fit both its container limit and the available pod
+memory limit. Measure overhead under representative concurrent load, including
+request/connection buffers, allocation or copy overhead, and other traffic sharing
+the proxy; do not substitute idle memory usage. Record the cap, concurrency bound,
+measured overhead, and explicit safety margin with the sizing evidence.
+
+Leave the supported Envoy concurrency/admission control to implementation. Prove its
+effective bound per pod across workers, connections, routes, and enabled protocols.
+Count responses retained for slow consumers as well as responses still being filled.
+A request-rate limit or a per-connection HTTP/2 stream limit alone does not establish
+this aggregate bound.
+
+Acceptance must exercise simultaneous near-cap responses and slow consumers at the
+allowed concurrency, then exceed that concurrency. Excess work must receive a
+bounded overload failure without unbounded queueing or buffering. Verify peak memory
+stays within the budget and that the proxy recovers without an OOM kill or restart.
+
+### Crawler deadlines
+
 Keep a finite global crawler wall-clock deadline as well as client HTTP timeouts.
 Do not claim that a client disconnect immediately cancels a native backend crawl.
 Consumers reject late results and preserve their own deadlines and retry budgets.
@@ -337,6 +382,10 @@ consumer. Required evidence includes automatic cold-start issuance, proactive
 renewal, credential-free consumer continuity, header replacement, data scope,
 restart/reconciliation, expired and key-invalidated token recovery, cached-token
 continuity during refresh failure, observable failure, and fail-closed expiry.
+Verify that admissions using a usable cached JWT perform no synchronous backend
+validation, that an active burst schedules at most one due background check, and
+that transient validation failure preserves usable access. Cover actual expiry,
+validation `401`, and a late `401` for a superseded token generation separately.
 Explicitly test bootstrap replacement and coordinated server rollout. Keep the
 route unavailable if a required policy or usable credential is absent.
 
@@ -397,8 +446,11 @@ and fail-closed expiry or unavailable agent. The fixture shortened the JWT lifet
 to 18 seconds and supplied a loopback MX DNS answer; it used no external network or
 production secrets. All disposable test containers were removed.
 
-Four focused checks with synthetic HTTP responses also verified that ambiguous
-validation failures deny admission while preserving an otherwise valid cached JWT.
+Four focused checks with synthetic HTTP responses verified that the earlier
+per-admission prototype retained its cached JWT on ambiguous validation failures.
+That prototype still denied the affected admission. The revised cached-admission
+design removes this dependency; its non-blocking validation behavior and aggregate
+Envoy memory/concurrency invariant require new implementation acceptance evidence.
 
 This proves the local lifecycle mechanism using a single native Uvicorn process,
 not deployed Kubernetes reconciliation, an actual n8n workflow execution, production
@@ -417,6 +469,7 @@ No service implementation, activation, or consumer follow-up issue is complete.
 - [Crawl4AI configuration](https://github.com/unclecode/crawl4ai/blob/v0.9.3/deploy/docker/config.yml)
 - [Crawl4AI authentication](https://github.com/unclecode/crawl4ai/blob/v0.9.3/deploy/docker/auth.py)
 - [Envoy flow control](https://www.envoyproxy.io/docs/envoy/v1.38.3/faq/configuration/flow_control.html)
+- [Envoy overload management](https://github.com/envoyproxy/envoy/blob/v1.38.3/docs/root/intro/arch_overview/operations/overload_manager.rst)
 - [Envoy Gateway Lua extensions](https://gateway.envoyproxy.io/v1.8/tasks/extensibility/lua/)
 - [Envoy Gateway external authorization](https://gateway.envoyproxy.io/v1.8/tasks/security/ext-auth/)
 - [Pinned external-authorization translation](https://github.com/envoyproxy/gateway/blob/v1.8.2/internal/xds/translator/extauth.go)
