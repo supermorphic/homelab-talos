@@ -535,7 +535,7 @@ job-seeking workload. Core runtime resources are:
 
 | Workload | CPU request / limit | Memory request / limit |
 | --- | ---: | ---: |
-| n8n | 100m / none | 1 GiB / 4 GiB |
+| n8n | 100m / none | 1 GiB / 8 GiB |
 | PostgreSQL | 50m / none | 256 MiB / 1 GiB |
 | SQL Exporter sidecar | 10m / none | 32 MiB / 128 MiB |
 | logical-backup Job | 50m / none | 64 MiB / 512 MiB |
@@ -546,7 +546,7 @@ for baseline use. The 1 GiB PostgreSQL memory limit avoids a 512 MiB hard ceilin
 dumps, maintenance, migrations, or temporary query growth. Auxiliary backup and exporter
 containers have smaller explicit envelopes and do not change the core service topology.
 
-The n8n main process reserves 1 GiB for scheduling and can use up to 4 GiB for
+The n8n main process reserves 1 GiB for scheduling and can use up to 8 GiB for
 concurrent workflow execution. This provides headroom for workflow code, model
 context, and in-flight results; it does not guarantee capacity for arbitrary bursts.
 Application concurrency settings remain separate from this resource allocation.
