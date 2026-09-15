@@ -86,7 +86,7 @@ def expect_acceptance(
         f"{name}: expected acceptance, got exit {completed.returncode}\n"
         f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
     )
-    assert completed.stdout == "Test catalog passed validation: suites=127.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=128.\n"
     assert completed.stderr == ""
 
 
@@ -804,6 +804,19 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
     assert suite(canonical, "verification.nocodb")["runner"]["implementation"] == (
         "scripts/verify/nocodb.sh"
     ), "NocoDB verification definition is absent"
+    live_contract = suite(canonical, "test.web-research-live-contract")
+    assert live_contract.get("access", {}).get("tier") == "diagnostic"
+    assert live_contract["metadata"]["execution_owner"] == "human"
+    assert live_contract["metadata"]["mutates_cluster"] is False
+    assert "test.web-research-live-contract" in catalog_validator.STANDALONE_SUITES
+    assert all(
+        "test.web-research-live-contract" not in (campaign.get("members") or [])
+        for campaign in canonical["campaigns"].values()
+    ), "live contract must remain outside automatic campaigns"
+    assert all(
+        "test.web-research-live-contract" not in execution
+        for execution in canonical["executions"].values()
+    ), "live contract must remain outside CI executions"
     analyze = catalog_validator.forbidden_kubernetes_operations
     forbidden_cases = {
         "array-secret": 'kc=(kubectl --kubeconfig x)\n"${kc[@]}" get secrets',
@@ -1124,7 +1137,7 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
 def main() -> int:
     completed = run_validator(CATALOG)
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout == "Test catalog passed validation: suites=127.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=128.\n"
     assert completed.stderr == ""
     canonical = yaml.safe_load(CATALOG.read_text(encoding="utf-8"))
     groups = {

@@ -133,6 +133,7 @@ manual token issuance, Secret update, consumer restart, or runtime-credential co
 ```sh
 mise exec -- just kube web-research-validate
 mise exec -- just kube web-research-local-integration-test
+mise exec -- just kube web-research-live-contract-test
 ```
 
 The first command runs source invariants, Kustomize rendering, available Kubernetes
@@ -144,6 +145,18 @@ creates disposable local containers from the pinned images, translates the curre
 Gateway policies, and exercises native extraction, credential rotation and recovery,
 SearXNG search/UI, and all four Gatus conditions. It needs no cluster credentials or
 production secrets and cleans up only the resources it creates.
+
+The third command is a manually selected live acceptance suite. It uses
+`homelab-observer` for the Deployment, ReplicaSet, Pod, owner, readiness, and rollout
+preflight. It repeats that preflight, then uses `homelab-diagnostic` for one fixed
+Node program sent on standard input to the current ready `n8n-main` container. The
+program has no caller-supplied endpoint or executable argument. It performs bounded
+search, static and JavaScript crawl, caller-header replacement, exact route exclusion,
+loopback rejection, deterministic oversized-response rejection, four-request burst,
+and recovery checks. Output is limited to fixed phase, result, status, size, count,
+and duration fields. This suite is registered outside automatic campaigns and CI.
+It exercises the network position and runtime of n8n, but it is not an n8n HTTP
+Request workflow execution.
 
 Local acceptance also measured slow HTTP/1.1 and HTTP/2 consumers at the response
 limit, overload rejection and recovery. Four concurrent public static-page crawls

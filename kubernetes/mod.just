@@ -29,6 +29,13 @@ web-research-validate: require-bash
 web-research-local-integration-test: require-bash
     @scripts/test/scenarios/web-research-local-integration.sh
 
+# Run the registered live consumer contract from the current ready n8n main Pod.
+# Kubernetes reads use homelab-observer; only the fixed Node stdin process uses
+# homelab-diagnostic. This suite is intentionally outside automatic campaigns.
+web-research-live-contract-test: require-bash
+    @scripts/test/run-catalog-suite.sh test.web-research-live-contract -- \
+      scripts/test/scenarios/web-research-live-contract.sh {{quote(kubeconfig)}}
+
 # Validate the staged NocoDB source and its pinned OCI Helm render. This is local,
 # secret-free, and remains safe while the Flux Kustomization is suspended.
 nocodb-validate: require-bash

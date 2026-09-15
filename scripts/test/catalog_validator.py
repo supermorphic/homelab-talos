@@ -69,6 +69,7 @@ CI_HARNESS_GROUPS = (
 STANDALONE_SUITES = {
     "test.automation-data-provisioning",
     "test.nocodb-local-integration",
+    "test.web-research-live-contract",
     "test.web-research-local-integration",
     "test.resilience.node-abrupt-loss",
 }

@@ -34,4 +34,5 @@ print(agent.monitor_response("/metrics").body.decode(), end="")
 PY
 promtool check metrics <"$work/agent-metrics.txt"
 uv run --locked python -m unittest discover -s scripts/test/web_research -p 'test_*.py'
+node --test scripts/test/web_research/test_live_contract_node.js
 printf '%s\n' 'Web research source, native rendering, Prometheus rules and runtime unit tests passed.'
