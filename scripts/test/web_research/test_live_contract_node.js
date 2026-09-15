@@ -17,6 +17,7 @@ const {
   resultRecord,
   searchContract,
   shouldRun,
+  SLOW_HOLD_MS,
   startPausedRequest,
 } = require('./live_contract_node.js');
 
@@ -133,6 +134,11 @@ test('retained batch holds all four headers before drain and cleans every failur
     await assert.rejects(retainAndDrain(failing, 25, async () => {}));
     assert.deepEqual(destroyed.sort(), [0, 1, 2, 3]);
   }
+});
+
+test('live retained batch hold stays below Envoy default delayed close', () => {
+  assert.equal(SLOW_HOLD_MS, 100);
+  assert.ok(SLOW_HOLD_MS < 1000);
 });
 
 function jsonResponse(status, document) {

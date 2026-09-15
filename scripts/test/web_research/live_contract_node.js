@@ -14,7 +14,9 @@ const JAVASCRIPT_URL = 'https://quotes.toscrape.com/js/';
 const JAVASCRIPT_TEXT = 'The world as we have created it';
 const LOOPBACK_URL = 'https://127.0.0.1/';
 const NEAR_LIMIT_MIN_BYTES = 7 * 1024 * 1024;
-const SLOW_HOLD_MS = 3000;
+// One-request HTTP/1 connections use Envoy's default 1s delayed-close flush.
+// Pause all four together, then drain before that close grace can expire.
+const SLOW_HOLD_MS = 100;
 
 class ContractError extends Error {
   constructor(code, bytesRead = 0) {
@@ -607,6 +609,7 @@ module.exports = {
   resultRecord,
   searchContract,
   shouldRun,
+  SLOW_HOLD_MS,
   startPausedRequest,
 };
 

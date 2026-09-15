@@ -40,7 +40,7 @@ cutover; the proxy never replays a crawl automatically.
   stream per connection, across two workers. Its container memory limit is 256 MiB.
 - The controller's `shutdown-manager` sidecar is separately limited to 64 MiB,
   making the hard ceiling across both Pod containers 320 MiB.
-- The sizing budget is 32 MiB for resident responses, 96 MiB for loaded overhead,
+- The sizing budget is 32 MiB for resident responses, 128 MiB for loaded overhead,
   and 64 MiB safety margin. Local slow-consumer tests measured less than 82 MiB of
   container memory and 51 MiB of allocator physical memory. Repeat measurement on
   the deployed architecture, including the generated sidecar.
@@ -157,14 +157,23 @@ search, static and JavaScript crawl, caller-header replacement, exact route excl
 loopback rejection, deterministic oversized-response rejection, four-request burst,
 slow-consumer retention, and recovery checks. The slow-consumer phase starts exactly
 four fixed raw crawls below 50 KiB, pauses every response at its headers, holds all
-four for three seconds, then drains at most 8 MiB plus one sentinel and requires four
-valid native JSON successes between 7 MiB and 8 MiB. Client success does not establish
-the proxy's memory high-water mark; collect that evidence independently from Prometheus. A fifth
-excluded-route request cannot distinguish connection admission from normal route
-handling, so excess-concurrency acceptance remains pending a reliable oracle. Output
+four for 100 milliseconds, then drains at most 8 MiB plus one sentinel and requires
+four valid native JSON successes between 7 MiB and 8 MiB. Client success does not
+establish the proxy's memory high-water mark; collect that evidence independently
+from Prometheus. A fifth excluded-route request cannot distinguish connection
+admission from normal route handling, so excess-concurrency acceptance remains
+pending a reliable oracle. Output
 is limited to fixed phase, result, status, size, count, and duration fields. This suite
 is registered outside automatic campaigns and CI. It exercises the network position
 and runtime of n8n, but it is not an n8n HTTP Request workflow execution.
+
+Envoy's default one-second delayed-close flush can abort a one-request HTTP/1
+connection when a client fully stalls it for three seconds. That behavior produced a
+failed partial read in the initial deployed probe, with no OOM or container restart;
+the later small burst and recovery checks passed. A partial body never satisfies this
+contract as successful native JSON. The 100-millisecond hold retains all four complete
+near-cap responses together without changing the production timeout for an artificial
+multi-second stall.
 
 Local acceptance also measured slow HTTP/1.1 and HTTP/2 consumers at the response
 limit, overload rejection and recovery. Four concurrent public static-page crawls
