@@ -21,6 +21,31 @@ def read(relative):
 
 
 class SourceBoundaryTests(unittest.TestCase):
+    def test_default_search_enables_only_the_four_intended_engines(self):
+        settings = read("searxng/app/settings.yml")
+        self.assertEqual(validator.search_engine_errors(settings), [])
+
+        for changed in (
+            {**settings, "engines": settings.get("engines", [])[:-1]},
+            {
+                **settings,
+                "engines": [
+                    {**engine, "disabled": True}
+                    if engine.get("name") == "google"
+                    else engine
+                    for engine in settings.get("engines", [])
+                ],
+            },
+            {
+                **settings,
+                "use_default_settings": {
+                    "engines": {"keep_only": ["bing", "brave", "duckduckgo"]}
+                },
+            },
+        ):
+            with self.subTest(changed=changed):
+                self.assertTrue(validator.search_engine_errors(changed))
+
     def test_credentials_are_monitored_from_native_activation(self):
         resources = ["./credentials.yaml"]
         self.assertEqual(validator.monitoring_errors(False, False, resources, [], []), [])
