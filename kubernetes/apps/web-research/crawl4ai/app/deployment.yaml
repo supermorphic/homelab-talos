@@ -1,0 +1,149 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crawl4ai
+  labels:
+    app.kubernetes.io/name: crawl4ai
+spec:
+  replicas: 1
+  # Signing-key cutover must never mix old and new native workers.
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: crawl4ai
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: crawl4ai
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 40
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: crawl4ai
+          image: docker.io/unclecode/crawl4ai:0.9.3@sha256:84751dab794259db05d5bd4e5c766a8041a65f0554326e4516e620abdf2fa18b
+          command: ["python3", "/opt/platform/server_launcher.py"]
+          ports:
+            - name: native
+              containerPort: 11235
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          startupProbe:
+            httpGet:
+              path: /health
+              port: native
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: native
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: native
+            periodSeconds: 30
+            failureThreshold: 5
+          volumeMounts:
+            - name: platform
+              mountPath: /opt/platform
+              readOnly: true
+            - name: native-bootstrap
+              mountPath: /run/bootstrap
+              readOnly: true
+            - name: native-runtime
+              mountPath: /run/crawl4ai
+            - name: shm
+              mountPath: /dev/shm
+        - name: credential-agent
+          # Reuse the already-pulled native image; the agent uses only Python stdlib.
+          image: docker.io/unclecode/crawl4ai:0.9.3@sha256:84751dab794259db05d5bd4e5c766a8041a65f0554326e4516e620abdf2fa18b
+          command: ["python3", "/opt/platform/credential_agent.py"]
+          args:
+            - --admin-token-file
+            - /run/bootstrap/api_token
+            - --subject
+            - crawl4ai-platform@supermorphic.com
+            - --auth-host
+            - "0.0.0.0"
+          ports:
+            - name: auth
+              containerPort: 9000
+            - name: health
+              containerPort: 9001
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: health
+            periodSeconds: 30
+          volumeMounts:
+            - name: platform
+              mountPath: /opt/platform
+              readOnly: true
+            - name: agent-bootstrap
+              mountPath: /run/bootstrap
+              readOnly: true
+      volumes:
+        - name: platform
+          configMap:
+            name: crawl4ai-platform-runtime
+        - name: native-bootstrap
+          secret:
+            secretName: crawl4ai-bootstrap
+            defaultMode: 0440
+            items:
+              - key: api_token
+                path: api_token
+              - key: signing_key
+                path: signing_key
+        - name: agent-bootstrap
+          secret:
+            secretName: crawl4ai-bootstrap
+            defaultMode: 0440
+            items:
+              - key: api_token
+                path: api_token
+        - name: native-runtime
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi

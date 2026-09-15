@@ -1,0 +1,15 @@
+---
+# yaml-language-server: $schema=https://k8s-schemas.home-operations.com/monitoring.coreos.com/servicemonitor_v1.json
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: crawl4ai-credential-agent
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: crawl4ai-health
+  endpoints:
+    - port: health
+      path: /metrics
+      interval: 1m
+      scrapeTimeout: 5s

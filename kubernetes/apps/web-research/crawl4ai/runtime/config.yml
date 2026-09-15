@@ -1,0 +1,93 @@
+app:
+  title: "Crawl4AI API"
+  version: "1.0.0"
+  host: "0.0.0.0"
+  port: 11235
+  reload: false
+  workers: 1
+  timeout_keep_alive: 5
+
+llm:
+  provider: "openai/gpt-4o-mini"
+
+redis:
+  host: "127.0.0.1"
+  port: 6379
+  db: 0
+  password: ""
+  task_ttl_seconds: 3600
+  ssl: false
+
+limits:
+  max_body_bytes: 524288
+  max_pages: 1
+  max_depth: 1
+  wall_clock_s: 75
+  queue:
+    maxsize: 4
+    workers: 1
+    per_principal: 1
+
+rate_limiting:
+  enabled: true
+  default_limit: "60/minute"
+  trusted_proxies: []
+  storage_uri: "memory://"
+
+security:
+  enabled: true
+  jwt_enabled: true
+  api_token: ""
+  https_redirect: false
+  trusted_hosts: ["*"]
+  cors_allow_origins: []
+  headers:
+    x_content_type_options: "nosniff"
+    x_frame_options: "DENY"
+    content_security_policy: "default-src 'self'"
+    strict_transport_security: "max-age=63072000; includeSubDomains"
+
+crawler:
+  base_config:
+    simulate_user: true
+  memory_threshold_percent: 90.0
+  rate_limiter:
+    enabled: true
+    base_delay: [1.0, 2.0]
+  timeouts:
+    stream_init: 30.0
+    batch_process: 75.0
+  pool:
+    max_pages: 2
+    idle_ttl_sec: 60
+  browser:
+    kwargs:
+      headless: true
+      text_mode: true
+    extra_args:
+      - "--no-sandbox"
+      - "--disable-dev-shm-usage"
+      - "--disable-gpu"
+      - "--disable-software-rasterizer"
+
+logging:
+  level: "ERROR"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+observability:
+  prometheus:
+    enabled: false
+    endpoint: "/metrics"
+  health_check:
+    endpoint: "/health"
+
+webhooks:
+  enabled: false
+  default_url: null
+  data_in_payload: false
+  retry:
+    max_attempts: 1
+    initial_delay_ms: 1000
+    max_delay_ms: 1000
+    timeout_ms: 1000
+  headers: {}

@@ -1,0 +1,62 @@
+# Activation fragment: append these endpoints to Gatus config.endpoints only after
+# platform acceptance. Do not use it as a valuesFrom replacement for the array.
+config:
+  endpoints:
+    - name: searxng
+      group: Automation
+      url: "https://searxng.lab.supermorphic.com/healthz"
+      method: GET
+      interval: 1m
+      client:
+        timeout: 10s
+      conditions:
+        - "[STATUS] == 200"
+    - name: crawl4ai-readiness
+      group: Automation
+      url: "http://crawl4ai-health.web-research.svc.cluster.local:9001/readyz"
+      method: GET
+      interval: 1m
+      client:
+        timeout: 5s
+      conditions:
+        - "[STATUS] == 200"
+        - "[BODY].ready == true"
+      ui:
+        hide-errors: true
+    - name: crawl4ai-e2e
+      group: Automation
+      url: "http://crawl4ai.envoy-gateway-system.svc.cluster.local:8080/crawl"
+      method: POST
+      interval: 15m
+      client:
+        timeout: 100s
+      headers:
+        Content-Type: application/json
+      body: >-
+        {"urls":["https://example.com/"],"crawler_config":{"type":"CrawlerRunConfig","params":{"cache_mode":{"type":"CacheMode","params":"bypass"},"page_timeout":30000,"verbose":false,"only_text":true,"exclude_all_images":true}}}
+      conditions:
+        - "[STATUS] == 200"
+        - "[BODY].success == true"
+        - "len([BODY].results) == 1"
+        - "[BODY].results[0].success == true"
+        - "[BODY].results[0].status_code == 200"
+        - "[BODY].results[0].url == https://example.com/"
+        - "[BODY].results[0].markdown.raw_markdown == pat(*Example Domain*)"
+        - '[BODY].results[0].redirected_url == https://example.com/'
+      ui:
+        hide-errors: true
+    - name: searxng-search-e2e
+      group: Automation
+      url: "http://searxng.web-research.svc.cluster.local:8080/search?q=example%20domain&format=json"
+      method: GET
+      interval: 30m
+      client:
+        timeout: 20s
+      conditions:
+        - "[STATUS] == 200"
+        - "len([BODY].results) > 0"
+        - "len([BODY].results[0].url) > 0"
+        - "[BODY].results[0].parsed_url[0] == any(http, https)"
+        - "len([BODY].results[0].parsed_url[1]) > 0"
+      ui:
+        hide-errors: true

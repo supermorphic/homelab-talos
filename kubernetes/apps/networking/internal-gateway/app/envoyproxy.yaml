@@ -5,6 +5,17 @@ metadata:
   name: internal
   namespace: networking
 spec:
+  telemetry:
+    accessLog:
+      settings:
+        # Keep the default format for existing routes. Search URLs can contain
+        # private query text, so exclude this app's authority from access logs.
+        - matches:
+            - '!request.host.matches("(?i)^searxng[.]lab[.]supermorphic[.]com[.]?(:[0-9]+)?$")'
+          sinks:
+            - type: File
+              file:
+                path: /dev/stdout
   provider:
     type: Kubernetes
     kubernetes:

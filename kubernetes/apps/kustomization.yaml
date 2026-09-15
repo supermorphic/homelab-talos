@@ -12,3 +12,4 @@ resources:
   - ./security
   - ./storage
   - ./testing
+  - ./web-research

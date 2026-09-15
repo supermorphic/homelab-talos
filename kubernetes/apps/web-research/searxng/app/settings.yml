@@ -1,0 +1,29 @@
+# Private UI and native JSON API. No server-side search result cache or accounts.
+use_default_settings:
+  engines:
+    keep_only:
+      - bing
+      - duckduckgo
+      - brave
+      - google
+server:
+  bind_address: "0.0.0.0"
+  port: 8080
+  base_url: "https://searxng.lab.supermorphic.com/"
+  limiter: false
+  public_instance: false
+  image_proxy: false
+search:
+  safe_search: 0
+  formats:
+    - html
+    - json
+  autocomplete: ""
+outgoing:
+  request_timeout: 5.0
+  max_request_timeout: 10.0
+  enable_http2: true
+  retries: 0
+general:
+  debug: false
+  instance_name: "Private web search"

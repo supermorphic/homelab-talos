@@ -143,10 +143,10 @@ class ClassificationTests(unittest.TestCase):
                 self.assertEqual(groups, expected)
                 self.assertEqual(reasons[0]["reason"], reason)
 
-    def test_shared_alert_validator_selects_observability(self):
+    def test_shared_alert_validator_selects_observability_and_automation(self):
         self.assertEqual(
             classify([Change("M", None, "scripts/validate/alerts.sh")], self.impact, full=False),
-            ("core", "observability"),
+            ("core", "observability", "automation"),
         )
 
     def test_observability_implementations_select_owned_tests(self):

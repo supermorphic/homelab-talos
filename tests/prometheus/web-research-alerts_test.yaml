@@ -1,0 +1,299 @@
+rule_files:
+  - gatus.yaml
+  - credentials.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - name: one-minute Gatus checks require five continuous failures and recover
+    interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Automation",name="searxng"}'
+        values: '1x3 0x8 1x5'
+      - series: 'gatus_results_endpoint_success{group="Automation",name="crawl4ai-readiness"}'
+        values: '1x3 0x8 1x5'
+      - series: 'gatus_results_endpoint_success{group="Other",name="searxng"}'
+        values: '0x16'
+      - series: 'gatus_results_endpoint_success{group="Other",name="crawl4ai-readiness"}'
+        values: '0x16'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: SearxngUnavailable
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: SearxngUnavailable
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Automation, name: searxng}
+            exp_annotations:
+              summary: Web research check searxng is failing
+              description: The searxng check has failed continuously for 5m. Functional checks depend on public internet and their external fixture or search engines.
+      - eval_time: 14m
+        alertname: SearxngUnavailable
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: Crawl4aiAuthUnavailable
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: Crawl4aiAuthUnavailable
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Automation, name: crawl4ai-readiness}
+            exp_annotations:
+              summary: Web research check crawl4ai-readiness is failing
+              description: The crawl4ai-readiness check has failed continuously for 5m. Functional checks depend on public internet and their external fixture or search engines.
+      - eval_time: 14m
+        alertname: Crawl4aiAuthUnavailable
+        exp_alerts: []
+
+  - name: fifteen-minute crawl check requires failures across scheduled runs and recovers
+    interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Automation",name="crawl4ai-e2e"}'
+        values: '1x3 0x38 1x5'
+      - series: 'gatus_results_endpoint_success{group="Other",name="crawl4ai-e2e"}'
+        values: '0x46'
+    alert_rule_test:
+      - eval_time: 34m
+        alertname: Crawl4aiE2eFailed
+        exp_alerts: []
+      - eval_time: 39m
+        alertname: Crawl4aiE2eFailed
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Automation, name: crawl4ai-e2e}
+            exp_annotations:
+              summary: Web research check crawl4ai-e2e is failing
+              description: The crawl4ai-e2e check has failed continuously for 35m. Functional checks depend on public internet and their external fixture or search engines.
+      - eval_time: 44m
+        alertname: Crawl4aiE2eFailed
+        exp_alerts: []
+
+  - name: thirty-minute search check requires failures across scheduled runs and recovers
+    interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Automation",name="searxng-search-e2e"}'
+        values: '1x3 0x68 1x5'
+      - series: 'gatus_results_endpoint_success{group="Other",name="searxng-search-e2e"}'
+        values: '0x76'
+    alert_rule_test:
+      - eval_time: 64m
+        alertname: SearxngSearchE2eFailed
+        exp_alerts: []
+      - eval_time: 69m
+        alertname: SearxngSearchE2eFailed
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Automation, name: searxng-search-e2e}
+            exp_annotations:
+              summary: Web research check searxng-search-e2e is failing
+              description: The searxng-search-e2e check has failed continuously for 65m. Functional checks depend on public internet and their external fixture or search engines.
+      - eval_time: 74m
+        alertname: SearxngSearchE2eFailed
+        exp_alerts: []
+
+  - name: missing Gatus probes ignore unrelated endpoints and honor each cadence window
+    interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Automation",name="unrelated-check"}'
+        values: '1x75'
+      - series: 'gatus_results_endpoint_success{group="Other",name="searxng"}'
+        values: '1x75'
+      - series: 'gatus_results_endpoint_success{group="Automation",name="searxng"}'
+        values: '_x68 1x5'
+      - series: 'gatus_results_endpoint_success{group="Automation",name="crawl4ai-readiness"}'
+        values: '_x68 1x5'
+      - series: 'gatus_results_endpoint_success{group="Automation",name="crawl4ai-e2e"}'
+        values: '_x68 1x5'
+      - series: 'gatus_results_endpoint_success{group="Automation",name="searxng-search-e2e"}'
+        values: '_x68 1x5'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: SearxngProbeMissing
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: SearxngProbeMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Automation, name: searxng}
+            exp_annotations:
+              summary: Web research check searxng is missing
+              description: Gatus has not exported the searxng result for 5m. Check probe configuration and Gatus availability.
+      - eval_time: 4m
+        alertname: Crawl4aiReadinessProbeMissing
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: Crawl4aiReadinessProbeMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Automation, name: crawl4ai-readiness}
+            exp_annotations:
+              summary: Web research check crawl4ai-readiness is missing
+              description: Gatus has not exported the crawl4ai-readiness result for 5m. Check probe configuration and Gatus availability.
+      - eval_time: 34m
+        alertname: Crawl4aiE2eProbeMissing
+        exp_alerts: []
+      - eval_time: 36m
+        alertname: Crawl4aiE2eProbeMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Automation, name: crawl4ai-e2e}
+            exp_annotations:
+              summary: Web research check crawl4ai-e2e is missing
+              description: Gatus has not exported the crawl4ai-e2e result for 35m. Check probe configuration and Gatus availability.
+      - eval_time: 64m
+        alertname: SearxngSearchE2eProbeMissing
+        exp_alerts: []
+      - eval_time: 66m
+        alertname: SearxngSearchE2eProbeMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, group: Automation, name: searxng-search-e2e}
+            exp_annotations:
+              summary: Web research check searxng-search-e2e is missing
+              description: Gatus has not exported the searxng-search-e2e result for 65m. Check probe configuration and Gatus availability.
+      - eval_time: 70m
+        alertname: SearxngProbeMissing
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: Crawl4aiReadinessProbeMissing
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: Crawl4aiE2eProbeMissing
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: SearxngSearchE2eProbeMissing
+        exp_alerts: []
+
+  - name: healthy exact Gatus series suppress failure and missing alerts
+    interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Automation",name="searxng"}'
+        values: '1x70'
+      - series: 'gatus_results_endpoint_success{group="Automation",name="crawl4ai-readiness"}'
+        values: '1x70'
+      - series: 'gatus_results_endpoint_success{group="Automation",name="crawl4ai-e2e"}'
+        values: '1x70'
+      - series: 'gatus_results_endpoint_success{group="Automation",name="searxng-search-e2e"}'
+        values: '1x70'
+    alert_rule_test:
+      - eval_time: 66m
+        alertname: SearxngUnavailable
+        exp_alerts: []
+      - eval_time: 66m
+        alertname: SearxngProbeMissing
+        exp_alerts: []
+      - eval_time: 66m
+        alertname: Crawl4aiAuthUnavailable
+        exp_alerts: []
+      - eval_time: 66m
+        alertname: Crawl4aiReadinessProbeMissing
+        exp_alerts: []
+      - eval_time: 66m
+        alertname: Crawl4aiE2eFailed
+        exp_alerts: []
+      - eval_time: 66m
+        alertname: Crawl4aiE2eProbeMissing
+        exp_alerts: []
+      - eval_time: 66m
+        alertname: SearxngSearchE2eFailed
+        exp_alerts: []
+      - eval_time: 66m
+        alertname: SearxngSearchE2eProbeMissing
+        exp_alerts: []
+
+  - name: credential degradation and unavailability honor their windows and recover
+    interval: 1m
+    input_series:
+      - series: 'crawl4ai_credential_refresh_degraded{namespace="web-research",service="crawl4ai-health"}'
+        values: '0x3 1x8 0x5'
+      - series: 'crawl4ai_credential_validation_degraded{namespace="web-research",service="crawl4ai-health"}'
+        values: '0x3 1x8 0x5'
+      - series: 'crawl4ai_credential_ready{namespace="web-research",service="crawl4ai-health"}'
+        values: '1x3 0x8 1x5'
+      - series: 'crawl4ai_credential_refresh_degraded{namespace="other",service="crawl4ai-health"}'
+        values: '1x16'
+      - series: 'crawl4ai_credential_validation_degraded{namespace="web-research",service="other"}'
+        values: '1x16'
+      - series: 'crawl4ai_credential_ready{namespace="other",service="crawl4ai-health"}'
+        values: '0x16'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: Crawl4aiCredentialRefreshDegraded
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: Crawl4aiCredentialRefreshDegraded
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: web-research, service: crawl4ai-health}
+            exp_annotations:
+              summary: Crawl4AI automatic credential renewal is degraded
+              description: Existing validated credentials remain usable until their usable expiry. Inspect credential agent health and issuer availability; never distribute administrative credentials to consumers.
+      - eval_time: 14m
+        alertname: Crawl4aiCredentialRefreshDegraded
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: Crawl4aiCredentialValidationDegraded
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: Crawl4aiCredentialValidationDegraded
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: web-research, service: crawl4ai-health}
+            exp_annotations:
+              summary: Crawl4AI background credential validation is degraded
+              description: Background validation cannot confirm the active credential. Cached admission continues for an unexpired credential unless the backend explicitly rejects it.
+      - eval_time: 14m
+        alertname: Crawl4aiCredentialValidationDegraded
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: Crawl4aiCredentialUnavailable
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: Crawl4aiCredentialUnavailable
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: web-research, service: crawl4ai-health}
+            exp_annotations:
+              summary: Crawl4AI has no usable platform credential
+              description: Crawl admission fails closed while the agent automatically attempts recovery.
+      - eval_time: 14m
+        alertname: Crawl4aiCredentialUnavailable
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: Crawl4aiCredentialMetricsMissing
+        exp_alerts: []
+
+  - name: missing credential readiness ignores unrelated identities and recovers
+    interval: 1m
+    input_series:
+      - series: 'crawl4ai_credential_ready{namespace="other",service="crawl4ai-health"}'
+        values: '1x8'
+      - series: 'crawl4ai_credential_ready{namespace="web-research",service="crawl4ai-health"}'
+        values: '_x8 1x5'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: Crawl4aiCredentialMetricsMissing
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: Crawl4aiCredentialMetricsMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: web-research, service: crawl4ai-health}
+            exp_annotations:
+              summary: Crawl4AI credential health metrics are missing
+              description: Check the credential agent, its ServiceMonitor, and Prometheus scrape health.
+      - eval_time: 9m
+        alertname: Crawl4aiCredentialMetricsMissing
+        exp_alerts: []
+
+  - name: healthy credential metrics suppress all agent alerts
+    interval: 1m
+    input_series:
+      - series: 'crawl4ai_credential_refresh_degraded{namespace="web-research",service="crawl4ai-health"}'
+        values: '0x10'
+      - series: 'crawl4ai_credential_validation_degraded{namespace="web-research",service="crawl4ai-health"}'
+        values: '0x10'
+      - series: 'crawl4ai_credential_ready{namespace="web-research",service="crawl4ai-health"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: Crawl4aiCredentialRefreshDegraded
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: Crawl4aiCredentialValidationDegraded
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: Crawl4aiCredentialUnavailable
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: Crawl4aiCredentialMetricsMissing
+        exp_alerts: []

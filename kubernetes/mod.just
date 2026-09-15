@@ -21,6 +21,14 @@ cilium-render:
 cilium-validate: require-bash
     @scripts/validate/cilium.sh
 
+# Validate private web research source and runtime units without cluster credentials.
+web-research-validate: require-bash
+    @scripts/validate/web-research.sh
+
+# Run disposable native web research containers and automatic credential cutover.
+web-research-local-integration-test: require-bash
+    @scripts/test/scenarios/web-research-local-integration.sh
+
 # Validate the staged NocoDB source and its pinned OCI Helm render. This is local,
 # secret-free, and remains safe while the Flux Kustomization is suspended.
 nocodb-validate: require-bash
