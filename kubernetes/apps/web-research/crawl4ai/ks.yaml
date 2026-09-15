@@ -33,6 +33,8 @@ spec:
   dependsOn:
     - name: crawl4ai
     - name: envoy-gateway
+    - name: internal-gateway
+    - name: automation
   interval: 1h
   path: ./kubernetes/apps/web-research/crawl4ai/proxy
   prune: true
