@@ -88,6 +88,10 @@ Envoy Service. This identifies the authorized workload, not an individual n8n
 workflow. Do not trust a caller-supplied identity header. Restrict the route to exact
 `POST /crawl`; consumers cannot reach `/token`, administrative operations, streaming
 crawls, the raw backend Service, or the credential agent. Keep monitoring separate.
+The implemented consumer address is
+`http://crawl4ai.envoy-gateway-system.svc.cluster.local:8080/crawl`; the managed
+Envoy Service lives in the controller namespace. SearXNG JSON search uses
+`http://searxng.web-research.svc.cluster.local:8080/search`.
 
 Envoy calls a small platform-owned credential agent through supported
 `SecurityPolicy.extAuth`. The agent returns a current data-scoped JWT to Envoy, which
@@ -307,7 +311,8 @@ truncated successful JSON document. Keep this operator-owned code small and free
 of retrieval, domain, or consumer-specific logic.
 
 Use an HTTPRoute-targeted `EnvoyExtensionPolicy` with Lua `body(true)`, which also
-handles empty bodies. Enable the supported Lua extension in Envoy Gateway. Configure
+handles empty bodies. Envoy Gateway `1.8.2` enables this supported extension by default;
+no shared-controller feature-flag change is required. Configure
 both `ClientTrafficPolicy.connection.bufferLimit` for HTTP/1.1 and
 `ClientTrafficPolicy.http2.initialStreamWindowSize` for HTTP/2; the controller
 translates them separately. Set the HTTP/2 connection window at least as large as
@@ -346,6 +351,24 @@ measured overhead, and explicit safety margin with the sizing evidence.
 Leave the supported Envoy concurrency/admission control to implementation. Prove its
 effective bound per pod across workers, connections, routes, and enabled protocols.
 Count responses retained for slow consumers as well as responses still being filled.
+
+The implementation selects a dedicated two-worker Envoy with
+`connectionLimit.value: 4`, `maxRequestsPerConnection: 1`, and
+`http2.maxConcurrentStreams: 1`. Both protocol buffers and HTTP/2 windows are 8 MiB.
+The container limit is 256 MiB, with a budget of 32 MiB for four resident responses,
+96 MiB for loaded overhead, and 64 MiB safety margin. Local load acceptance covered
+four simultaneous responses retained by slow HTTP/1.1 and HTTP/2 consumers, excess
+admission, and recovery. With responses held for six seconds per protocol, peak
+sampled container memory was below 82 MiB (`podman stats`, 37 samples), and allocator
+physical memory was below 51 MiB (528 samples). Container accounting includes memory
+outside the allocator; the overhead budget conservatively exceeds this measured
+whole-container peak before adding the separate response allowance and safety margin.
+Repeat this measurement on the deployed architecture before activation; local ARM64
+measurements alone do not establish the live AMD64 resource margin.
+The generated `shutdown-manager` sidecar also receives an explicit 64 MiB memory
+limit through the supported Deployment strategic-merge patch. The two container
+limits enforce a 320 MiB ceiling across the Pod; the sidecar cannot consume an
+unbounded amount outside the main Envoy container's budget.
 A request-rate limit or a per-connection HTTP/2 stream limit alone does not establish
 this aggregate bound.
 
@@ -497,50 +520,74 @@ The selected design combines native services, a generic response-size guard, and
 Envoy `ext_authz` credential agent. Fully automated authentication supersedes the
 earlier proposal to distribute manually rotated data JWTs to consumers. No search,
 extraction, or consumer-policy adapter is needed.
-The official Crawl4AI image passed fifteen isolated checks covering data JWTs,
-configuration rejection, prohibited seed URLs, deterministic raw-HTML extraction,
-and the distinction between incoming request and outgoing response size. Those
-checks did not contact public pages or validate cluster network policy.
+Feasibility probes established native data-scope enforcement, caller configuration
+and prohibited-seed rejection, and full-response limits for HTTP/1.1, HTTP/2,
+chunked and encoded responses. These informed the selected native API and generic
+proxy boundary. The earlier short-TTL lifecycle prototype used synchronous
+validation; the implementation evidence below supersedes that request path.
 
-An isolated probe of the controller's pinned Envoy `1.38.3` image passed eight
-response-boundary checks. With an illustrative 1 MiB cap, HTTP/1.1 and HTTP/2
-responses at the limit passed, and responses one byte over the limit returned a
-small error. HTTP/1.1 chunked bodies obeyed the same boundary. Compressed and empty
-encoded responses returned a small error. Test containers were removed.
-
-n8n `2.36.7` does not supply this protection: its HTTP Request transport configures
+n8n `2.36.7` does not supply the output bound: its HTTP Request transport configures
 unlimited response length, and optional output optimization happens after receipt.
-Likewise, the Crawl4AI probe produced a 1,693,205-byte response from a 288,304-byte
-request under a 524,288-byte incoming request cap with deterministic extraction.
+Likewise, a native Crawl4AI probe produced a 1,693,205-byte response from a
+288,304-byte request under a 524,288-byte input cap with deterministic extraction.
 
-The proxy probe used direct Envoy configuration. Deployed Gateway policy translation,
-filter-failure behavior, representative browser loads, production sizing, and cluster
-acceptance remain unverified. These checks must pass before activation.
+### Implementation evidence
 
-An additional isolated lifecycle spike passed 21 assertions through Envoy `1.38.3`
-and the native Crawl4AI `0.9.3` endpoints. It covered issuance, proactive renewal,
-credential-free client continuity, header overwrite, route restriction, data scope,
-agent/consumer restart, automatic bootstrap-file reload and native server restart,
-signing-key invalidation, issuer-credential replacement,
-cached access during refresh failure, observable degradation, expired-token recovery,
-and fail-closed expiry or unavailable agent. The fixture shortened the JWT lifetime
-to 18 seconds and supplied a loopback MX DNS answer; it used no external network or
-production secrets. All disposable test containers were removed.
+The staged source now contains native Deployments, a dedicated Envoy Gateway,
+workload network policies, the cached credential agent, the atomic-bootstrap server
+launcher, a guarded operator SOPS writer, private SearXNG routing and Homepage
+discovery, and the four approved Gatus definitions. Flux units remain suspended;
+no production bootstrap Secret or runtime consumer credential has been created.
 
-Four focused checks with synthetic HTTP responses verified that the earlier
-per-admission prototype retained its cached JWT on ambiguous validation failures.
-That prototype still denied the affected admission. The revised cached-admission
-design removes this dependency; its non-blocking validation behavior and aggregate
-Envoy memory/concurrency invariant require new implementation acceptance evidence.
+The production credential agent's focused tests cover automatic issuance, idle
+renewal, cached admission, malformed issuer responses, expiry and recovery,
+generation-aware invalidation, bounded incoming/outgoing HTTP, and observability.
+Two scheduling regressions prove failed renewal cannot starve active validation
+and validation failures cannot postpone due issuance. The launcher tests include
+detached, TERM-ignoring workers and browser descendants, Supervisor crashes,
+withholding replacement when cleanup cannot be proved, and exclusion of ambient
+provider credentials. Linux-only process behavior was tested in the pinned native
+image, in addition to the host source suite.
 
-This proves the local lifecycle mechanism using a single native Uvicorn process,
-not deployed Kubernetes reconciliation, an actual n8n workflow execution, production
-DNS reliability, Kubernetes Secret projection, or production supervisor/worker
-shutdown. Invalid/simultaneous bootstrap changes, launcher failure, separate
-liveness/readiness behavior, and malformed issuer-response rejection also remain
-implementation acceptance tests. Those integration gates remain outstanding; do not report
-the unattended platform ready before they pass.
-No service implementation, activation, or consumer follow-up issue is complete.
+Pinned `egctl 1.8.2` accepted and translated the production route and policies.
+The generated configuration ran in Envoy `1.38.3` with the production agent and
+native Supervisor, Redis, Gunicorn and Chromium. Credential-free crawl, caller
+Authorization replacement, excluded routes, public-page extraction and final URL
+checks passed. Native atomic bundle rotation preserved issued JWTs during an
+admin-only change, denied subsequent issuance with the old admin token, revoked
+old-key JWTs on signing-key replacement, and recovered automatically through the
+agent. All old native and browser process identities were gone before accepting
+the replacement. The client required no credential update or restart.
+
+The four condition sets passed in Gatus `5.34.0` against actual local native
+SearXNG and Crawl4AI services, including the public crawl fixture and a real search
+query. The shared internal Gateway's translated access-log filter was tested in
+native Envoy: SearXNG authority variants were omitted and an unrelated route's log
+was retained. The agent has separate ServiceMonitor and credential degradation,
+unavailability and missing-metrics alert rules; the Gatus rules remain staged with
+their endpoint definitions.
+
+A sustained local run observed proactive renewal with the native 60-minute JWT
+lifetime around half-life, then a successful credential-free crawl without a client
+restart. Four simultaneous public static-page crawls returned successful native
+responses of about 184 KiB to 1 MiB; the native container peaked at 772,530,176 bytes
+with no recorded OOM events. Slow-consumer response-buffer measurements are recorded
+in the aggregate-memory section. These are local ARM64 fixtures, not a complete
+JavaScript-heavy or deployed AMD64 workload profile.
+
+The registered source gate passes 59 focused tests on the host (one Linux-only
+case skipped and separately passed in the native image), validates 23 rendered
+resources against available schemas, and checks twelve alert rules and the agent's
+metric exposition. The registered local integration workflow uses current pinned
+images and generated Gateway configuration, verifies native rotation/recovery and
+all four Gatus checks, and removes its owned Podman resources. It requires public
+internet access but no cluster credentials or production secret.
+
+These results do not establish live
+Kubernetes Secret projection, Cilium enforcement, n8n workflow continuity,
+LAN/Tailscale access, or representative deployed resource margins. Complete those
+acceptance gates before declaring the unattended platform ready or creating the
+authorized career-ops integration issue.
 
 ## References
 

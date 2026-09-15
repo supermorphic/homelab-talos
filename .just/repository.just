@@ -107,6 +107,12 @@ secrets:
     }
     echo "Loaded age identity matches $expected."
 
+# Write the SOPS-encrypted Crawl4AI bootstrap Secret from both operator-supplied values.
+# Preserve CRAWL4AI_SIGNING_KEY for routine API-token rotation. Change it intentionally
+# only when the coordinated server cutover must revoke all issued JWTs.
+crawl4ai-secrets:
+    uv run --locked --no-dev python scripts/repository/crawl4ai_secrets.py
+
 # Write only the SOPS-encrypted Gatus media-integration API-key Secret. The five
 # API keys are used by Gatus native-health endpoints; this recipe never echoes them.
 gatus-media-integration-secrets:

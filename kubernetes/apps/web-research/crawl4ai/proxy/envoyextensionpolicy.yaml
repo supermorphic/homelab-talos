@@ -1,0 +1,32 @@
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyExtensionPolicy
+metadata:
+  name: crawl4ai-response-bound
+  namespace: web-research
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: crawl4ai
+  lua:
+    - type: Inline
+      inline: |
+        local limit = 8388608
+        function envoy_on_request(handle)
+          handle:headers():replace("accept-encoding", "identity")
+        end
+        function envoy_on_response(handle)
+          handle:headers():remove("authorization")
+          local body = handle:body(true)
+          local encoding = handle:headers():get("content-encoding")
+          if (encoding ~= nil and string.lower(encoding) ~= "identity") or
+             body:length() > limit then
+            local replacement = '{"error":"upstream response too large or encoded"}\n'
+            handle:headers():replace(":status", "502")
+            handle:headers():replace("content-type", "application/json")
+            handle:headers():remove("content-encoding")
+            handle:headers():replace("content-length", string.len(replacement))
+            body:setBytes(replacement)
+          end
+        end

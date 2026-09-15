@@ -1,0 +1,85 @@
+# Staged with the four Gatus endpoints; select together after acceptance.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: web-research
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: web-research
+spec:
+  groups:
+  - name: web-research
+    rules:
+    - alert: SearxngUnavailable
+      expr: gatus_results_endpoint_success{group="Automation",name="searxng"} == 0
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: Web research check searxng is failing
+        description: The searxng check has failed continuously for 5m. Functional checks depend on
+          public internet and their external fixture or search engines.
+    - alert: SearxngProbeMissing
+      expr: absent(gatus_results_endpoint_success{group="Automation",name="searxng"})
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: Web research check searxng is missing
+        description: Gatus has not exported the searxng result for 5m. Check probe configuration
+          and Gatus availability.
+    - alert: Crawl4aiAuthUnavailable
+      expr: gatus_results_endpoint_success{group="Automation",name="crawl4ai-readiness"} == 0
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: Web research check crawl4ai-readiness is failing
+        description: The crawl4ai-readiness check has failed continuously for 5m. Functional checks
+          depend on public internet and their external fixture or search engines.
+    - alert: Crawl4aiReadinessProbeMissing
+      expr: absent(gatus_results_endpoint_success{group="Automation",name="crawl4ai-readiness"})
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: Web research check crawl4ai-readiness is missing
+        description: Gatus has not exported the crawl4ai-readiness result for 5m. Check probe configuration
+          and Gatus availability.
+    - alert: Crawl4aiE2eFailed
+      expr: gatus_results_endpoint_success{group="Automation",name="crawl4ai-e2e"} == 0
+      for: 35m
+      labels:
+        severity: warning
+      annotations:
+        summary: Web research check crawl4ai-e2e is failing
+        description: The crawl4ai-e2e check has failed continuously for 35m. Functional checks depend
+          on public internet and their external fixture or search engines.
+    - alert: Crawl4aiE2eProbeMissing
+      expr: absent(gatus_results_endpoint_success{group="Automation",name="crawl4ai-e2e"})
+      for: 35m
+      labels:
+        severity: warning
+      annotations:
+        summary: Web research check crawl4ai-e2e is missing
+        description: Gatus has not exported the crawl4ai-e2e result for 35m. Check probe configuration
+          and Gatus availability.
+    - alert: SearxngSearchE2eFailed
+      expr: gatus_results_endpoint_success{group="Automation",name="searxng-search-e2e"} == 0
+      for: 65m
+      labels:
+        severity: warning
+      annotations:
+        summary: Web research check searxng-search-e2e is failing
+        description: The searxng-search-e2e check has failed continuously for 65m. Functional checks
+          depend on public internet and their external fixture or search engines.
+    - alert: SearxngSearchE2eProbeMissing
+      expr: absent(gatus_results_endpoint_success{group="Automation",name="searxng-search-e2e"})
+      for: 65m
+      labels:
+        severity: warning
+      annotations:
+        summary: Web research check searxng-search-e2e is missing
+        description: Gatus has not exported the searxng-search-e2e result for 65m. Check probe configuration
+          and Gatus availability.

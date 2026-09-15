@@ -1,0 +1,95 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: searxng
+  labels:
+    app.kubernetes.io/name: searxng
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: searxng
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: searxng
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 977
+        runAsGroup: 977
+        fsGroup: 977
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: searxng
+          image: docker.io/searxng/searxng:2026.9.15-ca4965040@sha256:f1aca3f61c7ff4552b8d54c0ab7fb458e907b78f51c503210cf450c900adca2c
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              # Disposable signing secret; this service has no retained sessions.
+              export SEARXNG_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+              # Native error messages can include engine URLs and search terms.
+              # Health and synthetic functional probes provide token-free status.
+              exec /usr/local/searxng/entrypoint.sh >/dev/null 2>&1
+          env:
+            - name: GRANIAN_HOST
+              value: "0.0.0.0"
+            - name: GRANIAN_PORT
+              value: "8080"
+            - name: GRANIAN_WORKERS
+              value: "1"
+            - name: GRANIAN_LOG_LEVEL
+              value: "error"
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            failureThreshold: 5
+          volumeMounts:
+            - name: settings
+              mountPath: /etc/searxng
+              readOnly: true
+            - name: cache
+              mountPath: /var/cache/searxng
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: settings
+          configMap:
+            name: searxng-settings
+        - name: cache
+          emptyDir:
+            sizeLimit: 128Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

@@ -1,0 +1,22 @@
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: crawl4ai
+  namespace: web-research
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: crawl4ai
+  extAuth:
+    failOpen: false
+    timeout: 2s
+    http:
+      backendRefs:
+      - name: crawl4ai-auth
+        port: 9000
+      pathOverride: /authorize
+      headersToBackend:
+      - Authorization
+    statusOnError: 503

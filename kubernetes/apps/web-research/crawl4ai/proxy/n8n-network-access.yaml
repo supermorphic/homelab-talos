@@ -1,0 +1,28 @@
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: n8n-web-research
+  namespace: automation
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: n8n
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: web-research
+        app.kubernetes.io/name: searxng
+    toPorts:
+    - ports:
+      - port: '8080'
+        protocol: TCP
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: envoy-gateway-system
+        gateway.envoyproxy.io/owning-gateway-name: crawl4ai
+        gateway.envoyproxy.io/owning-gateway-namespace: web-research
+    toPorts:
+    - ports:
+      - port: '8080'
+        protocol: TCP
