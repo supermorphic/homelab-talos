@@ -40,6 +40,19 @@ contracts:
       - scripts/verify/nocodb.sh
     required_tests:
       - catalog:validation.nocodb
+  web-research-validation:
+    changed_inputs:
+      - kubernetes/apps/web-research/crawl4ai/runtime/credential_agent.py
+      - kubernetes/apps/web-research/crawl4ai/runtime/server_launcher.py
+      - kubernetes/apps/web-research/crawl4ai/proxy/envoyproxy.yaml
+      - kubernetes/apps/web-research/alerts/app/credentials.yaml
+      - kubernetes/apps/web-research/monitoring/gatus-endpoints.yaml
+      - scripts/repository/crawl4ai_secrets.py
+      - scripts/validate/web_research.py
+      - scripts/validate/alerts.sh
+      - tests/prometheus/web-research-alerts_test.yaml
+    required_tests:
+      - catalog:validation.web-research
   ci-framework-runner:
     changed_inputs:
       - scripts/test/run-ci.sh
