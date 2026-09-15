@@ -1,5 +1,5 @@
-# Activation fragment: append these endpoints to Gatus config.endpoints only after
-# platform acceptance. Do not use it as a valuesFrom replacement for the array.
+# Shared endpoint definitions selected in Gatus config.endpoints and exercised by
+# local integration. Do not use as a valuesFrom replacement for the endpoint array.
 config:
   endpoints:
     - name: searxng

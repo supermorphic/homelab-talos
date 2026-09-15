@@ -372,9 +372,11 @@ physical memory was below 51 MiB (528 samples). Container accounting includes me
 outside the allocator; the overhead budget conservatively exceeds this measured
 whole-container peak before adding the separate response allowance and safety margin.
 The deployed HTTP/1.1 experiment with four approximately 7.55 MiB native responses
-recorded a whole-container peak of about 101 MiB and no restarts. The revised 128 MiB
+recorded a whole-container peak below 103 MiB and no restarts. The revised 128 MiB
 overhead allowance conservatively exceeds that entire measured footprint, including
 buffers, before adding the separate response allowance and safety margin.
+The sum of recorded Envoy and shutdown-manager container high-water marks was below
+167 MiB, compared with the combined 320 MiB container limits.
 
 Envoy's default delayed-close timeout is one second without write progress, including
 pending response buffers when closing a connection. A deliberate three-second pause
@@ -519,9 +521,10 @@ this specification with implemented and validated behavior.
 
 ## Required consumer follow-up
 
-After implementation and platform acceptance are complete, create a new issue in
-the private `career-ops` repository to wire up SearXNG and Crawl4AI. This is a
-required completion task; do not create it before the platform is ready.
+Consumer integration is tracked in [career-ops #67](https://github.com/supermorphic/career-ops/issues/67),
+created early at the operator's explicit request. Implementation and tests may proceed
+in parallel with platform acceptance; production cutover still depends on the platform
+being ready. Creating the issue does not change any live consumer or remove Tavily.
 
 Direct APIs are not a wire-compatible Tavily endpoint. The issue must implement
 bounded search, URL filtering, extraction, and response normalization while
@@ -557,8 +560,8 @@ workload network policies, the cached credential agent, the atomic-bootstrap ser
 launcher, a guarded operator SOPS writer, private SearXNG routing and Homepage
 discovery, and the four approved Gatus definitions. The initial deployment change
 enables the five Flux units and selects the operator-provided SOPS bootstrap Secret.
-Gatus checks and their alert rules remain staged pending live acceptance. This
-deployment selection does not establish that the unattended platform is ready.
+The monitoring activation change selects Gatus checks and their alert rules together.
+Deployment selection alone does not establish that the unattended platform is ready.
 Runtime consumer credentials are never written to Git.
 
 The production credential agent's focused tests cover automatic issuance, idle
@@ -588,8 +591,8 @@ native Envoy: SearXNG authority variants were omitted and an unrelated route's l
 was retained. The agent has separate ServiceMonitor and credential degradation,
 unavailability and missing-metrics alert rules. Rules live in the domain
 `alerts/app` package in the monitoring namespace. Credential alerts activate with
-native Crawl4AI; Gatus rules remain unselected until their four endpoint definitions
-activate in the same change.
+native Crawl4AI; Gatus rules and their four endpoint definitions are selected in the
+same monitoring activation change.
 
 A sustained local run observed proactive renewal with the native 60-minute JWT
 lifetime around half-life, then a successful credential-free crawl without a client
@@ -642,10 +645,18 @@ recovery during coordinated native replacement remain unverified in the cluster.
 The local lifecycle tests and observed normal live issuance/renewal still apply;
 the waiver does not turn them into evidence of live failure recovery.
 
-Remaining deployment gates include full workload-network restriction coverage,
-off-LAN Tailscale access, and deployed aggregate memory under near-cap slow-consumer
-load. Complete the required gates before activating Gatus, declaring the unattended
-platform ready, or creating the authorized career-ops issue.
+The final live diagnostic run passed all ten phases, including four complete native
+responses totaling 31,655,019 bytes after their shared 100 ms pause, explicit oversized
+rejection, prohibited-loopback rejection, and subsequent recovery. The four deployed
+Cilium policy specifications exactly matched source. These checks establish allowed
+consumer reachability and prohibited-seed rejection; they do not claim a complete
+independent packet-level policy test matrix. Excess connection rejection and HTTP/2
+buffer behavior retain the separately recorded local evidence.
+
+Off-LAN Tailscale access remains an operator acceptance check before merging monitoring
+activation. After merge, verify all four Gatus results and their alert rules in the
+cluster before declaring the unattended platform ready. The consumer issue is already
+created, with production cutover dependent on this platform acceptance.
 
 ## References
 

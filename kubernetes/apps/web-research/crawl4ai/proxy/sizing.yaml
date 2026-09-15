@@ -2,7 +2,7 @@
 # four 8 MiB responses, two workers, stalled downstream HTTP/1 and HTTP/2 clients;
 # container memory below 82 MiB and allocator physical memory below 51 MiB,
 # during six-second stalled-client experiments; overload recovery passed.
-# Deployed four near-cap HTTP/1 responses peaked at about 101 MiB, including buffers.
+# Deployed four near-cap HTTP/1 responses peaked below 103 MiB, including buffers.
 # Conservatively budget the whole measured peak as overhead, then add the separate
 # response allowance and safety margin: 32 + 128 + 64 = 224 MiB <= 256 MiB.
 response_cap_bytes: 8388608

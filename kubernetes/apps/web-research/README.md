@@ -41,9 +41,10 @@ cutover; the proxy never replays a crawl automatically.
 - The controller's `shutdown-manager` sidecar is separately limited to 64 MiB,
   making the hard ceiling across both Pod containers 320 MiB.
 - The sizing budget is 32 MiB for resident responses, 128 MiB for loaded overhead,
-  and 64 MiB safety margin. Local slow-consumer tests measured less than 82 MiB of
-  container memory and 51 MiB of allocator physical memory. Repeat measurement on
-  the deployed architecture, including the generated sidecar.
+  and 64 MiB safety margin. The deployed four-response test measured less than
+  103 MiB in Envoy; its recorded high-water mark plus the generated sidecar's was
+  below 167 MiB. No container restarted. The overhead allowance conservatively
+  exceeds the entire measured Envoy footprint before the response allowance is added.
 - These response limits do not bound downloaded page bytes or Chromium memory.
   Browser resources and deadlines are separate controls. A client disconnect does
   not prove immediate browser cancellation.
@@ -60,12 +61,11 @@ The SearXNG HTTPRoute supplies the **Platform → SearXNG** Homepage card throug
 existing discovery annotations. The hostname uses the internal Gateway, internal
 DNS audience, and existing wildcard TLS. There is no public route or Funnel.
 
-The four approved Gatus endpoints are staged in
-[monitoring/gatus-endpoints.yaml](monitoring/gatus-endpoints.yaml). Append them to
-the existing Gatus endpoint array when activating monitoring; do not replace the
-array with this fragment through Helm values merging.
-Add `./gatus.yaml` to `alerts/app/kustomization.yaml` in the same Git change to
-select their alert rules.
+The four approved Gatus endpoints are selected in the existing Gatus endpoint array,
+together with `./gatus.yaml` in `alerts/app/kustomization.yaml` for their alert rules.
+[monitoring/gatus-endpoints.yaml](monitoring/gatus-endpoints.yaml) retains the shared
+condition definitions used by validation and local integration. Do not use this
+fragment as a Helm values replacement for the existing endpoint array.
 
 | Gatus name | Interval | Public internet dependency |
 | --- | --- | --- |
@@ -89,8 +89,8 @@ missing-series rules deploy with the four endpoint definitions.
 
 Git selects the namespace, SearXNG, native Crawl4AI, dedicated proxy, and credential
 alerts for initial deployment. The operator-provided encrypted bootstrap Secret is
-selected with the native app. Gatus checks and their alert rules remain staged until
-live acceptance passes.
+selected with the native app. The monitoring activation change selects Gatus checks
+and their alert rules together; it must merge after the remaining operator acceptance.
 
 The operator supplies the initial SOPS-encrypted `crawl4ai-bootstrap` Secret with
 `api_token` and `signing_key`. These are long-lived platform bootstrap values;
@@ -183,5 +183,6 @@ JavaScript-heavy page behavior, Cilium enforcement, n8n continuity, Kubernetes S
 projection, or LAN/Tailscale reachability. Those remain deployment acceptance gates.
 
 The [design record](../../../docs/specs/029-selfhost-web-research.md) contains the
-acceptance requirements and evidence limits. Create the authorized career-ops
-integration issue only after platform implementation and acceptance are complete.
+acceptance requirements and evidence limits. Consumer integration is tracked in
+[career-ops #67](https://github.com/supermorphic/career-ops/issues/67). Implementation
+and tests may proceed in parallel; production cutover depends on platform acceptance.
