@@ -212,12 +212,18 @@ function oversizedPayload() {
 }
 
 function oversizedContract(response) {
-  const expected = Buffer.from('{"error":"upstream response too large or encoded"}\n');
   const contentType = String(response.headers['content-type'] || '').toLowerCase();
   const encoding = String(response.headers['content-encoding'] || '').toLowerCase();
   const declaredLength = Number(response.headers['content-length']);
-  if (response.status !== 502 || contentType !== 'application/json' || encoding ||
-      declaredLength !== expected.length || !response.body.equals(expected)) {
+  // The connection manager can reject its full buffer before Lua body() resumes.
+  // Reproduced with the pinned native API returning >8 MiB through translated Envoy.
+  const expected = response.status === 500 && contentType === 'text/plain'
+    ? Buffer.from('Internal Server Error')
+    : response.status === 502 && contentType === 'application/json'
+      ? Buffer.from('{"error":"upstream response too large or encoded"}\n')
+      : null;
+  if (!expected || encoding || declaredLength !== expected.length ||
+      !response.body.equals(expected)) {
     throw new ContractError('oversized-contract', response.body.length);
   }
   return 1;

@@ -34,6 +34,8 @@ cutover; the proxy never replays a crawl automatically.
 - Native API input: 512 KiB; crawl wall-clock budget: 75 seconds.
 - Complete API response: 8 MiB. Encoded responses are rejected. Oversized responses
   return an error; a truncated response is never presented as successful native JSON.
+  Envoy's buffer guard can return HTTP 500 with `Internal Server Error` before Lua
+  resumes; the Lua guard itself returns HTTP 502 JSON. Both are failed crawls.
 - Envoy admits at most four connections, one request per connection and one HTTP/2
   stream per connection, across two workers. Its container memory limit is 256 MiB.
 - The controller's `shutdown-manager` sidecar is separately limited to 64 MiB,

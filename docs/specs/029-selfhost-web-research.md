@@ -310,6 +310,14 @@ compressed body cannot expand without a bound in n8n. Return an error, never a
 truncated successful JSON document. Keep this operator-owned code small and free
 of retrieval, domain, or consumer-specific logic.
 
+The 8 MiB value is a platform setting, not an upstream Crawl4AI response limit.
+Envoy can reject a full buffer before Lua resumes: the pinned proxy returns HTTP
+500 with the fixed plain-text body `Internal Server Error` in that case. The Lua
+guard returns its small HTTP 502 JSON error when it handles a rejection itself.
+Consumers treat either as a failed crawl. Acceptance uses a deterministic fixture
+independently shown to produce more than 8 MiB through the native API; an arbitrary
+upstream 500 does not establish response-cap enforcement.
+
 Use an HTTPRoute-targeted `EnvoyExtensionPolicy` with Lua `body(true)`, which also
 handles empty bodies. Envoy Gateway `1.8.2` enables this supported extension by default;
 no shared-controller feature-flag change is required. Configure
@@ -322,9 +330,9 @@ applications' response behavior.
 Listener limits alone do not cap streaming responses. Verify HTTP/1.1 and any enabled
 HTTP/2 behavior, exact boundaries, chunked bodies, empty bodies, encoded responses,
 and filter execution failure. Bind the policy to the crawler route and prevent
-consumers bypassing it through the raw backend Service. The current repository has
-not enabled these policies; deployment requires reviewed Git configuration and live
-acceptance. Use supported Envoy Gateway resources where available rather than an
+consumers bypassing it through the raw backend Service. These policies are deployed;
+remaining live acceptance gates still precede monitoring activation. Use supported
+Envoy Gateway resources where available rather than an
 unnecessary standalone application or experimental filter.
 
 Select the production response cap from representative complete native results,

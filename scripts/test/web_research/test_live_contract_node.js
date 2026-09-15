@@ -206,7 +206,7 @@ test('main runs only for a Node stdin module', () => {
 test('oversized fixture is fixed, network-free, and below the input cap', () => {
   const payload = oversizedPayload();
   const encoded = Buffer.from(JSON.stringify(payload));
-  assert.ok(encoded.length < 512 * 1024);
+  assert.ok(encoded.length < 50 * 1024);
   assert.equal(payload.urls.length, 1);
   assert.ok(payload.urls[0].startsWith('raw:<html>'));
   assert.equal((payload.urls[0].match(/<a href=/g) || []).length, 220);
@@ -230,5 +230,24 @@ test('oversized response requires the proxy exact replacement response', () => {
       () => oversizedContract(distractor),
       (error) => error.code === 'oversized-contract',
     );
+  }
+});
+
+test('oversized response accepts the independently reproduced Envoy buffer rejection', () => {
+  const rejection = {
+    status: 500,
+    headers: {'content-type': 'text/plain', 'content-length': '21'},
+    body: Buffer.from('Internal Server Error'),
+  };
+  assert.equal(oversizedContract(rejection), 1);
+  for (const distractor of [
+    {...rejection, status: 503},
+    {...rejection, headers: {...rejection.headers, 'content-encoding': 'gzip'}},
+    {...rejection, headers: {...rejection.headers, 'content-length': '22'}},
+    {...rejection, body: Buffer.from('upstream unavailable')},
+    jsonResponse(500, {error: 'Internal server error', correlation_id: 'synthetic'}),
+  ]) {
+    assert.throws(() => oversizedContract(distractor),
+      (error) => error.code === 'oversized-contract');
   }
 });
