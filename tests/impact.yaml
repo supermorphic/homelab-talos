@@ -125,6 +125,12 @@ conditional_paths:
     - docs/runbooks/platform-disaster-recovery.md
     - kubernetes/apps/automation/**
     - kubernetes/apps/automation-data/**
+    - kubernetes/apps/web-research/**
+    - scripts/validate/web-research.sh
+    - scripts/validate/web_research.py
+    - scripts/test/web_research/**
+    - scripts/test/scenarios/web-research-local-integration.sh
+    - scripts/repository/crawl4ai_secrets.py
     - kubernetes/apps/monitoring/alerts/app/kustomization.yaml
     - kubernetes/apps/monitoring/alerts/app/n8n.yaml
     - kubernetes/apps/monitoring/alerts/app/nocodb.yaml
