@@ -330,9 +330,8 @@ applications' response behavior.
 Listener limits alone do not cap streaming responses. Verify HTTP/1.1 and any enabled
 HTTP/2 behavior, exact boundaries, chunked bodies, empty bodies, encoded responses,
 and filter execution failure. Bind the policy to the crawler route and prevent
-consumers bypassing it through the raw backend Service. These policies are deployed;
-remaining live acceptance gates still precede monitoring activation. Use supported
-Envoy Gateway resources where available rather than an
+consumers bypassing it through the raw backend Service. Require live acceptance
+before monitoring activation. Use supported Envoy Gateway resources rather than an
 unnecessary standalone application or experimental filter.
 
 Select the production response cap from representative complete native results,
@@ -379,12 +378,8 @@ The sum of recorded Envoy and shutdown-manager container high-water marks was be
 167 MiB, compared with the combined 320 MiB container limits.
 
 Envoy's default delayed-close timeout is one second without write progress, including
-pending response buffers when closing a connection. A deliberate three-second pause
-therefore produced a transport-aborted response; subsequent normal crawls succeeded.
-The successful-drain test uses a 100 ms simultaneous pause, below that timeout.
-Kernel high-water memory metrics retain the peak without requiring a long pause to
-coincide with a Prometheus scrape. Consumers must reject incomplete HTTP responses;
-an initial HTTP 200 header alone does not establish crawl success.
+pending response buffers when closing a connection. Consumers must reject incomplete
+HTTP responses; an initial HTTP 200 header alone does not establish crawl success.
 The generated `shutdown-manager` sidecar also receives an explicit 64 MiB memory
 limit through the supported Deployment strategic-merge patch. The two container
 limits enforce a 320 MiB ceiling across the Pod; the sidecar cannot consume an
@@ -519,22 +514,17 @@ precedes initial deployment. Required live acceptance precedes Gatus activation 
 declaring the platform ready. Merge needs explicit operator authorization. Reconcile
 this specification with implemented and validated behavior.
 
-## Required consumer follow-up
+## Consumer integration contract
 
-Consumer integration is tracked in [career-ops #67](https://github.com/supermorphic/career-ops/issues/67),
-created early at the operator's explicit request. Implementation and tests may proceed
-in parallel with platform acceptance; production cutover still depends on the platform
-being ready. Creating the issue does not change any live consumer or remove Tavily.
-
-Direct APIs are not a wire-compatible Tavily endpoint. The issue must implement
+Direct APIs are not a wire-compatible Tavily endpoint. Consumers must implement
 bounded search, URL filtering, extraction, and response normalization while
 preserving the existing consumer's logical budgets, direct ATS retrieval, cache,
 source qualification, evidence handling, and inference boundary. Include workload
 admission with no stored Crawl4AI credential, final-URL handling, platform authentication
 and size/timeout failures, accurate provider
 attribution, compatibility tests, and an explicit hosted-provider rollback path.
-Link the completed infrastructure change and acceptance evidence. Do not publish
-private consumer implementation or policy in this repository.
+Consumer implementation and tests may proceed in parallel with platform acceptance;
+production cutover depends on the platform being ready.
 
 ## Status
 
@@ -609,54 +599,6 @@ Prometheus fixtures, and the agent's metric exposition. The registered local int
 images and generated Gateway configuration, verifies native rotation/recovery and
 all four Gatus checks, and removes its owned Podman resources. It requires public
 internet access but no cluster credentials or production secret.
-
-### Deployed acceptance in progress
-
-On 2026-09-15, all five selected Flux units reconciled successfully. The native
-services, credential agent and dedicated Envoy were Ready without container restarts.
-The private SearXNG UI and Homepage card worked over LAN with normal TLS verification
-and no application login. The credential metrics and four credential alert rules
-were loaded and healthy. The four Gatus endpoints remain staged.
-
-A task-owned manual n8n workflow completed native search and a public HTTPS crawl
-through the actual HTTP Request node before and after automatic JWT renewal, with
-no Crawl4AI credential or consumer restart. The Crawl4AI node configuration was
-unchanged. The intervening search assertion was corrected to accept both canonical
-HTTP and HTTPS spellings of the example.com result; the crawl always used HTTPS.
-The temporary workflow was archived after the test. This establishes consumer
-continuity across normal renewal, not injected expiry or bootstrap replacement.
-
-The registered diagnostic suite passed domain-qualified search, static and rendered
-JavaScript extraction, caller Authorization replacement, excluded-route rejection,
-explicit prohibited-loopback rejection, four concurrent small crawls, and recovery.
-An oversized fixture returned the small HTTP 500 described in the response-limit
-section. A separate pinned native/proxy reproduction established the reason for
-that response before correcting the diagnostic expectation.
-
-Explicit queries reached all four intended search engines. Default settings inherited
-disabled Google and Bing entries from upstream; named engine overrides now explicitly
-enable the intended four-engine set. Partial provider failure was also observed:
-usable results remained available while one provider reported a CAPTCHA. This does
-not establish controlled total-provider-failure behavior.
-
-The operator waived the remaining live credential-recovery tests on 2026-09-15.
-Injected expiry and refresh failure, Kubernetes bootstrap/key replacement, and
-recovery during coordinated native replacement remain unverified in the cluster.
-The local lifecycle tests and observed normal live issuance/renewal still apply;
-the waiver does not turn them into evidence of live failure recovery.
-
-The final live diagnostic run passed all ten phases, including four complete native
-responses totaling 31,655,019 bytes after their shared 100 ms pause, explicit oversized
-rejection, prohibited-loopback rejection, and subsequent recovery. The four deployed
-Cilium policy specifications exactly matched source. These checks establish allowed
-consumer reachability and prohibited-seed rejection; they do not claim a complete
-independent packet-level policy test matrix. Excess connection rejection and HTTP/2
-buffer behavior retain the separately recorded local evidence.
-
-Off-LAN Tailscale access remains an operator acceptance check before merging monitoring
-activation. After merge, verify all four Gatus results and their alert rules in the
-cluster before declaring the unattended platform ready. The consumer issue is already
-created, with production cutover dependent on this platform acceptance.
 
 ## References
 

@@ -183,6 +183,5 @@ JavaScript-heavy page behavior, Cilium enforcement, n8n continuity, Kubernetes S
 projection, or LAN/Tailscale reachability. Those remain deployment acceptance gates.
 
 The [design record](../../../docs/specs/029-selfhost-web-research.md) contains the
-acceptance requirements and evidence limits. Consumer integration is tracked in
-[career-ops #67](https://github.com/supermorphic/career-ops/issues/67). Implementation
-and tests may proceed in parallel; production cutover depends on platform acceptance.
+acceptance requirements and evidence limits. Consumer implementation and tests may
+proceed in parallel; production cutover depends on platform acceptance.
