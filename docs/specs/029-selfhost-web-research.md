@@ -12,6 +12,12 @@ Cilium policies. Add an application adapter only when a required invariant canno
 be enforced through supported upstream or generic platform controls. Reducing the
 apparent API surface is not sufficient justification for an adapter.
 
+Unattended operation is a required invariant. The platform owns authentication,
+issuance, renewal, and recovery from expired backend credentials. The selected
+generic authentication boundary is Envoy `ext_authz` plus a small credential agent
+beside Crawl4AI. It preserves the native crawl operation and does not implement a
+search, extraction, or consumer-policy adapter.
+
 Consumers own queries, allowed domains, URL selection, workflow budgets, caching,
 evidence qualification, normalization, and inference. This platform does not
 receive consumer policy, workflow state, prompts, or model credentials.
@@ -19,16 +25,19 @@ receive consumer policy, workflow state, prompts, or model credentials.
 ## Service interfaces
 
 The selected design exposes SearXNG's JSON search API and Crawl4AI's authenticated
-`POST /crawl` API. A response-limiting proxy preserves the native API while
-protecting clients from oversized responses. It does not combine searches and
-retrievals, transform results, or implement the Tavily API.
+`POST /crawl` API. Envoy handles authentication and response limits while
+preserving the native request and successful response. It does not combine searches
+and retrievals, transform results, or implement the Tavily API.
 
 The consumer flow is:
 
 ```text
 consumer -> SearXNG JSON search -> consumer selects approved public URLs
-         -> Crawl4AI through bounded-response proxy -> consumer normalization
-         -> consumer-owned evidence/cache and inference
+         -> private Envoy POST /crawl -> native Crawl4AI -> consumer normalization
+                    |
+                    +-> ext_authz credential agent -> native POST /token
+
+consumer-owned evidence/cache and inference follow normalization
 ```
 
 Use one explicit HTTPS URL per normal extraction request. A representative native
@@ -65,18 +74,152 @@ selectors, and pruning can reduce typical output, but are not maximum-size
 controls. The Docker API uses the browser path for ordinary pages; do not introduce
 a custom SDK service solely to obtain a lighter static fetch path.
 
-## Authentication and trust boundaries
+## Automated authentication
 
-Give each consumer a data-scoped JWT. Never give a consumer the static administrative
-API token or the signing key. The pinned server verifies JWT expiry, rejects
-administrative actions for a data principal, and rejects dangerous caller-provided
-browser, code, proxy, and filesystem configuration.
+### Required invariant and selected boundary
 
-Prepare an operator-run issuance and rotation workflow using the repository's SOPS
-conventions. The upstream token endpoint requires an operator credential and issues
-short-lived data tokens; a data token cannot mint its replacement. Document expiry
-and rotation explicitly without placing the administrative credential in n8n.
-Credential lifecycle does not itself justify a retrieval adapter.
+An authorized consumer can keep using the service without holding a Crawl4AI token,
+manually obtaining or rotating a JWT, editing a Secret, restarting its process, or
+making a Git commit because a runtime credential expired. n8n stores no Crawl4AI
+administrative credential, signing key, or data JWT.
+
+Use the private caller's Cilium workload identity for admission to the dedicated
+Envoy Service. This identifies the authorized workload, not an individual n8n
+workflow. Do not trust a caller-supplied identity header. Restrict the route to exact
+`POST /crawl`; consumers cannot reach `/token`, administrative operations, streaming
+crawls, the raw backend Service, or the credential agent. Keep monitoring separate.
+
+Envoy calls a small platform-owned credential agent through supported
+`SecurityPolicy.extAuth`. The agent returns a current data-scoped JWT to Envoy, which
+overwrites the upstream `Authorization` header on every admitted request. Do not
+forward that header to the client. The agent receives no crawl request body and
+does not fetch target pages, parse documents, filter domains, cache results, combine
+searches, or transform successful crawl responses.
+
+HTTP `ext_authz` includes any caller `Authorization` header in its check request.
+The agent must ignore that value and must never log incoming headers. It uses only
+its own platform-issued data JWT for the upstream header.
+
+Keep the agent beside Crawl4AI with an in-memory token cache. It needs no Kubernetes
+API credential, Secret-write permissions, persistent volume, or consumer credential
+database. Configure `extAuth.failOpen: false`, `statusOnError: 503`, a finite auth
+timeout, no route recomputation, and only `Authorization` in `headersToBackend`.
+Use a fixed backend address, separate from the consumer-facing crawl route, to avoid
+recursive authentication. Keep the existing full-response guard on the crawl path.
+
+### Native capability evaluation
+
+Crawl4AI `0.9.3` exposes a scriptable JSON `POST /token` with an email subject and
+administrative API token. It issues a data JWT with a 60-minute lifetime. It has no
+OAuth2 client-credentials grant, refresh token, individual JWT revocation endpoint,
+or built-in consumer credential distribution. n8n's OAuth2 client sends form-encoded
+OAuth requests, which do not match this native JSON endpoint. A static header-auth
+credential does not implement renewal.
+
+The native endpoint remains the issuer; the agent supplies the missing lifecycle
+and transparent delivery. A periodic job updating a consumer Secret would not solve
+an unchanged n8n process retaining its stored credential. Envoy's supported Secret
+credential-injection mechanism is another possible delivery path, but needs a token
+writer, runtime Secret ownership, and Secret-to-proxy convergence. The selected
+in-memory agent avoids those dependencies and gives a direct unavailable condition.
+Do not inject the administrative token into crawl requests or use a manually issued
+long-lived JWT as the steady-state solution.
+
+### Bootstrap and renewal
+
+SOPS bootstraps the long-lived platform API token and stable signing key. Mount the
+API token only into the credential agent and native server; the signing key is
+needed only by the native server. Neither reaches the consumer or Envoy. Keep these
+values in the platform namespace. Ephemeral data JWTs exist only in the agent and
+the Envoy-to-Crawl4AI request path; they are not Git-managed Secret values.
+
+The native `/token` implementation reads `security.api_token` from `config.yml`;
+setting `CRAWL4AI_API_TOKEN` alone is insufficient for issuance. Prepare the effective
+configuration automatically in a private runtime volume from the non-secret template
+and mounted bootstrap material. Do not write rendered secret configuration to Git
+or logs. Keep `SECRET_KEY` stable across workers and ordinary server replacement.
+
+Every issuance checks the email subject's MX record. Use a configured platform
+subject with a valid MX domain; no email is sent. DNS failure is an issuance failure.
+Startup waits and retries automatically until the authenticated issuer is usable.
+Missing or invalid bootstrap material must never enable an unauthenticated server.
+
+The credential agent must:
+
+1. Mint automatically on startup, with one issuance in progress at a time.
+2. Bound issuer and validation requests by time and response bytes, prohibit redirects,
+   and validate JSON content type, field types, returned email and bearer token type,
+   JWT type and algorithm, subject, data scope, and plausible future expiry.
+3. Validate each candidate with a bounded, authenticated, side-effect-free native
+   `GET /schema` before atomically replacing the current token. Decoded expiry is a
+   scheduling hint; the backend is the authentication authority. `/health` cannot
+   establish token validity because it is public.
+4. Renew proactively around halfway through the native lifetime, with bounded jitter
+   and retry backoff. Keep a small expiry margin for clock skew and request admission.
+5. Validate cached access on admission and remint on a native `401`. A timeout,
+   `5xx`, or other ambiguous validation response denies that admission with `503`
+   while retaining an otherwise unexpired token. Only an authentication rejection
+   invalidates the cache. This detects signing-key invalidation without giving the
+   consumer a renewal protocol.
+6. Read the projected API-token file afresh for issuance rather than retaining an
+   environment-variable snapshot. A replacement credential is used automatically.
+
+Consumers always use the same endpoint. Each Envoy authorization call obtains the
+current JWT, so rotation does not require changing a consumer Secret, workflow
+credential, environment variable, or process. No credentials are returned to n8n.
+
+### Failure and restart behavior
+
+If proactive refresh fails, retain the last backend-validated JWT while it remains
+usable. Mark refresh health degraded and retry automatically. Do not mark a usable
+service unready merely because one early renewal attempt failed. Once no usable
+credential remains, deny admission with `503 platform_auth_unavailable`. An agent
+timeout, crash, or missing endpoint also fails closed. Never fall back to anonymous
+access, inject an administrative credential, broaden permissions, or retry a crawl
+POST as part of authentication recovery.
+
+Expose token-free refresh health, last successful refresh time, seconds until usable
+expiry, and bounded failure counters. Distinguish process liveness, usable access,
+and degraded refresh health. A separate readiness endpoint returns `200` only while
+access is safely usable; liveness does not depend on a working issuer. Alert before
+expiry and on unavailable authentication;
+never log JWTs, authorization headers, issuer request bodies, or signing material.
+
+An agent or consumer restart requires no retained data JWT. Agent startup mints a
+new token; a restarted consumer uses the same endpoint. An ordinary Crawl4AI restart
+retains its stable signing key and recovers through startup/readiness ordering.
+Reconciliation must restore the route, authorization policy, and agent together and
+must not make an unauthenticated route usable during recovery.
+
+The pinned upstream has no overlapping signing-key support. Bootstrap replacement
+uses a small launcher in the server container that watches the projected bootstrap
+volume, takes a consistent snapshot, prepares private configuration, and replaces
+its own native child process when that snapshot changes. Mount the versioned bundle
+without `subPath`; render configuration mode `0600` on a memory-backed runtime
+volume. An ordinary sidecar cannot restart a different container. The launcher also
+restarts an exited
+server with bounded backoff. This needs no Kubernetes Secret writes, Deployment
+patch permissions, or consumer restart. Readiness covers the complete cutover;
+malformed or absent material must not start an unauthenticated process. Validate
+shutdown of the server's workers and browser children before replacement.
+
+Do not mix old-key and new-key server replicas behind one Service. A signing-key
+cutover invalidates existing JWTs, and the agent remints through the native issuer. The
+deployment workflow must prove this automatic cutover before activation. Native
+API-token replacement alone does not revoke already-issued JWTs.
+
+A key can change between an admission probe and the crawl itself. Therefore a
+cutover may produce a transient backend authentication/unavailable response; the
+next admission must recover automatically. Do not promise zero failed requests or
+replay a possibly-started crawl. If the platform's issuing authority has itself been
+revoked or is unavailable, keep access closed when cached authority expires; the
+agent retries with its configured authority and cannot grant itself new authority.
+
+## Network and caller configuration boundaries
+
+The pinned server verifies JWT expiry, rejects administrative actions for a data
+principal, and rejects dangerous caller-provided browser, code, proxy, and filesystem
+configuration. The authentication agent does not replace these upstream controls.
 
 Keep inline code and hooks disabled and provide no external LLM credentials. Use
 cluster-private Services and explicit Cilium caller selectors. Permit only approved
@@ -145,9 +288,11 @@ they are not established by the response-size control.
 
 ## Flux, storage, versions, and operations
 
-Use the existing `automation` grouping with app-local Flux Kustomizations and native
-workloads. Keep discovery and extraction independently restartable, initially with
-one replica each. Preserve restricted Pod Security: non-root execution, dropped
+Use app-local Flux Kustomizations and native workloads in a dedicated `web-research`
+platform namespace, separate from consumer credentials and workloads. This isolation
+supports the automated credential boundary. Keep discovery and extraction
+independently restartable, initially with one replica each. Preserve restricted
+Pod Security: non-root execution, dropped
 capabilities, no privilege escalation, runtime-default seccomp, no host networking
 or mounts, and no Kubernetes service-account token.
 
@@ -185,6 +330,16 @@ limits; timeouts; bounded consumer attempts; partial and total engine failure;
 privacy; and resource measurements. A healthy empty search must remain distinct
 from total upstream failure.
 
+Before deployment implementation, establish the automated authentication design with
+an isolated lifecycle spike. Before activation, repeat the relevant checks through
+the deployed Gateway policies, Cilium callers, and an unchanged n8n HTTP Request
+consumer. Required evidence includes automatic cold-start issuance, proactive
+renewal, credential-free consumer continuity, header replacement, data scope,
+restart/reconciliation, expired and key-invalidated token recovery, cached-token
+continuity during refresh failure, observable failure, and fail-closed expiry.
+Explicitly test bootstrap replacement and coordinated server rollout. Keep the
+route unavailable if a required policy or usable credential is absent.
+
 Before publication, commit the candidate and run
 `mise exec -- just test ci-publish` from a clean feature worktree. Operator secrets
 and required runtime acceptance precede activation. Merge needs explicit operator
@@ -199,16 +354,19 @@ required completion task; do not create it before the platform is ready.
 Direct APIs are not a wire-compatible Tavily endpoint. The issue must implement
 bounded search, URL filtering, extraction, and response normalization while
 preserving the existing consumer's logical budgets, direct ATS retrieval, cache,
-source qualification, evidence handling, and inference boundary. Include data-token
-provisioning/rotation, final-URL handling, size and timeout failures, accurate provider
+source qualification, evidence handling, and inference boundary. Include workload
+admission with no stored Crawl4AI credential, final-URL handling, platform authentication
+and size/timeout failures, accurate provider
 attribution, compatibility tests, and an explicit hosted-provider rollback path.
 Link the completed infrastructure change and acceptance evidence. Do not publish
 private consumer implementation or policy in this repository.
 
 ## Status
 
-The direct-API review selected native services with a generic response-size guard.
-No application adapter or custom SDK worker is justified by the tested requirements.
+The selected design combines native services, a generic response-size guard, and an
+Envoy `ext_authz` credential agent. Fully automated authentication supersedes the
+earlier proposal to distribute manually rotated data JWTs to consumers. No search,
+extraction, or consumer-policy adapter is needed.
 The official Crawl4AI image passed fifteen isolated checks covering data JWTs,
 configuration rejection, prohibited seed URLs, deterministic raw-HTML extraction,
 and the distinction between incoming request and outgoing response size. Those
@@ -228,6 +386,27 @@ request under a 524,288-byte incoming request cap with deterministic extraction.
 The proxy probe used direct Envoy configuration. Deployed Gateway policy translation,
 filter-failure behavior, representative browser loads, production sizing, and cluster
 acceptance remain unverified. These checks must pass before activation.
+
+An additional isolated lifecycle spike passed 21 assertions through Envoy `1.38.3`
+and the native Crawl4AI `0.9.3` endpoints. It covered issuance, proactive renewal,
+credential-free client continuity, header overwrite, route restriction, data scope,
+agent/consumer restart, automatic bootstrap-file reload and native server restart,
+signing-key invalidation, issuer-credential replacement,
+cached access during refresh failure, observable degradation, expired-token recovery,
+and fail-closed expiry or unavailable agent. The fixture shortened the JWT lifetime
+to 18 seconds and supplied a loopback MX DNS answer; it used no external network or
+production secrets. All disposable test containers were removed.
+
+Four focused checks with synthetic HTTP responses also verified that ambiguous
+validation failures deny admission while preserving an otherwise valid cached JWT.
+
+This proves the local lifecycle mechanism using a single native Uvicorn process,
+not deployed Kubernetes reconciliation, an actual n8n workflow execution, production
+DNS reliability, Kubernetes Secret projection, or production supervisor/worker
+shutdown. Invalid/simultaneous bootstrap changes, launcher failure, separate
+liveness/readiness behavior, and malformed issuer-response rejection also remain
+implementation acceptance tests. Those integration gates remain outstanding; do not report
+the unattended platform ready before they pass.
 No service implementation, activation, or consumer follow-up issue is complete.
 
 ## References
@@ -239,6 +418,10 @@ No service implementation, activation, or consumer follow-up issue is complete.
 - [Crawl4AI authentication](https://github.com/unclecode/crawl4ai/blob/v0.9.3/deploy/docker/auth.py)
 - [Envoy flow control](https://www.envoyproxy.io/docs/envoy/v1.38.3/faq/configuration/flow_control.html)
 - [Envoy Gateway Lua extensions](https://gateway.envoyproxy.io/v1.8/tasks/extensibility/lua/)
+- [Envoy Gateway external authorization](https://gateway.envoyproxy.io/v1.8/tasks/security/ext-auth/)
+- [Pinned external-authorization translation](https://github.com/envoyproxy/gateway/blob/v1.8.2/internal/xds/translator/extauth.go)
+- [Crawl4AI token endpoint](https://github.com/unclecode/crawl4ai/blob/v0.9.3/deploy/docker/server.py#L581-L596)
+- [Crawl4AI issuer DNS check](https://github.com/unclecode/crawl4ai/blob/v0.9.3/deploy/docker/utils.py#L402-L409)
 - [n8n HTTP Request options](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.httprequest/)
 - [n8n pinned HTTP transport configuration](https://github.com/n8n-io/n8n/blob/f09fcad454339ae8d16d88c85e2e4a38f85b1217/packages/%40n8n/backend-network/src/http/axios/request.ts#L35-L43)
 - [n8n platform](023-n8n-workflow-automation-platform.md)
