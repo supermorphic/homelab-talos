@@ -55,12 +55,15 @@ reset_tree() {
     "$tree_root/kubernetes/apps/automation/n8n-postgresql" \
     "$tree_root/kubernetes/apps/networking/public-webhook-gateway" \
     "$tree_root/kubernetes/apps/testing/echo/app" \
+    "$tree_root/kubernetes/apps/web-research/monitoring" \
     "$tree_root/kubernetes/apps/networking/internal-gateway/app"
   cp "$repo_root/.sops.yaml" "$tree_root/.sops.yaml"
   cp -R "$repo_root/kubernetes/apps/monitoring/gatus" \
     "$tree_root/kubernetes/apps/monitoring/gatus"
   cp "$repo_root/kubernetes/apps/monitoring/kustomization.yaml" \
     "$tree_root/kubernetes/apps/monitoring/kustomization.yaml"
+  cp "$repo_root/kubernetes/apps/web-research/monitoring/gatus-endpoints.yaml" \
+    "$tree_root/kubernetes/apps/web-research/monitoring/gatus-endpoints.yaml"
   cp "$repo_root/kubernetes/apps/testing/echo/app/httproute.yaml" \
     "$tree_root/kubernetes/apps/testing/echo/app/httproute.yaml"
   cp "$repo_root/kubernetes/apps/testing/echo/app/service.yaml" \
@@ -218,6 +221,14 @@ canary_secret="$tree_root/kubernetes/apps/monitoring/gatus/app/n8n-canary.sops.y
 
 reset_tree
 expect_fixture_pass 'selected synthetic n8n canary Secret'
+
+reset_tree
+yq -i 'del(.config.endpoints[] | select(.name == "crawl4ai-readiness"))' "$values"
+expect_fail 'missing web research readiness endpoint' 'Web research endpoint contracts:'
+
+reset_tree
+yq -i '(.config.endpoints[] | select(.name == "crawl4ai-e2e")).headers.Authorization = "synthetic"' "$values"
+expect_fail 'consumer credential added to web research endpoint' 'Web research endpoint contracts:'
 
 reset_tree
 yq -i '.spec.valuesFrom[0].valuesKey = "n8n-canary-activation.values.yaml"' \
