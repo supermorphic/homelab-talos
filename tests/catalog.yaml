@@ -711,6 +711,12 @@ suites:
     runner: {command: "mise exec -- just kube web-research-local-integration-test", implementation: scripts/test/scenarios/web-research-local-integration.sh}
     native_results: {strategy: wrapper-junit}
     dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/web-research-local-integration.sh, args: [], selector: null}
+  - metadata: {id: test.web-research-live-contract, source: test, framework: bash, suite: platform, tier: integration, target: web-research-live, scenario: n8n-consumer, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: diagnostic}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube web-research-live-contract-test", implementation: scripts/test/scenarios/web-research-live-contract.sh}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/web-research-live-contract.sh, args: [.kube/config], selector: null}
   - metadata: {id: test.nocodb-restore-drill, source: test, framework: bash, suite: platform, tier: integration, target: nocodb, scenario: metadata-record-restore, scope: system, intent: resilience, mutates_cluster: true, execution_owner: human}
     confirmation: {type: exact, variable: NOCODB_RESTORE_CONFIRM, expected: "restore:nocodb:metadata"}
     runner: {command: "NOCODB_RESTORE_CONFIRM=restore:nocodb:metadata mise exec -- just kube nocodb-restore-drill", implementation: scripts/test/scenarios/nocodb-restore-drill.sh}

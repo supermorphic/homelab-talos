@@ -310,6 +310,14 @@ compressed body cannot expand without a bound in n8n. Return an error, never a
 truncated successful JSON document. Keep this operator-owned code small and free
 of retrieval, domain, or consumer-specific logic.
 
+The 8 MiB value is a platform setting, not an upstream Crawl4AI response limit.
+Envoy can reject a full buffer before Lua resumes: the pinned proxy returns HTTP
+500 with the fixed plain-text body `Internal Server Error` in that case. The Lua
+guard returns its small HTTP 502 JSON error when it handles a rejection itself.
+Consumers treat either as a failed crawl. Acceptance uses a deterministic fixture
+independently shown to produce more than 8 MiB through the native API; an arbitrary
+upstream 500 does not establish response-cap enforcement.
+
 Use an HTTPRoute-targeted `EnvoyExtensionPolicy` with Lua `body(true)`, which also
 handles empty bodies. Envoy Gateway `1.8.2` enables this supported extension by default;
 no shared-controller feature-flag change is required. Configure
@@ -322,9 +330,8 @@ applications' response behavior.
 Listener limits alone do not cap streaming responses. Verify HTTP/1.1 and any enabled
 HTTP/2 behavior, exact boundaries, chunked bodies, empty bodies, encoded responses,
 and filter execution failure. Bind the policy to the crawler route and prevent
-consumers bypassing it through the raw backend Service. The current repository has
-not enabled these policies; deployment requires reviewed Git configuration and live
-acceptance. Use supported Envoy Gateway resources where available rather than an
+consumers bypassing it through the raw backend Service. Require live acceptance
+before monitoring activation. Use supported Envoy Gateway resources rather than an
 unnecessary standalone application or experimental filter.
 
 Select the production response cap from representative complete native results,
@@ -356,15 +363,23 @@ The implementation selects a dedicated two-worker Envoy with
 `connectionLimit.value: 4`, `maxRequestsPerConnection: 1`, and
 `http2.maxConcurrentStreams: 1`. Both protocol buffers and HTTP/2 windows are 8 MiB.
 The container limit is 256 MiB, with a budget of 32 MiB for four resident responses,
-96 MiB for loaded overhead, and 64 MiB safety margin. Local load acceptance covered
+128 MiB for loaded overhead, and 64 MiB safety margin: 224 MiB total. Local load acceptance covered
 four simultaneous responses retained by slow HTTP/1.1 and HTTP/2 consumers, excess
-admission, and recovery. With responses held for six seconds per protocol, peak
+admission, and recovery. During six-second stalled-client experiments per protocol, peak
 sampled container memory was below 82 MiB (`podman stats`, 37 samples), and allocator
 physical memory was below 51 MiB (528 samples). Container accounting includes memory
 outside the allocator; the overhead budget conservatively exceeds this measured
 whole-container peak before adding the separate response allowance and safety margin.
-Repeat this measurement on the deployed architecture before activation; local ARM64
-measurements alone do not establish the live AMD64 resource margin.
+The deployed HTTP/1.1 experiment with four approximately 7.55 MiB native responses
+recorded a whole-container peak below 103 MiB and no restarts. The revised 128 MiB
+overhead allowance conservatively exceeds that entire measured footprint, including
+buffers, before adding the separate response allowance and safety margin.
+The sum of recorded Envoy and shutdown-manager container high-water marks was below
+167 MiB, compared with the combined 320 MiB container limits.
+
+Envoy's default delayed-close timeout is one second without write progress, including
+pending response buffers when closing a connection. Consumers must reject incomplete
+HTTP responses; an initial HTTP 200 header alone does not establish crawl success.
 The generated `shutdown-manager` sidecar also receives an explicit 64 MiB memory
 limit through the supported Deployment strategic-merge patch. The two container
 limits enforce a 320 MiB ceiling across the Pod; the sidecar cannot consume an
@@ -499,21 +514,17 @@ precedes initial deployment. Required live acceptance precedes Gatus activation 
 declaring the platform ready. Merge needs explicit operator authorization. Reconcile
 this specification with implemented and validated behavior.
 
-## Required consumer follow-up
+## Consumer integration contract
 
-After implementation and platform acceptance are complete, create a new issue in
-the private `career-ops` repository to wire up SearXNG and Crawl4AI. This is a
-required completion task; do not create it before the platform is ready.
-
-Direct APIs are not a wire-compatible Tavily endpoint. The issue must implement
+Direct APIs are not a wire-compatible Tavily endpoint. Consumers must implement
 bounded search, URL filtering, extraction, and response normalization while
 preserving the existing consumer's logical budgets, direct ATS retrieval, cache,
 source qualification, evidence handling, and inference boundary. Include workload
 admission with no stored Crawl4AI credential, final-URL handling, platform authentication
 and size/timeout failures, accurate provider
 attribution, compatibility tests, and an explicit hosted-provider rollback path.
-Link the completed infrastructure change and acceptance evidence. Do not publish
-private consumer implementation or policy in this repository.
+Consumer implementation and tests may proceed in parallel with platform acceptance;
+production cutover depends on the platform being ready.
 
 ## Status
 
@@ -539,8 +550,8 @@ workload network policies, the cached credential agent, the atomic-bootstrap ser
 launcher, a guarded operator SOPS writer, private SearXNG routing and Homepage
 discovery, and the four approved Gatus definitions. The initial deployment change
 enables the five Flux units and selects the operator-provided SOPS bootstrap Secret.
-Gatus checks and their alert rules remain staged pending live acceptance. This
-deployment selection does not establish that the unattended platform is ready.
+The monitoring activation change selects Gatus checks and their alert rules together.
+Deployment selection alone does not establish that the unattended platform is ready.
 Runtime consumer credentials are never written to Git.
 
 The production credential agent's focused tests cover automatic issuance, idle
@@ -570,8 +581,8 @@ native Envoy: SearXNG authority variants were omitted and an unrelated route's l
 was retained. The agent has separate ServiceMonitor and credential degradation,
 unavailability and missing-metrics alert rules. Rules live in the domain
 `alerts/app` package in the monitoring namespace. Credential alerts activate with
-native Crawl4AI; Gatus rules remain unselected until their four endpoint definitions
-activate in the same change.
+native Crawl4AI; Gatus rules and their four endpoint definitions are selected in the
+same monitoring activation change.
 
 A sustained local run observed proactive renewal with the native 60-minute JWT
 lifetime around half-life, then a successful credential-free crawl without a client
@@ -588,12 +599,6 @@ Prometheus fixtures, and the agent's metric exposition. The registered local int
 images and generated Gateway configuration, verifies native rotation/recovery and
 all four Gatus checks, and removes its owned Podman resources. It requires public
 internet access but no cluster credentials or production secret.
-
-These results do not establish live
-Kubernetes Secret projection, Cilium enforcement, n8n workflow continuity,
-LAN/Tailscale access, or representative deployed resource margins. Complete those
-acceptance gates before declaring the unattended platform ready or creating the
-authorized career-ops integration issue.
 
 ## References
 

@@ -6,6 +6,15 @@ use_default_settings:
       - duckduckgo
       - brave
       - google
+engines:
+  - name: bing
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: google
+    disabled: false
 server:
   bind_address: "0.0.0.0"
   port: 8080

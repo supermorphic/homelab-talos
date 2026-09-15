@@ -5,6 +5,15 @@ History is held in memory and resets when Gatus restarts. The
 [media integration specification](../../../../docs/specs/019-media-integration-health-gatus.md)
 describes the authenticated media checks and their evidence limits.
 
+## Private web research
+
+The **Automation** group includes `searxng` and `crawl4ai-readiness` every minute,
+`crawl4ai-e2e` every 15 minutes, and `searxng-search-e2e` every 30 minutes. The two
+functional checks use fixed public fixtures and depend on public internet access.
+Gatus stores no Crawl4AI credential. The endpoint definitions and eight associated
+alert rules activate together; see the [web-research runbook](../../web-research/README.md)
+for their contracts, credential-readiness dependency, and acceptance evidence.
+
 ## Off-cluster management services
 
 Separate host automation manages the off-cluster host, Caddy, DNS/TLS endpoint provisioning,

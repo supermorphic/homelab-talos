@@ -132,6 +132,7 @@ conditional_paths:
     - tests/prometheus/web-research-alerts_test.yaml
     - scripts/test/web_research/**
     - scripts/test/scenarios/web-research-local-integration.sh
+    - scripts/test/scenarios/web-research-live-contract.sh
     - scripts/repository/crawl4ai_secrets.py
     - kubernetes/apps/monitoring/alerts/app/kustomization.yaml
     - kubernetes/apps/monitoring/alerts/app/n8n.yaml

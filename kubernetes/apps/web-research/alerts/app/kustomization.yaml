@@ -3,4 +3,4 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - ./credentials.yaml
-  # Add ./gatus.yaml with the four Gatus endpoints after platform acceptance.
+  - ./gatus.yaml

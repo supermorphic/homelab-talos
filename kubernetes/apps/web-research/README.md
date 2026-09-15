@@ -34,14 +34,17 @@ cutover; the proxy never replays a crawl automatically.
 - Native API input: 512 KiB; crawl wall-clock budget: 75 seconds.
 - Complete API response: 8 MiB. Encoded responses are rejected. Oversized responses
   return an error; a truncated response is never presented as successful native JSON.
+  Envoy's buffer guard can return HTTP 500 with `Internal Server Error` before Lua
+  resumes; the Lua guard itself returns HTTP 502 JSON. Both are failed crawls.
 - Envoy admits at most four connections, one request per connection and one HTTP/2
   stream per connection, across two workers. Its container memory limit is 256 MiB.
 - The controller's `shutdown-manager` sidecar is separately limited to 64 MiB,
   making the hard ceiling across both Pod containers 320 MiB.
-- The sizing budget is 32 MiB for resident responses, 96 MiB for loaded overhead,
-  and 64 MiB safety margin. Local slow-consumer tests measured less than 82 MiB of
-  container memory and 51 MiB of allocator physical memory. Repeat measurement on
-  the deployed architecture, including the generated sidecar.
+- The sizing budget is 32 MiB for resident responses, 128 MiB for loaded overhead,
+  and 64 MiB safety margin. The deployed four-response test measured less than
+  103 MiB in Envoy; its recorded high-water mark plus the generated sidecar's was
+  below 167 MiB. No container restarted. The overhead allowance conservatively
+  exceeds the entire measured Envoy footprint before the response allowance is added.
 - These response limits do not bound downloaded page bytes or Chromium memory.
   Browser resources and deadlines are separate controls. A client disconnect does
   not prove immediate browser cancellation.
@@ -58,12 +61,11 @@ The SearXNG HTTPRoute supplies the **Platform → SearXNG** Homepage card throug
 existing discovery annotations. The hostname uses the internal Gateway, internal
 DNS audience, and existing wildcard TLS. There is no public route or Funnel.
 
-The four approved Gatus endpoints are staged in
-[monitoring/gatus-endpoints.yaml](monitoring/gatus-endpoints.yaml). Append them to
-the existing Gatus endpoint array when activating monitoring; do not replace the
-array with this fragment through Helm values merging.
-Add `./gatus.yaml` to `alerts/app/kustomization.yaml` in the same Git change to
-select their alert rules.
+The four approved Gatus endpoints are selected in the existing Gatus endpoint array,
+together with `./gatus.yaml` in `alerts/app/kustomization.yaml` for their alert rules.
+[monitoring/gatus-endpoints.yaml](monitoring/gatus-endpoints.yaml) retains the shared
+condition definitions used by validation and local integration. Do not use this
+fragment as a Helm values replacement for the existing endpoint array.
 
 | Gatus name | Interval | Public internet dependency |
 | --- | --- | --- |
@@ -87,8 +89,8 @@ missing-series rules deploy with the four endpoint definitions.
 
 Git selects the namespace, SearXNG, native Crawl4AI, dedicated proxy, and credential
 alerts for initial deployment. The operator-provided encrypted bootstrap Secret is
-selected with the native app. Gatus checks and their alert rules remain staged until
-live acceptance passes.
+selected with the native app. The monitoring activation change selects Gatus checks
+and their alert rules together; it must merge after the remaining operator acceptance.
 
 The operator supplies the initial SOPS-encrypted `crawl4ai-bootstrap` Secret with
 `api_token` and `signing_key`. These are long-lived platform bootstrap values;
@@ -133,6 +135,7 @@ manual token issuance, Secret update, consumer restart, or runtime-credential co
 ```sh
 mise exec -- just kube web-research-validate
 mise exec -- just kube web-research-local-integration-test
+mise exec -- just kube web-research-live-contract-test
 ```
 
 The first command runs source invariants, Kustomize rendering, available Kubernetes
@@ -145,6 +148,33 @@ Gateway policies, and exercises native extraction, credential rotation and recov
 SearXNG search/UI, and all four Gatus conditions. It needs no cluster credentials or
 production secrets and cleans up only the resources it creates.
 
+The third command is a manually selected live acceptance suite. It uses
+`homelab-observer` for the Deployment, ReplicaSet, Pod, owner, readiness, and rollout
+preflight. It repeats that preflight, then uses `homelab-diagnostic` for one fixed
+Node program sent on standard input to the current ready `n8n-main` container. The
+program has no caller-supplied endpoint or executable argument. It performs bounded
+search, static and JavaScript crawl, caller-header replacement, exact route exclusion,
+loopback rejection, deterministic oversized-response rejection, four-request burst,
+slow-consumer retention, and recovery checks. The slow-consumer phase starts exactly
+four fixed raw crawls below 50 KiB, pauses every response at its headers, holds all
+four for 100 milliseconds, then drains at most 8 MiB plus one sentinel and requires
+four valid native JSON successes between 7 MiB and 8 MiB. Client success does not
+establish the proxy's memory high-water mark; collect that evidence independently
+from Prometheus. A fifth excluded-route request cannot distinguish connection
+admission from normal route handling, so excess-concurrency acceptance remains
+pending a reliable oracle. Output
+is limited to fixed phase, result, status, size, count, and duration fields. This suite
+is registered outside automatic campaigns and CI. It exercises the network position
+and runtime of n8n, but it is not an n8n HTTP Request workflow execution.
+
+Envoy's default one-second delayed-close flush can abort a one-request HTTP/1
+connection when a client fully stalls it for three seconds. That behavior produced a
+failed partial read in the initial deployed probe, with no OOM or container restart;
+the later small burst and recovery checks passed. A partial body never satisfies this
+contract as successful native JSON. The 100-millisecond hold retains all four complete
+near-cap responses together without changing the production timeout for an artificial
+multi-second stall.
+
 Local acceptance also measured slow HTTP/1.1 and HTTP/2 consumers at the response
 limit, overload rejection and recovery. Four concurrent public static-page crawls
 produced native responses up to about 1 MiB and a native-container memory peak of
@@ -153,5 +183,5 @@ JavaScript-heavy page behavior, Cilium enforcement, n8n continuity, Kubernetes S
 projection, or LAN/Tailscale reachability. Those remain deployment acceptance gates.
 
 The [design record](../../../docs/specs/029-selfhost-web-research.md) contains the
-acceptance requirements and evidence limits. Create the authorized career-ops
-integration issue only after platform implementation and acceptance are complete.
+acceptance requirements and evidence limits. Consumer implementation and tests may
+proceed in parallel; production cutover depends on platform acceptance.

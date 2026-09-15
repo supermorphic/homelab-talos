@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 import unittest
@@ -6,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import local_integration as integration
+import native_fixture
 
 
 class PartialCreationRun(integration.PodmanRun):
@@ -74,6 +76,20 @@ class FailureReportingTests(unittest.TestCase):
             lines,
         )
         self.assertNotIn(sentinel, "\n".join(lines))
+
+
+class NearLimitFixtureTests(unittest.TestCase):
+    def test_raw_fixture_is_fixed_and_below_50_kib(self):
+        payload = native_fixture.near_limit_body()
+        encoded = json.dumps(payload).encode()
+        url = payload["urls"][0]
+
+        self.assertLess(len(encoded), 50 * 1024)
+        self.assertTrue(url.startswith("raw:<html>"))
+        self.assertEqual(url.count('<a href="item-'), 65)
+        self.assertIn("https://example.com/" + "a" * 40000 + "/", url)
+        self.assertNotIn("<script", url)
+        self.assertNotIn("<img", url)
 
 
 if __name__ == "__main__":

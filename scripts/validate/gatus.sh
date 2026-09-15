@@ -257,8 +257,18 @@ legacy_endpoint_names='alertmanager,caddy,echo,flaresolverr,grafana,letsencrypt-
 require_equal 'Existing Level 1 endpoint names' \
   "$(yq -r '[.config.endpoints[] | select(.group != "Media Integration" and
     .name != "n8n-readiness" and .name != "n8n-webhook-e2e" and
-    .name != "automation-data-e2e") | .name] | sort | join(",")' "$values")" \
+    .name != "automation-data-e2e" and .name != "searxng" and
+    .name != "crawl4ai-readiness" and .name != "crawl4ai-e2e" and
+    .name != "searxng-search-e2e") | .name] | sort | join(",")' "$values")" \
   "$legacy_endpoint_names"
+
+require_equal 'Web research endpoint contracts' \
+  "$(yq -o=json -I=0 '[.config.endpoints[] | select(
+    .name == "searxng" or .name == "crawl4ai-readiness" or
+    .name == "crawl4ai-e2e" or .name == "searxng-search-e2e")] | sort_by(.name)' "$values")" \
+  "$(yq -o=json -I=0 '.config.endpoints | sort_by(.name)' \
+    kubernetes/apps/web-research/monitoring/gatus-endpoints.yaml)"
+
 while IFS='|' read -r name group url interval conditions; do
   require_equal "Existing Level 1 endpoint $name group" \
     "$(yq -r ".config.endpoints[] | select(.name == \"$name\") | .group" "$values")" "$group"

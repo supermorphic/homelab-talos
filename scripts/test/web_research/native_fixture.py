@@ -16,6 +16,8 @@ from pathlib import Path
 
 BOOTSTRAP = Path("/run/bootstrap")
 SUBJECT = "crawl4ai-platform@supermorphic.com"
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+NEAR_LIMIT_MIN_BYTES = 7 * 1024 * 1024
 
 
 def request(
@@ -43,7 +45,7 @@ def request(
             return (
                 response.status,
                 dict(response.headers),
-                response.read(8 * 1024 * 1024 + 1),
+                response.read(MAX_RESPONSE_BYTES + 1),
             )
     except (OSError, TimeoutError):
         return 0, {}, b""
@@ -77,6 +79,18 @@ def crawl_body(url: str) -> dict[str, object]:
             },
         },
     }
+
+
+def near_limit_body() -> dict[str, object]:
+    base = "https://example.com/" + "a" * 40000 + "/"
+    links = "".join(
+        f'<a href="item-{index}">Fixture item {index}</a>' for index in range(65)
+    )
+    html = (
+        f'<html><head><base href="{base}"></head>'
+        f"<body><p>Bounded public fixture</p>{links}</body></html>"
+    )
+    return crawl_body(f"raw:{html}")
 
 
 def serve() -> None:
@@ -180,6 +194,28 @@ def gateway_contract() -> None:
         "canary-extraction",
     )
     print("PASS translated-gateway-contract", flush=True)
+
+
+def near_limit_contract() -> None:
+    payload = near_limit_body()
+    status, _, body = request(8080, "/crawl", "POST", payload)
+    require(
+        status == 200 and NEAR_LIMIT_MIN_BYTES <= len(body) <= MAX_RESPONSE_BYTES,
+        "near-limit-size",
+    )
+    document = json.loads(body)
+    results = document.get("results", [])
+    result = results[0] if len(results) == 1 else {}
+    require(document.get("success") is True, "near-limit-success")
+    require(result.get("success") is True, "near-limit-result")
+    require(result.get("status_code") == 200, "near-limit-status")
+    require(result.get("url") == payload["urls"][0], "near-limit-url")
+    require(
+        "Bounded public fixture"
+        in result.get("markdown", {}).get("raw_markdown", ""),
+        "near-limit-content",
+    )
+    print("PASS near-limit-response", flush=True)
 
 
 def rotation_contract() -> None:
@@ -356,6 +392,7 @@ MODES = {
     "readiness": readiness,
     "metrics": capture_metrics,
     "gateway": gateway_contract,
+    "near-limit": near_limit_contract,
     "rotation": rotation_contract,
     "searx": searx_contract,
     "gatus": gatus_contract,

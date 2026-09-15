@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 BASE = Path("kubernetes/apps/web-research")
+INTENDED_SEARCH_ENGINES = {"bing", "brave", "duckduckgo", "google"}
 
 
 def quantity(value):
@@ -33,6 +34,38 @@ def ui_errors(route):
         errors.append("SearXNG Homepage tile must use Platform")
     if spec.get("hostnames") != ["searxng.lab.supermorphic.com"]:
         errors.append("unexpected SearXNG private hostname")
+    return errors
+
+
+def search_engine_errors(settings):
+    errors = []
+    try:
+        kept = settings["use_default_settings"]["engines"]["keep_only"]
+        overrides = settings["engines"]
+    except (KeyError, TypeError):
+        return ["SearXNG must explicitly retain and enable the four intended engines"]
+    if (
+        not isinstance(kept, list)
+        or len(kept) != len(INTENDED_SEARCH_ENGINES)
+        or any(not isinstance(name, str) for name in kept)
+        or set(kept) != INTENDED_SEARCH_ENGINES
+    ):
+        errors.append("SearXNG must retain only the four intended engines")
+    if (
+        not isinstance(overrides, list)
+        or len(overrides) != len(INTENDED_SEARCH_ENGINES)
+        or any(not isinstance(engine, dict) for engine in overrides)
+    ):
+        errors.append("SearXNG must explicitly enable the four intended engines")
+    else:
+        names = [engine.get("name") for engine in overrides]
+        if (
+            any(not isinstance(name, str) for name in names)
+            or set(names) != INTENDED_SEARCH_ENGINES
+            or len(set(names)) != len(names)
+            or any(engine.get("disabled") is not False for engine in overrides)
+        ):
+            errors.append("SearXNG must explicitly enable the four intended engines")
     return errors
 
 
@@ -180,6 +213,7 @@ def main():
             return yaml.safe_load(stream)
 
     errors = ui_errors(read("searxng/app/httproute.yaml"))
+    errors += search_engine_errors(read("searxng/app/settings.yml"))
     errors += credential_mount_errors(read("crawl4ai/app/deployment.yaml"))
     errors += auth_errors(read("crawl4ai/proxy/securitypolicy.yaml"))
     errors += buffer_errors(
