@@ -364,15 +364,25 @@ The implementation selects a dedicated two-worker Envoy with
 `connectionLimit.value: 4`, `maxRequestsPerConnection: 1`, and
 `http2.maxConcurrentStreams: 1`. Both protocol buffers and HTTP/2 windows are 8 MiB.
 The container limit is 256 MiB, with a budget of 32 MiB for four resident responses,
-96 MiB for loaded overhead, and 64 MiB safety margin. Local load acceptance covered
+128 MiB for loaded overhead, and 64 MiB safety margin: 224 MiB total. Local load acceptance covered
 four simultaneous responses retained by slow HTTP/1.1 and HTTP/2 consumers, excess
-admission, and recovery. With responses held for six seconds per protocol, peak
+admission, and recovery. During six-second stalled-client experiments per protocol, peak
 sampled container memory was below 82 MiB (`podman stats`, 37 samples), and allocator
 physical memory was below 51 MiB (528 samples). Container accounting includes memory
 outside the allocator; the overhead budget conservatively exceeds this measured
 whole-container peak before adding the separate response allowance and safety margin.
-Repeat this measurement on the deployed architecture before activation; local ARM64
-measurements alone do not establish the live AMD64 resource margin.
+The deployed HTTP/1.1 experiment with four approximately 7.55 MiB native responses
+recorded a whole-container peak of about 101 MiB and no restarts. The revised 128 MiB
+overhead allowance conservatively exceeds that entire measured footprint, including
+buffers, before adding the separate response allowance and safety margin.
+
+Envoy's default delayed-close timeout is one second without write progress, including
+pending response buffers when closing a connection. A deliberate three-second pause
+therefore produced a transport-aborted response; subsequent normal crawls succeeded.
+The successful-drain test uses a 100 ms simultaneous pause, below that timeout.
+Kernel high-water memory metrics retain the peak without requiring a long pause to
+coincide with a Prometheus scrape. Consumers must reject incomplete HTTP responses;
+an initial HTTP 200 header alone does not establish crawl success.
 The generated `shutdown-manager` sidecar also receives an explicit 64 MiB memory
 limit through the supported Deployment strategic-merge patch. The two container
 limits enforce a 320 MiB ceiling across the Pod; the sidecar cannot consume an

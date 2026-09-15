@@ -1,11 +1,12 @@
 # Validation input, not a Kubernetes resource. Local Envoy 1.38.3 measurements:
 # four 8 MiB responses, two workers, stalled downstream HTTP/1 and HTTP/2 clients;
 # container memory below 82 MiB and allocator physical memory below 51 MiB,
-# including responses held for six seconds per protocol; overload recovery passed.
-# The overhead budget is deliberately larger and includes allocation/copy overhead.
-# Repeat with deployed xDS configuration and representative crawls before activation.
+# during six-second stalled-client experiments; overload recovery passed.
+# Deployed four near-cap HTTP/1 responses peaked at about 101 MiB, including buffers.
+# Conservatively budget the whole measured peak as overhead, then add the separate
+# response allowance and safety margin: 32 + 128 + 64 = 224 MiB <= 256 MiB.
 response_cap_bytes: 8388608
 shutdown_manager_memory_limit_bytes: 67108864
 proxy_pod_memory_limit_bytes: 335544320
-loaded_overhead_budget_bytes: 100663296
+loaded_overhead_budget_bytes: 134217728
 safety_margin_bytes: 67108864
