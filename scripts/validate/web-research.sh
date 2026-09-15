@@ -11,13 +11,11 @@ helm template envoy-gateway "$(yq -r '.spec.url' "$controller_source/ocireposito
 uv run --locked python scripts/validate/web_research.py --controller-manifest "$work/controller.yaml"
 
 mkdir "$work/manifests"
-for package in namespace/app searxng/app crawl4ai/app crawl4ai/proxy monitoring; do
+for package in namespace/app searxng/app crawl4ai/app crawl4ai/proxy alerts/app; do
 	kustomize build "kubernetes/apps/web-research/$package" >"$work/manifests/${package//\//-}.yaml"
 done
 kubeconform -strict -summary -ignore-missing-schemas "$work/manifests"
-yq '.spec' kubernetes/apps/web-research/monitoring/alerts.yaml >"$work/alerts-rules.yaml"
-yq '.spec' kubernetes/apps/web-research/crawl4ai/app/credential-alerts.yaml >"$work/credential-rules.yaml"
-promtool check rules "$work/alerts-rules.yaml" "$work/credential-rules.yaml"
+scripts/validate/alerts.sh web-research
 uv run --locked python - <<'PY' >"$work/agent-metrics.txt"
 import sys
 from pathlib import Path

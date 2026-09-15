@@ -7,5 +7,4 @@ resources:
 - ./services.yaml
 - ./ciliumnetworkpolicy.yaml
 - ./servicemonitor.yaml
-- ./credential-alerts.yaml
 - ../runtime

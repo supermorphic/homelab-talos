@@ -21,6 +21,29 @@ def read(relative):
 
 
 class SourceBoundaryTests(unittest.TestCase):
+    def test_credentials_are_monitored_from_native_activation(self):
+        resources = ["./credentials.yaml"]
+        self.assertEqual(validator.monitoring_errors(False, False, resources, [], []), [])
+        self.assertEqual(validator.monitoring_errors(True, True, resources, [], []), [])
+        for alerts_active, native_active in ((True, False), (False, True)):
+            self.assertTrue(
+                validator.monitoring_errors(alerts_active, native_active, resources, [], [])
+            )
+        self.assertTrue(validator.monitoring_errors(True, True, [], [], []))
+
+    def test_gatus_endpoints_and_alert_rules_activate_as_one_change(self):
+        expected = read("monitoring/gatus-endpoints.yaml")["config"]["endpoints"]
+        resources = ["./credentials.yaml", "./gatus.yaml"]
+        self.assertEqual(
+            validator.monitoring_errors(True, True, resources, expected, expected), []
+        )
+        self.assertTrue(validator.monitoring_errors(True, True, resources, [], expected))
+        self.assertTrue(
+            validator.monitoring_errors(True, True, resources, expected[:-1], expected)
+        )
+        self.assertTrue(validator.monitoring_errors(False, False, resources, expected, expected))
+        self.assertTrue(validator.monitoring_errors(True, True, resources[:1], expected, expected))
+
     def test_proxy_xds_selector_must_match_rendered_controller(self):
         policy = read("crawl4ai/proxy/ciliumnetworkpolicy.yaml")
         controller = {

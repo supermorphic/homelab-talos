@@ -62,7 +62,8 @@ The four approved Gatus endpoints are staged in
 [monitoring/gatus-endpoints.yaml](monitoring/gatus-endpoints.yaml). Append them to
 the existing Gatus endpoint array when activating monitoring; do not replace the
 array with this fragment through Helm values merging.
-Unsuspend `web-research-monitoring` in the same Git change to select their alert rules.
+Add `./gatus.yaml` to `alerts/app/kustomization.yaml` in the same Git change to
+select their alert rules.
 
 | Gatus name | Interval | Public internet dependency |
 | --- | --- | --- |
@@ -77,13 +78,14 @@ route, and successful search-engine discovery. Partial engine failure is accepta
 No exact search ranking or external page latency is asserted.
 
 The agent's separate ServiceMonitor exposes readiness, renewal and validation
-degradation, usable expiry, and fixed failure categories. Its alert rules deploy
-with the native app, so renewal failure is observable before token expiry. Gatus
-availability and missing-series rules deploy with the four endpoint definitions.
+degradation, usable expiry, and fixed failure categories. Unsuspend the separate
+`web-research-alerts` Flux unit with native Crawl4AI so its credential alert rules
+make renewal failure observable before token expiry. Gatus availability and
+missing-series rules deploy with the four endpoint definitions.
 
 ## Bootstrap and activation
 
-The namespace, SearXNG, native Crawl4AI, and dedicated proxy Flux units start
+The namespace, SearXNG, native Crawl4AI, dedicated proxy, and alerts Flux units start
 suspended. Source validation permits this staged state without a Secret.
 
 The operator supplies the initial SOPS-encrypted `crawl4ai-bootstrap` Secret with

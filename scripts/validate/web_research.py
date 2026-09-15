@@ -148,6 +148,28 @@ def controller_access_errors(policy, controllers):
     return ["dedicated Envoy must reach the pinned controller's xDS port"]
 
 
+def monitoring_errors(alerts_active, native_active, resources, selected, expected):
+    errors = []
+    if resources.count("./credentials.yaml") != 1 or set(resources) - {
+        "./credentials.yaml",
+        "./gatus.yaml",
+    }:
+        errors.append("credential alerts require their canonical resource selection")
+    if alerts_active != native_active:
+        errors.append("native Crawl4AI and credential alerts must activate together")
+    gatus_count = resources.count("./gatus.yaml")
+    if gatus_count not in (0, 1) or (gatus_count and not alerts_active):
+        errors.append("Gatus alert selection requires an active alerts application")
+    if gatus_count:
+        if sorted(selected, key=lambda value: value["name"]) != sorted(
+            expected, key=lambda value: value["name"]
+        ):
+            errors.append("active monitoring requires the four exact approved Gatus endpoints")
+    elif selected:
+        errors.append("Gatus checks and their alert rules must activate together")
+    return errors
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--controller-manifest", required=True, type=Path)
@@ -195,18 +217,19 @@ def main():
         for endpoint in live_values["config"]["endpoints"]
         if endpoint["name"] in intervals
     ]
-    monitoring_active = read("monitoring/ks.yaml")["spec"].get("suspend") is not True
-    if monitoring_active:
-        if sorted(selected_endpoints, key=lambda value: value["name"]) != sorted(
-            endpoints, key=lambda value: value["name"]
-        ):
-            errors.append("active monitoring requires the four exact approved Gatus endpoints")
-    elif selected_endpoints:
-        errors.append("Gatus checks and their alert rules must activate together")
     # Staging requires no credential object. Activation requires an operator-produced
     # encrypted artifact selected by the app; validation never decrypts it.
     entrypoints = list(yaml.safe_load_all((BASE / "crawl4ai/ks.yaml").read_text()))
     native = next(e for e in entrypoints if e["metadata"]["name"] == "crawl4ai")
+    errors.extend(
+        monitoring_errors(
+            read("alerts/ks.yaml")["spec"].get("suspend") is not True,
+            native["spec"].get("suspend") is not True,
+            read("alerts/app/kustomization.yaml")["resources"],
+            selected_endpoints,
+            endpoints,
+        )
+    )
     if "kube-prometheus-stack" not in {item["name"] for item in native["spec"]["dependsOn"]}:
         errors.append("native monitoring resources require the monitoring CRD dependency")
     secret = BASE / "crawl4ai/app/bootstrap.sops.yaml"

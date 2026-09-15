@@ -564,8 +564,10 @@ SearXNG and Crawl4AI services, including the public crawl fixture and a real sea
 query. The shared internal Gateway's translated access-log filter was tested in
 native Envoy: SearXNG authority variants were omitted and an unrelated route's log
 was retained. The agent has separate ServiceMonitor and credential degradation,
-unavailability and missing-metrics alert rules; the Gatus rules remain staged with
-their endpoint definitions.
+unavailability and missing-metrics alert rules. Rules live in the domain
+`alerts/app` package in the monitoring namespace. Credential alerts activate with
+native Crawl4AI; Gatus rules remain unselected until their four endpoint definitions
+activate in the same change.
 
 A sustained local run observed proactive renewal with the native 60-minute JWT
 lifetime around half-life, then a successful credential-free crawl without a client
@@ -575,10 +577,10 @@ with no recorded OOM events. Slow-consumer response-buffer measurements are reco
 in the aggregate-memory section. These are local ARM64 fixtures, not a complete
 JavaScript-heavy or deployed AMD64 workload profile.
 
-The registered source gate passes 59 focused tests on the host (one Linux-only
-case skipped and separately passed in the native image), validates 23 rendered
-resources against available schemas, and checks twelve alert rules and the agent's
-metric exposition. The registered local integration workflow uses current pinned
+The registered source gate passes 61 focused tests on the host (one Linux-only
+case skipped and separately passed in the native image), validates 22 rendered
+resources against available schemas, and checks twelve alert rules, their temporal
+Prometheus fixtures, and the agent's metric exposition. The registered local integration workflow uses current pinned
 images and generated Gateway configuration, verifies native rotation/recovery and
 all four Gatus checks, and removes its owned Podman resources. It requires public
 internet access but no cluster credentials or production secret.

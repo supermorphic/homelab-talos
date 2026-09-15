@@ -9,10 +9,10 @@ source "$script_dir/../lib/n8n-alert-activation.sh"
 # (the single source of truth) into plain Prometheus rule files and runs promtool against
 # the tracked fixture, so alert PromQL is never duplicated in a test. Replaces the three
 # near-identical per-subject validators this repository accumulated.
-[[ "$#" -eq 1 ]] || { echo 'Usage: alerts.sh <media|monitoring|networking|security>' >&2; exit 2; }
+[[ "$#" -eq 1 ]] || { echo 'Usage: alerts.sh <media|monitoring|networking|security|web-research>' >&2; exit 2; }
 domain="$1"
 case "$domain" in
-  media|monitoring|networking) expected_dependencies='kube-prometheus-stack' ;;
+  media|monitoring|networking|web-research) expected_dependencies='kube-prometheus-stack' ;;
   security) expected_dependencies='cert-manager-monitoring,kube-prometheus-stack' ;;
   *) echo "Unknown alerts domain: $domain" >&2; exit 2 ;;
 esac
@@ -46,12 +46,13 @@ rg -qx "  - ./alerts/ks.yaml" "kubernetes/apps/$domain/kustomization.yaml" || {
 [[ "$(yq -r '.metadata.name' "$ks")" == "$domain-alerts" ]]
 [[ "$(yq -r '.metadata.namespace' "$ks")" == 'flux-system' ]]
 [[ "$(yq -r '[.spec.dependsOn[].name] | sort | join(",")' "$ks")" == "$expected_dependencies" ]]
-[[ "$(yq -r '.spec.suspend // false' "$ks")" == 'false' ]]
+# Web research starts suspended; its source validator pairs native and alert activation.
+[[ "$domain" == 'web-research' || "$(yq -r '.spec.suspend // false' "$ks")" == 'false' ]]
 [[ "$(yq -r '.spec.path' "$ks")" == "./kubernetes/apps/$domain/alerts/app" ]]
 
 # Every rule file in the app directory must be a PrometheusRule in the monitoring
-# namespace. Monitoring-owned n8n and NocoDB rules have explicit staged exceptions: each
-# remains tested while unselected, and its activation intent controls wiring.
+# namespace. n8n, NocoDB, and web research Gatus rules have explicit staged exceptions:
+# each remains tested while unselected, and its activation intent controls wiring.
 mapfile -t rule_files < <(rg --files "$base/app" | rg '\.yaml$' | rg -v '/kustomization\.yaml$' | sort)
 [[ "${#rule_files[@]}" -gt 0 ]] || { echo "No rule files under $base/app." >&2; exit 1; }
 extracted=()
@@ -67,6 +68,10 @@ for rule in "${rule_files[@]}"; do
   selected_count="$(n8n_alert_resource_count "$app_kustomization" "$(basename "$rule")")"
   if [[ "$domain" == 'monitoring' && "$(basename "$rule")" == 'n8n.yaml' ]]; then
     : # The activation validator resolves aliases and owns the staged n8n selection count.
+  elif [[ "$domain" == 'web-research' && "$(basename "$rule")" == 'gatus.yaml' ]]; then
+    # The web research source gate pairs selection with the four approved endpoints.
+    # Exercise these rules while staged, as for other staged monitoring rules.
+    [[ "$selected_count" == '0' || "$selected_count" == '1' ]]
   elif [[ "$domain" == 'monitoring' && "$(basename "$rule")" == 'nocodb.yaml' && \
     "$(yq -r '.spec.suspend' kubernetes/apps/automation-data/nocodb/ks.yaml)" == 'true' ]]; then
     selected_count="$(resolved_alert_resource_count "$app_kustomization" "$rule")"
