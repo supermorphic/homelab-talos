@@ -74,6 +74,21 @@ selectors, and pruning can reduce typical output, but are not maximum-size
 controls. The Docker API uses the browser path for ordinary pages; do not introduce
 a custom SDK service solely to obtain a lighter static fetch path.
 
+## Search provider selection
+
+Brave and DuckDuckGo are the only loaded engines. Native requests without an engine
+selection use both; automated consumers explicitly send `engines=brave,duckduckgo`.
+The pair fans out together. Google, Bing, Startpage, and Mojeek are absent from the
+loaded engine set, including explicit API selection. There is no automatic fallback
+provider or platform evidence-quality layer.
+
+Consumers decide whether results supply sufficient usable evidence within their
+existing attempt and deadline budgets. Partial engine failure is acceptable when
+the remaining results suffice. Preserve actual engine metadata for provenance.
+The Gatus search canary exercises the default pair and accepts usable results from
+either engine. Search providers receive queries and the platform's outbound IP;
+the private service boundary does not promise anonymity from those providers.
+
 ## Automated authentication
 
 ### Required invariant and selected boundary

@@ -1,19 +1,14 @@
 # Private UI and native JSON API. No server-side search result cache or accounts.
+# Load only the approved pair, including for explicit API selection.
 use_default_settings:
   engines:
     keep_only:
-      - bing
-      - duckduckgo
       - brave
-      - google
+      - duckduckgo
 engines:
-  - name: bing
-    disabled: false
-  - name: duckduckgo
-    disabled: false
   - name: brave
     disabled: false
-  - name: google
+  - name: duckduckgo
     disabled: false
 server:
   bind_address: "0.0.0.0"
