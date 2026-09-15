@@ -85,8 +85,10 @@ missing-series rules deploy with the four endpoint definitions.
 
 ## Bootstrap and activation
 
-The namespace, SearXNG, native Crawl4AI, dedicated proxy, and alerts Flux units start
-suspended. Source validation permits this staged state without a Secret.
+Git selects the namespace, SearXNG, native Crawl4AI, dedicated proxy, and credential
+alerts for initial deployment. The operator-provided encrypted bootstrap Secret is
+selected with the native app. Gatus checks and their alert rules remain staged until
+live acceptance passes.
 
 The operator supplies the initial SOPS-encrypted `crawl4ai-bootstrap` Secret with
 `api_token` and `signing_key`. These are long-lived platform bootstrap values;
@@ -96,9 +98,11 @@ Neither workload mounts a Kubernetes API token or writes Kubernetes Secrets.
 
 For initial bootstrap, the operator supplies `CRAWL4AI_API_TOKEN` and
 `CRAWL4AI_SIGNING_KEY` through the environment and uses the existing SOPS age
-identity. Each value must contain 32–4096 printable ASCII characters. Then run:
+identity. Each value must contain 32–4096 printable ASCII characters. Verify the
+loaded identity before running the writer; this exposes identity-check errors directly:
 
 ```sh
+mise exec -- just repo secrets
 CRAWL4AI_SECRETS_CONFIRM=write:web-research:crawl4ai:sops mise exec -- just repo crawl4ai-secrets
 ```
 

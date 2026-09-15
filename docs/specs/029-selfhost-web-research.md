@@ -480,7 +480,7 @@ privacy; and resource measurements. A healthy empty search must remain distinct
 from total upstream failure.
 
 Before deployment implementation, establish the automated authentication design with
-an isolated lifecycle spike. Before activation, repeat the relevant checks through
+an isolated lifecycle spike. Before declaring the platform ready, repeat the relevant checks through
 the deployed Gateway policies, Cilium callers, and an unchanged n8n HTTP Request
 consumer. Required evidence includes automatic cold-start issuance, proactive
 renewal, credential-free consumer continuity, header replacement, data scope,
@@ -494,9 +494,10 @@ Explicitly test bootstrap replacement and coordinated server rollout. Keep the
 route unavailable if a required policy or usable credential is absent.
 
 Before publication, commit the candidate and run
-`mise exec -- just test ci-publish` from a clean feature worktree. Operator secrets
-and required runtime acceptance precede activation. Merge needs explicit operator
-authorization. Reconcile this specification with implemented and validated behavior.
+`mise exec -- just test ci-publish` from a clean feature worktree. Operator bootstrap
+precedes initial deployment. Required live acceptance precedes Gatus activation and
+declaring the platform ready. Merge needs explicit operator authorization. Reconcile
+this specification with implemented and validated behavior.
 
 ## Required consumer follow-up
 
@@ -533,11 +534,14 @@ Likewise, a native Crawl4AI probe produced a 1,693,205-byte response from a
 
 ### Implementation evidence
 
-The staged source now contains native Deployments, a dedicated Envoy Gateway,
+The source contains native Deployments, a dedicated Envoy Gateway,
 workload network policies, the cached credential agent, the atomic-bootstrap server
 launcher, a guarded operator SOPS writer, private SearXNG routing and Homepage
-discovery, and the four approved Gatus definitions. Flux units remain suspended;
-no production bootstrap Secret or runtime consumer credential has been created.
+discovery, and the four approved Gatus definitions. The initial deployment change
+enables the five Flux units and selects the operator-provided SOPS bootstrap Secret.
+Gatus checks and their alert rules remain staged pending live acceptance. This
+deployment selection does not establish that the unattended platform is ready.
+Runtime consumer credentials are never written to Git.
 
 The production credential agent's focused tests cover automatic issuance, idle
 renewal, cached admission, malformed issuer responses, expiry and recovery,
@@ -578,7 +582,7 @@ in the aggregate-memory section. These are local ARM64 fixtures, not a complete
 JavaScript-heavy or deployed AMD64 workload profile.
 
 The registered source gate passes 61 focused tests on the host (one Linux-only
-case skipped and separately passed in the native image), validates 22 rendered
+case skipped and separately passed in the native image), validates 23 rendered
 resources against available schemas, and checks twelve alert rules, their temporal
 Prometheus fixtures, and the agent's metric exposition. The registered local integration workflow uses current pinned
 images and generated Gateway configuration, verifies native rotation/recovery and

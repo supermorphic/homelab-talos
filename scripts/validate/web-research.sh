@@ -12,7 +12,10 @@ uv run --locked python scripts/validate/web_research.py --controller-manifest "$
 
 mkdir "$work/manifests"
 for package in namespace/app searxng/app crawl4ai/app crawl4ai/proxy alerts/app; do
-	kustomize build "kubernetes/apps/web-research/$package" >"$work/manifests/${package//\//-}.yaml"
+	# Flux removes SOPS metadata during decryption. Validate the resource shape
+	# without decrypting ciphertext or changing the operator's source artifact.
+	kustomize build "kubernetes/apps/web-research/$package" |
+		yq ea 'del(.sops)' >"$work/manifests/${package//\//-}.yaml"
 done
 kubeconform -strict -summary -ignore-missing-schemas "$work/manifests"
 scripts/validate/alerts.sh web-research
