@@ -47,6 +47,7 @@ def search_engine_errors(settings):
     if (
         not isinstance(kept, list)
         or len(kept) != len(INTENDED_SEARCH_ENGINES)
+        or any(not isinstance(name, str) for name in kept)
         or set(kept) != INTENDED_SEARCH_ENGINES
     ):
         errors.append("SearXNG must retain only the four intended engines")

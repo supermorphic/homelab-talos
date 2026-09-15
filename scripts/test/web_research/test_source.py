@@ -42,6 +42,12 @@ class SourceBoundaryTests(unittest.TestCase):
                     "engines": {"keep_only": ["bing", "brave", "duckduckgo"]}
                 },
             },
+            {
+                **settings,
+                "use_default_settings": {
+                    "engines": {"keep_only": ["bing", "brave", "duckduckgo", {}]}
+                },
+            },
         ):
             with self.subTest(changed=changed):
                 self.assertTrue(validator.search_engine_errors(changed))
