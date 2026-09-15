@@ -29,6 +29,25 @@ metrics. Expiry or a confirmed validation `401` prevents further admission with
 that token. The agent automatically retries issuance. A crawl can fail during key
 cutover; the proxy never replays a crawl automatically.
 
+## Search engines
+
+Searches use **Brave and DuckDuckGo** together. Consumers should explicitly send
+`engines=brave,duckduckgo` for a stable automated search contract. The Gatus search
+canary omits that parameter so it exercises the configured default pair.
+
+Only these two engines are loaded. Google, Bing, Startpage, and Mojeek are excluded,
+including explicit API selection. There is no automatic engine fallback. Consumers
+own evidence sufficiency, attempt budgets, deadlines, and the handling of empty or
+failed searches. Partial engine failure is acceptable when the other engine returns
+sufficient usable results. Preserve actual engine metadata for source attribution.
+
+The selected providers still receive query text and the platform's outbound IP.
+Private ingress and removal of personal browser sessions do not hide that IP from
+search providers. Keep private consumer data out of search terms. The published
+[Brave](https://search.brave.com/help/privacy-policy) and
+[DuckDuckGo](https://duckduckgo.com/privacy) privacy policies motivate this provider
+set; provider privacy claims are not enforced by SearXNG.
+
 ## Limits and privacy
 
 - Native API input: 512 KiB; crawl wall-clock budget: 75 seconds.

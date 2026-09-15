@@ -21,31 +21,44 @@ def read(relative):
 
 
 class SourceBoundaryTests(unittest.TestCase):
-    def test_default_search_enables_only_the_four_intended_engines(self):
+    def test_search_policy_enables_only_the_private_pair(self):
+        # Retaining another engine permits explicit automated selection and
+        # discloses queries beyond the approved pair.
+        settings = {
+            "use_default_settings": {
+                "engines": {"keep_only": ["brave", "duckduckgo"]}
+            },
+            "engines": [
+                {"name": "brave", "disabled": False},
+                {"name": "duckduckgo", "disabled": False},
+            ],
+        }
+        self.assertEqual(validator.search_engine_errors(settings), [])
+        for name in ("brave", "duckduckgo"):
+            for field, value in (("disabled", True), ("inactive", True)):
+                changed = copy.deepcopy(settings)
+                next(e for e in changed["engines"] if e["name"] == name)[field] = value
+                with self.subTest(name=name, field=field):
+                    self.assertTrue(validator.search_engine_errors(changed))
+        for name in ("google", "bing", "startpage", "mojeek"):
+            changed = copy.deepcopy(settings)
+            changed["use_default_settings"]["engines"]["keep_only"].append(name)
+            changed["engines"].append({"name": name, "disabled": True})
+            with self.subTest(excluded=name):
+                self.assertTrue(validator.search_engine_errors(changed))
+
+    def test_deployed_search_settings_follow_policy_and_reject_malformed_entries(self):
         settings = read("searxng/app/settings.yml")
         self.assertEqual(validator.search_engine_errors(settings), [])
-
         for changed in (
-            {**settings, "engines": settings.get("engines", [])[:-1]},
-            {
-                **settings,
-                "engines": [
-                    {**engine, "disabled": True}
-                    if engine.get("name") == "google"
-                    else engine
-                    for engine in settings.get("engines", [])
-                ],
-            },
+            {},
+            {**settings, "engines": settings["engines"][:-1]},
+            {**settings, "engines": [{"name": {}, "disabled": False}] * 2},
+            {**settings, "engines": [settings["engines"][0]] * 2},
             {
                 **settings,
                 "use_default_settings": {
-                    "engines": {"keep_only": ["bing", "brave", "duckduckgo"]}
-                },
-            },
-            {
-                **settings,
-                "use_default_settings": {
-                    "engines": {"keep_only": ["bing", "brave", "duckduckgo", {}]}
+                    "engines": {"keep_only": ["brave", {}]}
                 },
             },
         ):
