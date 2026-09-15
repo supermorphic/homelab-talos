@@ -13,6 +13,8 @@ const STATIC_TEXT = 'Example Domain';
 const JAVASCRIPT_URL = 'https://quotes.toscrape.com/js/';
 const JAVASCRIPT_TEXT = 'The world as we have created it';
 const LOOPBACK_URL = 'https://127.0.0.1/';
+const NEAR_LIMIT_MIN_BYTES = 7 * 1024 * 1024;
+const SLOW_HOLD_MS = 3000;
 
 class ContractError extends Error {
   constructor(code, bytesRead = 0) {
@@ -178,6 +180,149 @@ function boundedRequest(url, options = {}) {
   });
 }
 
+function startPausedRequest(url, options = {}) {
+  const timeoutMs = options.timeoutMs;
+  const maxBytes = options.maxBytes;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 ||
+      !Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    const error = new ContractError('invalid-limit');
+    return {
+      headers: Promise.reject(error),
+      bytesRead: 0,
+      drain: () => Promise.reject(error),
+      destroy() {},
+    };
+  }
+  const parsed = new URL(url);
+  const transport = parsed.protocol === 'https:' ? https : http;
+  let request;
+  let response;
+  let bytesRead = 0;
+  let headerSettled = false;
+  let draining = false;
+  let finished = false;
+  let terminalError;
+  let terminalResponse;
+  let drainResolve;
+  let drainReject;
+  let resolveHeaders;
+  let rejectHeaders;
+  const headers = new Promise((resolve, reject) => {
+    resolveHeaders = resolve;
+    rejectHeaders = reject;
+  });
+  const chunks = [];
+  const deadline = setTimeout(() => {
+    fail(new ContractError('deadline', bytesRead));
+  }, timeoutMs);
+
+  function fail(error) {
+    if (finished || terminalError) return;
+    terminalError = error instanceof ContractError
+      ? error
+      : new ContractError('request-error', bytesRead);
+    clearTimeout(deadline);
+    if (!headerSettled) {
+      headerSettled = true;
+      rejectHeaders(terminalError);
+    }
+    if (drainReject) drainReject(terminalError);
+    if (response && !response.destroyed) response.destroy();
+    if (request && !request.destroyed) request.destroy();
+  }
+
+  function complete() {
+    if (finished || terminalError) return;
+    finished = true;
+    clearTimeout(deadline);
+    terminalResponse = {
+      status: response.statusCode || 0,
+      headers: response.headers,
+      body: Buffer.concat(chunks),
+    };
+    if (drainResolve) drainResolve(terminalResponse);
+  }
+
+  const controller = {
+    headers,
+    get bytesRead() {
+      return bytesRead;
+    },
+    drain() {
+      if (draining) return Promise.reject(new ContractError('duplicate-drain', bytesRead));
+      draining = true;
+      if (terminalError) return Promise.reject(terminalError);
+      if (finished) return Promise.resolve(terminalResponse);
+      if (!response) return Promise.reject(new ContractError('headers-pending', bytesRead));
+      const result = new Promise((resolve, reject) => {
+        drainResolve = resolve;
+        drainReject = reject;
+      });
+      response.resume();
+      return result;
+    },
+    destroy() {
+      fail(new ContractError('cancelled', bytesRead));
+    },
+  };
+
+  request = transport.request(parsed, {
+    method: options.method || 'GET',
+    headers: {'accept-encoding': 'identity', ...(options.headers || {})},
+    agent: false,
+  });
+  request.on('response', (incoming) => {
+    response = incoming;
+    response.pause();
+    response.on('data', (chunk) => {
+      const remaining = maxBytes + 1 - bytesRead;
+      if (remaining > 0) {
+        const bounded = chunk.subarray(0, remaining);
+        chunks.push(bounded);
+        bytesRead += bounded.length;
+      }
+      if (bytesRead > maxBytes) {
+        fail(new ContractError('response-too-large', bytesRead));
+      }
+    });
+    response.on('end', complete);
+    response.on('aborted', () => fail(new ContractError('response-aborted', bytesRead)));
+    response.on('error', (error) => fail(error));
+    response.on('close', () => {
+      if (!response.complete) fail(new ContractError('response-closed', bytesRead));
+    });
+    headerSettled = true;
+    resolveHeaders({status: response.statusCode || 0, headers: response.headers});
+  });
+  request.on('error', (error) => fail(error));
+  if (options.body !== undefined) request.write(options.body);
+  request.end();
+  return controller;
+}
+
+async function retainAndDrain(controllers, holdMs, sleep = (milliseconds) =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds))) {
+  if (!Array.isArray(controllers) || controllers.length !== 4 ||
+      !Number.isSafeInteger(holdMs) || holdMs < 1 || holdMs > 5000) {
+    throw new ContractError('slow-consumer-contract');
+  }
+  try {
+    const metadata = await Promise.all(controllers.map((controller) => controller.headers));
+    for (const item of metadata) {
+      const contentType = String(item.headers['content-type'] || '').toLowerCase();
+      const encoding = String(item.headers['content-encoding'] || 'identity').toLowerCase();
+      if (item.status !== 200 || !contentType.startsWith('application/json') ||
+          (encoding !== '' && encoding !== 'identity')) {
+        throw new ContractError('slow-consumer-contract');
+      }
+    }
+    await sleep(holdMs);
+    return await Promise.all(controllers.map((controller) => controller.drain()));
+  } finally {
+    for (const controller of controllers) controller.destroy();
+  }
+}
+
 function crawlPayload(url) {
   return {
     urls: [url],
@@ -200,15 +345,40 @@ function crawlPayload(url) {
   };
 }
 
-function oversizedPayload() {
+function rawFixturePayload(linkCount) {
   const base = `https://example.com/${'a'.repeat(40000)}/`;
   const links = Array.from(
-    {length: 220},
+    {length: linkCount},
     (_value, index) => `<a href="item-${index}">Fixture item ${index}</a>`,
   ).join('');
   const html = `<html><head><base href="${base}"></head>` +
     `<body><p>Bounded public fixture</p>${links}</body></html>`;
   return crawlPayload(`raw:${html}`);
+}
+
+function oversizedPayload() {
+  return rawFixturePayload(220);
+}
+
+function nearLimitPayload() {
+  return rawFixturePayload(65);
+}
+
+function nearLimitContract(response, expectedUrl) {
+  if (response.status !== 200 || response.body.length < NEAR_LIMIT_MIN_BYTES ||
+      response.body.length > MAX_RESPONSE_BYTES) {
+    throw new ContractError('near-limit-contract', response.body.length);
+  }
+  const document = jsonDocument(response, 'near-limit-contract');
+  const results = document.results;
+  const result = Array.isArray(results) && results.length === 1 ? results[0] : null;
+  if (document.success !== true || !result || result.success !== true ||
+      result.status_code !== 200 || result.url !== expectedUrl ||
+      !result.markdown || typeof result.markdown.raw_markdown !== 'string' ||
+      !result.markdown.raw_markdown.includes('Bounded public fixture')) {
+    throw new ContractError('near-limit-contract', response.body.length);
+  }
+  return 1;
 }
 
 function oversizedContract(response) {
@@ -257,6 +427,21 @@ async function call(url, timeoutMs, body, extraHeaders = {}) {
   return boundedRequest(url, {
     method: encoded === undefined ? 'GET' : 'POST',
     headers,
+    body: encoded,
+    timeoutMs,
+    maxBytes: MAX_RESPONSE_BYTES,
+  });
+}
+
+function startPausedCall(url, timeoutMs, body) {
+  const encoded = JSON.stringify(body);
+  return startPausedRequest(url, {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/json',
+      'content-length': Buffer.byteLength(encoded),
+    },
     body: encoded,
     timeoutMs,
     maxBytes: MAX_RESPONSE_BYTES,
@@ -348,6 +533,27 @@ async function main() {
     }
   }));
 
+  records.push(await runPhase('slow-consumer-retention', async () => {
+    const payload = nearLimitPayload();
+    const controllers = Array.from(
+      {length: 4},
+      () => startPausedCall(CRAWL_URL, 100000, payload),
+    );
+    const responses = await retainAndDrain(controllers, SLOW_HOLD_MS);
+    for (const response of responses) {
+      try {
+        nearLimitContract(response, payload.urls[0]);
+      } catch (_error) {
+        throw contractFailure('near-limit-contract', response);
+      }
+    }
+    return {
+      status: 200,
+      size: responses.reduce((total, response) => total + response.body.length, 0),
+      count: responses.length,
+    };
+  }));
+
   records.push(await runPhase('prohibited-loopback', async () => {
     const response = await call(CRAWL_URL, 30000, crawlPayload(LOOPBACK_URL));
     try {
@@ -392,12 +598,16 @@ module.exports = {
   ContractError,
   crawlContract,
   crawlPayload,
+  nearLimitContract,
+  nearLimitPayload,
   oversizedContract,
   oversizedPayload,
   prohibitedContract,
+  retainAndDrain,
   resultRecord,
   searchContract,
   shouldRun,
+  startPausedRequest,
 };
 
 if (shouldRun(module.filename)) {

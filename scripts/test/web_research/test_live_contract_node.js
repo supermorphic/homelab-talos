@@ -8,12 +8,16 @@ const {
   classifyBurst,
   crawlContract,
   crawlPayload,
+  nearLimitContract,
+  nearLimitPayload,
   oversizedContract,
   oversizedPayload,
   prohibitedContract,
+  retainAndDrain,
   resultRecord,
   searchContract,
   shouldRun,
+  startPausedRequest,
 } = require('./live_contract_node.js');
 
 async function listen(handler) {
@@ -56,6 +60,79 @@ test('response reader stops at one byte beyond its declared cap', async () => {
     (error) => error.code === 'response-too-large' && error.bytesRead === 33,
   );
   await close(server);
+});
+
+test('paused response reads no body until bounded drain', async () => {
+  const server = await listen((_request, response) => {
+    response.writeHead(200, {'content-type': 'application/json'});
+    response.end(Buffer.alloc(64, 120));
+  });
+  const { port } = server.address();
+  const controller = startPausedRequest(`http://127.0.0.1:${port}/paused`, {
+    timeoutMs: 1000,
+    maxBytes: 64,
+  });
+  const headers = await controller.headers;
+  assert.equal(headers.status, 200);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(controller.bytesRead, 0);
+  const response = await controller.drain();
+  assert.equal(response.body.length, 64);
+  await close(server);
+});
+
+test('paused response retains its hard deadline through drain', async () => {
+  const server = await listen((_request, response) => {
+    response.writeHead(200, {'content-type': 'application/json'});
+    response.write('x');
+  });
+  const { port } = server.address();
+  const controller = startPausedRequest(`http://127.0.0.1:${port}/deadline`, {
+    timeoutMs: 80,
+    maxBytes: 64,
+  });
+  await controller.headers;
+  await assert.rejects(controller.drain(), (error) => error.code === 'deadline');
+  await close(server);
+});
+
+test('retained batch holds all four headers before drain and cleans every failure', async () => {
+  let held = false;
+  const drained = [];
+  const controllers = Array.from({length: 4}, (_value, index) => ({
+    headers: Promise.resolve({
+      status: 200,
+      headers: {'content-type': 'application/json'},
+    }),
+    drain: async () => {
+      assert.equal(held, true);
+      drained.push(index);
+      return jsonResponse(200, {index});
+    },
+    destroy() {},
+  }));
+  const responses = await retainAndDrain(controllers, 25, async (milliseconds) => {
+    assert.equal(milliseconds, 25);
+    held = true;
+  });
+  assert.equal(responses.length, 4);
+  assert.deepEqual(drained.sort(), [0, 1, 2, 3]);
+
+  for (const failureAt of ['headers', 'drain']) {
+    const destroyed = [];
+    const failing = Array.from({length: 4}, (_value, index) => ({
+      headers: failureAt === 'headers' && index === 2
+        ? Promise.reject(new Error('synthetic header failure'))
+        : Promise.resolve({status: 200, headers: {'content-type': 'application/json'}}),
+      drain: async () => {
+        if (failureAt === 'drain' && index === 2) throw new Error('synthetic drain failure');
+        return jsonResponse(200, {index});
+      },
+      destroy: () => destroyed.push(index),
+    }));
+    await assert.rejects(retainAndDrain(failing, 25, async () => {}));
+    assert.deepEqual(destroyed.sort(), [0, 1, 2, 3]);
+  }
 });
 
 function jsonResponse(status, document) {
@@ -212,6 +289,39 @@ test('oversized fixture is fixed, network-free, and below the input cap', () => 
   assert.equal((payload.urls[0].match(/<a href=/g) || []).length, 220);
   assert.equal(payload.urls[0].includes('<script'), false);
   assert.equal(payload.urls[0].includes('<img'), false);
+});
+
+test('near-limit fixture is fixed below 50 KiB and requires a valid near-cap crawl', () => {
+  const payload = nearLimitPayload();
+  const encoded = Buffer.from(JSON.stringify(payload));
+  assert.ok(encoded.length < 50 * 1024);
+  assert.equal(payload.urls.length, 1);
+  assert.equal((payload.urls[0].match(/<a href=/g) || []).length, 65);
+  assert.equal(payload.urls[0].includes('<script'), false);
+  assert.equal(payload.urls[0].includes('<img'), false);
+
+  const document = {
+    success: true,
+    results: [{
+      success: true,
+      status_code: 200,
+      url: payload.urls[0],
+      markdown: {raw_markdown: `Bounded public fixture${'x'.repeat(7 * 1024 * 1024)}`},
+    }],
+  };
+  const response = jsonResponse(200, document);
+  assert.ok(response.body.length < 8 * 1024 * 1024);
+  assert.equal(nearLimitContract(response, payload.urls[0]), 1);
+  for (const distractor of [
+    crawlResponse(),
+    {...response, status: 500},
+    jsonResponse(200, {...document, results: [{...document.results[0], success: false}]}),
+  ]) {
+    assert.throws(
+      () => nearLimitContract(distractor, payload.urls[0]),
+      (error) => error.code === 'near-limit-contract',
+    );
+  }
 });
 
 test('oversized response requires the proxy exact replacement response', () => {

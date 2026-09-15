@@ -161,6 +161,7 @@ class PodmanRun:
             "readiness": "PASS native-readiness",
             "metrics": "PASS credential-agent-metrics-capture",
             "gateway": "PASS translated-gateway-contract",
+            "near-limit": "PASS near-limit-response",
             "rotation": "PASS credential-rotation-contract",
             "searx": "PASS searxng-contract",
             "gatus": "PASS gatus-production-conditions",
@@ -411,6 +412,7 @@ def execute(root: Path, directory: Path) -> None:
         assert_container(run, native, 2 * 1024**3)
         assert_container(run, envoy, 256 * 1024**2, native)
         run.exec_fixture(native, "gateway", 240)
+        run.exec_fixture(native, "near-limit", 180)
         run.exec_fixture(native, "rotation", 300)
 
         run.run_container(

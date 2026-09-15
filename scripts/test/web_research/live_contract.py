@@ -23,6 +23,7 @@ PHASES = (
     "route-exclusion",
     "javascript-crawl",
     "oversized-response",
+    "slow-consumer-retention",
     "prohibited-loopback",
     "concurrency-burst",
     "recovery",

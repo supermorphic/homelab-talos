@@ -155,10 +155,16 @@ Node program sent on standard input to the current ready `n8n-main` container. T
 program has no caller-supplied endpoint or executable argument. It performs bounded
 search, static and JavaScript crawl, caller-header replacement, exact route exclusion,
 loopback rejection, deterministic oversized-response rejection, four-request burst,
-and recovery checks. Output is limited to fixed phase, result, status, size, count,
-and duration fields. This suite is registered outside automatic campaigns and CI.
-It exercises the network position and runtime of n8n, but it is not an n8n HTTP
-Request workflow execution.
+slow-consumer retention, and recovery checks. The slow-consumer phase starts exactly
+four fixed raw crawls below 50 KiB, pauses every response at its headers, holds all
+four for three seconds, then drains at most 8 MiB plus one sentinel and requires four
+valid native JSON successes between 7 MiB and 8 MiB. Client success does not establish
+the proxy's memory high-water mark; collect that evidence independently from Prometheus. A fifth
+excluded-route request cannot distinguish connection admission from normal route
+handling, so excess-concurrency acceptance remains pending a reliable oracle. Output
+is limited to fixed phase, result, status, size, count, and duration fields. This suite
+is registered outside automatic campaigns and CI. It exercises the network position
+and runtime of n8n, but it is not an n8n HTTP Request workflow execution.
 
 Local acceptance also measured slow HTTP/1.1 and HTTP/2 consumers at the response
 limit, overload rejection and recovery. Four concurrent public static-page crawls
