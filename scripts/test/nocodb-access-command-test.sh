@@ -143,6 +143,10 @@ case "$url" in
       sync_number="$(($(rg -c '^source-sync$' "${NOCODB_ACCESS_EVENT_LOG:?}" || true) + 1))"
       event='source-sync'
       case "${NOCODB_ACCESS_START_STATE:-initial}:$sync_number" in
+        prepared:1) response='source-sync-prepared.json' ;;
+        prepared:2) response='source-sync-retained.json' ;;
+        adopted:1) response='source-sync-2.json' ;;
+        adopted:2) response='source-sync-retained.json' ;;
         retained:1) response='source-sync-retained.json' ;;
         retained:2) response='source-sync-retained.json' ;;
         partial:1) response='source-sync-partial.json' ;;
@@ -265,6 +269,7 @@ operator_rotated="$(jq -c '.sourceCreateJobState = null' <<<"$operator_rotated")
 
 jq -n --argjson reader "$reader_created" --argjson operator "$operator_waiting" '{ok:true,domain:"automation_data_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-1.json"
 jq -n --argjson reader "$reader_current" --argjson operator "$operator_created" '{ok:true,domain:"automation_data_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-2.json"
+jq -n --argjson reader "$reader_created" --argjson operator "$operator_created" '{ok:true,domain:"automation_data_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-prepared.json"
 jq -n --argjson reader "$reader_current" --argjson operator "$operator_current" '{ok:true,domain:"automation_data_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-3.json"
 jq -n --argjson reader "$reader_current" --argjson operator "$operator_current" '{ok:true,domain:"automation_data_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-retained.json"
 jq -n --argjson reader "$reader_current" --argjson operator "$operator_waiting" '{ok:true,domain:"automation_data_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-partial.json"
@@ -440,6 +445,43 @@ run_scenario test:nocodb:access none 403 '' false false \
 assert_status 0
 expected_order=$'kubectl\nkubectl\nkubectl\nkubectl\nprovision\nkubectl\nacceptance-structure\nkubectl\nsource-sync\nkubectl\nsignup-denial\nkubectl\nacceptance-probe\nkubectl\nacceptance-feedback\nkubectl\nsource-sync\nkubectl\nsource-rotate\nkubectl\nacceptance-probe\nkubectl\nacceptance-cleanup'
 [[ "$(cat "$fixture/events.log")" == "$expected_order" ]] || fail "retained rerun used initial-creation routing: $(tr '\n' ' ' <"$fixture/events.log")"
+assert_no_secret_output
+
+for start_state in prepared adopted; do
+  case_name="ready first sync accepts validated source creation after grants: $start_state"
+  run_scenario test:nocodb:access none 403 '' false false \
+    'bound:automation_data_acceptance:credential-migrator:credential-runtime' "$start_state"
+  assert_status 0
+  [[ "$(cat "$fixture/events.log")" == "$expected_order" ]] || fail 'ready source creation repeated grants or adoption'
+  assert_no_secret_output
+done
+
+cp "$fixture/responses/source-sync-prepared.json" "$fixture/responses/prepared.valid.json"
+for invalid_projection in \
+  '.operator.sourceCreateJobState = null' \
+  '.operator.sourceCreateJobState = "running"' \
+  '.operator.postgresqlValidation.databaseIsolationValid = false' \
+  '.operator.sourceReadBack = false' \
+  '.operator.operationStartedAt = "2026-09-04T12:01:00.000000Z"'; do
+  case_name="prepared source creation rejects invalid evidence: $invalid_projection"
+  jq "$invalid_projection" "$fixture/responses/prepared.valid.json" >"$fixture/responses/source-sync-prepared.json"
+  run_scenario test:nocodb:access none 403 '' false false \
+    'bound:automation_data_acceptance:credential-migrator:credential-runtime' prepared
+  assert_status 1
+  ! rg -q '^acceptance-probe$' "$fixture/events.log" || fail 'invalid creation evidence reached data probes'
+  assert_no_secret_output
+done
+mv "$fixture/responses/prepared.valid.json" "$fixture/responses/source-sync-prepared.json"
+
+case_name='retained reader and newly created operator preserve creation ordering'
+cp "$fixture/responses/source-sync-2.json" "$fixture/responses/adopted.valid.json"
+jq '.operator.operationStartedAt = "2026-09-04T12:01:00.000000Z"' \
+  "$fixture/responses/adopted.valid.json" >"$fixture/responses/source-sync-2.json"
+run_scenario test:nocodb:access none 403 '' false false \
+  'bound:automation_data_acceptance:credential-migrator:credential-runtime' adopted
+assert_status 1
+! rg -q '^acceptance-probe$' "$fixture/events.log" || fail 'reversed adoption reached data probes'
+mv "$fixture/responses/adopted.valid.json" "$fixture/responses/source-sync-2.json"
 assert_no_secret_output
 
 case_name='reader-ready operator-pending retry retains the reader and completes operator creation'

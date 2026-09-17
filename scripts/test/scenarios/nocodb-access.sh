@@ -420,9 +420,11 @@ case "$(jq -r '.operator.state // "absent"' "$first_sync")" in
     fi
     ;;
   ready)
-    if [[ "$reader_transition" != retained ]] ||
-      ! validate_ready_source "$first_sync" operator null; then
-      echo 'Retained ready sources omitted current identity, data-read, or PostgreSQL evidence.' >&2
+    operator_job_state="$(jq -r '.operator.sourceCreateJobState // "null"' "$first_sync")"
+    if [[ "$operator_job_state" != null && "$operator_job_state" != completed ]] ||
+      [[ "$reader_transition" == created && "$operator_job_state" != completed ]] ||
+      ! validate_ready_source "$first_sync" operator "$operator_job_state"; then
+      echo 'Ready sources omitted current identity, data-read, or PostgreSQL evidence.' >&2
       exit 1
     fi
     cp "$first_sync" "$ready_sync"
@@ -433,7 +435,7 @@ case "$(jq -r '.operator.state // "absent"' "$first_sync")" in
     ;;
 esac
 
-if [[ "$reader_transition" == created ]]; then
+if [[ "$(jq -r '.operator.sourceCreateJobState // "null"' "$ready_sync")" == completed ]]; then
   jq -e '.reader.updatedAt < .operator.operationStartedAt' "$ready_sync" >/dev/null || {
     echo 'Initial reader completion did not precede operator creation.' >&2
     exit 1
