@@ -16,6 +16,6 @@ printf %s "${EXPECTED_DATABASE_SET_BASE64:-}" | base64 -d >"$scratch/expected" 2
 awk -F '\t' '$1 == "database" {print $2}' "$bundle/manifest.tsv" | LC_ALL=C sort -u >"$scratch/actual"
 cmp -s "$scratch/expected" "$scratch/actual" || fail database_inventory
 awk -F '\t' 'NF != 15 {bad=1} END {exit (bad || NR == 0)}' "$bundle/registry.tsv" || fail registry_format
-awk -F '\t' '$1 == "issue317_backup_error" && $6 == "error" && $15 == "acceptance_backup_error" {found=1} END {exit !found}' "$bundle/registry.tsv" || fail error_record
+awk -F '\t' '$1 == "automation_data_backup_error" && $6 == "error" && $15 == "acceptance_backup_error" {found=1} END {exit !found}' "$bundle/registry.tsv" || fail error_record
 database_count="$(wc -l <"$scratch/actual" | tr -d ' ')"
 printf 'bundle_valid=true database_count=%s error_record=present\n' "$database_count"

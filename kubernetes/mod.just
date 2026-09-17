@@ -50,6 +50,11 @@ nocodb-verify: require-bash
 nocodb-source-sync domain: require-bash
     @scripts/nocodb/source-operation.sh sync {{quote(domain)}}
 
+# Prepare restricted NOLOGIN access roles without registering a NocoDB base or source.
+# Guard: NOCODB_SOURCE_PREPARE_CONFIRM='prepare:nocodb:<domain>'.
+nocodb-source-prepare domain: require-bash
+    @scripts/nocodb/source-operation.sh prepare {{quote(domain)}}
+
 # Rotate exactly one NocoDB source credential through the fixed private webhook. Guard:
 # NOCODB_SOURCE_ROTATE_CONFIRM='rotate:nocodb:<domain>:<reader|operator>'.
 nocodb-source-rotate domain access_kind: require-bash

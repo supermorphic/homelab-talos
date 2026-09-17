@@ -54,9 +54,19 @@ for index in "${!expected_args[@]}"; do
   }
 done
 
-rg -Fq "PERFORM platform_operations.record_operation_error('issue317_backup_error', 'acceptance_backup_error');" "$temp_dir/fixture.sql"
+rg -Fq "PERFORM platform_operations.record_operation_error('automation_data_backup_error', 'acceptance_backup_error');" "$temp_dir/fixture.sql"
 rg -Fq 'SELECT FROM pg_database' "$temp_dir/fixture.sql"
 rg -Fq 'SELECT FROM pg_roles' "$temp_dir/fixture.sql"
+database_guard_line="$(rg -n -m1 -F "IF EXISTS (SELECT FROM pg_database WHERE datname = 'automation_data_backup_error') OR" \
+  "$temp_dir/fixture.sql" | cut -d: -f1)"
+role_guard_line="$(rg -n -m1 -F "EXISTS (SELECT FROM pg_roles WHERE rolname IN ('automation_data_backup_error_owner', 'automation_data_backup_error_migrator', 'automation_data_backup_error_runtime')) THEN" \
+  "$temp_dir/fixture.sql" | cut -d: -f1)"
+registry_absence_line="$(rg -n -m1 -F "IF NOT EXISTS (SELECT FROM platform_operations.managed_domains WHERE domain = 'automation_data_backup_error') THEN" \
+  "$temp_dir/fixture.sql" | cut -d: -f1)"
+[[ "$database_guard_line" -lt "$registry_absence_line" && "$role_guard_line" -lt "$registry_absence_line" ]] || {
+  echo 'The backup-error fixture must reject database or role collisions on every run.' >&2
+  exit 1
+}
 yq -e '.spec.template.spec.containers[0].env[] | select(.name == "PGPASSWORD") |
   .valueFrom.secretKeyRef.key == "backup-password"' "$temp_dir/error-job.yaml" >/dev/null
 

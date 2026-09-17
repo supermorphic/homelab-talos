@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo 'Usage: source-operation.sh <sync|rotate> <domain> [reader|operator]' >&2
+  echo 'Usage: source-operation.sh <prepare|sync|rotate> <domain> [reader|operator]' >&2
   exit 2
 }
 
@@ -18,6 +18,14 @@ access_kind="${3:-}"
 }
 
 case "$operation" in
+  prepare)
+    [[ -z "$access_kind" ]] || usage
+    expected_confirmation="prepare:nocodb:${domain}"
+    [[ "${NOCODB_SOURCE_PREPARE_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo "Refusing NocoDB access preparation; set NOCODB_SOURCE_PREPARE_CONFIRM='$expected_confirmation'." >&2
+      exit 1
+    }
+    ;;
   sync)
     [[ -z "$access_kind" ]] || usage
     expected_confirmation="sync:nocodb:${domain}"
@@ -69,11 +77,12 @@ trap 'rm -rf -- "$temp_dir"' EXIT
 request_body="$temp_dir/request.json"
 curl_config="$temp_dir/request.curl"
 
-if [[ "$operation" == sync ]]; then
-  jq -cn --arg domain "$domain" '{domain: $domain, operation: "sync"}' >"$request_body"
-else
+if [[ "$operation" == rotate ]]; then
   jq -cn --arg domain "$domain" --arg access_kind "$access_kind" \
     '{domain: $domain, operation: "rotate", accessKind: $access_kind}' >"$request_body"
+else
+  jq -cn --arg domain "$domain" --arg operation "$operation" \
+    '{domain: $domain, operation: $operation}' >"$request_body"
 fi
 
 {
@@ -90,7 +99,27 @@ curl_status=$?
 set -e
 [[ "$curl_status" -eq 0 ]] || exit "$curl_status"
 
-jq -e --arg domain "$domain" --arg operation "$operation" '
+if [[ "$operation" == prepare ]]; then
+  jq -e --arg domain "$domain" '
+    type == "object" and
+    (keys | sort == [
+      "domain", "ok", "operation", "operatorEligible", "operatorRequested", "operatorRole",
+      "readerEligible", "readerRole", "state"
+    ]) and
+    .ok == true and .domain == $domain and .operation == "prepare" and .state == "prepared" and
+    .readerRole == ($domain + "_reader") and .readerEligible == true and
+    (.operatorRequested | type == "boolean") and (.operatorEligible | type == "boolean") and
+    (if .operatorRequested then
+      .operatorRole == ($domain + "_operator")
+    else
+      .operatorRole == null and .operatorEligible == false
+    end)
+  ' <<<"$response" >/dev/null || {
+    echo 'NocoDB source response did not satisfy the prepare contract.' >&2
+    exit 1
+  }
+else
+  jq -e --arg domain "$domain" --arg operation "$operation" '
   type == "object" and
   (keys | sort == ["baseId", "domain", "errorCode", "ok", "operation", "operator", "reader"]) and
   .ok == true and
@@ -162,9 +191,10 @@ jq -e --arg domain "$domain" --arg operation "$operation" '
   (($access_kinds | unique | length) == ($access_kinds | length)) and
   (.reader.accessKind == "reader") and
   (.operator == null or .operator.accessKind == "operator")
-' <<<"$response" >/dev/null || {
-  echo 'NocoDB source response did not satisfy the source lifecycle contract.' >&2
-  exit 1
-}
+  ' <<<"$response" >/dev/null || {
+    echo 'NocoDB source response did not satisfy the source lifecycle contract.' >&2
+    exit 1
+  }
+fi
 
 printf '%s\n' "$response"

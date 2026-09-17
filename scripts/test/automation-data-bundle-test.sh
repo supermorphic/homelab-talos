@@ -10,7 +10,7 @@ mkdir -p "$bundle" "$test_root/scratch"
 export TMPDIR="$test_root/scratch"
 export EXPECTED_DATABASE_SET_BASE64=Y0c5emRHZHlaWE09Cg==
 printf 'database\tcG9zdGdyZXM=\tdump\n' >"$bundle/manifest.tsv"
-printf 'issue317_backup_error\tdb\towner\tmigrator\truntime\terror\tfalse\t1\t\t\t\t\tstart\tupdated\tacceptance_backup_error\n' >"$bundle/registry.tsv"
+printf 'automation_data_backup_error\tdb\towner\tmigrator\truntime\terror\tfalse\t1\t\t\t\t\tstart\tupdated\tacceptance_backup_error\n' >"$bundle/registry.tsv"
 
 seal() {
   (cd "$bundle" && sha256sum manifest.tsv registry.tsv >SHA256SUMS && sha256sum SHA256SUMS >COMPLETE)
@@ -30,7 +30,7 @@ printf 'DO_NOT_EXPOSE\n' >>"$bundle/registry.tsv"
 check 1 'bundle_check_failed=checksums'
 seal
 check 1 'bundle_check_failed=registry_format'
-printf '%s' 'issue317_backup_error\tdb\towner\tmigrator\truntime\terror\tfalse\t1\t\t\t\t\tstart\tupdated\tacceptance_backup_error' >"$bundle/registry.tsv"
+printf '%s' 'automation_data_backup_error\tdb\towner\tmigrator\truntime\terror\tfalse\t1\t\t\t\t\tstart\tupdated\tacceptance_backup_error' >"$bundle/registry.tsv"
 seal
 check 1 'bundle_check_failed=registry_format'
 printf 'other\tdb\towner\tmigrator\truntime\terror\tfalse\t1\t\t\t\t\tstart\tupdated\tacceptance_backup_error\n' >"$bundle/registry.tsv"

@@ -51,7 +51,7 @@ create_bundle() { # <timestamp> <complete|incomplete>
 	printf 'CREATE ROLE postgres;\n' >"$bundle/globals.sql"
 	printf 'registry\n' >"$bundle/registry.tsv"
 	printf 'bundle_version\t1\ncaptured_at\tfixture\nplatform_generation\t1\ndatabase_set_hash\tfixture\nrecord_type\tdatabase_name_base64\tdump_path\n' >"$bundle/manifest.tsv"
-	for database_name in nocodb automation_data_control issue334_acceptance; do
+	for database_name in nocodb automation_data_control automation_data_acceptance; do
 		encoded="$(printf '%s' "$database_name" | base64 | tr -d '\n')"
 		dump_path="databases/db-$(printf '%s' "$encoded" | tr -d '=').dump"
 		printf 'database\t%s\t%s\n' "$encoded" "$dump_path" >>"$bundle/manifest.tsv"
@@ -83,8 +83,8 @@ fi
 
 source_registry="$fixture/source-registry.json"
 jq -n '{items: [
-  {domain:"issue334_acceptance",accessKind:"reader",state:"ready",baseId:"base-canary",sourceId:"source-reader",integrationId:"integration-reader",valid:true},
-  {domain:"issue334_acceptance",accessKind:"operator",state:"ready",baseId:"base-canary",sourceId:"source-operator",integrationId:"integration-operator",valid:true}
+  {domain:"automation_data_acceptance",accessKind:"reader",state:"ready",baseId:"base-canary",sourceId:"source-reader",integrationId:"integration-reader",valid:true},
+  {domain:"automation_data_acceptance",accessKind:"operator",state:"ready",baseId:"base-canary",sourceId:"source-operator",integrationId:"integration-operator",valid:true}
 ]}' >"$source_registry"
 nocodb_restore_validate_source_registry "$source_registry" ||
 	fail 'the complete reader/operator source registry was rejected'

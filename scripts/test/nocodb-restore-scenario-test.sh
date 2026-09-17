@@ -269,8 +269,8 @@ run_case() { # <case>
 	mkdir -p "$state/$run_id/diagnostics"
 	: >"$state/events.log"
 	source_registry_base64="$(jq -nc '{items:[
-    {domain:"issue334_acceptance",accessKind:"reader",state:"ready",baseId:"base-canary",sourceId:"source-reader",integrationId:"integration-reader",valid:true},
-    {domain:"issue334_acceptance",accessKind:"operator",state:"ready",baseId:"base-canary",sourceId:"source-operator",integrationId:"integration-operator",valid:true}
+    {domain:"automation_data_acceptance",accessKind:"reader",state:"ready",baseId:"base-canary",sourceId:"source-reader",integrationId:"integration-reader",valid:true},
+    {domain:"automation_data_acceptance",accessKind:"operator",state:"ready",baseId:"base-canary",sourceId:"source-operator",integrationId:"integration-operator",valid:true}
   ]}' | base64 | tr -d '\n')"
 	if [[ "$case_name" == invalid-registry ]]; then
 		source_registry_base64="$(printf '%s' '{"items":[]}' | base64 | tr -d '\n')"

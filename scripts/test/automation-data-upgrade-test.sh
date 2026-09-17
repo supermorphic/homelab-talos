@@ -26,6 +26,7 @@ extension_sql='kubernetes/apps/automation-data/postgresql/app/scripts/nocodb-ext
 control_sql='kubernetes/apps/automation-data/postgresql/app/scripts/platform-control.sql'
 init_script='kubernetes/apps/automation-data/postgresql/app/scripts/init-platform.sh'
 kustomization='kubernetes/apps/automation-data/postgresql/app/kustomization.yaml'
+source_workflow='kubernetes/apps/automation/n8n/app/workflows/nocodb-source-provisioner.json'
 
 fail() {
 	echo "automation-data upgrade test failed: $*" >&2
@@ -71,7 +72,7 @@ remove_owned_containers() { # <run-marker> [container...]
 }
 
 for source in "$upgrade_command" "$upgrade_sql" "$extension_sql" "$control_sql" \
-	"$init_script" "$kustomization"; do
+	"$init_script" "$kustomization" "$source_workflow"; do
 	[[ -f "$source" ]] || fail "missing $source"
 done
 [[ -x "$upgrade_command" ]] || fail 'upgrade command is not executable'
@@ -930,13 +931,25 @@ CREATE TABLE operator.decisions (
 );
 RESET ROLE;
 " >/dev/null
-authority_plan_before="$(psql_query "$fresh_container" automation_data_control \
-	"SELECT platform_operations.prepare_nocodb_access('authority_fixture')::text;")"
+atomic_prepare_query="$(jq -er '.nodes[] | select(.name == "Prepare Unregistered Access") | .parameters.query' \
+	"$source_workflow")" || fail 'atomic prepare query is missing from the source workflow'
+run_atomic_prepare() {
+	psql_query "$fresh_container" automation_data_control \
+		"PREPARE guarded_prepare(text) AS ${atomic_prepare_query}
+EXECUTE guarded_prepare('authority_fixture');" | tail -n 1
+}
+authority_plan_before="$(run_atomic_prepare)"
 jq -e '
   .domain == "authority_fixture" and .readerEligible == true and
   .operatorRequested == true and .operatorEligible == false
 ' <<<"$authority_plan_before" >/dev/null ||
-	fail 'real reader authority preparation did not preserve the operator grant phase'
+	fail 'atomic prepare rejected JSON-null source absence or lost the operator grant phase'
+authority_plan_repeat="$(run_atomic_prepare)"
+jq -e '
+  .domain == "authority_fixture" and .readerEligible == true and
+  .operatorRequested == true and .operatorEligible == false
+' <<<"$authority_plan_repeat" >/dev/null ||
+	fail 'atomic prepare rejected an identity-free awaiting-grants operator candidate'
 [[ "$(psql_query "$fresh_container" automation_data_control \
 	"SELECT NOT has_database_privilege('authority_fixture_reader', 'postgres', 'CONNECT') AND NOT has_database_privilege('authority_fixture_reader', 'template1', 'CONNECT');")" == t ]] ||
 	fail 'disposable bootstrap databases retained PUBLIC CONNECT for the reader role'
@@ -959,8 +972,7 @@ GRANT UPDATE (decision) ON TABLE operator.decisions TO authority_fixture_operato
 GRANT USAGE ON SEQUENCE operator.decisions_id_seq TO authority_fixture_operator;
 RESET ROLE;
 " >/dev/null
-authority_plan_after="$(psql_query "$fresh_container" automation_data_control \
-	"SELECT platform_operations.prepare_nocodb_access('authority_fixture')::text;")"
+authority_plan_after="$(run_atomic_prepare)"
 jq -e '.readerEligible == true and .operatorEligible == true' \
 	<<<"$authority_plan_after" >/dev/null ||
 	fail 'real operator authority preparation rejected the reviewed grants'
@@ -975,6 +987,59 @@ jq -e '
   .controlledDmlPresent == true
 ' <<<"$operator_authority" >/dev/null ||
 	fail 'real operator authority booleans did not satisfy the least-privilege contract'
+
+# The prepare-only workflow query must refuse every registered reader state without
+# invoking the preparation function. LOGIN is a sentinel: the underlying function would
+# change an error or awaiting-grants reader back to NOLOGIN if the atomic CASE were wrong.
+psql_query "$fresh_container" automation_data_control "
+INSERT INTO platform_operations.managed_nocodb_sources
+  (domain, access_kind, role_name, state, operation, generation, credential_generation)
+VALUES
+  ('authority_fixture', 'reader', 'authority_fixture_reader', 'error', 'sync',
+   platform_internal.bump_generation(), 0);
+ALTER ROLE authority_fixture_reader LOGIN;
+" >/dev/null
+for registered_state in awaiting_grants provisioning waiting_for_source ready rotating error; do
+	psql_query "$fresh_container" automation_data_control \
+		"UPDATE platform_operations.managed_nocodb_sources SET state = '$registered_state'
+WHERE domain = 'authority_fixture' AND access_kind = 'reader';" >/dev/null
+	guard_refusal="$(run_atomic_prepare)"
+	jq -e '. == {
+	  domain:"authority_fixture", allowed:false,
+	  errorCode:"prepare_source_already_registered"
+	}' <<<"$guard_refusal" >/dev/null ||
+		fail "atomic prepare accepted registered reader state $registered_state"
+	[[ "$(psql_query "$fresh_container" automation_data_control \
+		"SELECT rolcanlogin FROM pg_roles WHERE rolname = 'authority_fixture_reader';")" == t ]] ||
+		fail "atomic prepare invoked role preparation for reader state $registered_state"
+done
+psql_query "$fresh_container" automation_data_control "
+DELETE FROM platform_operations.managed_nocodb_sources
+WHERE domain = 'authority_fixture' AND access_kind = 'reader';
+ALTER ROLE authority_fixture_reader NOLOGIN;
+ALTER ROLE authority_fixture_operator LOGIN;
+UPDATE platform_operations.managed_nocodb_sources
+SET base_id = 'base-existing'
+WHERE domain = 'authority_fixture' AND access_kind = 'operator';
+" >/dev/null
+for registered_state in awaiting_grants provisioning waiting_for_source ready rotating error; do
+	psql_query "$fresh_container" automation_data_control \
+		"UPDATE platform_operations.managed_nocodb_sources SET state = '$registered_state'
+WHERE domain = 'authority_fixture' AND access_kind = 'operator';" >/dev/null
+	guard_refusal="$(run_atomic_prepare)"
+	jq -e '.allowed == false and .errorCode == "prepare_source_already_registered"' \
+		<<<"$guard_refusal" >/dev/null ||
+		fail "atomic prepare accepted registered operator state $registered_state"
+	[[ "$(psql_query "$fresh_container" automation_data_control \
+		"SELECT rolcanlogin FROM pg_roles WHERE rolname = 'authority_fixture_operator';")" == t ]] ||
+		fail "atomic prepare invoked role preparation for operator state $registered_state"
+done
+psql_query "$fresh_container" automation_data_control "
+UPDATE platform_operations.managed_nocodb_sources
+SET state = 'awaiting_grants', base_id = NULL
+WHERE domain = 'authority_fixture' AND access_kind = 'operator';
+ALTER ROLE authority_fixture_operator NOLOGIN;
+" >/dev/null
 
 # Upgraded backup classification must execute the revision oracle. A concrete missing
 # required function therefore makes both the oracle and backup publication fail.
@@ -1094,16 +1159,16 @@ corrected_body="$(psql_query "$old_container" automation_data_control \
 psql_query "$old_container" automation_data_control "
   INSERT INTO platform_operations.managed_domains
     (domain, database_name, owner_role, migrator_role, runtime_role, state, generation)
-  VALUES ('issue317_backup_error', 'issue317_backup_error',
-    'issue317_backup_error_owner', 'issue317_backup_error_migrator',
-    'issue317_backup_error_runtime', 'error', platform_internal.bump_generation());
+  VALUES ('automation_data_backup_error', 'automation_data_backup_error',
+    'automation_data_backup_error_owner', 'automation_data_backup_error_migrator',
+    'automation_data_backup_error_runtime', 'error', platform_internal.bump_generation());
   SELECT platform_operations.provision_nocodb_metadata(repeat('synthetic', 6));
   SELECT platform_operations.provision_nocodb_metadata(repeat('synthetic', 6));
 " >"$integration_root/metadata-result"
 [[ "$(psql_query "$old_container" automation_data_control "
   SELECT EXISTS (SELECT FROM platform_operations.managed_domains
-    WHERE domain = 'issue317_backup_error' AND NOT has_reached_ready AND state = 'error')
-    AND NOT EXISTS (SELECT FROM pg_database WHERE datname = 'issue317_backup_error')
+    WHERE domain = 'automation_data_backup_error' AND NOT has_reached_ready AND state = 'error')
+    AND NOT EXISTS (SELECT FROM pg_database WHERE datname = 'automation_data_backup_error')
     AND NOT has_database_privilege('nocodb_metadata', 'upgrade_fixture', 'CONNECT');")" == t ]] ||
   fail 'metadata bootstrap changed the error record or allowed access to domain data'
 
@@ -1112,7 +1177,7 @@ metadata_verifier="$(psql_query "$old_container" automation_data_control \
   "SELECT md5(rolpassword) FROM pg_authid WHERE rolname = 'nocodb_metadata';")"
 psql_query "$old_container" automation_data_control "
   UPDATE platform_operations.managed_domains SET has_reached_ready = true
-  WHERE domain = 'issue317_backup_error';" >/dev/null
+  WHERE domain = 'automation_data_backup_error';" >/dev/null
 if psql_query "$old_container" automation_data_control \
   "SELECT platform_operations.provision_nocodb_metadata(repeat('different', 6));" \
   >"$integration_root/private/missing-ready.log" 2>&1; then

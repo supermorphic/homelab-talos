@@ -183,10 +183,11 @@ output:
 Supply the token bound to **Automation Data Provisioning Header**. The command requires
 at least 32 URL-safe letters, digits, underscores, or hyphens.
 
-The test creates or reconciles `issue317_acceptance`, validates owner/migrator/runtime
-permissions, proves that an unchanged request is idempotent, performs an explicit
-credential rotation, and creates a complete backup. Ordinary reconcile never rotates a
-password or replaces an n8n credential.
+The test creates or reconciles `automation_data_acceptance`, validates
+owner/migrator/runtime permissions, proves that an unchanged request is idempotent,
+performs an explicit credential rotation, and creates a complete backup. It does not
+install application tables, so the NocoDB acceptance fixture can use the same domain.
+Ordinary reconcile never rotates a password or replaces an n8n credential.
 
 For each new domain, the workflow creates:
 

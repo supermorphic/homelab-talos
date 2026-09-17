@@ -166,7 +166,7 @@ cleanup() {
       .ok == true and
       .operation == "cleanup" and
       .runId == env.RUN_ID and
-      .domain == "issue334_acceptance" and
+      .domain == "automation_data_acceptance" and
       (.removedCount | type == "number" and . >= 0 and . <= 1000)
     ' "$cleanup_response" >/dev/null; then
     :
@@ -281,17 +281,17 @@ jq -e '
 
 provision_body="$temp_dir/provision.json"
 provision_response="$temp_dir/provision-response.json"
-jq -n '{domain: "issue334_acceptance", operation: "provision"}' >"$provision_body"
+jq -n '{domain: "automation_data_acceptance", operation: "provision"}' >"$provision_body"
 verify_lease || exit 1
 http_request provision "$provisioning_url" provisioning "$provision_body" \
   "$provision_response" 200
 jq -e '
-  .ok == true and .domain == "issue334_acceptance" and
+  .ok == true and .domain == "automation_data_acceptance" and
   .operation == "provision" and .state == "ready" and
-  .database == "issue334_acceptance" and
-  .ownerRole == "issue334_acceptance_owner" and
-  .migratorRole == "issue334_acceptance_migrator" and
-  .runtimeRole == "issue334_acceptance_runtime" and
+  .database == "automation_data_acceptance" and
+  .ownerRole == "automation_data_acceptance_owner" and
+  .migratorRole == "automation_data_acceptance_migrator" and
+  .runtimeRole == "automation_data_acceptance_runtime" and
   (.migratorCredentialId | type == "string" and test("^[A-Za-z0-9_-]+$")) and
   (.runtimeCredentialId | type == "string" and test("^[A-Za-z0-9_-]+$")) and
   (.checks | length == 15 and all)
@@ -301,7 +301,7 @@ jq -e '
 }
 migrator_credential_id="$(jq -r '.migratorCredentialId' "$provision_response")"
 runtime_credential_id="$(jq -r '.runtimeCredentialId' "$provision_response")"
-expected_binding_confirm="bound:issue334_acceptance:$migrator_credential_id:$runtime_credential_id"
+expected_binding_confirm="bound:automation_data_acceptance:$migrator_credential_id:$runtime_credential_id"
 [[ "$acceptance_binding_confirm" == "$expected_binding_confirm" ]] || {
   printf 'Generated migrator credential ID: %s\n' "$migrator_credential_id" >&2
   printf 'Generated runtime credential ID: %s\n' "$runtime_credential_id" >&2
@@ -314,7 +314,7 @@ structure_response="$temp_dir/structure-response.json"
 acceptance_cleanup_armed=true
 acceptance_request structure "$structure_response"
 RUN_ID="$run_id" jq -e '
-  . == {ok:true,operation:"structure",runId:env.RUN_ID,domain:"issue334_acceptance",structureReady:true}
+  . == {ok:true,operation:"structure",runId:env.RUN_ID,domain:"automation_data_acceptance",structureReady:true}
 ' "$structure_response" >/dev/null || {
   echo 'The fixed acceptance structure operation did not complete.' >&2
   exit 1
@@ -325,9 +325,9 @@ source_request() { # <operation> <response>
   body="$temp_dir/source-${operation}-$(basename "$response")"
   verify_lease || return
   if [[ "$operation" == sync ]]; then
-    jq -n '{domain: "issue334_acceptance", operation: "sync"}' >"$body"
+    jq -n '{domain: "automation_data_acceptance", operation: "sync"}' >"$body"
   else
-    jq -n '{domain: "issue334_acceptance", operation: "rotate", accessKind: "operator"}' >"$body"
+    jq -n '{domain: "automation_data_acceptance", operation: "rotate", accessKind: "operator"}' >"$body"
   fi
   http_request "source-${operation}-$(basename "$response" .json)" "$source_url" source \
     "$body" "$response" 200
@@ -371,7 +371,7 @@ validate_ready_source() { # <response> <kind> <completed|null>
 validate_source_envelope() { # <response> <operation>
   local response="$1" operation="$2"
   OPERATION="$operation" jq -e '
-    .ok == true and .domain == "issue334_acceptance" and
+    .ok == true and .domain == "automation_data_acceptance" and
     .operation == env.OPERATION and
     (.baseId | type == "string" and length > 0) and .errorCode == null
   ' "$response" >/dev/null
@@ -406,7 +406,7 @@ case "$(jq -r '.operator.state // "absent"' "$first_sync")" in
     grants_response="$temp_dir/grants-response.json"
     acceptance_request grants "$grants_response"
     RUN_ID="$run_id" jq -e '
-      . == {ok:true,operation:"grants",runId:env.RUN_ID,domain:"issue334_acceptance",grantsReady:true}
+      . == {ok:true,operation:"grants",runId:env.RUN_ID,domain:"automation_data_acceptance",grantsReady:true}
     ' "$grants_response" >/dev/null || {
       echo 'The fixed acceptance grants operation did not complete.' >&2
       exit 1
@@ -467,7 +467,7 @@ validate_probe() { # <response> <source-response>
   RUN_ID="$run_id" BASE_ID="$base_id" READER_SOURCE_ID="$reader_source_id" \
     OPERATOR_SOURCE_ID="$operator_source_id" jq -e '
     .ok == true and .operation == "probe" and .runId == env.RUN_ID and
-    .domain == "issue334_acceptance" and
+    .domain == "automation_data_acceptance" and
     (env.BASE_ID | length > 0) and
     .credentialProof == {throughN8n:true,credentialName:"NocoDB Operator API"} and
     .inserted == true and .read == true and .readerRead == true and
@@ -528,7 +528,7 @@ validate_probe "$probe_one" "$ready_sync" || {
 canary_evidence="$run_dir/diagnostics/recovery-canary.json"
 base_id="$(jq -r '.baseId' "$ready_sync")"
 fact_table_id="$(jq -r '.recoveryCanary.factTableId' "$probe_one")"
-jq -n --arg domain issue334_acceptance --arg base_id "$base_id" --arg fact_table_id "$fact_table_id" \
+jq -n --arg domain automation_data_acceptance --arg base_id "$base_id" --arg fact_table_id "$fact_table_id" \
   --slurpfile before "$probe_one" '{
     domain: $domain,
     baseId: $base_id,
@@ -542,7 +542,7 @@ feedback_response="$temp_dir/feedback.json"
 acceptance_request feedback "$feedback_response"
 RUN_ID="$run_id" jq -e '
   .ok == true and .operation == "feedback" and .runId == env.RUN_ID and
-  .domain == "issue334_acceptance" and
+  .domain == "automation_data_acceptance" and
   (.factId | type == "number" and . != -334) and
   .feedback == {
     initialFact:"original",

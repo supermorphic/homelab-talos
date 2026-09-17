@@ -3134,7 +3134,7 @@ automation-data:
       scripts/test/lib/automation-data-restore-command.sh \
       kubernetes/apps/automation-data \
       kubernetes/apps/automation/n8n/app/workflows/automation-data-provisioner.json \
-      kubernetes/apps/automation/n8n/app/workflows/automation-data-recovery-canary.json \
+      kubernetes/apps/automation/n8n/app/workflows/automation-data-canary.json \
       kubernetes/apps/monitoring/alerts/app/automation-data.yaml
 
     [[ "$(yq -r '.spec.suspend' "$postgresql_ks")" == 'true' ]] || {
@@ -3255,12 +3255,14 @@ automation-data:
        X-Automation-Data-Provisioning. Retain its private value outside Git.
     4. Import automation-data-provisioner.json. Bind the three credentials exactly as its
        setup note specifies, then publish the provisioning workflow.
-    5. Run the attended provisioning test. It creates issue317_acceptance and the scoped
-       n8n migrator/runtime credentials without returning either generated password.
-    6. Import automation-data-recovery-canary.json. Bind Platform Canary Header to its
-       Webhook and automation-data/issue317_acceptance/runtime to its Postgres node, then
-       publish it.
-    7. Run the full-chain restore drill only after a later complete n8n dump and
+    5. Run the attended provisioning test. It creates or reconciles
+       automation_data_acceptance and returns the stable scoped n8n migrator/runtime
+       credential IDs without returning either generated password.
+    6. Provision automation_data_canary through the same private provisioning workflow.
+    7. Import automation-data-canary.json. Bind Platform Canary Header to Canary Webhook
+       and automation-data/automation_data_canary/runtime to Test Stable Runtime
+       Credential, then publish Automation Data Canary.
+    8. Run the full-chain restore drill only after a later complete n8n dump and
        automation-data bundle include those published bindings.
 
     Durable suspend:false changes remain Git-managed. Do not activate a destructive

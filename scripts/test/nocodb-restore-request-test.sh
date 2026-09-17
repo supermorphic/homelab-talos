@@ -34,12 +34,12 @@ globalThis.fetch = async (input, options = {}) => {
     {id:'workspace-2',title:'Unrelated Workspace'}
   ]});
   if (url.pathname === '/api/v2/meta/bases' && method === 'GET') return json({list:[
-    {id:fixtureCase === 'wrong-base-id' ? 'replacement-base' : 'base-acceptance',title:'issue334_acceptance',fk_workspace_id:fixtureCase === 'wrong-base-workspace' ? 'missing-workspace' : 'workspace-1'},
-    {id:'unrelated-base',title:'issue334_acceptance',fk_workspace_id:'workspace-2'}
+    {id:fixtureCase === 'wrong-base-id' ? 'replacement-base' : 'base-acceptance',title:'automation_data_acceptance',fk_workspace_id:fixtureCase === 'wrong-base-workspace' ? 'missing-workspace' : 'workspace-1'},
+    {id:'unrelated-base',title:'automation_data_acceptance',fk_workspace_id:'workspace-2'}
   ]});
   if (url.pathname === '/api/v2/meta/workspaces/workspace-1/integrations' && method === 'GET') return json({list:[
-    {id:'integration-reader',title:'automation-data/issue334_acceptance/reader',type:fixtureCase === 'wrong-integration-type' ? 'api' : 'database',sub_type:'pg'},
-    {id:'integration-operator',title:'automation-data/issue334_acceptance/operator',type:'database',sub_type:'pg'}
+    {id:'integration-reader',title:'automation-data/automation_data_acceptance/reader',type:fixtureCase === 'wrong-integration-type' ? 'api' : 'database',sub_type:'pg'},
+    {id:'integration-operator',title:'automation-data/automation_data_acceptance/operator',type:'database',sub_type:'pg'}
   ]});
   if (url.pathname === '/api/v2/meta/bases/base-acceptance/sources' && method === 'GET') return json({list:[
     {id:'source-default'},{id:'source-reader'},{id:'source-operator'},
@@ -118,14 +118,20 @@ record_failure() {
 }
 
 run_case() { # <case>
-	local case_name="$1" status output events
+	local case_name="$1" status output events registry_domain source_registry
 	output="$fixture/$case_name.log"
 	events="$fixture/$case_name.events"
 	: >"$events"
+	registry_domain='automation_data_acceptance'
+	[[ "$case_name" != legacy-domain ]] || registry_domain='issue334_acceptance'
+	source_registry="$(jq -cn --arg domain "$registry_domain" '{items:[
+		{domain:$domain,accessKind:"reader",baseId:"base-acceptance",sourceId:"source-reader",integrationId:"integration-reader",state:"ready",valid:true},
+		{domain:$domain,accessKind:"operator",baseId:"base-acceptance",sourceId:"source-operator",integrationId:"integration-operator",state:"ready",valid:true}
+	]}')"
 	set +e
 	NOCODB_RESTORE_REQUEST_CASE="$case_name" NOCODB_RESTORE_REQUEST_EVENTS="$events" \
 		APP_SERVICE='nc-restore-fixture-nocodb' RUN_HASH='0123456789ab' \
-		SOURCE_REGISTRY='{"items":[{"domain":"issue334_acceptance","accessKind":"reader","baseId":"base-acceptance","sourceId":"source-reader","integrationId":"integration-reader","state":"ready","valid":true},{"domain":"issue334_acceptance","accessKind":"operator","baseId":"base-acceptance","sourceId":"source-operator","integrationId":"integration-operator","state":"ready","valid":true}]}' \
+		SOURCE_REGISTRY="$source_registry" \
 		ADMIN_EMAIL='fixture-admin@example.invalid' ADMIN_PASSWORD='fixture-password-not-a-secret' \
 		NODE_OPTIONS="--import=$fixture/mock-fetch.mjs" \
 		mise exec -- node --input-type=module --eval "$request_script" >"$output" 2>&1
@@ -165,7 +171,7 @@ for rejected_case in extra-unmanaged-source malformed-intrinsic-source intrinsic
 	[[ "$status" -ne 0 ]] || record_failure "$case_name unexpected intrinsic-source remainder was accepted"
 done
 
-for rejected_case in wrong-base-id wrong-base-workspace; do
+for rejected_case in legacy-domain wrong-base-id wrong-base-workspace; do
 	IFS=$'\t' read -r case_name status output events < <(run_case "$rejected_case")
 	[[ "$status" -ne 0 ]] || record_failure "$case_name registry/base/workspace mismatch was accepted"
 done

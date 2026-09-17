@@ -100,10 +100,11 @@ Broad changes remain n8n operations; schema changes remain migrator operations.
 
 ### Domain opt-in
 
-Ordinary domain provisioning creates no NocoDB dependency. Explicit source sync opts an
-existing ready domain into reader access. An `operator` schema requests an optional
-controlled-edit surface; the corresponding role remains a `NOLOGIN` candidate until
-reviewed grants pass validation.
+Ordinary domain provisioning creates no NocoDB dependency. Explicit access preparation
+creates and validates restricted role candidates without registering a NocoDB base or
+source. Explicit source sync opts an existing ready domain into reader access. An
+`operator` schema requests an optional controlled-edit surface; the corresponding role
+remains a `NOLOGIN` candidate until reviewed grants pass validation.
 
 Opt-in, grant eligibility, source identities, and lifecycle progress are runtime platform
 state. Adding a domain requires no per-domain `homelab-talos` manifest, SOPS Secret, or
@@ -390,6 +391,15 @@ A private n8n workflow accepts one existing ready managed-domain identifier. Eli
 comes from PostgreSQL catalogs; callers supply no arbitrary target, database credential,
 schema, or grant. Reader and operator eligibility are evaluated independently.
 
+The authenticated `prepare` operation requires the domain `read_model` schema, invokes
+the fixed access-preparation function, validates canonical role identities and boolean
+eligibility, and returns bounded role evidence. It terminates before password generation
+or any NocoDB HTTP request, so it does not create a base, integration, or source. New
+roles remain `NOLOGIN`. An optional operator schema can produce an `awaiting_grants`
+registry row with no source identity. One atomic, domain-locked statement refuses
+preparation when a reader registry row exists or when the operator is beyond that
+identity-free candidate state. Registered sources use sync or targeted rotation instead.
+
 Each enabled domain has one base, a reader source, and an optional operator source.
 Deterministic names aid reconciliation, while retained base, workspace, integration,
 and source IDs are the durable identities. Workspace titles are not recovery roots.
@@ -472,7 +482,8 @@ domain. Future decommissioning requires a separate attended design.
 The command surface follows the
 [repository lifecycle contract](021-repository-command-lifecycle.md): validation is
 local, verification is observational, tests are bounded experiments, and bootstrap,
-source sync, and rotation are explicit administration or reconciliation.
+access preparation, source sync, and rotation are explicit administration or
+reconciliation.
 
 Mutation workflows bind execution intent to the target, check deployed-source parity,
 repeat safety-critical preconditions, and read back postconditions. Confirmation guards
