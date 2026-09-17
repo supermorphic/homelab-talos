@@ -324,11 +324,18 @@ for bootstrap_marker in \
   'flux resume kustomization automation-data-postgresql' \
   '--from=cronjob/automation-data-postgresql-backup' \
   'just kube automation-data-verify' \
+  'kubernetes/apps/automation/n8n/app/workflows/automation-data-canary.json' \
+  'automation_data_acceptance' \
+  'automation-data/automation_data_canary/runtime' \
   'trap cleanup_automation_data_bootstrap EXIT' \
   'bootstrap_complete=true'; do
   rg -Fq -- "$bootstrap_marker" "$temp_dir/bootstrap-source" ||
     fail "the automation-data bootstrap omits $bootstrap_marker"
 done
+if rg -n 'issue317_acceptance|automation-data-recovery-canary\.json' \
+  "$temp_dir/bootstrap-source"; then
+  fail 'the automation-data bootstrap still names a legacy acceptance or canary resource'
+fi
 bootstrap_trap_line="$(rg -n -m 1 -F 'trap cleanup_automation_data_bootstrap EXIT' \
   "$temp_dir/bootstrap-source" | cut -d: -f1)"
 deployed_source_line="$(rg -n -m 1 -F "require_deployed_source 'automation-data bootstrap'" \

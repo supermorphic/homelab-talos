@@ -402,7 +402,8 @@ so the NocoDB fixture can add its reviewed acceptance structure to the same doma
 Import
 `kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json`. Do not bind
 a PostgreSQL credential or publish this workflow yet. The first provisioning call must
-create `automation_data_acceptance` and its generated migrator and runtime credentials.
+create or reconcile `automation_data_acceptance` and return its stable generated
+migrator and runtime credentials.
 Bind **NocoDB Operator API** to every HTTP Request node and **NocoDB Acceptance Header**
 to **Acceptance Webhook**. NocoDB receives neither PostgreSQL credential. Generate and
 retain a separate token with at least 32 URL-safe characters from `A-Z`, `a-z`, `0-9`,
