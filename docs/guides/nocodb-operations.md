@@ -281,8 +281,13 @@ NOCODB_SOURCE_PREPARE_CONFIRM='prepare:nocodb:<domain>' \
 This authenticated operation creates or validates the restricted `<domain>_reader`
 role. A new role starts as `NOLOGIN`. If an `operator` schema exists, it also creates or
 validates `<domain>_operator`; missing reviewed controlled-edit grants can create an
-`awaiting_grants` registry row. Preparation preserves the login state of an existing
-registered source.
+identity-free `awaiting_grants` registry row. Preparation is limited to initial role
+setup: it requires no reader registry row and permits only an absent operator row or the
+identity-free `awaiting_grants` candidate created by an earlier prepare call. It refuses
+`provisioning`, `waiting_for_source`, `ready`, `rotating`, and `error` source states.
+
+Use source sync for registered sources and targeted rotation for credential changes.
+Do not use prepare as source repair or deactivation.
 
 The bounded response reports the canonical roles and reader/operator eligibility. It
 does not generate a password or return a base, integration, or source ID. It does not

@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 source_workflow="$repo_root/kubernetes/apps/automation/n8n/app/workflows/nocodb-source-provisioner.json"
 acceptance_workflow="$repo_root/kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json"
+control_sql="$repo_root/kubernetes/apps/automation-data/postgresql/app/scripts/nocodb-extension.sql"
 kustomization="$repo_root/kubernetes/apps/automation/n8n/app/kustomization.yaml"
 
 [[ -f "$source_workflow" ]] || {
@@ -18,7 +19,7 @@ kustomization="$repo_root/kubernetes/apps/automation/n8n/app/kustomization.yaml"
 yq -p=json -o=json '.' "$source_workflow" >/dev/null
 yq -p=json -o=json '.' "$acceptance_workflow" >/dev/null
 
-python - "$source_workflow" <<'PY'
+python - "$source_workflow" "$control_sql" <<'PY'
 import json
 import re
 import sys
@@ -27,6 +28,7 @@ from pathlib import Path
 
 
 workflow = json.loads(Path(sys.argv[1]).read_text())
+control_sql = Path(sys.argv[2]).read_text()
 nodes = workflow.get("nodes", [])
 by_name = {node.get("name"): node for node in nodes}
 
@@ -91,6 +93,37 @@ approved_functions = {
     "platform_operations.rotate_nocodb_source_credential",
     "platform_operations.validate_nocodb_access",
 }
+prepare_unregistered_query = """WITH reader_state AS MATERIALIZED (
+  SELECT platform_operations.read_nocodb_source_state($1, 'reader') AS state
+),
+operator_state AS MATERIALIZED (
+  SELECT platform_operations.read_nocodb_source_state($1, 'operator') AS state
+),
+eligibility AS MATERIALIZED (
+  SELECT reader_state.state = 'null'::jsonb AND (
+    operator_state.state = 'null'::jsonb OR (
+      operator_state.state->>'domain' = $1 AND
+      operator_state.state->>'accessKind' = 'operator' AND
+      operator_state.state->>'role' = ($1 || '_operator') AND
+      operator_state.state->>'state' = 'awaiting_grants' AND
+      operator_state.state->>'operation' = 'sync' AND
+      operator_state.state->>'baseId' IS NULL AND
+      operator_state.state->>'integrationId' IS NULL AND
+      operator_state.state->>'sourceId' IS NULL AND
+      operator_state.state->>'sourceCreateJobId' IS NULL
+    )
+  ) AS allowed
+  FROM reader_state CROSS JOIN operator_state
+)
+SELECT CASE WHEN eligibility.allowed
+  THEN platform_operations.prepare_nocodb_access($1)
+  ELSE jsonb_build_object(
+    'domain', $1,
+    'allowed', false,
+    'errorCode', 'prepare_source_already_registered'
+  )
+END AS result
+FROM eligibility;"""
 seen_functions = set()
 postgres_nodes = [node for node in nodes if node.get("type") == "n8n-nodes-base.postgres"]
 require(postgres_nodes, "The source workflow must use the fixed PostgreSQL function boundary.")
@@ -99,15 +132,41 @@ for node in postgres_nodes:
     query = parameters.get("query", "")
     calls = set(re.findall(r"platform_operations\.[a-z_]+", query))
     require(parameters.get("operation") == "executeQuery", f"{node['name']} must execute a fixed query.")
-    require(
-        len(calls) == 1
-        and calls <= approved_functions
-        and re.fullmatch(r"SELECT platform_operations\.[a-z_]+\([^;]*\) AS result;", query),
-        f"{node['name']} does not contain one approved fixed-function SELECT.",
-    )
-    require(parameters.get("options", {}).get("queryReplacement"), f"{node['name']} must bind query parameters.")
+    if node["name"] == "Prepare Unregistered Access":
+        require(query == prepare_unregistered_query, "Prepare Unregistered Access does not use the exact atomic guard query.")
+        require(
+            calls == {
+                "platform_operations.read_nocodb_source_state",
+                "platform_operations.prepare_nocodb_access",
+            }
+            and query.count("platform_operations.read_nocodb_source_state") == 2
+            and query.count("platform_operations.prepare_nocodb_access") == 1,
+            "Prepare Unregistered Access does not use the exact fixed function set.",
+        )
+        require(
+            parameters.get("options") == {
+                "queryReplacement": "={{ [$json.domain] }}",
+                "queryBatching": "transaction",
+            },
+            "Prepare Unregistered Access must bind one domain and keep the atomic query in a transaction.",
+        )
+    else:
+        require(
+            len(calls) == 1
+            and calls <= approved_functions
+            and re.fullmatch(r"SELECT platform_operations\.[a-z_]+\([^;]*\) AS result;", query),
+            f"{node['name']} does not contain one approved fixed-function SELECT.",
+        )
+        require(parameters.get("options", {}).get("queryReplacement"), f"{node['name']} must bind query parameters.")
     seen_functions |= calls
 require(seen_functions == approved_functions, "The source workflow does not use the exact Task 1 function set.")
+for function_name in ("read_nocodb_source_state", "prepare_nocodb_access"):
+    match = re.search(
+        rf"CREATE OR REPLACE FUNCTION platform_operations\.{function_name}\(.*?^\$function\$;",
+        control_sql,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    require(match and "pg_advisory_xact_lock" in match.group(0), f"{function_name} does not retain the domain transaction lock.")
 record_error = by_name.get("Record Source Error", {}).get("parameters", {})
 require(
     record_error.get("query") == "SELECT platform_operations.record_nocodb_source_error($1, $2, $3, $4) AS result;"
@@ -258,6 +317,21 @@ require(
     "Every source workflow executable node must be reachable from the webhook.",
 )
 require(
+    successors("Require Ready Managed Domain") == ["Initial Prepare Requested", "Prepare Source Error Response"],
+    "The ready-domain gate must classify prepare before the privileged access function.",
+)
+initial_prepare_outputs = connections.get("Initial Prepare Requested", {}).get("main", [])
+require(
+    [[edge["node"] for edge in output] for output in initial_prepare_outputs]
+    == [["Prepare Unregistered Access"], ["Prepare NocoDB Access"]],
+    "Only prepare must enter the initial-source-state guards; sync and rotate must retain the existing route.",
+)
+require(
+    successors("Prepare Unregistered Access") == ["Keep Access Plan", "Prepare Source Error Response"]
+    and "Prepare NocoDB Access" not in reachable("Prepare Unregistered Access"),
+    "Prepare must use only the atomic guarded function call before response validation.",
+)
+require(
     successors("Keep Access Plan") == ["Prepare Requested", "Prepare Source Error Response"],
     "The validated access plan must route through the prepare-operation branch.",
 )
@@ -392,6 +466,23 @@ const prepareRequest = execute('Normalize Source Request', {
 })[0].json;
 if (prepareRequest.operation !== 'prepare' || prepareRequest.domain !== 'domain_one' || prepareRequest.requestedAccessKind !== null) {
   throw new Error('Normalize Source Request did not accept the bounded prepare operation');
+}
+const prepareRefusal = { domain: 'domain_one', allowed: false, errorCode: 'prepare_source_already_registered' };
+let refusalRejected = false;
+try {
+  execute('Keep Access Plan', { result: prepareRefusal }, { 'Normalize Source Request': prepareRequest });
+} catch (error) { refusalRejected = /prepare_source_already_registered/.test(error.message); }
+if (!refusalRejected) throw new Error('Keep Access Plan accepted bounded prepare refusal evidence');
+for (const invalidRefusal of [
+  { ...prepareRefusal, domain: 'other_domain' },
+  { ...prepareRefusal, errorCode: 'other_error' },
+  { ...prepareRefusal, extra: true },
+]) {
+  let rejected = false;
+  try {
+    execute('Keep Access Plan', { result: invalidRefusal }, { 'Normalize Source Request': prepareRequest });
+  } catch (error) { rejected = /prepare_refusal_invalid/.test(error.message); }
+  if (!rejected) throw new Error(`Keep Access Plan accepted malformed prepare refusal: ${JSON.stringify(invalidRefusal)}`);
 }
 for (const body of [
   { domain: 'domain_one', operation: 'prepare', accessKind: 'reader' },

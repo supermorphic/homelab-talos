@@ -81,6 +81,57 @@
     },
     {
       "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.operation }}",
+              "rightValue": "prepare",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        120,
+        -360
+      ],
+      "id": "10000000-0000-4000-8000-000000000141",
+      "name": "Initial Prepare Requested"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH reader_state AS MATERIALIZED (\n  SELECT platform_operations.read_nocodb_source_state($1, 'reader') AS state\n),\noperator_state AS MATERIALIZED (\n  SELECT platform_operations.read_nocodb_source_state($1, 'operator') AS state\n),\neligibility AS MATERIALIZED (\n  SELECT reader_state.state = 'null'::jsonb AND (\n    operator_state.state = 'null'::jsonb OR (\n      operator_state.state->>'domain' = $1 AND\n      operator_state.state->>'accessKind' = 'operator' AND\n      operator_state.state->>'role' = ($1 || '_operator') AND\n      operator_state.state->>'state' = 'awaiting_grants' AND\n      operator_state.state->>'operation' = 'sync' AND\n      operator_state.state->>'baseId' IS NULL AND\n      operator_state.state->>'integrationId' IS NULL AND\n      operator_state.state->>'sourceId' IS NULL AND\n      operator_state.state->>'sourceCreateJobId' IS NULL\n    )\n  ) AS allowed\n  FROM reader_state CROSS JOIN operator_state\n)\nSELECT CASE WHEN eligibility.allowed\n  THEN platform_operations.prepare_nocodb_access($1)\n  ELSE jsonb_build_object(\n    'domain', $1,\n    'allowed', false,\n    'errorCode', 'prepare_source_already_registered'\n  )\nEND AS result\nFROM eligibility;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain] }}",
+          "queryBatching": "transaction"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        360,
+        -360
+      ],
+      "id": "10000000-0000-4000-8000-000000000142",
+      "name": "Prepare Unregistered Access",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
         "operation": "executeQuery",
         "query": "SELECT platform_operations.prepare_nocodb_access($1) AS result;",
         "options": {
@@ -99,7 +150,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const request = $('Normalize Source Request').first().json;\nconst plan = $json.result;\nif (!plan || plan.domain !== request.domain || plan.readerEligible !== true) throw new Error('reader_not_eligible');\nreturn [{ json: { ...request, plan } }];"
+        "jsCode": "const request = $('Normalize Source Request').first().json;\nconst plan = $json.result;\nif (request.operation === 'prepare' && plan?.allowed === false) {\n  if (plan.domain !== request.domain || plan.errorCode !== 'prepare_source_already_registered' || Object.keys(plan).sort().join(',') !== 'allowed,domain,errorCode') throw new Error('prepare_refusal_invalid');\n  throw new Error('prepare_source_already_registered');\n}\nif (!plan || plan.domain !== request.domain || plan.readerEligible !== true) throw new Error('reader_not_eligible');\nreturn [{ json: { ...request, plan } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -2645,7 +2696,43 @@
       "main": [
         [
           {
+            "node": "Initial Prepare Requested",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initial Prepare Requested": {
+      "main": [
+        [
+          {
+            "node": "Prepare Unregistered Access",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
             "node": "Prepare NocoDB Access",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Unregistered Access": {
+      "main": [
+        [
+          {
+            "node": "Keep Access Plan",
             "type": "main",
             "index": 0
           }

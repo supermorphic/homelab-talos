@@ -396,8 +396,9 @@ the fixed access-preparation function, validates canonical role identities and b
 eligibility, and returns bounded role evidence. It terminates before password generation
 or any NocoDB HTTP request, so it does not create a base, integration, or source. New
 roles remain `NOLOGIN`. An optional operator schema can produce an `awaiting_grants`
-registry row, while roles for existing registered sources keep their required login
-state.
+registry row with no source identity. One atomic, domain-locked statement refuses
+preparation when a reader registry row exists or when the operator is beyond that
+identity-free candidate state. Registered sources use sync or targeted rotation instead.
 
 Each enabled domain has one base, a reader source, and an optional operator source.
 Deterministic names aid reconciliation, while retained base, workspace, integration,
