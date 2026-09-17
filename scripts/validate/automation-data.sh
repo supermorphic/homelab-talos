@@ -183,8 +183,8 @@ done
 for scenario_contract in \
   "expected_confirmation='test:automation-data:provisioning'" \
   'X-Automation-Data-Provisioning' \
-  "domain='issue317_acceptance'" \
-  "error_domain='issue317_backup_error'" \
+  "domain='automation_data_acceptance'" \
+  "error_domain='automation_data_backup_error'" \
   'secretKeyRef' \
   'record_operation_error' \
   '--from=cronjob/automation-data-postgresql-backup' \

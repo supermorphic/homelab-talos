@@ -132,7 +132,7 @@ rg -Fxq 'max-filesize = 65536' "$config" || exit 81
 case "$url" in
   https://n8n.lab.supermorphic.com/webhook/automation-data-provision)
     rg -Fxq "header = \"X-Automation-Data-Provisioning: ${NOCODB_ACCESS_PROVISION_TOKEN:?}\"" "$config" || exit 70
-    jq -e '. == {domain: "issue334_acceptance", operation: "provision"}' "$body_path" >/dev/null || exit 71
+    jq -e '. == {domain: "automation_data_acceptance", operation: "provision"}' "$body_path" >/dev/null || exit 71
     event='provision'
     response='provision.json'
     ;;
@@ -148,11 +148,11 @@ case "$url" in
         partial:1) response='source-sync-partial.json' ;;
         *) response="source-sync-${sync_number}.json" ;;
       esac
-      jq -e '. == {domain: "issue334_acceptance", operation: "sync"}' "$body_path" >/dev/null || exit 73
+      jq -e '. == {domain: "automation_data_acceptance", operation: "sync"}' "$body_path" >/dev/null || exit 73
     elif [[ "$operation" == rotate ]]; then
       event='source-rotate'
       response='source-rotate.json'
-      jq -e '. == {domain: "issue334_acceptance", operation: "rotate", accessKind: "operator"}' "$body_path" >/dev/null || exit 74
+      jq -e '. == {domain: "automation_data_acceptance", operation: "rotate", accessKind: "operator"}' "$body_path" >/dev/null || exit 74
     else
       exit 75
     fi
@@ -195,19 +195,19 @@ EOF
 chmod 700 "$fixture/bin/git" "$fixture/bin/kubectl" "$fixture/bin/curl"
 
 cat >"$fixture/responses/provision.json" <<'EOF'
-{"ok":true,"domain":"issue334_acceptance","operation":"provision","state":"ready","database":"issue334_acceptance","ownerRole":"issue334_acceptance_owner","migratorRole":"issue334_acceptance_migrator","runtimeRole":"issue334_acceptance_runtime","migratorCredentialId":"credential-migrator","runtimeCredentialId":"credential-runtime","migratorCredentialUpdatedAt":"2026-09-04T12:00:00Z","runtimeCredentialUpdatedAt":"2026-09-04T12:00:00Z","passwordsUnchanged":null,"checks":[true,true,true,true,true,true,true,true,true,true,true,true,true,true,true]}
+{"ok":true,"domain":"automation_data_acceptance","operation":"provision","state":"ready","database":"automation_data_acceptance","ownerRole":"automation_data_acceptance_owner","migratorRole":"automation_data_acceptance_migrator","runtimeRole":"automation_data_acceptance_runtime","migratorCredentialId":"credential-migrator","runtimeCredentialId":"credential-runtime","migratorCredentialUpdatedAt":"2026-09-04T12:00:00Z","runtimeCredentialUpdatedAt":"2026-09-04T12:00:00Z","passwordsUnchanged":null,"checks":[true,true,true,true,true,true,true,true,true,true,true,true,true,true,true]}
 EOF
 cat >"$fixture/responses/acceptance-structure.json" <<EOF
-{"ok":true,"operation":"structure","runId":"$run_id","domain":"issue334_acceptance","structureReady":true}
+{"ok":true,"operation":"structure","runId":"$run_id","domain":"automation_data_acceptance","structureReady":true}
 EOF
 cat >"$fixture/responses/acceptance-grants.json" <<EOF
-{"ok":true,"operation":"grants","runId":"$run_id","domain":"issue334_acceptance","grantsReady":true}
+{"ok":true,"operation":"grants","runId":"$run_id","domain":"automation_data_acceptance","grantsReady":true}
 EOF
 cat >"$fixture/responses/acceptance-cleanup.json" <<EOF
-{"ok":true,"operation":"cleanup","runId":"$run_id","domain":"issue334_acceptance","removedCount":2}
+{"ok":true,"operation":"cleanup","runId":"$run_id","domain":"automation_data_acceptance","removedCount":2}
 EOF
 cat >"$fixture/responses/acceptance-feedback.json" <<EOF
-{"ok":true,"operation":"feedback","runId":"$run_id","domain":"issue334_acceptance","factId":7000000011,"feedback":{"initialFact":"original","operatorDecision":"corrected","effectiveBeforeRefresh":"corrected","refreshedFact":"refreshed","effectiveAfterRefresh":"corrected"}}
+{"ok":true,"operation":"feedback","runId":"$run_id","domain":"automation_data_acceptance","factId":7000000011,"feedback":{"initialFact":"original","operatorDecision":"corrected","effectiveBeforeRefresh":"corrected","refreshedFact":"refreshed","effectiveAfterRefresh":"corrected"}}
 EOF
 cat >"$fixture/responses/signup-denial.json" <<'EOF'
 {"error":"signup_disabled"}
@@ -263,19 +263,19 @@ operator_rotated="$(source_record operator ready source-operator integration-ope
   2026-09-04T12:05:00.100000Z 2026-09-04T12:06:00.500000Z 2026-09-04T12:06:00.400000Z)"
 operator_rotated="$(jq -c '.sourceCreateJobState = null' <<<"$operator_rotated")"
 
-jq -n --argjson reader "$reader_created" --argjson operator "$operator_waiting" '{ok:true,domain:"issue334_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-1.json"
-jq -n --argjson reader "$reader_current" --argjson operator "$operator_created" '{ok:true,domain:"issue334_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-2.json"
-jq -n --argjson reader "$reader_current" --argjson operator "$operator_current" '{ok:true,domain:"issue334_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-3.json"
-jq -n --argjson reader "$reader_current" --argjson operator "$operator_current" '{ok:true,domain:"issue334_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-retained.json"
-jq -n --argjson reader "$reader_current" --argjson operator "$operator_waiting" '{ok:true,domain:"issue334_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-partial.json"
-jq -n --argjson reader "$reader_current" --argjson operator "$operator_rotated" '{ok:true,domain:"issue334_acceptance",operation:"rotate",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-rotate.json"
+jq -n --argjson reader "$reader_created" --argjson operator "$operator_waiting" '{ok:true,domain:"automation_data_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-1.json"
+jq -n --argjson reader "$reader_current" --argjson operator "$operator_created" '{ok:true,domain:"automation_data_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-2.json"
+jq -n --argjson reader "$reader_current" --argjson operator "$operator_current" '{ok:true,domain:"automation_data_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-3.json"
+jq -n --argjson reader "$reader_current" --argjson operator "$operator_current" '{ok:true,domain:"automation_data_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-retained.json"
+jq -n --argjson reader "$reader_current" --argjson operator "$operator_waiting" '{ok:true,domain:"automation_data_acceptance",operation:"sync",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-sync-partial.json"
+jq -n --argjson reader "$reader_current" --argjson operator "$operator_rotated" '{ok:true,domain:"automation_data_acceptance",operation:"rotate",baseId:"base-acceptance",reader:$reader,operator:$operator,errorCode:null}' >"$fixture/responses/source-rotate.json"
 
 probe_response() {
   jq -n --arg run_id "$run_id" '{
     ok: true,
     operation: "probe",
     runId: $run_id,
-    domain: "issue334_acceptance",
+    domain: "automation_data_acceptance",
     credentialProof: {throughN8n: true, credentialName: "NocoDB Operator API"},
     inserted: true,
     read: true,
@@ -315,7 +315,7 @@ run_scenario() { # [confirmation|-] [bad-runtime-kind] [signup-status] [oversize
   local confirmation="${1:--}" bad_runtime_kind="${2:-none}" signup_status="${3:-403}"
   local oversize_event="${4:-}" lose_lease_on_cleanup="${5:-false}"
   local omit_binding_confirm="${6:-false}"
-  local binding_confirm="${7:-bound:issue334_acceptance:credential-migrator:credential-runtime}"
+  local binding_confirm="${7:-bound:automation_data_acceptance:credential-migrator:credential-runtime}"
   local start_state="${8:-initial}"
   local result_root="$fixture/run-$RANDOM-$RANDOM"
   mkdir -p "$result_root/logs" "$result_root/diagnostics"
@@ -379,7 +379,7 @@ assert_no_secret_output
 
 case_name='paired binding guard rejects a missing runtime credential identity'
 run_scenario test:nocodb:access none 403 '' false false \
-  'bound:issue334_acceptance:credential-migrator:'
+  'bound:automation_data_acceptance:credential-migrator:'
 assert_status 1
 [[ "$(cat "$fixture/events.log")" == $'kubectl\nkubectl\nkubectl\nkubectl\nprovision' ]] ||
   fail 'incomplete paired binding reached the acceptance workflow'
@@ -396,7 +396,7 @@ assert_status 1
   fail 'first-run onboarding omitted the generated migrator credential ID'
 [[ "$OUT" == *'Generated runtime credential ID: credential-runtime'* ]] ||
   fail 'first-run onboarding omitted the generated runtime credential ID'
-[[ "$OUT" == *"NOCODB_ACCEPTANCE_BINDING_CONFIRM='bound:issue334_acceptance:credential-migrator:credential-runtime'"* ]] ||
+[[ "$OUT" == *"NOCODB_ACCEPTANCE_BINDING_CONFIRM='bound:automation_data_acceptance:credential-migrator:credential-runtime'"* ]] ||
   fail 'first-run onboarding omitted the explicit rerun confirmation'
 yq -e '.status == "failed"' "$run_dir/assertion.json" >/dev/null ||
   fail 'binding stop was not recorded as an incomplete acceptance run'
@@ -414,7 +414,7 @@ yq -e '.status == "passed" and .reason == "current-run rows were removed; domain
 yq -e '.status == "not-required"' "$run_dir/recovery.json" >/dev/null || fail 'recovery evidence is not separate'
 jq -e '
   (keys | sort) == ["afterRotation","baseId","beforeRotation","domain","factTableId"] and
-  .domain == "issue334_acceptance" and .baseId == "base-acceptance" and
+  .domain == "automation_data_acceptance" and .baseId == "base-acceptance" and
   .factTableId == "table-facts" and .beforeRotation == .afterRotation and
   .beforeRotation == {
     version:2,state:"ready",baseId:"base-acceptance",readerSourceId:"source-reader",
@@ -436,7 +436,7 @@ assert_no_secret_output
 
 case_name='fully ready rerun validates retained identities without requiring creation jobs'
 run_scenario test:nocodb:access none 403 '' false false \
-  'bound:issue334_acceptance:credential-migrator:credential-runtime' retained
+  'bound:automation_data_acceptance:credential-migrator:credential-runtime' retained
 assert_status 0
 expected_order=$'kubectl\nkubectl\nkubectl\nkubectl\nprovision\nkubectl\nacceptance-structure\nkubectl\nsource-sync\nkubectl\nsignup-denial\nkubectl\nacceptance-probe\nkubectl\nacceptance-feedback\nkubectl\nsource-sync\nkubectl\nsource-rotate\nkubectl\nacceptance-probe\nkubectl\nacceptance-cleanup'
 [[ "$(cat "$fixture/events.log")" == "$expected_order" ]] || fail "retained rerun used initial-creation routing: $(tr '\n' ' ' <"$fixture/events.log")"
@@ -444,7 +444,7 @@ assert_no_secret_output
 
 case_name='reader-ready operator-pending retry retains the reader and completes operator creation'
 run_scenario test:nocodb:access none 403 '' false false \
-  'bound:issue334_acceptance:credential-migrator:credential-runtime' partial
+  'bound:automation_data_acceptance:credential-migrator:credential-runtime' partial
 assert_status 0
 expected_order=$'kubectl\nkubectl\nkubectl\nkubectl\nprovision\nkubectl\nacceptance-structure\nkubectl\nsource-sync\nkubectl\nacceptance-grants\nkubectl\nsource-sync\nkubectl\nsignup-denial\nkubectl\nacceptance-probe\nkubectl\nacceptance-feedback\nkubectl\nsource-sync\nkubectl\nsource-rotate\nkubectl\nacceptance-probe\nkubectl\nacceptance-cleanup'
 [[ "$(cat "$fixture/events.log")" == "$expected_order" ]] || fail "partial retry did not resume operator adoption: $(tr '\n' ' ' <"$fixture/events.log")"

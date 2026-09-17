@@ -599,7 +599,7 @@ EOF
 chmod 700 "$integration_root/validator-bin/git" "$integration_root/validator-bin/curl"
 
 validate_source_response() { # <operation> <access-kind|-> <actual-response> [domain]
-	local operation="$1" access_kind="$2" response="$3" domain="${4:-issue334_acceptance}"
+	local operation="$1" access_kind="$2" response="$3" domain="${4:-automation_data_acceptance}"
 	local confirmation_name confirmation_value validator_status
 	case "$operation" in
 		sync)
@@ -630,7 +630,7 @@ validate_source_response() { # <operation> <access-kind|-> <actual-response> [do
 }
 
 source_call() { # <operation> <access-kind|-> <output> [domain]
-	local operation="$1" access_kind="$2" output="$3" domain="${4:-issue334_acceptance}" body registry_state
+	local operation="$1" access_kind="$2" output="$3" domain="${4:-automation_data_acceptance}" body registry_state
 	if [[ "$operation" == sync ]]; then
 		body="$(jq -cn --arg domain "$domain" '{domain:$domain,operation:"sync"}')"
 	else
@@ -665,8 +665,8 @@ acceptance_call() { # <operation> <run-id> <output>
 
 phase='domain-provisioning'
 webhook_call automation-data-provision provision-webhook \
-	'{"domain":"issue334_acceptance","operation":"provision"}' "$integration_root/provision-response.json"
-jq -e '.ok == true and .state == "ready" and .domain == "issue334_acceptance"' \
+	'{"domain":"automation_data_acceptance","operation":"provision"}' "$integration_root/provision-response.json"
+jq -e '.ok == true and .state == "ready" and .domain == "automation_data_acceptance"' \
 	"$integration_root/provision-response.json" >/dev/null || fail 'actual provisioning workflow failed.'
 migrator_credential_id="$(jq -er '.migratorCredentialId' "$integration_root/provision-response.json")"
 runtime_credential_id="$(jq -er '.runtimeCredentialId' "$integration_root/provision-response.json")"
@@ -676,9 +676,9 @@ runtime_credential_id="$(jq -er '.runtimeCredentialId' "$integration_root/provis
 phase='acceptance-binding'
 bind_workflow kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json \
 	"$integration_root/nocodb-acceptance-domain.json" "$migrator_credential_id" \
-	'automation-data/issue334_acceptance/migrator' "$nocodb_header_id" 'NocoDB Operator API' \
+	'automation-data/automation_data_acceptance/migrator' "$nocodb_header_id" 'NocoDB Operator API' \
 	"$acceptance_header_id" 'NocoDB Acceptance Header' "$runtime_credential_id" \
-	'automation-data/issue334_acceptance/runtime'
+	'automation-data/automation_data_acceptance/runtime'
 acceptance_workflow_id="$(import_and_publish "$integration_root/nocodb-acceptance-domain.json" 'NocoDB Acceptance Domain')"
 http_request GET "$n8n_url/api/v1/workflows/$acceptance_workflow_id" n8n-key - \
 	"$integration_root/imported-acceptance-workflow.json"
@@ -929,9 +929,9 @@ prove_additive_metadata_refresh() { # <ready-source-response> <probe-response>
 	jq -e '.is_schema_readonly == true and .is_data_readonly == false' \
 		"$integration_root/refresh-source-before.json" >/dev/null ||
 		fail 'operator source flags were not schema-read-only before refresh.'
-	printf '%s\n' 'BEGIN; SET LOCAL ROLE issue334_acceptance_owner; ALTER TABLE operator.acceptance_decision ADD COLUMN IF NOT EXISTS refresh_note text; COMMIT;' |
+	printf '%s\n' 'BEGIN; SET LOCAL ROLE automation_data_acceptance_owner; ALTER TABLE operator.acceptance_decision ADD COLUMN IF NOT EXISTS refresh_note text; COMMIT;' |
 		"$podman_bin" exec --interactive "$postgres_name" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
-			--username postgres --dbname issue334_acceptance >/dev/null
+			--username postgres --dbname automation_data_acceptance >/dev/null
 	http_request GET "$nocodb_url/api/v2/meta/bases/$base_id/meta-diff/$operator_source_id" nocodb-jwt - \
 		"$integration_root/meta-diff-start.json"
 	diff_job_id="$(jq -er '.id | select(type == "string" and length > 0)' "$integration_root/meta-diff-start.json")"
@@ -1089,7 +1089,7 @@ prove_logical_restore() { # <ready-source-response> <probe-response>
 	for access_kind in reader operator; do
 		"$podman_bin" exec "$restore_postgres_name" psql --no-psqlrc --tuples-only --no-align \
 			--set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_control --command \
-			"SELECT (platform_operations.validate_nocodb_access('issue334_acceptance','$access_kind')->>'valid')::boolean;" |
+			"SELECT (platform_operations.validate_nocodb_access('automation_data_acceptance','$access_kind')->>'valid')::boolean;" |
 			rg -qx t || fail "restored PostgreSQL $access_kind authority validation failed."
 	done
 	source_registry="$("$podman_bin" exec "$restore_postgres_name" psql --no-psqlrc --tuples-only --no-align \
@@ -1106,7 +1106,7 @@ SELECT jsonb_build_object(
   ) ORDER BY source.access_kind), '[]'::jsonb)
 )
 FROM platform_operations.managed_nocodb_sources AS source
-WHERE source.domain = 'issue334_acceptance';")" ||
+WHERE source.domain = 'automation_data_acceptance';")" ||
 		fail 'could not capture the restored source registry for the production request helper.'
 	nocodb_restore_validate_source_registry <(printf '%s\n' "$source_registry") ||
 		fail 'restored source registry did not satisfy the production request contract.'

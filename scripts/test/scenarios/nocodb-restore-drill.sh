@@ -258,7 +258,7 @@ SELECT jsonb_build_object(
   ) ORDER BY source.access_kind), '[]'::jsonb)
 )
 FROM platform_operations.managed_nocodb_sources AS source
-WHERE source.domain = 'issue334_acceptance';
+WHERE source.domain = 'automation_data_acceptance';
 ")" || restore_fail nocodb-source-registry-query
 # Validate decoded JSON in the caller; the pinned PostgreSQL image has no jq.
 test -n "$source_registry" || restore_fail nocodb-source-registry-shape

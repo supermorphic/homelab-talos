@@ -1094,16 +1094,16 @@ corrected_body="$(psql_query "$old_container" automation_data_control \
 psql_query "$old_container" automation_data_control "
   INSERT INTO platform_operations.managed_domains
     (domain, database_name, owner_role, migrator_role, runtime_role, state, generation)
-  VALUES ('issue317_backup_error', 'issue317_backup_error',
-    'issue317_backup_error_owner', 'issue317_backup_error_migrator',
-    'issue317_backup_error_runtime', 'error', platform_internal.bump_generation());
+  VALUES ('automation_data_backup_error', 'automation_data_backup_error',
+    'automation_data_backup_error_owner', 'automation_data_backup_error_migrator',
+    'automation_data_backup_error_runtime', 'error', platform_internal.bump_generation());
   SELECT platform_operations.provision_nocodb_metadata(repeat('synthetic', 6));
   SELECT platform_operations.provision_nocodb_metadata(repeat('synthetic', 6));
 " >"$integration_root/metadata-result"
 [[ "$(psql_query "$old_container" automation_data_control "
   SELECT EXISTS (SELECT FROM platform_operations.managed_domains
-    WHERE domain = 'issue317_backup_error' AND NOT has_reached_ready AND state = 'error')
-    AND NOT EXISTS (SELECT FROM pg_database WHERE datname = 'issue317_backup_error')
+    WHERE domain = 'automation_data_backup_error' AND NOT has_reached_ready AND state = 'error')
+    AND NOT EXISTS (SELECT FROM pg_database WHERE datname = 'automation_data_backup_error')
     AND NOT has_database_privilege('nocodb_metadata', 'upgrade_fixture', 'CONNECT');")" == t ]] ||
   fail 'metadata bootstrap changed the error record or allowed access to domain data'
 
@@ -1112,7 +1112,7 @@ metadata_verifier="$(psql_query "$old_container" automation_data_control \
   "SELECT md5(rolpassword) FROM pg_authid WHERE rolname = 'nocodb_metadata';")"
 psql_query "$old_container" automation_data_control "
   UPDATE platform_operations.managed_domains SET has_reached_ready = true
-  WHERE domain = 'issue317_backup_error';" >/dev/null
+  WHERE domain = 'automation_data_backup_error';" >/dev/null
 if psql_query "$old_container" automation_data_control \
   "SELECT platform_operations.provision_nocodb_metadata(repeat('different', 6));" \
   >"$integration_root/private/missing-ready.log" 2>&1; then

@@ -54,7 +54,7 @@ for index in "${!expected_args[@]}"; do
   }
 done
 
-rg -Fq "PERFORM platform_operations.record_operation_error('issue317_backup_error', 'acceptance_backup_error');" "$temp_dir/fixture.sql"
+rg -Fq "PERFORM platform_operations.record_operation_error('automation_data_backup_error', 'acceptance_backup_error');" "$temp_dir/fixture.sql"
 rg -Fq 'SELECT FROM pg_database' "$temp_dir/fixture.sql"
 rg -Fq 'SELECT FROM pg_roles' "$temp_dir/fixture.sql"
 yq -e '.spec.template.spec.containers[0].env[] | select(.name == "PGPASSWORD") |

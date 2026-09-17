@@ -152,7 +152,7 @@ if resolve_backup_configmap <<<"$multiple_configmaps" >/dev/null 2>&1; then
   fail 'multiple generated backup ConfigMaps were accepted'
 fi
 
-registry_body=$'domain\tdatabase_name\towner_role\tmigrator_role\truntime_role\tstate\thas_reached_ready\tgeneration\tmigrator_credential_id\truntime_credential_id\tmigrator_credential_updated_at\truntime_credential_updated_at\toperation_started_at\tupdated_at\terror_code\ndomain_one\tdomain_one\tdomain_one_owner\tdomain_one_migrator\tdomain_one_runtime\tready\ttrue\t2\tmigrator-id\truntime-id\t2026-08-27 00:00:00+00\t2026-08-27 00:00:00+00\t2026-08-27 00:00:00+00\t2026-08-27 00:00:00+00\t\nissue317_backup_error\tissue317_backup_error\tissue317_backup_error_owner\tissue317_backup_error_migrator\tissue317_backup_error_runtime\terror\tfalse\t3\t\t\t\t\t2026-08-27 00:00:00+00\t2026-08-27 00:00:00+00\tacceptance_backup_error'
+registry_body=$'domain\tdatabase_name\towner_role\tmigrator_role\truntime_role\tstate\thas_reached_ready\tgeneration\tmigrator_credential_id\truntime_credential_id\tmigrator_credential_updated_at\truntime_credential_updated_at\toperation_started_at\tupdated_at\terror_code\ndomain_one\tdomain_one\tdomain_one_owner\tdomain_one_migrator\tdomain_one_runtime\tready\ttrue\t2\tmigrator-id\truntime-id\t2026-08-27 00:00:00+00\t2026-08-27 00:00:00+00\t2026-08-27 00:00:00+00\t2026-08-27 00:00:00+00\t\nautomation_data_backup_error\tautomation_data_backup_error\tautomation_data_backup_error_owner\tautomation_data_backup_error_migrator\tautomation_data_backup_error_runtime\terror\tfalse\t3\t\t\t\t\t2026-08-27 00:00:00+00\t2026-08-27 00:00:00+00\tacceptance_backup_error'
 database_names=$'automation_data_control\ndomain_one\npostgres'
 
 create_bundle() {

@@ -9,7 +9,7 @@ nocodb_restore_preflight_manifest() { # <job-name> <run-hash>
 	command+=$'\n'
 	command+="$(
 		cat <<'EOF'
-for required_database in nocodb automation_data_control issue334_acceptance; do
+for required_database in nocodb automation_data_control automation_data_acceptance; do
   encoded="$(printf '%s' "$required_database" | base64 | tr -d '\n')"
   grep -Fxq "$encoded" /tmp/restore-expected-databases-base64 || restore_fail required-database-missing
 done
@@ -75,12 +75,12 @@ try {
   const headers = {'xc-auth':jwt};
 
   const registry = JSON.parse(process.env.SOURCE_REGISTRY);
-  const retained = registry.items.filter((item) => item.domain === 'issue334_acceptance');
+  const retained = registry.items.filter((item) => item.domain === 'automation_data_acceptance');
   const registryBaseIds = [...new Set(retained.map((item) => item.baseId))];
   if (retained.length !== 2 || registryBaseIds.length !== 1 || typeof registryBaseIds[0] !== 'string' || !registryBaseIds[0] ||
       retained.some((item) => item.state !== 'ready' || item.valid !== true)) throw new Error('registry_base_mismatch');
   const bases = list((await bounded('/api/v2/meta/bases', {headers})).json);
-  const baseMatches = bases.filter((item) => item?.id === registryBaseIds[0] && item?.title === 'issue334_acceptance');
+  const baseMatches = bases.filter((item) => item?.id === registryBaseIds[0] && item?.title === 'automation_data_acceptance');
   if (baseMatches.length !== 1) throw new Error('base_contract_failed');
   const base = baseMatches[0];
   const workspaceId = base.fk_workspace_id || base.workspace_id;
@@ -119,7 +119,7 @@ try {
     const matches = retained.filter((item) => item.accessKind === kind);
     if (matches.length !== 1 || source.id !== matches[0].sourceId || source.fk_integration_id !== matches[0].integrationId) throw new Error('registry_source_mismatch');
     const integration = integrations.filter((item) => item.id === matches[0].integrationId);
-    if (integration.length !== 1 || integration[0].title !== `automation-data/issue334_acceptance/${kind}` ||
+    if (integration.length !== 1 || integration[0].title !== `automation-data/automation_data_acceptance/${kind}` ||
         integration[0].type !== 'database' || integration[0].sub_type !== 'pg') throw new Error('registry_integration_mismatch');
   }
 
@@ -229,24 +229,24 @@ nocodb_restore_validate_source_registry() { # <registry-json>
 	local registry_json="$1"
 	jq -e '
     (.items | type) == "array" and
-    ([.items[] | select(.domain == "issue334_acceptance")] | length) == 2 and
+    ([.items[] | select(.domain == "automation_data_acceptance")] | length) == 2 and
     ([.items[] | select(
-      .domain == "issue334_acceptance" and .accessKind == "reader" and
+      .domain == "automation_data_acceptance" and .accessKind == "reader" and
       .state == "ready" and .valid == true and
       (.baseId | type == "string" and length > 0) and
       (.sourceId | type == "string" and length > 0) and
       (.integrationId | type == "string" and length > 0)
     )] | length) == 1 and
     ([.items[] | select(
-      .domain == "issue334_acceptance" and .accessKind == "operator" and
+      .domain == "automation_data_acceptance" and .accessKind == "operator" and
       .state == "ready" and .valid == true and
       (.baseId | type == "string" and length > 0) and
       (.sourceId | type == "string" and length > 0) and
       (.integrationId | type == "string" and length > 0)
     )] | length) == 1 and
-    ([.items[] | select(.domain == "issue334_acceptance") | .baseId] | unique | length) == 1 and
-    ([.items[] | select(.domain == "issue334_acceptance") | .sourceId] | unique | length) == 2 and
-    ([.items[] | select(.domain == "issue334_acceptance") | .integrationId] | unique | length) == 2
+    ([.items[] | select(.domain == "automation_data_acceptance") | .baseId] | unique | length) == 1 and
+    ([.items[] | select(.domain == "automation_data_acceptance") | .sourceId] | unique | length) == 2 and
+    ([.items[] | select(.domain == "automation_data_acceptance") | .integrationId] | unique | length) == 2
   ' "$registry_json" >/dev/null
 }
 

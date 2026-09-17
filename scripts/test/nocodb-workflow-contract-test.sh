@@ -1089,16 +1089,16 @@ require("UPDATE operator.acceptance_decision" not in structure_sql, "Structure m
 
 grant_sql = by_name.get("Grant Acceptance Access", {}).get("parameters", {}).get("query", "")
 for marker in (
-    "issue334_acceptance_operator",
-    "issue334_acceptance_runtime",
-    "GRANT USAGE ON SCHEMA read_model, operator TO issue334_acceptance_runtime;",
-    "GRANT SELECT ON TABLE read_model.acceptance_facts TO issue334_acceptance_runtime;",
-    "GRANT SELECT ON TABLE operator.acceptance_decision TO issue334_acceptance_runtime;",
-    "GRANT UPDATE (decision) ON TABLE operator.acceptance_decision TO issue334_acceptance_operator;",
+    "automation_data_acceptance_operator",
+    "automation_data_acceptance_runtime",
+    "GRANT USAGE ON SCHEMA read_model, operator TO automation_data_acceptance_runtime;",
+    "GRANT SELECT ON TABLE read_model.acceptance_facts TO automation_data_acceptance_runtime;",
+    "GRANT SELECT ON TABLE operator.acceptance_decision TO automation_data_acceptance_runtime;",
+    "GRANT UPDATE (decision) ON TABLE operator.acceptance_decision TO automation_data_acceptance_operator;",
 ):
     require(marker in grant_sql, f"Acceptance grant SQL omits {marker}")
 require(
-    "GRANT" not in grant_sql.split("issue334_acceptance_runtime;")[-1]
+    "GRANT" not in grant_sql.split("automation_data_acceptance_runtime;")[-1]
     and "REVOKE" not in grant_sql.upper(),
     "Acceptance grants must preserve the runtime role's existing app rights.",
 )
@@ -1125,7 +1125,7 @@ for node in postgres_nodes:
     require(not node.get("credentials"), f"{node['name']} embeds a credential ID.")
     if node["name"] in migrator_names:
         require(
-            re.findall(r"SET LOCAL ROLE ([a-z0-9_]+);", query) == ["issue334_acceptance_owner"],
+            re.findall(r"SET LOCAL ROLE ([a-z0-9_]+);", query) == ["automation_data_acceptance_owner"],
             f"{node['name']} must use only the reviewed owner role.",
         )
     else:
@@ -1150,8 +1150,8 @@ require(
 
 notes = by_name.get("Acceptance Setup", {}).get("parameters", {}).get("content", "")
 for label in (
-    "automation-data/issue334_acceptance/migrator",
-    "automation-data/issue334_acceptance/runtime",
+    "automation-data/automation_data_acceptance/migrator",
+    "automation-data/automation_data_acceptance/runtime",
     "NocoDB Operator API",
     "NocoDB Acceptance Header",
 ):
@@ -1770,22 +1770,22 @@ if (!rejects('Require Initial Runtime Fact', {
   throw new Error('missing runtime binding proof was accepted');
 }
 const initial = execute('Require Initial Runtime Fact', {
-  factId: prepared.factId, runId: prepared.runId, fact: 'original', runtimeRole: 'issue334_acceptance_runtime',
+  factId: prepared.factId, runId: prepared.runId, fact: 'original', runtimeRole: 'automation_data_acceptance_runtime',
 }, { 'Prepare Feedback Fact': prepared })[0].json;
 const normalizedDecision = execute('Normalize Feedback Decision', { id: 73 }, { 'Require Initial Runtime Fact': initial })[0].json;
 const before = execute('Require Feedback Before Refresh', {
   factId: prepared.factId, runId: prepared.runId, initialFact: 'original', operatorDecision: 'corrected',
-  effectiveBeforeRefresh: 'corrected', runtimeRole: 'issue334_acceptance_runtime',
+  effectiveBeforeRefresh: 'corrected', runtimeRole: 'automation_data_acceptance_runtime',
 }, { 'Normalize Feedback Decision': normalizedDecision })[0].json;
 const refreshed = execute('Require Refreshed Runtime Fact', {
-  factId: prepared.factId, runId: prepared.runId, fact: 'refreshed', runtimeRole: 'issue334_acceptance_runtime',
+  factId: prepared.factId, runId: prepared.runId, fact: 'refreshed', runtimeRole: 'automation_data_acceptance_runtime',
 }, { 'Require Feedback Before Refresh': before })[0].json;
 const observed = execute('Require Refreshed Reader Fact', {
   list: [{ id: prepared.factId, run_id: prepared.runId, fact: 'refreshed' }],
 }, { 'Require Refreshed Runtime Fact': refreshed })[0].json;
 const feedback = execute('Prepare Feedback Response', {
   factId: prepared.factId, runId: prepared.runId, refreshedFact: 'refreshed', operatorDecision: 'corrected',
-  effectiveAfterRefresh: 'corrected', runtimeRole: 'issue334_acceptance_runtime',
+  effectiveAfterRefresh: 'corrected', runtimeRole: 'automation_data_acceptance_runtime',
 }, { 'Require Refreshed Reader Fact': observed })[0].json;
 const expectedFeedback = {
   initialFact: 'original',
@@ -1796,11 +1796,11 @@ const expectedFeedback = {
 };
 if (
   feedback.ok !== true || feedback.operation !== 'feedback' || feedback.runId !== 'feedback-run-one' ||
-  feedback.domain !== 'issue334_acceptance' || feedback.factId !== prepared.factId ||
+  feedback.domain !== 'automation_data_acceptance' || feedback.factId !== prepared.factId ||
   JSON.stringify(feedback.feedback) !== JSON.stringify(expectedFeedback)
 ) throw new Error('feedback response is not exact');
 for (const invalid of [
-  { factId: prepared.factId, runId: prepared.runId, refreshedFact: 'refreshed', operatorDecision: 'corrected', effectiveAfterRefresh: 'original', runtimeRole: 'issue334_acceptance_runtime' },
+  { factId: prepared.factId, runId: prepared.runId, refreshedFact: 'refreshed', operatorDecision: 'corrected', effectiveAfterRefresh: 'original', runtimeRole: 'automation_data_acceptance_runtime' },
   { factId: prepared.factId, runId: prepared.runId, refreshedFact: 'refreshed', operatorDecision: 'corrected', effectiveAfterRefresh: 'corrected' },
 ]) {
   if (!rejects('Prepare Feedback Response', invalid, { 'Require Refreshed Reader Fact': observed }, /feedback_after_refresh_invalid/)) {

@@ -390,18 +390,37 @@ credentials, or perform a positive authorization probe.
 
 ### 8. Run attended access acceptance
 
+Platform provisioning acceptance and NocoDB acceptance use the fixed
+`automation_data_acceptance` domain. The platform phase installs no application tables,
+so the NocoDB fixture can add its reviewed acceptance structure to the same domain.
+
 Import
 `kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json`. Do not bind
 a PostgreSQL credential or publish this workflow yet. The first provisioning call must
-create `issue334_acceptance` and its generated migrator and runtime credentials. Bind
-**NocoDB Operator API** to every HTTP Request node and **NocoDB Acceptance Header** to
-**Acceptance Webhook**. NocoDB receives neither PostgreSQL credential. Generate and
-retain a separate token with at
-least 32 URL-safe characters from `A-Z`, `a-z`, `0-9`, `_`, and `-`. Create the
+create `automation_data_acceptance` and its generated migrator and runtime credentials.
+Bind **NocoDB Operator API** to every HTTP Request node and **NocoDB Acceptance Header**
+to **Acceptance Webhook**. NocoDB receives neither PostgreSQL credential. Generate and
+retain a separate token with at least 32 URL-safe characters from `A-Z`, `a-z`, `0-9`,
+`_`, and `-`. Create the
 **NocoDB Acceptance Header** Header Auth credential with header name `Authorization`
 and value `Bearer <token>`. Keep the bare token outside Git as
 `NOCODB_ACCEPTANCE_TOKEN`. Keep execution persistence disabled. Do not publish the
 workflow until both generated PostgreSQL credentials are bound after the first pass.
+
+#### Transition an existing acceptance installation
+
+Do not rename existing managed-domain catalog rows, PostgreSQL databases, roles, or n8n
+credentials. Provision `automation_data_acceptance` through the standard guarded
+provisioner. Bind the acceptance workflow to the replacement domain's generated migrator
+and runtime credentials. Then run the complete access acceptance and isolated restore
+acceptance, and retain the new evidence before considering retirement of prior acceptance
+domains. Keep older reports unchanged as historical evidence.
+
+Ordinary provisioning and source webhooks do not delete domains or sources. Keep prior
+resources until a separate reviewed attended retirement handles the database, backup
+dependencies, platform and source registries, credentials, and NocoDB UI objects as one
+bounded lifecycle. This transition does not claim that any live legacy resource has been
+removed.
 
 The access script requires these exact endpoint and token environment variables.
 The completed pass also requires the non-secret binding confirmation printed by the
@@ -415,22 +434,21 @@ first pass:
 | `AUTOMATION_DATA_PROVISIONING_TOKEN` | Bare retained token for **Automation Data Provisioning Header** |
 | `NOCODB_SOURCE_PROVISIONING_TOKEN` | Bare retained token used by **NocoDB Source Provisioning Header** |
 | `NOCODB_ACCEPTANCE_TOKEN` | Bare retained token used by **NocoDB Acceptance Header** |
-| `NOCODB_ACCEPTANCE_BINDING_CONFIRM` | `bound:issue334_acceptance:<generated-migrator-credential-id>:<generated-runtime-credential-id>` |
+| `NOCODB_ACCEPTANCE_BINDING_CONFIRM` | `bound:automation_data_acceptance:<generated-migrator-credential-id>:<generated-runtime-credential-id>` |
 
 Each token must contain at least 32 URL-safe characters from the set above. Load all
 three tokens through an approved secret-input method and export the exact URLs. Run the
 command first without `NOCODB_ACCEPTANCE_BINDING_CONFIRM`. It provisions
-`issue334_acceptance`, prints only the two generated non-secret credential IDs, then
-stops before it calls the
-unpublished acceptance workflow. The catalog records this intentional first pass as
-incomplete.
+`automation_data_acceptance`, prints only the two generated non-secret credential IDs,
+then stops before it calls the unpublished acceptance workflow. The catalog records this
+intentional first pass as incomplete.
 
 In n8n, bind the generated credentials to these exact PostgreSQL nodes:
 
 | Credential | Nodes |
 | --- | --- |
-| `automation-data/issue334_acceptance/migrator` | **Create Acceptance Structure**, **Grant Acceptance Access**, **Clear Reader Negative Residue**, **Cleanup Unexpected Reader Insert**, **Clear Feedback Residue**, **Cleanup Feedback Fact** |
-| `automation-data/issue334_acceptance/runtime` | **Publish Initial Feedback Fact**, **Consume Feedback Before Refresh**, **Refresh Feedback Fact**, **Consume Feedback After Refresh** |
+| `automation-data/automation_data_acceptance/migrator` | **Create Acceptance Structure**, **Grant Acceptance Access**, **Clear Reader Negative Residue**, **Cleanup Unexpected Reader Insert**, **Clear Feedback Residue**, **Cleanup Feedback Fact** |
+| `automation-data/automation_data_acceptance/runtime` | **Publish Initial Feedback Fact**, **Consume Feedback Before Refresh**, **Refresh Feedback Fact**, **Consume Feedback After Refresh** |
 
 The migrator nodes perform only reviewed DDL, grants, and bounded residue cleanup. The
 runtime nodes publish facts and consume the exact operator decision. Do not bind either
@@ -452,7 +470,7 @@ confirmation printed by the first pass:
   printf '\n' >&2
   export AUTOMATION_DATA_PROVISIONING_TOKEN NOCODB_SOURCE_PROVISIONING_TOKEN
   export NOCODB_ACCEPTANCE_TOKEN
-  export NOCODB_ACCEPTANCE_BINDING_CONFIRM='bound:issue334_acceptance:<generated-migrator-credential-id>:<generated-runtime-credential-id>'
+  export NOCODB_ACCEPTANCE_BINDING_CONFIRM='bound:automation_data_acceptance:<generated-migrator-credential-id>:<generated-runtime-credential-id>'
   NOCODB_ACCESS_TEST_CONFIRM='test:nocodb:access' \
     mise exec -- just kube nocodb-access-test
   unset AUTOMATION_DATA_PROVISIONING_TOKEN NOCODB_SOURCE_PROVISIONING_TOKEN

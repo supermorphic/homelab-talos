@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## Synthetic acceptance setup\n\nImport this inactive template through the private n8n editor. Bind **automation-data/issue334_acceptance/migrator** to **Create Acceptance Structure**, **Grant Acceptance Access**, **Clear Reader Negative Residue**, **Cleanup Unexpected Reader Insert**, **Clear Feedback Residue**, and **Cleanup Feedback Fact**. Bind **automation-data/issue334_acceptance/runtime** to **Publish Initial Feedback Fact**, **Consume Feedback Before Refresh**, **Refresh Feedback Fact**, and **Consume Feedback After Refresh**. Bind **NocoDB Operator API** to every HTTP Request node and **NocoDB Acceptance Header** to **Acceptance Webhook**. Run structure, source sync, grants, source sync, probe, then feedback. Keep execution persistence disabled. NocoDB receives neither PostgreSQL credential.",
+        "content": "## Synthetic acceptance setup\n\nImport this inactive template through the private n8n editor. Bind **automation-data/automation_data_acceptance/migrator** to **Create Acceptance Structure**, **Grant Acceptance Access**, **Clear Reader Negative Residue**, **Cleanup Unexpected Reader Insert**, **Clear Feedback Residue**, and **Cleanup Feedback Fact**. Bind **automation-data/automation_data_acceptance/runtime** to **Publish Initial Feedback Fact**, **Consume Feedback Before Refresh**, **Refresh Feedback Fact**, and **Consume Feedback After Refresh**. Bind **NocoDB Operator API** to every HTTP Request node and **NocoDB Acceptance Header** to **Acceptance Webhook**. Run structure, source sync, grants, source sync, probe, then feedback. Keep execution persistence disabled. NocoDB receives neither PostgreSQL credential.",
         "height": 380,
         "width": 540
       },
@@ -182,7 +182,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nCREATE SCHEMA IF NOT EXISTS read_model AUTHORIZATION issue334_acceptance_owner;\nCREATE SCHEMA IF NOT EXISTS operator AUTHORIZATION issue334_acceptance_owner;\nCREATE TABLE IF NOT EXISTS app.acceptance_fact (\n  id bigint PRIMARY KEY,\n  run_id text,\n  fact text NOT NULL,\n  artifact_id text,\n  artifact_uri text,\n  artifact_media_type text,\n  artifact_size_bytes bigint,\n  artifact_sha256 text\n);\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS run_id text;\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS artifact_id text;\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS artifact_uri text;\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS artifact_media_type text;\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS artifact_size_bytes bigint;\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS artifact_sha256 text;\nCREATE UNIQUE INDEX IF NOT EXISTS issue334_acceptance_fact_run_id\nON app.acceptance_fact (run_id) WHERE run_id IS NOT NULL;\nCREATE OR REPLACE VIEW read_model.acceptance_facts AS\nSELECT id, fact, run_id, artifact_id, artifact_uri, artifact_media_type,\n  artifact_size_bytes, artifact_sha256\nFROM app.acceptance_fact;\nCREATE TABLE IF NOT EXISTS operator.acceptance_decision (\n  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,\n  run_id text NOT NULL,\n  decision text NOT NULL,\n  protected_created_at timestamptz NOT NULL DEFAULT clock_timestamp()\n);\nCREATE UNIQUE INDEX IF NOT EXISTS issue334_acceptance_recovery_canary_v2_one\nON operator.acceptance_decision (run_id)\nWHERE run_id = 'recovery-canary-v2';\nINSERT INTO app.acceptance_fact (\n  id, run_id, fact, artifact_id, artifact_uri, artifact_media_type,\n  artifact_size_bytes, artifact_sha256\n) VALUES (\n  -334, 'recovery-canary-v2', 'artifact-available',\n  'issue334-artifact-v1', 'https://artifacts.example.invalid/issue334/artifact-v1',\n  'text/plain', 37,\n  '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3'\n) ON CONFLICT (id) DO NOTHING;\nINSERT INTO operator.acceptance_decision (run_id, decision)\nVALUES ('recovery-canary-v2', 'retain')\nON CONFLICT DO NOTHING;\nDO $block$\nBEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM app.acceptance_fact\n    WHERE id = -334 AND run_id = 'recovery-canary-v2'\n      AND fact = 'artifact-available'\n      AND artifact_id = 'issue334-artifact-v1'\n      AND artifact_uri = 'https://artifacts.example.invalid/issue334/artifact-v1'\n      AND artifact_media_type = 'text/plain'\n      AND artifact_size_bytes = 37\n      AND artifact_sha256 = '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3'\n  ) OR NOT EXISTS (\n    SELECT 1 FROM operator.acceptance_decision\n    WHERE run_id = 'recovery-canary-v2' AND decision = 'retain'\n  ) THEN\n    RAISE EXCEPTION 'recovery_canary_incompatible';\n  END IF;\nEND\n$block$;\nCOMMIT;\nSELECT current_user AS \"credentialRole\";",
+        "query": "BEGIN;\nSET LOCAL ROLE automation_data_acceptance_owner;\nCREATE SCHEMA IF NOT EXISTS read_model AUTHORIZATION automation_data_acceptance_owner;\nCREATE SCHEMA IF NOT EXISTS operator AUTHORIZATION automation_data_acceptance_owner;\nCREATE TABLE IF NOT EXISTS app.acceptance_fact (\n  id bigint PRIMARY KEY,\n  run_id text,\n  fact text NOT NULL,\n  artifact_id text,\n  artifact_uri text,\n  artifact_media_type text,\n  artifact_size_bytes bigint,\n  artifact_sha256 text\n);\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS run_id text;\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS artifact_id text;\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS artifact_uri text;\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS artifact_media_type text;\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS artifact_size_bytes bigint;\nALTER TABLE app.acceptance_fact ADD COLUMN IF NOT EXISTS artifact_sha256 text;\nCREATE UNIQUE INDEX IF NOT EXISTS automation_data_acceptance_fact_run_id\nON app.acceptance_fact (run_id) WHERE run_id IS NOT NULL;\nCREATE OR REPLACE VIEW read_model.acceptance_facts AS\nSELECT id, fact, run_id, artifact_id, artifact_uri, artifact_media_type,\n  artifact_size_bytes, artifact_sha256\nFROM app.acceptance_fact;\nCREATE TABLE IF NOT EXISTS operator.acceptance_decision (\n  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,\n  run_id text NOT NULL,\n  decision text NOT NULL,\n  protected_created_at timestamptz NOT NULL DEFAULT clock_timestamp()\n);\nCREATE UNIQUE INDEX IF NOT EXISTS automation_data_acceptance_recovery_canary_v2_one\nON operator.acceptance_decision (run_id)\nWHERE run_id = 'recovery-canary-v2';\nINSERT INTO app.acceptance_fact (\n  id, run_id, fact, artifact_id, artifact_uri, artifact_media_type,\n  artifact_size_bytes, artifact_sha256\n) VALUES (\n  -334, 'recovery-canary-v2', 'artifact-available',\n  'issue334-artifact-v1', 'https://artifacts.example.invalid/issue334/artifact-v1',\n  'text/plain', 37,\n  '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3'\n) ON CONFLICT (id) DO NOTHING;\nINSERT INTO operator.acceptance_decision (run_id, decision)\nVALUES ('recovery-canary-v2', 'retain')\nON CONFLICT DO NOTHING;\nDO $block$\nBEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM app.acceptance_fact\n    WHERE id = -334 AND run_id = 'recovery-canary-v2'\n      AND fact = 'artifact-available'\n      AND artifact_id = 'issue334-artifact-v1'\n      AND artifact_uri = 'https://artifacts.example.invalid/issue334/artifact-v1'\n      AND artifact_media_type = 'text/plain'\n      AND artifact_size_bytes = 37\n      AND artifact_sha256 = '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3'\n  ) OR NOT EXISTS (\n    SELECT 1 FROM operator.acceptance_decision\n    WHERE run_id = 'recovery-canary-v2' AND decision = 'retain'\n  ) THEN\n    RAISE EXCEPTION 'recovery_canary_incompatible';\n  END IF;\nEND\n$block$;\nCOMMIT;\nSELECT current_user AS \"credentialRole\";",
         "options": {}
       },
       "type": "n8n-nodes-base.postgres",
@@ -197,7 +197,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const request = $('Normalize Acceptance Request').first().json;\nif ($json.credentialRole !== 'issue334_acceptance_migrator') throw new Error('acceptance_migrator_binding_invalid');\nreturn [{ json: { ok: true, operation: request.operation, runId: request.runId, domain: 'issue334_acceptance', structureReady: true } }];"
+        "jsCode": "const request = $('Normalize Acceptance Request').first().json;\nif ($json.credentialRole !== 'automation_data_acceptance_migrator') throw new Error('acceptance_migrator_binding_invalid');\nreturn [{ json: { ok: true, operation: request.operation, runId: request.runId, domain: 'automation_data_acceptance', structureReady: true } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -212,7 +212,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "DO $block$\nBEGIN\n  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'issue334_acceptance_operator') THEN\n    RAISE EXCEPTION 'operator_candidate_missing';\n  END IF;\n  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'issue334_acceptance_runtime') THEN\n    RAISE EXCEPTION 'runtime_role_missing';\n  END IF;\nEND\n$block$;\nBEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nGRANT USAGE ON SCHEMA operator TO issue334_acceptance_operator;\nGRANT SELECT, INSERT, DELETE ON TABLE operator.acceptance_decision TO issue334_acceptance_operator;\nGRANT UPDATE (decision) ON TABLE operator.acceptance_decision TO issue334_acceptance_operator;\nGRANT USAGE ON SEQUENCE operator.acceptance_decision_id_seq TO issue334_acceptance_operator;\nGRANT USAGE ON SCHEMA read_model, operator TO issue334_acceptance_runtime;\nGRANT SELECT ON TABLE read_model.acceptance_facts TO issue334_acceptance_runtime;\nGRANT SELECT ON TABLE operator.acceptance_decision TO issue334_acceptance_runtime;\nCOMMIT;\nSELECT current_user AS \"credentialRole\";",
+        "query": "DO $block$\nBEGIN\n  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'automation_data_acceptance_operator') THEN\n    RAISE EXCEPTION 'operator_candidate_missing';\n  END IF;\n  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'automation_data_acceptance_runtime') THEN\n    RAISE EXCEPTION 'runtime_role_missing';\n  END IF;\nEND\n$block$;\nBEGIN;\nSET LOCAL ROLE automation_data_acceptance_owner;\nGRANT USAGE ON SCHEMA operator TO automation_data_acceptance_operator;\nGRANT SELECT, INSERT, DELETE ON TABLE operator.acceptance_decision TO automation_data_acceptance_operator;\nGRANT UPDATE (decision) ON TABLE operator.acceptance_decision TO automation_data_acceptance_operator;\nGRANT USAGE ON SEQUENCE operator.acceptance_decision_id_seq TO automation_data_acceptance_operator;\nGRANT USAGE ON SCHEMA read_model, operator TO automation_data_acceptance_runtime;\nGRANT SELECT ON TABLE read_model.acceptance_facts TO automation_data_acceptance_runtime;\nGRANT SELECT ON TABLE operator.acceptance_decision TO automation_data_acceptance_runtime;\nCOMMIT;\nSELECT current_user AS \"credentialRole\";",
         "options": {}
       },
       "type": "n8n-nodes-base.postgres",
@@ -227,7 +227,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const request = $('Normalize Acceptance Request').first().json;\nif ($json.credentialRole !== 'issue334_acceptance_migrator') throw new Error('acceptance_migrator_binding_invalid');\nreturn [{ json: { ok: true, operation: request.operation, runId: request.runId, domain: 'issue334_acceptance', grantsReady: true } }];"
+        "jsCode": "const request = $('Normalize Acceptance Request').first().json;\nif ($json.credentialRole !== 'automation_data_acceptance_migrator') throw new Error('acceptance_migrator_binding_invalid');\nreturn [{ json: { ok: true, operation: request.operation, runId: request.runId, domain: 'automation_data_acceptance', grantsReady: true } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -259,7 +259,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const request = $('Normalize Acceptance Request').first().json;\nconst bases = Array.isArray($json) ? $json : ($json.list || $json.data || []);\nconst matches = bases.filter((base) => base && base.title === 'issue334_acceptance');\nif (matches.length !== 1 || !matches[0].id) throw new Error(matches.length > 1 ? 'duplicate_acceptance_base' : 'acceptance_base_missing');\nreturn [{ json: { ...request, domain: 'issue334_acceptance', baseId: matches[0].id } }];"
+        "jsCode": "const request = $('Normalize Acceptance Request').first().json;\nconst bases = Array.isArray($json) ? $json : ($json.list || $json.data || []);\nconst matches = bases.filter((base) => base && base.title === 'automation_data_acceptance');\nif (matches.length !== 1 || !matches[0].id) throw new Error(matches.length > 1 ? 'duplicate_acceptance_base' : 'acceptance_base_missing');\nreturn [{ json: { ...request, domain: 'automation_data_acceptance', baseId: matches[0].id } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -919,7 +919,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $json.context || $('Prepare Cleanup Page').last().json;\nconst body = $json.body;\nif ($json.statusCode !== 200 || !body || !Array.isArray(body.list) || !body.pageInfo || body.list.length !== 0 || Number(body.pageInfo.totalRows) !== 0) throw new Error('cleanup_absence_invalid');\nreturn [{ json: { factsTableId: context.factsTableId, ok: true, operation: 'cleanup', runId: context.runId, domain: 'issue334_acceptance', removedCount: context.removedCount } }];"
+        "jsCode": "const context = $json.context || $('Prepare Cleanup Page').last().json;\nconst body = $json.body;\nif ($json.statusCode !== 200 || !body || !Array.isArray(body.list) || !body.pageInfo || body.list.length !== 0 || Number(body.pageInfo.totalRows) !== 0) throw new Error('cleanup_absence_invalid');\nreturn [{ json: { factsTableId: context.factsTableId, ok: true, operation: 'cleanup', runId: context.runId, domain: 'automation_data_acceptance', removedCount: context.removedCount } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -970,7 +970,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nDELETE FROM app.acceptance_fact WHERE id = $1 AND fact = $2;\nCOMMIT;",
+        "query": "BEGIN;\nSET LOCAL ROLE automation_data_acceptance_owner;\nDELETE FROM app.acceptance_fact WHERE id = $1 AND fact = $2;\nCOMMIT;",
         "options": {"queryReplacement": "={{ [$json.readerProbeId, $json.readerProbeFact] }}"}
       },
       "type": "n8n-nodes-base.postgres",
@@ -998,7 +998,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nDELETE FROM app.acceptance_fact WHERE id = $1 AND fact = $2;\nCOMMIT;",
+        "query": "BEGIN;\nSET LOCAL ROLE automation_data_acceptance_owner;\nDELETE FROM app.acceptance_fact WHERE id = $1 AND fact = $2;\nCOMMIT;",
         "options": {"queryReplacement": "={{ [$json.readerProbeId, $json.readerProbeFact] }}"}
       },
       "type": "n8n-nodes-base.postgres",
@@ -1047,7 +1047,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Require Recovery Decision').first().json;\nif (context.inserted !== true || context.read !== true || context.readerRead !== true || context.decisionUpdated !== true ||\n  context.protectedUpdateDenied !== true || context.readerInsertDenied !== true ||\n  context.publicSharing?.basePublicShareUuid !== null || context.publicSharing?.views?.length !== 2 ||\n  context.recoveryCanary?.version !== 2 || context.recoveryCanary?.state !== 'ready') throw new Error('probe_evidence_incomplete');\nreturn [{ json: {\n  ok: true,\n  operation: 'probe',\n  runId: context.runId,\n  domain: 'issue334_acceptance',\n  credentialProof: { throughN8n: true, credentialName: 'NocoDB Operator API' },\n  inserted: context.inserted,\n  read: context.read,\n  readerRead: context.readerRead,\n  decisionUpdated: context.decisionUpdated,\n  removed: true,\n  reflectedSchemas: context.reflectedSchemas,\n  reflectedTables: context.reflectedTables,\n  publicSharing: context.publicSharing,\n  recoveryCanary: context.recoveryCanary,\n  forbiddenOperations: {\n    protectedUpdateDenied: context.protectedUpdateDenied,\n    protectedUpdateStatus: context.protectedUpdateStatus,\n    protectedUpdateEvidence: context.protectedUpdateEvidence,\n    readerInsertDenied: context.readerInsertDenied,\n    readerInsertStatus: context.readerInsertStatus,\n    readerInsertEvidence: context.readerInsertEvidence,\n  },\n} }];"
+        "jsCode": "const context = $('Require Recovery Decision').first().json;\nif (context.inserted !== true || context.read !== true || context.readerRead !== true || context.decisionUpdated !== true ||\n  context.protectedUpdateDenied !== true || context.readerInsertDenied !== true ||\n  context.publicSharing?.basePublicShareUuid !== null || context.publicSharing?.views?.length !== 2 ||\n  context.recoveryCanary?.version !== 2 || context.recoveryCanary?.state !== 'ready') throw new Error('probe_evidence_incomplete');\nreturn [{ json: {\n  ok: true,\n  operation: 'probe',\n  runId: context.runId,\n  domain: 'automation_data_acceptance',\n  credentialProof: { throughN8n: true, credentialName: 'NocoDB Operator API' },\n  inserted: context.inserted,\n  read: context.read,\n  readerRead: context.readerRead,\n  decisionUpdated: context.decisionUpdated,\n  removed: true,\n  reflectedSchemas: context.reflectedSchemas,\n  reflectedTables: context.reflectedTables,\n  publicSharing: context.publicSharing,\n  recoveryCanary: context.recoveryCanary,\n  forbiddenOperations: {\n    protectedUpdateDenied: context.protectedUpdateDenied,\n    protectedUpdateStatus: context.protectedUpdateStatus,\n    protectedUpdateEvidence: context.protectedUpdateEvidence,\n    readerInsertDenied: context.readerInsertDenied,\n    readerInsertStatus: context.readerInsertStatus,\n    readerInsertEvidence: context.readerInsertEvidence,\n  },\n} }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1061,7 +1061,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const request = $('Normalize Acceptance Request').first().json;\nreturn [{ json: { ok: false, operation: request?.operation || null, runId: request?.runId || null, domain: 'issue334_acceptance', errorCode: 'acceptance_operation_failed' } }];"
+        "jsCode": "const request = $('Normalize Acceptance Request').first().json;\nreturn [{ json: { ok: false, operation: request?.operation || null, runId: request?.runId || null, domain: 'automation_data_acceptance', errorCode: 'acceptance_operation_failed' } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1273,7 +1273,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nDELETE FROM operator.acceptance_decision WHERE id = $3 AND run_id = $1 AND run_id <> 'recovery-canary-v2';\nDELETE FROM app.acceptance_fact WHERE id = $2 AND run_id = $1 AND id <> -334;\nCOMMIT;",
+        "query": "BEGIN;\nSET LOCAL ROLE automation_data_acceptance_owner;\nDELETE FROM operator.acceptance_decision WHERE id = $3 AND run_id = $1 AND run_id <> 'recovery-canary-v2';\nDELETE FROM app.acceptance_fact WHERE id = $2 AND run_id = $1 AND id <> -334;\nCOMMIT;",
         "options": {
           "queryReplacement": "={{ [$json.runId, $json.factId, $json.residueDecisionId] }}"
         }
@@ -1310,7 +1310,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Prepare Feedback Fact').first().json;\nif ($json.runtimeRole !== 'issue334_acceptance_runtime' || String($json.factId) !== String(context.factId) ||\n  $json.runId !== context.runId || $json.fact !== 'original') throw new Error('feedback_initial_fact_invalid');\nreturn [{ json: { ...context, initialFact: $json.fact } }];"
+        "jsCode": "const context = $('Prepare Feedback Fact').first().json;\nif ($json.runtimeRole !== 'automation_data_acceptance_runtime' || String($json.factId) !== String(context.factId) ||\n  $json.runId !== context.runId || $json.fact !== 'original') throw new Error('feedback_initial_fact_invalid');\nreturn [{ json: { ...context, initialFact: $json.fact } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1378,7 +1378,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Normalize Feedback Decision').first().json;\nif ($json.runtimeRole !== 'issue334_acceptance_runtime' || String($json.factId) !== String(context.factId) ||\n  $json.runId !== context.runId || $json.initialFact !== 'original' ||\n  $json.operatorDecision !== 'corrected' || $json.effectiveBeforeRefresh !== 'corrected') {\n  throw new Error('feedback_before_refresh_invalid');\n}\nreturn [{ json: { ...context, initialFact: $json.initialFact, operatorDecision: $json.operatorDecision, effectiveBeforeRefresh: $json.effectiveBeforeRefresh } }];"
+        "jsCode": "const context = $('Normalize Feedback Decision').first().json;\nif ($json.runtimeRole !== 'automation_data_acceptance_runtime' || String($json.factId) !== String(context.factId) ||\n  $json.runId !== context.runId || $json.initialFact !== 'original' ||\n  $json.operatorDecision !== 'corrected' || $json.effectiveBeforeRefresh !== 'corrected') {\n  throw new Error('feedback_before_refresh_invalid');\n}\nreturn [{ json: { ...context, initialFact: $json.initialFact, operatorDecision: $json.operatorDecision, effectiveBeforeRefresh: $json.effectiveBeforeRefresh } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1411,7 +1411,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Require Feedback Before Refresh').first().json;\nif ($json.runtimeRole !== 'issue334_acceptance_runtime' || String($json.factId) !== String(context.factId) ||\n  $json.runId !== context.runId || $json.fact !== 'refreshed') throw new Error('feedback_refresh_invalid');\nreturn [{ json: context }];"
+        "jsCode": "const context = $('Require Feedback Before Refresh').first().json;\nif ($json.runtimeRole !== 'automation_data_acceptance_runtime' || String($json.factId) !== String(context.factId) ||\n  $json.runId !== context.runId || $json.fact !== 'refreshed') throw new Error('feedback_refresh_invalid');\nreturn [{ json: context }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1489,7 +1489,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Require Refreshed Reader Fact').first().json;\nif ($json.runtimeRole !== 'issue334_acceptance_runtime' || String($json.factId) !== String(context.factId) ||\n  $json.runId !== context.runId || $json.refreshedFact !== 'refreshed' ||\n  $json.operatorDecision !== context.operatorDecision || $json.effectiveAfterRefresh !== 'corrected') {\n  throw new Error('feedback_after_refresh_invalid');\n}\nreturn [{ json: {\n  ok: true,\n  operation: 'feedback',\n  runId: context.runId,\n  domain: 'issue334_acceptance',\n  factId: context.factId,\n  feedback: {\n    initialFact: context.initialFact,\n    operatorDecision: context.operatorDecision,\n    effectiveBeforeRefresh: context.effectiveBeforeRefresh,\n    refreshedFact: $json.refreshedFact,\n    effectiveAfterRefresh: $json.effectiveAfterRefresh,\n  },\n} }];"
+        "jsCode": "const context = $('Require Refreshed Reader Fact').first().json;\nif ($json.runtimeRole !== 'automation_data_acceptance_runtime' || String($json.factId) !== String(context.factId) ||\n  $json.runId !== context.runId || $json.refreshedFact !== 'refreshed' ||\n  $json.operatorDecision !== context.operatorDecision || $json.effectiveAfterRefresh !== 'corrected') {\n  throw new Error('feedback_after_refresh_invalid');\n}\nreturn [{ json: {\n  ok: true,\n  operation: 'feedback',\n  runId: context.runId,\n  domain: 'automation_data_acceptance',\n  factId: context.factId,\n  feedback: {\n    initialFact: context.initialFact,\n    operatorDecision: context.operatorDecision,\n    effectiveBeforeRefresh: context.effectiveBeforeRefresh,\n    refreshedFact: $json.refreshedFact,\n    effectiveAfterRefresh: $json.effectiveAfterRefresh,\n  },\n} }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1518,7 +1518,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "BEGIN;\nSET LOCAL ROLE issue334_acceptance_owner;\nDELETE FROM app.acceptance_fact WHERE id = $1 AND run_id = $2 AND id <> -334;\nCOMMIT;",
+        "query": "BEGIN;\nSET LOCAL ROLE automation_data_acceptance_owner;\nDELETE FROM app.acceptance_fact WHERE id = $1 AND run_id = $2 AND id <> -334;\nCOMMIT;",
         "options": {
           "queryReplacement": "={{ [$json.factId, $json.runId] }}"
         }
@@ -1612,7 +1612,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Require Cleanup Fact Absent').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nconst pageInfo = $json?.pageInfo;\nif (!Array.isArray(rows) || rows.length !== 1 || !pageInfo || Number(pageInfo.totalRows) !== 1 || pageInfo.isLastPage !== true) {\n  throw new Error('cleanup_canary_invalid');\n}\nconst row = rows[0];\nif (Number(row.id) !== -334 || row.run_id !== 'recovery-canary-v2' || row.fact !== 'artifact-available' ||\n  row.artifact_id !== 'issue334-artifact-v1' || row.artifact_uri !== 'https://artifacts.example.invalid/issue334/artifact-v1' ||\n  row.artifact_media_type !== 'text/plain' || Number(row.artifact_size_bytes) !== 37 ||\n  row.artifact_sha256 !== '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3') {\n  throw new Error('cleanup_canary_invalid');\n}\nreturn [{ json: { ok: true, operation: 'cleanup', runId: context.runId, domain: 'issue334_acceptance', removedCount: context.removedCount } }];"
+        "jsCode": "const context = $('Require Cleanup Fact Absent').first().json;\nconst rows = Array.isArray($json) ? $json : ($json.list || []);\nconst pageInfo = $json?.pageInfo;\nif (!Array.isArray(rows) || rows.length !== 1 || !pageInfo || Number(pageInfo.totalRows) !== 1 || pageInfo.isLastPage !== true) {\n  throw new Error('cleanup_canary_invalid');\n}\nconst row = rows[0];\nif (Number(row.id) !== -334 || row.run_id !== 'recovery-canary-v2' || row.fact !== 'artifact-available' ||\n  row.artifact_id !== 'issue334-artifact-v1' || row.artifact_uri !== 'https://artifacts.example.invalid/issue334/artifact-v1' ||\n  row.artifact_media_type !== 'text/plain' || Number(row.artifact_size_bytes) !== 37 ||\n  row.artifact_sha256 !== '09dbca24661414e7c9bfdb82b6ee39484466ae4bc4c9775501e2789fe39786a3') {\n  throw new Error('cleanup_canary_invalid');\n}\nreturn [{ json: { ok: true, operation: 'cleanup', runId: context.runId, domain: 'automation_data_acceptance', removedCount: context.removedCount } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
