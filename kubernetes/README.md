@@ -112,6 +112,7 @@ remains unverified until that drill passes:
 | `just repo nocodb-secrets` | Guard and write the SOPS-encrypted runtime Secret while retaining `NC_CONNECTION_ENCRYPT_KEY` |
 | `just kube nocodb-validate` | Validate the staged chart, package, optional database roles, workflows, monitoring, and command contracts |
 | `just bootstrap nocodb` | Initialize metadata and settings and bind one NocoDB API token directly to n8n |
+| `just kube nocodb-source-prepare <domain>` | Create and validate restricted access roles without registering a NocoDB base or source |
 | `just kube nocodb-source-sync <domain>` | Reconcile the fixed `read_model` source and eligible `operator` source for one managed domain |
 | `just kube nocodb-source-rotate <domain> <kind>` | Rotate one selected reader or operator PostgreSQL login and matching NocoDB integration |
 | `just kube nocodb-verify` | Observe workload, route, policy, monitoring, and logical-backup freshness without reading application state |

@@ -110,14 +110,30 @@ fail() {
   exit 1
 }
 
-run_operation() { # <sync|rotate> <domain> [kind] [confirmation|-] [token] [response] [curl-exit]
+run_operation() { # <prepare|sync|rotate> <domain> [kind] [confirmation|-] [token] [response] [curl-exit]
   local operation="$1" domain="$2" kind="${3:-}" confirmation="${4:--}"
   local supplied_token="${5:-$token}" response="${6:-$valid_sync_response}" curl_exit="${7:-0}"
   local -a args=("$operation" "$domain")
   [[ -z "$kind" ]] || args+=("$kind")
   : >"$event_log"
   set +e
-  if [[ "$operation" == sync ]]; then
+  if [[ "$operation" == prepare ]]; then
+    if [[ "$confirmation" == '-' ]]; then
+      OUT="$(PATH="$stub_bin:$linux_bin:$PATH" \
+        NOCODB_SOURCE_OPERATION_EXPECTED_BODY="$(jq -cn --arg domain "$domain" '{domain: $domain, operation: "prepare"}')" \
+        NOCODB_SOURCE_OPERATION_RESPONSE="$response" \
+        NOCODB_SOURCE_OPERATION_CURL_EXIT="$curl_exit" \
+        NOCODB_SOURCE_PROVISIONING_HEADER="$supplied_token" \
+        env -u NOCODB_SOURCE_PREPARE_CONFIRM "$command" "${args[@]}" 2>&1)"
+    else
+      OUT="$(PATH="$stub_bin:$linux_bin:$PATH" \
+        NOCODB_SOURCE_OPERATION_EXPECTED_BODY="$(jq -cn --arg domain "$domain" '{domain: $domain, operation: "prepare"}')" \
+        NOCODB_SOURCE_OPERATION_RESPONSE="$response" \
+        NOCODB_SOURCE_OPERATION_CURL_EXIT="$curl_exit" \
+        NOCODB_SOURCE_PROVISIONING_HEADER="$supplied_token" \
+        NOCODB_SOURCE_PREPARE_CONFIRM="$confirmation" "$command" "${args[@]}" 2>&1)"
+    fi
+  elif [[ "$operation" == sync ]]; then
     if [[ "$confirmation" == '-' ]]; then
       OUT="$(PATH="$stub_bin:$linux_bin:$PATH" \
         NOCODB_SOURCE_OPERATION_EXPECTED_BODY="$(jq -cn --arg domain "$domain" '{domain: $domain, operation: "sync"}')" \
@@ -169,6 +185,14 @@ valid_sync_response="$(jq -cn --argjson reader_validation "$reader_validation" -
   errorCode:null
 }')"
 valid_rotate_response="$(jq -c '.operation = "rotate" | .operator.generation = 2 | .operator.credentialGeneration = 2' <<<"$valid_sync_response")"
+valid_prepare_response='{"ok":true,"domain":"domain_one","operation":"prepare","state":"prepared","readerRole":"domain_one_reader","readerEligible":true,"operatorRequested":true,"operatorRole":"domain_one_operator","operatorEligible":false}'
+
+case_name='prepare requires an exact confirmation before deployed-source checks'
+run_operation prepare domain_one '' - "$token" "$valid_prepare_response"
+assert_status 1
+assert_contains "NOCODB_SOURCE_PREPARE_CONFIRM='prepare:nocodb:domain_one'"
+assert_no_request
+assert_no_secret_output
 
 case_name='sync requires an exact confirmation before deployed-source checks'
 run_operation sync domain_one '' -
@@ -220,6 +244,26 @@ assert_status 0
   fail 'curl ran before deployed-source parity'
 assert_no_secret_output
 
+case_name='prepare uses the exact body and returns only bounded role evidence'
+run_operation prepare domain_one '' 'prepare:nocodb:domain_one' "$token" "$valid_prepare_response"
+assert_status 0
+[[ "$(jq -cS . <<<"$OUT")" == "$(jq -cS . <<<"$valid_prepare_response")" ]] || fail 'prepare did not return the bounded webhook response unchanged'
+assert_no_secret_output
+
+case_name='prepare response with an inconsistent reader role fails closed'
+invalid_prepare_response="$(jq -c '.readerRole = "other_reader"' <<<"$valid_prepare_response")"
+run_operation prepare domain_one '' 'prepare:nocodb:domain_one' "$token" "$invalid_prepare_response"
+assert_status 1
+assert_contains 'response did not satisfy the prepare contract'
+assert_no_secret_output
+
+case_name='prepare response missing a boolean fails closed'
+invalid_prepare_response="$(jq -c 'del(.operatorEligible)' <<<"$valid_prepare_response")"
+run_operation prepare domain_one '' 'prepare:nocodb:domain_one' "$token" "$invalid_prepare_response"
+assert_status 1
+assert_contains 'response did not satisfy the prepare contract'
+assert_no_secret_output
+
 case_name='invalid temporary-file modes remain rejected'
 export NOCODB_TEST_STAT_MODE=755
 run_operation sync domain_one '' 'sync:nocodb:domain_one' "$token" "$valid_sync_response"
@@ -246,6 +290,21 @@ STATUS=$?
 set -e
 assert_status 0
 rg -Fxq curl "$event_log" || fail 'Just sync recipe did not invoke the guarded client'
+assert_no_secret_output
+
+case_name='the Just prepare recipe preserves the guarded command contract'
+: >"$event_log"
+set +e
+OUT="$(PATH="$stub_bin:$linux_bin:$PATH" \
+  NOCODB_SOURCE_OPERATION_EXPECTED_BODY='{"domain":"domain_one","operation":"prepare"}' \
+  NOCODB_SOURCE_OPERATION_RESPONSE="$valid_prepare_response" \
+  NOCODB_SOURCE_PROVISIONING_HEADER="$token" \
+  NOCODB_SOURCE_PREPARE_CONFIRM='prepare:nocodb:domain_one' \
+  mise exec -- just kube nocodb-source-prepare domain_one 2>&1)"
+STATUS=$?
+set -e
+assert_status 0
+rg -Fxq curl "$event_log" || fail 'Just prepare recipe did not invoke the guarded client'
 assert_no_secret_output
 
 case_name='the Just rotate recipe preserves the guarded command contract'

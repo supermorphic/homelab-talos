@@ -35,7 +35,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['domain', 'operation', 'accessKind']);\nif (Object.keys(body).some((key) => !allowedFields.has(key))) throw new Error('unexpected_request_field');\nconst { domain, operation, accessKind } = body;\nif (typeof domain !== 'string' || !/^[a-z][a-z0-9_]{0,47}$/.test(domain)) throw new Error('invalid_domain');\nif (!['sync', 'rotate'].includes(operation)) throw new Error('invalid_operation');\nif (operation === 'rotate') {\n  if (!['reader', 'operator'].includes(accessKind)) throw new Error('invalid_access_kind');\n} else if (accessKind !== undefined) {\n  throw new Error('access_kind_only_allowed_for_rotation');\n}\nreturn [{ json: { domain, operation, requestedAccessKind: accessKind || null, ...(accessKind ? { accessKind } : {}) } }];"
+        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['domain', 'operation', 'accessKind']);\nif (Object.keys(body).some((key) => !allowedFields.has(key))) throw new Error('unexpected_request_field');\nconst { domain, operation, accessKind } = body;\nif (typeof domain !== 'string' || !/^[a-z][a-z0-9_]{0,47}$/.test(domain)) throw new Error('invalid_domain');\nif (!['prepare', 'sync', 'rotate'].includes(operation)) throw new Error('invalid_operation');\nif (operation === 'rotate') {\n  if (!['reader', 'operator'].includes(accessKind)) throw new Error('invalid_access_kind');\n} else if (accessKind !== undefined) {\n  throw new Error('access_kind_only_allowed_for_rotation');\n}\nreturn [{ json: { domain, operation, requestedAccessKind: accessKind || null, ...(accessKind ? { accessKind } : {}) } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -109,6 +109,52 @@
       ],
       "id": "10000000-0000-4000-8000-000000000007",
       "name": "Keep Access Plan",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.operation }}",
+              "rightValue": "prepare",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        600,
+        -180
+      ],
+      "id": "10000000-0000-4000-8000-000000000139",
+      "name": "Prepare Requested"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Normalize Source Request').first().json;\nconst plan = $json.plan;\nconst readerRole = `${request.domain}_reader`;\nconst operatorRole = `${request.domain}_operator`;\nif (request.operation !== 'prepare' || !plan || plan.domain !== request.domain || plan.readerRole !== readerRole || plan.readerEligible !== true || typeof plan.operatorRequested !== 'boolean' || typeof plan.operatorEligible !== 'boolean' || (plan.operatorRequested ? plan.operatorRole !== operatorRole : plan.operatorRole !== null) || (!plan.operatorRequested && plan.operatorEligible)) throw new Error('prepare_response_invalid');\nreturn [{ json: { ok: true, domain: request.domain, operation: 'prepare', state: 'prepared', readerRole, readerEligible: true, operatorRequested: plan.operatorRequested, operatorRole: plan.operatorRole, operatorEligible: plan.operatorEligible } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        -180
+      ],
+      "id": "10000000-0000-4000-8000-000000000140",
+      "name": "Prepare Access Response",
       "onError": "continueErrorOutput"
     },
     {
@@ -2635,7 +2681,43 @@
       "main": [
         [
           {
+            "node": "Prepare Requested",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Requested": {
+      "main": [
+        [
+          {
+            "node": "Prepare Access Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
             "node": "List Domain Bases",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Access Response": {
+      "main": [
+        [
+          {
+            "node": "Respond",
             "type": "main",
             "index": 0
           }

@@ -66,7 +66,7 @@ normalize = by_name.get("Normalize Source Request", {})
 normalize_code = normalize.get("parameters", {}).get("jsCode", "")
 require(normalize.get("type") == "n8n-nodes-base.code", "Normalize Source Request must be a Code node.")
 allowed_request_fields = {"domain", "operation", "accessKind"}
-allowed_operations = {"sync", "rotate"}
+allowed_operations = {"prepare", "sync", "rotate"}
 allowed_access_kinds = {"reader", "operator"}
 for values, label in (
     (allowed_request_fields, "request field"),
@@ -257,6 +257,29 @@ require(
     executable_nodes <= (reachable("Source Webhook") | {"Source Webhook"}),
     "Every source workflow executable node must be reachable from the webhook.",
 )
+require(
+    successors("Keep Access Plan") == ["Prepare Requested", "Prepare Source Error Response"],
+    "The validated access plan must route through the prepare-operation branch.",
+)
+require(
+    successors("Prepare Requested") == ["Prepare Access Response", "List Domain Bases"],
+    "Prepare must terminate separately while sync and rotate retain the source lifecycle route.",
+)
+require(
+    successors("Prepare Access Response") == ["Respond", "Prepare Source Error Response"],
+    "The bounded prepare response must share the authenticated webhook response and error paths.",
+)
+prepare_reachable = reachable("Prepare Access Response")
+require(
+    not any(by_name[name].get("type") in {"n8n-nodes-base.httpRequest", "n8n-nodes-base.crypto"} for name in prepare_reachable),
+    "Prepare must terminate before every NocoDB HTTP and password-generation node.",
+)
+require(
+    "List Domain Bases" in reachable("Prepare Requested")
+    and "Generate Reader Password" in reachable("List Domain Bases")
+    and "Generate Operator Password" in reachable("List Domain Bases"),
+    "Sync and rotate must retain their existing HTTP and password-generation graph routes.",
+)
 require("Record Reader Ready" in reachable("Get Reader Source"), "Reader source GET must precede ready recording.")
 require("Validate Reader PostgreSQL" in reachable("Get Reader Source"), "Reader source GET must precede PostgreSQL validation.")
 require("Start Operator" in reachable("Record Reader Ready"), "The operator path must start only after reader ready.")
@@ -363,6 +386,59 @@ const operatorRotateRequest = execute('Normalize Source Request', {
 })[0].json;
 if (operatorRotateRequest.requestedAccessKind !== 'operator' || operatorRotateRequest.accessKind !== 'operator') {
   throw new Error('Normalize Source Request did not preserve the explicit rotation target separately');
+}
+const prepareRequest = execute('Normalize Source Request', {
+  body: { domain: 'domain_one', operation: 'prepare' },
+})[0].json;
+if (prepareRequest.operation !== 'prepare' || prepareRequest.domain !== 'domain_one' || prepareRequest.requestedAccessKind !== null) {
+  throw new Error('Normalize Source Request did not accept the bounded prepare operation');
+}
+for (const body of [
+  { domain: 'domain_one', operation: 'prepare', accessKind: 'reader' },
+  { domain: 'domain_one', operation: 'prepare', unexpected: true },
+  { domain: 'Domain_One', operation: 'prepare' },
+]) {
+  let rejected = false;
+  try { execute('Normalize Source Request', { body }); } catch { rejected = true; }
+  if (!rejected) throw new Error(`Normalize Source Request accepted malformed prepare request: ${JSON.stringify(body)}`);
+}
+const preparePlan = {
+  domain: 'domain_one', readerRole: 'domain_one_reader', readerEligible: true,
+  operatorRequested: true, operatorRole: 'domain_one_operator', operatorEligible: false,
+};
+const keptPreparePlan = execute(
+  'Keep Access Plan',
+  { result: preparePlan },
+  { 'Normalize Source Request': prepareRequest },
+)[0].json;
+const preparedResponse = execute(
+  'Prepare Access Response',
+  keptPreparePlan,
+  { 'Normalize Source Request': prepareRequest },
+)[0].json;
+if (JSON.stringify(preparedResponse) !== JSON.stringify({
+  ok: true, domain: 'domain_one', operation: 'prepare', state: 'prepared',
+  readerRole: 'domain_one_reader', readerEligible: true,
+  operatorRequested: true, operatorRole: 'domain_one_operator', operatorEligible: false,
+})) throw new Error('Prepare Access Response did not return the exact bounded result');
+for (const invalidPlan of [
+  { ...preparePlan, readerRole: 'other_reader' },
+  { ...preparePlan, readerEligible: false },
+  { ...preparePlan, operatorRequested: 'true' },
+  { ...preparePlan, operatorRole: 'other_operator' },
+  { ...preparePlan, operatorEligible: null },
+  { ...preparePlan, operatorRequested: false, operatorRole: 'domain_one_operator' },
+  { ...preparePlan, operatorRequested: false, operatorRole: null, operatorEligible: true },
+]) {
+  let rejected = false;
+  try {
+    execute(
+      'Prepare Access Response',
+      { ...keptPreparePlan, plan: invalidPlan },
+      { 'Normalize Source Request': prepareRequest },
+    );
+  } catch (error) { rejected = /prepare_response_invalid/.test(error.message); }
+  if (!rejected) throw new Error(`Prepare Access Response accepted inconsistent evidence: ${JSON.stringify(invalidPlan)}`);
 }
 const readerRotateRequest = execute('Normalize Source Request', {
   body: { domain: 'domain_one', operation: 'rotate', accessKind: 'reader' },

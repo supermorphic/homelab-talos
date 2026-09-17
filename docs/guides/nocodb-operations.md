@@ -267,7 +267,28 @@ Keep execution order `v1` and all saved manual, successful, failed, and progress
 execution data disabled. Publish **NocoDB Source Provisioner** only after checking every
 binding. Do not add credential IDs or values to the Git template.
 
-### 4. Adopt one domain
+### 4. Prepare domain access without NocoDB registration
+
+The domain must already be `ready` in automation-data and must have a reviewed
+`read_model` schema. A valid domain matches `^[a-z][a-z0-9_]{0,47}$`. Supply the existing
+private source-provisioning header through the environment or hidden interactive prompt:
+
+```bash
+NOCODB_SOURCE_PREPARE_CONFIRM='prepare:nocodb:<domain>' \
+  mise exec -- just kube nocodb-source-prepare <domain>
+```
+
+This authenticated operation creates or validates the restricted `<domain>_reader`
+role. A new role starts as `NOLOGIN`. If an `operator` schema exists, it also creates or
+validates `<domain>_operator`; missing reviewed controlled-edit grants can create an
+`awaiting_grants` registry row. Preparation preserves the login state of an existing
+registered source.
+
+The bounded response reports the canonical roles and reader/operator eligibility. It
+does not generate a password or return a base, integration, or source ID. It does not
+call NocoDB, create a base, register a source, or make a role available for login.
+
+### 5. Adopt one domain
 
 The domain must already be `ready` in automation-data and must have a reviewed
 `read_model` schema. A valid domain matches `^[a-z][a-z0-9_]{0,47}$`.
@@ -319,7 +340,7 @@ These labels and the asynchronous metadata-diff behavior are from pinned NocoDB
 source, integration, credential, and saved-view identities. An operator must still
 perform the attended browser check before this UI procedure counts as live acceptance.
 
-### 5. Rotate one source login
+### 6. Rotate one source login
 
 Rotate only the selected PostgreSQL reader or operator login and its matching NocoDB
 integration:
@@ -339,7 +360,7 @@ IDs match.
 This command does not rotate `NC_CONNECTION_ENCRYPT_KEY`, the NocoDB administrator, or
 the broad NocoDB API token stored in **NocoDB Operator API**.
 
-### 6. Verify observed health
+### 7. Verify observed health
 
 While Git still records `spec.suspend: true`, the default verifier checks the
 never-bootstrapped staged state:
@@ -367,7 +388,7 @@ active intent is a failure; the verifier does not skip it. All phases are read-o
 verifier does not read Secrets, authenticate to NocoDB, inspect metadata, invoke source
 credentials, or perform a positive authorization probe.
 
-### 7. Run attended access acceptance
+### 8. Run attended access acceptance
 
 Import
 `kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json`. Do not bind
@@ -471,7 +492,7 @@ by the final run cleanup. Perform the attended browser check after the API pass:
 that the reader is visibly read-only and that the operator can make the intended small
 edit.
 
-### 8. Make activation durable after access acceptance
+### 9. Make activation durable after access acceptance
 
 After platform prerequisites, access acceptance, and the browser check pass, complete
 review of the activation change under the operator-approved rollout sequence. It sets
@@ -487,7 +508,7 @@ and confirm the Gatus NocoDB endpoint is healthy. Record and publish the final e
 After activation verification, complete the backup and restore step below. Do not
 claim recoverability or close the rollout issue until the isolated drill passes.
 
-### 9. Wait for a complete logical backup and run the restore drill
+### 10. Wait for a complete logical backup and run the restore drill
 
 The automation-data logical CronJob runs at `00:30 Etc/UTC`. Wait until one complete,
 checksum-valid logical bundle contains the NocoDB metadata, source registry, optional
