@@ -91,11 +91,13 @@ write_kubeconfig_view() {
       "clusters": [{"name": "homelab", "cluster": {"server": "https://cluster"}}],
       "contexts": [
         {"name": "homelab-observer", "context": {"cluster": "homelab", "user": "homelab-observer"}},
-        {"name": "homelab-diagnostic", "context": {"cluster": "homelab", "user": "homelab-diagnostic"}}
+        {"name": "homelab-diagnostic", "context": {"cluster": "homelab", "user": "homelab-diagnostic"}},
+        {"name": "homelab-report-publisher", "context": {"cluster": "homelab", "user": "homelab-report-publisher"}}
       ],
       "users": [
         {"name": "homelab-observer", "user": {"token": "observer-token"}},
-        {"name": "homelab-diagnostic", "user": {"token": "diagnostic-token"}}
+        {"name": "homelab-diagnostic", "user": {"token": "diagnostic-token"}},
+        {"name": "homelab-report-publisher", "user": {"token": "publisher-token"}}
       ]
     }
   ' >"$fixture/kubeconfig-view.json"
@@ -109,6 +111,11 @@ write_kubeconfig_view() {
     missing-diagnostic)
       yq -i '.contexts = [.contexts[] | select(.name != "homelab-diagnostic")] |
         .users = [.users[] | select(.name != "homelab-diagnostic")]' \
+        "$fixture/kubeconfig-view.json"
+      ;;
+    missing-publisher)
+      yq -i '.contexts = [.contexts[] | select(.name != "homelab-report-publisher")] |
+        .users = [.users[] | select(.name != "homelab-report-publisher")]' \
         "$fixture/kubeconfig-view.json"
       ;;
     wrong-current)
@@ -147,9 +154,11 @@ expect_failure main-clone 'linked Git worktree' env FAKE_GIT_LAYOUT=main \
   "$preflight" "$worktree" "$worktree/.kube/config" "$worktree/.talos/config"
 
 write_kubeconfig_view admin
-expect_failure admin-kubeconfig 'exactly the scoped observer and diagnostic' run_preflight
+expect_failure admin-kubeconfig 'exactly the three scoped contexts' run_preflight
 write_kubeconfig_view missing-diagnostic
-expect_failure missing-diagnostic 'exactly the scoped observer and diagnostic' run_preflight
+expect_failure missing-diagnostic 'exactly the three scoped contexts' run_preflight
+write_kubeconfig_view missing-publisher
+expect_failure missing-publisher 'exactly the three scoped contexts' run_preflight
 write_kubeconfig_view wrong-current
 expect_failure wrong-current 'current context must be homelab-observer' run_preflight
 write_kubeconfig_view valid

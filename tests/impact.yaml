@@ -62,6 +62,7 @@ full_paths:
   - scripts/test/lib/common-test.sh
   - scripts/test/lib/harness-shell-runner*
   - scripts/test/lib/job.sh
+  - scripts/test/lib/report-publication.sh
   - scripts/test/lib/results*
   - kubernetes/apps/kustomization.yaml
   - kubernetes/mod.just

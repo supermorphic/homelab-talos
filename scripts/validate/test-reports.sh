@@ -78,19 +78,27 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 [[ "$(yq -r '.metadata.annotations."external-dns.k8s.io/audience"' "$route")" == 'internal' ]]
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/name"' "$route")" == 'Test Reports' ]]
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/description"' "$route")" == \
-  'Persistent operator-published test results' ]]
+  'Retained test evidence' ]]
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/group"' "$route")" == \
   'Monitoring & Testing' ]]
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.type"' "$route")" == \
   'customapi' ]]
-[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.display"' "$route")" == \
-  'dynamic-list' ]]
-[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.mappings.format"' "$route")" == \
-  'relativeDate' ]]
-[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.mappings.limit"' "$route")" == \
-  '6' ]]
-[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.mappings.target"' "$route")" == \
-  'https://tests.lab.supermorphic.com{path}' ]]
+[[ "$(yq -r '[
+  .metadata.annotations."gethomepage.dev/widget.mappings.0.field",
+  .metadata.annotations."gethomepage.dev/widget.mappings.0.label",
+  .metadata.annotations."gethomepage.dev/widget.mappings.1.field",
+  .metadata.annotations."gethomepage.dev/widget.mappings.1.label",
+  .metadata.annotations."gethomepage.dev/widget.mappings.1.format",
+  .metadata.annotations."gethomepage.dev/widget.mappings.2.field",
+  .metadata.annotations."gethomepage.dev/widget.mappings.2.label",
+  .metadata.annotations."gethomepage.dev/widget.mappings.2.format"
+] | join(",")' "$route")" == \
+  'latest,LATEST,last_run,LAST RUN,relativeDate,last_failure,LAST FAILURE,relativeDate' ]]
+if rg -q 'gethomepage\.dev/widget\.(display|mappings\.(items|name|label|limit|format|target)):' \
+  "$route"; then
+  echo 'Test Reports must not use the obsolete Homepage dynamic-list fields.' >&2
+  exit 1
+fi
 rg -q 'test-reports\.test-reports\.svc\.cluster\.local:8080/api/homepage\.json' "$route"
 
 [[ "$(yq -r '.spec.egress | length' "$policy")" == '0' ]]
@@ -186,4 +194,4 @@ fi
 sh -n "$app/bootstrap-storage.sh" "$app/install-report.sh"
 shellcheck "$app/bootstrap-storage.sh" "$app/install-report.sh" "$diagnostics"
 
-echo 'Caddy test-report server, activation-aware Gatus probe, content-addressed runtime configuration, retained RWO storage, Recreate strategy, restricted runtime, internal route, Homepage rollups, Grafana dashboard, network isolation, metrics, and atomic installer passed validation.'
+echo 'Caddy test-report server, activation-aware Gatus probe, content-addressed runtime configuration, retained RWO storage, Recreate strategy, restricted runtime, internal route, Homepage evidence summary, Grafana dashboard, network isolation, metrics, and atomic installer passed validation.'

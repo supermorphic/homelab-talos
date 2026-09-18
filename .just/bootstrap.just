@@ -2507,6 +2507,7 @@ agent-access:
     expected_confirmation='bootstrap:agent-access'
     ks='kubernetes/apps/kube-system/agent-access/ks.yaml'
     app='kubernetes/apps/kube-system/agent-access/app'
+    publisher_access='kubernetes/apps/monitoring/test-reports/app/publisher-access.yaml'
     policy='tests/policy/agent-access'
     temp_dir="$(mktemp -d /tmp/homelab-talos-agent-access.XXXXXX)"
     resumed=false
@@ -2524,6 +2525,8 @@ agent-access:
     conftest fmt --check "$policy"
     conftest verify --policy "$policy"
     kustomize build "$app" >"$temp_dir/rendered.yaml"
+    printf '%s\n' '---' >>"$temp_dir/rendered.yaml"
+    cat "$publisher_access" >>"$temp_dir/rendered.yaml"
     conftest test --combine --all-namespaces --policy "$policy" "$temp_dir/rendered.yaml"
 
     source scripts/lib/rollout.sh
@@ -2532,6 +2535,8 @@ agent-access:
       .just/bootstrap.just \
       kubernetes/apps/kube-system/kustomization.yaml \
       kubernetes/apps/kube-system/agent-access \
+      kubernetes/apps/monitoring/test-reports/app/kustomization.yaml \
+      "$publisher_access" \
       tests/policy/agent-access
     [[ "$(yq -r '.spec.suspend' "$ks")" == 'true' ]] || {
       echo 'Refusing agent-access bootstrap: the Kustomization must be staged suspended in Git.' >&2
