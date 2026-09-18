@@ -208,6 +208,11 @@ Tailscale access path. n8n's built-in owner authentication protects the UI. Auth
 deferred because the initial deployment has one operator, private network reachability,
 and no selected Community-edition OIDC integration.
 
+The private route sets request and backend request timeouts to 120 seconds so
+synchronous webhooks can finish beyond Envoy's default 15-second deadline.
+This bounds the HTTP wait; a disconnected caller does not establish that workflow
+execution stopped.
+
 ### Shared public webhook edge
 
 `hooks.lab.supermorphic.com` terminates TLS on a dedicated public Envoy data plane. Its

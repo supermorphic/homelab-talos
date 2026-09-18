@@ -23,7 +23,10 @@ spec:
       namespace: networking
       sectionName: https
   rules:
-    - backendRefs:
+    - timeouts:
+        request: 120s
+        backendRequest: 120s
+      backendRefs:
         - group: ""
           kind: Service
           name: n8n
