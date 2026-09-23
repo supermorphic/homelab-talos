@@ -385,6 +385,9 @@ administrative/decommission workflow must require an explicit target, existence 
 ownership validation, a fresh validated backup, and attended execution. Until that
 workflow exists, stop and prepare a separately reviewed operator procedure. Never add
 destructive operations to the ordinary provisioning webhook.
+For a NocoDB-connected domain, use the
+[attended decommission checklist](nocodb-operations.md#attended-domain-decommission)
+and its [partial-decommission recovery](../runbooks/nocodb-recovery.md#partial-domain-decommission).
 
 ## Rollback
 

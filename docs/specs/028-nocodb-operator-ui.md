@@ -475,7 +475,7 @@ both sides only after those identities match current state. Ordinary sync, anoth
 target, or a missing identity cannot resume rotation through blind credential replacement.
 
 There is no self-service operation that deletes a source, base, role, registry row, or
-domain. Future decommissioning requires a separate attended design.
+domain. Decommission is attended administration, separate from these lifecycle workflows.
 
 ## Command lifecycle
 
@@ -607,8 +607,17 @@ Disposable integration proved the source lifecycle, restart behavior, targeted r
 additive schema refresh, backup, and isolated restoration. Attended isolated metadata
 recovery passed on September 10, 2026.
 
-Fresh verification of the merged post-activation revision remains the closeout item at
-this revision. Individual run records and diagnostic history remain in reports and PRs.
+On September 23, 2026, automation-data and NocoDB read-only verification passed at
+revision `78e2b6c09f2e`. The replacement-domain isolated restore passed in canonical run
+`20260923T205527Z-78e2b6c09f2e-operator-c8028c37`, using complete bundle
+`automation-data-20260923T003011Z`. Assertion and cleanup both passed. The drill produced
+a fresh logical bundle inside the isolated environment, and its run-owned resources
+were confirmed absent after cleanup. This evidence is retained locally; report
+publication has not been established.
+
+Individual run records and diagnostic history remain in reports and PRs. The isolated
+restore verifies recovery of the retained acceptance domain, not unrelated lifecycle
+or user-access changes.
 
 The material implementation findings are reflected in the final architecture: separate
 fact and decision schemas, PostgreSQL-owned durable state with external artifact
