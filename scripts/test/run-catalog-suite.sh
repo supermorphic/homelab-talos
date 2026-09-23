@@ -154,6 +154,29 @@ if [[ "$mutates_cluster" == 'true' &&
   fi
 fi
 
+if [[ "$mutates_cluster" == 'true' && "$disruption_admitted" == 'true' ]]; then
+  lease_ready=false
+  if [[ "$lease_acquired" == 'true' ]]; then
+    if verify_test_lease_holder "$kubeconfig" "$run_id" &&
+      [[ ! -e "$run_dir_abs/diagnostics/lease-renewal-failed" ]]; then
+      lease_ready=true
+    fi
+  elif [[ "$lease_joined" == 'true' ]]; then
+    if verify_test_lease_holder "$kubeconfig" "$TEST_CAMPAIGN_LEASE_HOLDER" &&
+      [[ -z "${TEST_CAMPAIGN_LEASE_FAILURE_MARKER:-}" ||
+        ! -e "$TEST_CAMPAIGN_LEASE_FAILURE_MARKER" ]]; then
+      lease_ready=true
+    fi
+  fi
+  if [[ "$lease_ready" != 'true' ]]; then
+    write_result_case_junit "$run_dir/junit.xml" "$suite_id" \
+      lease-pre-mutation broken 0
+    primary_exit_code=1
+    run_result='broken'
+    disruption_admitted=false
+  fi
+fi
+
 if [[ "$lease_acquired" == 'true' ]]; then
   export HOMELAB_DISRUPTION_LEASE_HOLDER="$run_id"
 elif [[ "$lease_joined" == 'true' ]]; then

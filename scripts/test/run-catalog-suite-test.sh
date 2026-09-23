@@ -127,6 +127,36 @@ mapfile -t blocked_runs < <(
 [[ "$(yq -r '.result' "${blocked_runs[0]}/summary.json")" == broken ]]
 [[ "$(yq -r '.spec.holderIdentity' "$lease_state")" == campaign:fixture ]]
 
+cat >"$fixture_root/admission-then-renewal-failure" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+"${REAL_DISRUPTION_KUBECTL:?}" "$@"
+: >"${INJECT_LEASE_FAILURE_MARKER:?}"
+EOF
+chmod +x "$fixture_root/admission-then-renewal-failure"
+renewal_failure_marker="$fixture_root/parent-renewal-failed"
+renewal_child_marker="$fixture_root/renewal-failure-command-ran"
+set +e
+CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity \
+CAMPAIGN_TEST_LEASE_STATE="$lease_state" \
+TEST_LEASE_KUBECTL="$repo_root/tests/fixtures/campaign/fake-lease-kubectl.sh" \
+DISRUPTION_KUBECTL="$fixture_root/admission-then-renewal-failure" \
+REAL_DISRUPTION_KUBECTL="$repo_root/tests/fixtures/disruption-admission/fake-kubectl.sh" \
+DISRUPTION_TEST_NODES="$healthy_nodes" \
+INJECT_LEASE_FAILURE_MARKER="$renewal_failure_marker" \
+TEST_CAMPAIGN_LEASE_HOLDER=campaign:fixture \
+TEST_CAMPAIGN_LEASE_FAILURE_MARKER="$renewal_failure_marker" \
+TEST_RESULTS_ROOT="$fixture_root/renewal-blocked" \
+TEST_KUBECONFIG="$fixture_root/kubeconfig" \
+TEST_EXECUTION_ORIGIN=agent \
+  scripts/test/run-catalog-suite.sh test.cilium-connectivity -- \
+    touch "$renewal_child_marker" >/dev/null 2>&1
+renewal_blocked_exit="$?"
+set -e
+[[ "$renewal_blocked_exit" -ne 0 ]]
+[[ ! -e "$renewal_child_marker" ]]
+[[ "$(yq -r '.spec.holderIdentity' "$lease_state")" == campaign:fixture ]]
+
 cat >"$fixture_root/refuse-admission" <<'EOF'
 #!/usr/bin/env bash
 echo 'Read-only verification called disruption admission.' >&2
