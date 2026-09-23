@@ -48,6 +48,7 @@ full_paths:
   - scripts/test/repository_shell_validation.py
   - scripts/test/test_*.py
   - scripts/test/lease-test.sh
+  - scripts/test/disruption-admission-test.sh
   - scripts/test/run-campaign*
   - scripts/test/run-catalog-suite*
   - scripts/test/run-chainsaw*
@@ -72,6 +73,7 @@ full_paths:
   - kubernetes/flux/**
   - clusterconfig/**
   - talos/**
+  - tests/fixtures/disruption-admission/**
 conditional_paths:
   observability:
     - .sops.yaml
