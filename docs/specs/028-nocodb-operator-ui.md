@@ -475,118 +475,7 @@ both sides only after those identities match current state. Ordinary sync, anoth
 target, or a missing identity cannot resume rotation through blind credential replacement.
 
 There is no self-service operation that deletes a source, base, role, registry row, or
-domain. The acceptance-domain retirement below is a separate attended administrative
-procedure; it does not add deletion to these workflows.
-
-### Acceptance-domain retirement and account separation
-
-[Issue 433](https://github.com/supermorphic/homelab-talos/issues/433) completes the
-transition to the shared `automation_data_acceptance` domain. Its deletion scope is
-exactly `issue317_acceptance` and `issue334_acceptance`, plus resources independently
-proven to belong exclusively to those domains. This section defines the intended
-closeout; it does not claim retirement or account changes have been performed.
-
-Preserve `automation_data_acceptance`, `automation_data_canary`,
-`automation_data_backup_error`, all unrelated domains, and historical backups and
-reports. The retained canary's `issue334` artifact identifiers are fixture content in
-the replacement domain, not evidence that the old domain is still required. Do not
-rename or remove that content during retirement.
-
-The execution order is:
-
-1. Retain successful access and isolated restore evidence for the replacement domain,
-   including passed cleanup. Restore success alone does not complete issue 433.
-2. Inventory and review both legacy domains and their consumers before deleting either.
-3. Retire only the reviewed legacy resources through an attended procedure, with a
-   fresh validated recovery set and checks immediately before each destructive action.
-4. Establish and verify the selected NocoDB account arrangement.
-5. Capture and validate a new complete backup after both changes, rerun the isolated
-   restore drill, and retain the final evidence before closing the issue.
-
-#### Dependency review and retirement contract
-
-Begin with an inventory, not a reusable decommission subsystem. Prefer a documented
-operator procedure; add a small helper only when the observed dependencies require
-repeatable checks that cannot be performed reliably through the existing interfaces.
-No new self-service API, permanent service, or periodic retirement test is required.
-
-For each legacy domain, reconcile the PostgreSQL database and role identities with
-`managed_domains`, optional reader/operator roles with `managed_nocodb_sources`, and
-the corresponding NocoDB base, sources, integrations, saved views, and memberships.
-Check n8n credential references in current published workflows and saved definitions,
-running executions, direct connection consumers, and backup/restore assumptions.
-Names alone do not prove exclusive ownership. Shared integrations, credentials,
-cross-domain grants or role dependencies, unrelated base content, and unclassified
-consumers stop deletion of the affected target.
-
-The reviewed procedure must bind the exact object identities, establish how concurrent
-provisioning, source sync, rotation, acceptance, and backup operations are excluded or
-detected, and record the order and result of each action. A Kubernetes test Lease alone
-does not serialize application webhooks or scheduled backups. Any temporary pause must
-have an explicit restoration step and failure behavior.
-
-Before mutation, validate a fresh automation-data bundle containing both legacy domains,
-the replacement domain, control registry, global roles, and NocoDB metadata. Also retain
-the n8n recovery material needed to recover any credentials or workflow state removed by
-the procedure. Protect the selected recovery copies from ordinary backup expiration
-through the recovery window; do not rewrite or delete historical bundles or reports as
-part of retirement. Review the protection method before relying on it.
-
-Retirement consists of ordered steps across PostgreSQL, NocoDB, and n8n, not one atomic
-transaction. Remove or stop consumers before deleting their credentials or databases.
-Use supported application operations and scoped PostgreSQL administration; do not infer
-an undocumented NocoDB metadata rewrite from the desired result. Preserve registry and
-catalog consistency, including the existing backup-generation contract. Database and
-role deletion must not cascade into unrelated state or force termination of unknown
-sessions. Repeat ownership and dependency checks immediately before each mutation and
-verify the expected result before proceeding.
-
-On failure, stop and retain the completed-step record, recovery copies, and surviving
-objects. Do not attempt automatic destructive compensation or restore an entire shared
-production database to undo a legacy-only change. Resume only after current state agrees
-with the recorded partial result and the remaining procedure is reviewed. Completion
-requires independent absence checks across all four surfaces: PostgreSQL objects,
-platform/source registries, n8n credentials, and NocoDB objects. Missing objects count
-as already absent only when the review explains their absence and surviving references.
-
-#### Approved account arrangement and its acceptance
-
-Keep the bootstrap/admin account as owner of the `automation_data_acceptance` base.
-Give the everyday production account explicit base-level `No Access` on that base.
-Preserve its intended production-base access and the identity used by source provisioning
-and acceptance. This decision does not require ownership transfer, base recreation,
-workspace-wide access removal, or broad API-token rotation.
-
-Identify both live accounts and their effective instance, workspace, and base roles
-before applying the change. Verify the chosen operation and role behavior against the
-pinned NocoDB Community release. If the everyday account is the bootstrap owner or its
-effective authority prevents this separation, stop for an operator account decision;
-do not silently demote the administrator or create another account.
-
-Acceptance uses a fresh everyday-account session: the replacement test base is absent
-from its base list and UI, direct access to that base and its records is denied, and
-the intended production bases still support their previously authorized operations.
-Check every page of relevant listings. Separately prove that the bootstrap/admin account
-still owns and can access the replacement base and that the acceptance sources and
-recovery canary remain intact. Successful administrator requests do not establish
-everyday-account isolation. Repeat the relevant checks after a fresh login and confirm
-the membership state is included in the final backup; the existing administrator-only
-restore test does not by itself prove everyday-account denial.
-
-#### Execution authority and evidence
-
-The chosen targets and account arrangement define intent, not additional credential
-authority. Privileged inventory, deletion, application administration, recovery-copy
-handling, and evidence publication require the applicable operator authorization under
-`AGENTS.md`. Approval to use an administrator credential for a registered restore drill
-does not authorize those other operations. Prepare the exact procedure and requested
-access before asking for authorization; perform independent source work first.
-
-Keep detailed live identities in restricted, ignored local records. Public evidence
-contains sanitized outcomes and report references, never credential values or raw
-application exports. Distinguish local evidence from successfully published evidence.
-The operations guide owns the eventual attended steps, and the recovery runbook owns
-partial-failure handling. Reconcile both with the implemented and validated result.
+domain. Decommission is attended administration, separate from these lifecycle workflows.
 
 ## Command lifecycle
 
@@ -726,10 +615,9 @@ a fresh logical bundle inside the isolated environment, and its run-owned resour
 were confirmed absent after cleanup. This evidence is retained locally; report
 publication has not been established.
 
-Issue 433 remains open for the attended retirement of `issue317_acceptance` and
-`issue334_acceptance`, everyday-account separation, and verification of the final state
-described above. Neither retirement nor the account change has been performed. Individual
-run records and diagnostic history remain in reports and PRs.
+Individual run records and diagnostic history remain in reports and PRs. The isolated
+restore verifies recovery of the retained acceptance domain, not unrelated lifecycle
+or user-access changes.
 
 The material implementation findings are reflected in the final architecture: separate
 fact and decision schemas, PostgreSQL-owned durable state with external artifact
