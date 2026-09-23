@@ -6,7 +6,7 @@ source scripts/lib/common.sh
 source scripts/test/lib/catalog.sh
 source scripts/test/lib/results.sh
 source scripts/lib/lease.sh
-source scripts/lib/node-lifecycle-state.sh
+source scripts/lib/disruption-admission.sh
 require_bash
 
 [[ "$#" -ge 3 && "$2" == '--' ]] || {
@@ -144,7 +144,7 @@ fi
 
 if [[ "$mutates_cluster" == 'true' &&
   ("$lease_acquired" == 'true' || "$lease_joined" == 'true') ]]; then
-  if assert_cluster_disruption_admissible "$kubeconfig"; then
+  if assert_established_disruption_admissible "$kubeconfig"; then
     disruption_admitted=true
   else
     write_result_case_junit "$run_dir/junit.xml" "$suite_id" \

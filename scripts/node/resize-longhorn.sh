@@ -2,8 +2,8 @@
 set -euo pipefail
 
 source scripts/lib/lease.sh
-source scripts/lib/node-lifecycle-state.sh
-source scripts/node/common.sh
+source scripts/lib/disruption-admission.sh
+source scripts/lib/node-operations.sh
 
 resize_just() {
   "${NODE_JUST:-just}" "$@"
@@ -14,7 +14,7 @@ run_resize_longhorn_transaction() {
   local node="$2"
   local holder="$3"
   verify_test_lease_holder "$kubeconfig" "$holder" || return 1
-  assert_cluster_disruption_admissible "$kubeconfig" || return 1
+  assert_established_disruption_admissible "$kubeconfig" || return 1
   resize_just bootstrap _resize-longhorn-raw "$node" || return 1
 }
 
@@ -51,6 +51,10 @@ resize_longhorn_main() (
     rm -rf -- "$temp_dir"
     exit "$task_exit"
   ' EXIT INT TERM
+  [[ ! -f "$renewal_failure" ]] || {
+    echo 'Shared disruption Lease renewal failed before Longhorn resize.' >&2
+    return 1
+  }
   run_resize_longhorn_transaction "$kubeconfig" "$NODE_NAME" "$holder"
   [[ ! -f "$renewal_failure" ]] || {
     echo 'Shared disruption Lease renewal failed during Longhorn resize.' >&2

@@ -67,7 +67,7 @@ cat >"$healthy_nodes" <<'EOF'
 {"items":[{"metadata":{"name":"nuc1"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"nuc2"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}
 EOF
 cat >"$blocked_nodes" <<'EOF'
-{"items":[{"metadata":{"name":"nuc1"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"False"}]}},{"metadata":{"name":"nuc2"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}
+{"items":[{"metadata":{"name":"nuc1","annotations":{"homelab.supermorphic.com/node-lifecycle":""}},"spec":{"unschedulable":true},"status":{"conditions":[{"type":"Ready","status":"False"}]}},{"metadata":{"name":"nuc2"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}
 EOF
 NOW="$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)" \
   yq --null-input --output-format json '{
@@ -89,8 +89,8 @@ NOW="$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)" \
 CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity \
 CAMPAIGN_TEST_LEASE_STATE="$lease_state" \
 TEST_LEASE_KUBECTL="$repo_root/tests/fixtures/campaign/fake-lease-kubectl.sh" \
-NODE_LIFECYCLE_KUBECTL="$repo_root/tests/fixtures/node-lifecycle/fake-kubectl.sh" \
-NODE_LIFECYCLE_TEST_NODES="$healthy_nodes" \
+DISRUPTION_KUBECTL="$repo_root/tests/fixtures/disruption-admission/fake-kubectl.sh" \
+DISRUPTION_TEST_NODES="$healthy_nodes" \
 TEST_CAMPAIGN_LEASE_HOLDER=campaign:fixture \
 TEST_RESULTS_ROOT="$fixture_root/joined" \
 TEST_KUBECONFIG="$fixture_root/kubeconfig" \
@@ -108,8 +108,8 @@ set +e
 CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity \
 CAMPAIGN_TEST_LEASE_STATE="$lease_state" \
 TEST_LEASE_KUBECTL="$repo_root/tests/fixtures/campaign/fake-lease-kubectl.sh" \
-NODE_LIFECYCLE_KUBECTL="$repo_root/tests/fixtures/node-lifecycle/fake-kubectl.sh" \
-NODE_LIFECYCLE_TEST_NODES="$blocked_nodes" \
+DISRUPTION_KUBECTL="$repo_root/tests/fixtures/disruption-admission/fake-kubectl.sh" \
+DISRUPTION_TEST_NODES="$blocked_nodes" \
 TEST_CAMPAIGN_LEASE_HOLDER=campaign:fixture \
 TEST_RESULTS_ROOT="$fixture_root/lifecycle-blocked" \
 TEST_KUBECONFIG="$fixture_root/kubeconfig" \
@@ -120,5 +120,41 @@ blocked_exit="$?"
 set -e
 [[ "$blocked_exit" -ne 0 ]]
 [[ ! -e "$blocked_marker" ]]
+mapfile -t blocked_runs < <(
+  find "$fixture_root/lifecycle-blocked" -mindepth 1 -maxdepth 1 -type d
+)
+[[ "${#blocked_runs[@]}" -eq 1 ]]
+[[ "$(yq -r '.result' "${blocked_runs[0]}/summary.json")" == broken ]]
+[[ "$(yq -r '.spec.holderIdentity' "$lease_state")" == campaign:fixture ]]
+
+cat >"$fixture_root/refuse-admission" <<'EOF'
+#!/usr/bin/env bash
+echo 'Read-only verification called disruption admission.' >&2
+exit 88
+EOF
+cat >"$fixture_root/read-only-lease-kubectl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *' config view --minify --output jsonpath={.clusters[0].name}' ]]; then
+  printf 'fixture-cluster'
+  exit 0
+fi
+: >"${READ_ONLY_LEASE_CALL_MARKER:?}"
+exit 89
+EOF
+chmod +x "$fixture_root/refuse-admission" "$fixture_root/read-only-lease-kubectl"
+read_only_marker="$fixture_root/read-only-command-ran"
+read_only_lease_marker="$fixture_root/read-only-lease-called"
+DISRUPTION_KUBECTL="$fixture_root/refuse-admission" \
+DISRUPTION_TEST_NODES="$blocked_nodes" \
+TEST_LEASE_KUBECTL="$fixture_root/read-only-lease-kubectl" \
+READ_ONLY_LEASE_CALL_MARKER="$read_only_lease_marker" \
+TEST_RESULTS_ROOT="$fixture_root/read-only-contained" \
+TEST_KUBECONFIG="$fixture_root/kubeconfig" \
+TEST_EXECUTION_ORIGIN=agent \
+  scripts/test/run-catalog-suite.sh verification.foundation -- \
+    touch "$read_only_marker" >/dev/null
+[[ -e "$read_only_marker" ]]
+[[ ! -e "$read_only_lease_marker" ]]
 
 echo 'Single-suite result coordinator tests passed.'

@@ -134,7 +134,7 @@ retry-join node:
     kubeconfig='{{kubeconfig}}'
     nodes_csv='192.168.90.10,192.168.90.11,192.168.90.12'
     source scripts/lib/lease.sh
-    source scripts/lib/node-lifecycle-state.sh
+    source scripts/lib/disruption-admission.sh
     [[ -f "$kubeconfig" ]] || {
       echo 'Refusing join retry: Kubernetes API coordination requires the operator kubeconfig.' >&2
       exit 1
@@ -157,7 +157,7 @@ retry-join node:
     acquire_test_lease "$kubeconfig" "$lease_holder"
     lease_acquired=true
     start_test_lease_renewal "$kubeconfig" "$lease_holder" "$lease_failure"
-    assert_no_active_lifecycle_records "$kubeconfig"
+    assert_no_node_containment "$kubeconfig"
 
     member_table="$(talosctl etcd members \
       --nodes 192.168.90.10 \
@@ -198,7 +198,11 @@ retry-join node:
 
     echo "Rebooting only $node to rerun Talos' normal etcd join lifecycle."
     verify_test_lease_holder "$kubeconfig" "$lease_holder"
-    assert_no_active_lifecycle_records "$kubeconfig"
+    assert_no_node_containment "$kubeconfig"
+    [[ ! -f "$lease_failure" ]] || {
+      echo 'Shared disruption Lease renewal failed before the join retry reboot.' >&2
+      exit 1
+    }
     talosctl reboot \
       --nodes "$node_ip" \
       --endpoints "$nodes_csv" \
