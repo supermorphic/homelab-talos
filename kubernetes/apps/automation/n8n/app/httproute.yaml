@@ -24,8 +24,8 @@ spec:
       sectionName: https
   rules:
     - timeouts:
-        request: 120s
-        backendRequest: 120s
+        request: 600s
+        backendRequest: 600s
       backendRefs:
         - group: ""
           kind: Service
