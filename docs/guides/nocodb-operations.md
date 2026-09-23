@@ -13,8 +13,10 @@ check. The successful access run is
 On 2026-09-09, the operator authorized durable activation after successful access and
 browser acceptance, with the isolated restore drill as the final rollout step. The human
 operator reviews and merges the activation change. Verify activation, then complete the
-drill using a post-acceptance
-logical backup. Recovery remains unverified until that drill and its cleanup pass.
+drill using a post-acceptance logical backup. That rollout drill passed on 2026-09-10.
+The replacement-domain drill passed again on 2026-09-23; see the implementation status
+in [specification 028](../specs/028-nocodb-operator-ui.md). These results do not verify
+retirement or the final account arrangement.
 
 Use [Staged activation](#staged-activation) for the first deployment and
 [Routine operation](#routine-operation) afterward. For failure classification and
@@ -594,3 +596,58 @@ The lifecycle workflows do not delete a NocoDB source, base, registry row, domai
 PostgreSQL role. Decommissioning requires a separately reviewed, attended procedure with
 an explicit target, current ownership and dependency checks, a fresh validated logical
 bundle, and immediate precondition checks before each destructive mutation.
+
+### Issue 433 legacy acceptance domains
+
+The only intended domain targets are `issue317_acceptance` and `issue334_acceptance`.
+Preserve `automation_data_acceptance`, `automation_data_canary`,
+`automation_data_backup_error`, all unrelated domains, and historical backup and test
+records. This checklist is a review gate, not permission or a reusable deletion command.
+No legacy domain is retired merely because the replacement restore passed.
+
+For **each** target, prepare a private, target-bound execution record before the
+attended window. Record the current PostgreSQL database, owner, migrator, runtime,
+reader and operator role identities; `managed_domains` and
+`managed_nocodb_sources` rows and generations; NocoDB base, source, integration,
+view and membership identities; n8n credential identities; and every saved,
+published, running, or external consumer. Read all result pages. A matching name is
+not proof of exclusive ownership. Mark missing, duplicated, shared, and unknown
+objects as blockers until independently explained. Do not publish live identifiers,
+tokens, connection settings, or raw account exports in this repository.
+
+Before any deletion, the operator reviews the exact object list and the supported
+application actions, confirms the authority for each action, and protects a fresh
+complete automation-data bundle plus the n8n recovery material needed for removed
+credentials and workflows. Verify checksums and that the bundle includes both legacy
+databases, the replacement database, `nocodb` metadata, and the control registry.
+Normal backup retention keeps seven complete bundles; agree how to retain this
+recovery set through the recovery window without disrupting that schedule. Exclude or
+detect concurrent provisioning, source sync, rotation, acceptance, and backup work;
+record how any approved temporary pause will be restored.
+
+During the attended window, repeat identity, ownership, dependency, backup, and
+concurrency checks immediately before **each** consequential action. Remove or stop
+consumers before their credential or data source. Verify whether deleting a base also
+removes its sources and views; remove an integration only when no other base or source
+uses it. Recheck PostgreSQL sessions and role dependencies before database or role
+deletion. Do not use broad `CASCADE`, force a database drop, or terminate unclassified
+sessions. Preserve registry referential integrity and the backup generation contract.
+Perform a bounded readback after every step, then independently verify absence across
+PostgreSQL, both registries, n8n, and NocoDB. Recheck the second target from live state;
+the first target's preflight does not cover it. On any mismatch, follow
+[partial-retirement recovery](../runbooks/nocodb-recovery.md#partial-acceptance-domain-retirement)
+instead of repeating a deletion blindly.
+
+After retirement is verified, keep the bootstrap/admin account as owner of the
+`automation_data_acceptance` base and set the distinct everyday production account
+to explicit base-level `No Access`. First confirm both identities and their effective
+instance, workspace, and base roles. If the everyday account is an owner or otherwise
+cannot be denied by this setting, stop for an account decision. Test with a fresh
+everyday-user session: the base must be absent from complete lists and the sidebar,
+and direct access to its known URL must be denied. Confirm normal production-base
+access still works, and separately confirm admin ownership and access. An admin-token
+request is not evidence of everyday-user isolation.
+
+Finally, validate a **post-change** complete backup, rerun the isolated restore with
+that bundle, verify cleanup and current application health, and retain the results.
+The September 23 pre-retirement restore cannot establish the final state.

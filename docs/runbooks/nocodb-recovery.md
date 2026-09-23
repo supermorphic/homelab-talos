@@ -234,3 +234,25 @@ decommission must use a separately reviewed attended procedure that:
 5. removes only the reviewed objects, with post-action absence checks.
 
 Do not add destructive compensation to bootstrap, source sync, rotation, or restore.
+
+### Partial acceptance-domain retirement
+
+If the reviewed retirement of `issue317_acceptance` or `issue334_acceptance` stops,
+freeze further destructive work. Keep the protected pre-change automation-data and n8n
+recovery material, the exact completed-step record, and all surviving objects. Record
+which database, roles, registry rows, NocoDB objects, credentials, workflows, and
+consumers still exist. Check for active use before restoring any approved temporary
+pause. Do not infer success from a missing database alone.
+
+Classify the failure before resuming: an unremoved consumer, changed or reused object
+identity, shared dependency, failed application deletion, registry mismatch, role or
+session dependency, incomplete backup, or an unexpected account permission. Compare
+current live identities and generations with the recorded preconditions and successful
+steps. Resume only the remaining, newly reviewed actions if they still target the same
+objects exclusively and their preconditions pass again. A name reused for a new object
+is a new target and blocks resumption. Do not compensate by deleting additional objects
+or restoring the whole shared production database to undo a legacy-only change.
+
+A pre-change bundle is a recovery option, not evidence of final-state completion. If
+retirement or account changes succeed, obtain and validate a new complete bundle before
+the final isolated restore. Keep the legacy backups and historical reports unchanged.
