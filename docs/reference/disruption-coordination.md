@@ -111,3 +111,31 @@ uncordon occur only after accepted recovery.
 
 The local guards intentionally do not implement this recovery contract. They direct the
 operator to the validated playbook recovery interface after that replacement exists.
+
+## Recovery verification from a prepared checkout
+
+The playbook selects an absolute path to a Talos repository checkout that the operator
+prepared before the disruption. That checkout must already contain the approved
+`.kube/config`, and its pinned toolchain must provide this public command:
+
+```text
+mise exec -- just kube foundation-verify
+```
+
+Before disruption, playbook preflight verifies that the command is available and compares
+the prepared kubeconfig's cluster and current context with the transaction target. The
+playbook invokes the command from the selected checkout, with `TEST_KUBECONFIG` unset and
+other test-only credential overrides removed. An ambient `KUBECONFIG` does not replace the
+fixed `.kube/config` argument used by the recipe.
+
+The playbook gives the command a bounded timeout. A missing command, target or context
+mismatch, timeout, or nonzero exit is a failed recovery verification; containment remains
+in place. The playbook retains the command's canonical run reference and the evidence
+described in [the test harness documentation](../../tests/README.md) with its transaction
+record.
+
+This gate retains foundation source validation, Flux readiness, certificate, DNS, Gateway,
+TLS, and Cilium postflight checks. The broader `kube cilium-verify` command remains
+available but is not a new requirement of this recovery gate. The playbook calls the
+public repository command directly. The repository does not call back into the playbook or
+import playbook implementation code.

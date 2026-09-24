@@ -197,6 +197,7 @@ core_paths:
   - scripts/test/cilium-validator-test.sh
   - scripts/test/cilium-verify-test.sh
   - scripts/test/cluster-commands-test.sh
+  - scripts/test/cluster-verification-boundary-test.sh
   - scripts/test/external-dns-provider-rollout-test.sh
   - scripts/test/gatus-media-integration-secrets-test.sh
   - scripts/test/homepage-portainer-rollout-test.sh

@@ -180,6 +180,7 @@ register_group_shell_case ci-framework disruption-admission scripts/test/disrupt
 register_group_shell_case core node-lifecycle scripts/test/node-lifecycle-test.sh
 register_group_shell_case core node-operations scripts/test/node-operations-test.sh
 register_group_shell_case core cluster-commands scripts/test/cluster-commands-test.sh
+register_group_shell_case core cluster-verification-boundary scripts/test/cluster-verification-boundary-test.sh
 register_group_shell_case ci-framework catalog-suite-runner scripts/test/run-catalog-suite-test.sh
 register_group_shell_case ci-framework ci-runner scripts/test/run-ci-test.sh
 register_group_shell_case ci-framework ci-workflow-contract scripts/test/ci-workflow-contract-test.sh
