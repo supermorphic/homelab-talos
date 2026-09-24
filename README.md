@@ -273,7 +273,7 @@ available for focused developer validation.
 | `just bootstrap foundation` | Reconcile the nine staged foundation units in guarded dependency order | `SOPS_AGE_KEY`[`_FILE`]; `FOUNDATION_NETWORK_CONFIRM`; `FOUNDATION_BOOTSTRAP_CONFIRM` | Mutating after confirmation |
 | `just kube foundation-verify` | Verify DNS, trusted HTTPS, echo, Cilium, Talos, and etcd acceptance | — | Read-only |
 | `just node reboot <node>` | Cordon, gracefully drain, reboot one established node without routine replica evacuation, accept recovery, then uncordon | `NODE_REBOOT_CONFIRM` | Operator-only; disruptive after confirmation |
-| `just test resilience node-abrupt-loss <node>` | Observe an unprepared electrical node loss, then contain and recover the node | `CLUSTER_CHAOS_CONFIRM`; `NODE_ABRUPT_LOSS_CONFIRM` | Operator-only; attended standalone resilience test |
+| From `homelab-playbook`, `mise run playbook -- talos abrupt-loss-test production -e @/absolute/private/request.json` | Observe an unprepared electrical node loss, then contain and recover the node | Target-bound confirmations in the private request | Operator-only; attended standalone playbook action |
 | `just kube flux-restart` | Restart the flux-system controllers and prove reconciliation resumes | `FLUX_RESTART_CONFIRM` | Mutating after confirmation |
 | `just repo storage-secrets` | Validate the UNAS CIFS credentials and write only the encrypted Longhorn backup Secret | `SOPS_AGE_KEY`[`_FILE`]; `CIFS_USERNAME`; `CIFS_PASSWORD`; `STORAGE_SECRETS_CONFIRM` | Mutating tracked ciphertext after confirmation |
 | `just kube storage-validate` | Validate the Longhorn source, encrypted CIFS Secret, backup-target CR, dependencies, and pinned chart render | — | Read-only |

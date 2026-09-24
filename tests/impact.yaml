@@ -230,7 +230,6 @@ core_paths:
   - scripts/test/scenarios/cilium-connectivity.sh
   - scripts/test/scenarios/media-hardlink-test.sh
   - scripts/test/scenarios/media-hardlink.sh
-  - scripts/test/scenarios/node_abrupt_loss.py
   - scripts/test/scenarios/plex-network-policy.sh
   - scripts/test/scenarios/plex_cross_node_reschedule.py
   - scripts/test/scenarios/qbit_manage_policy.py

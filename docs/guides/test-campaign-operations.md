@@ -232,18 +232,19 @@ MODE=certified mise exec -- just kube conformance
 Both are operator-run state-changing suites. Each acquires the shared test Lease for its
 own run and leaves its canonical report local.
 
-The attended abrupt-loss test is also standalone:
+The attended abrupt-loss test is owned by `homelab-playbook` and remains standalone.
+Run it from that repository with a private request:
 
 ```bash
-CLUSTER_CHAOS_CONFIRM='chaos:node-abrupt-loss' \
-NODE_ABRUPT_LOSS_CONFIRM='remove-power:nuc1:192.168.90.10' \
-  mise exec -- just test resilience node-abrupt-loss nuc1
+mise run playbook -- talos abrupt-loss-test production \
+  -e @/absolute/private/abrupt-loss.json
 ```
 
 It requests actual removal and restoration of electrical input. It does not cordon or
 drain before loss. After all four loss signals are observed, it contains the offline Node,
-records ten minutes of autonomous recovery behavior, and uses the common lifecycle exit
+records ten minutes of autonomous recovery behavior, and uses the playbook-owned recovery
 path while the returned Node remains cordoned. Run it only when every node is established.
+It is not cataloged or published as a campaign result here.
 
 Publish a finalized standalone result separately only when retained evidence is wanted:
 

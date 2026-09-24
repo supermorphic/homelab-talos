@@ -44,7 +44,6 @@ from production policy by a unique category and run tag; production manages only
 recycle-bin purging, and mount downloads but never media. No qBittorrent or
 qbit_manage application logs are collected.
 
-The focused `media-hardlink` integration and attended `node-abrupt-loss` controller also
-run directly. The latter coordinates physical electrical power changes and the common
-node recovery path, so wrapping either in Chainsaw would add no useful Kubernetes
-lifecycle control.
+The focused `media-hardlink` integration runs directly. The attended electrical-loss
+controller is owned by `homelab-playbook`, where it coordinates physical power changes
+and guarded node recovery without a Chainsaw wrapper.

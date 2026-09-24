@@ -71,7 +71,6 @@ STANDALONE_SUITES = {
     "test.nocodb-local-integration",
     "test.web-research-live-contract",
     "test.web-research-local-integration",
-    "test.resilience.node-abrupt-loss",
 }
 METADATA_FIELDS = (
     "source",

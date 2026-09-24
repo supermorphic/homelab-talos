@@ -257,13 +257,10 @@ and each suite's catalog access tier to select an approved workflow.
   evicts the pod, proving the Longhorn RWOP config volume re-attaches on the landing node
   (Longhorn currentNodeID moves), a /config marker survives, and the SMB share re-mounts;
   restores only the node it cordoned)
-- `CLUSTER_CHAOS_CONFIRM=chaos:node-abrupt-loss NODE_ABRUPT_LOSS_CONFIRM=remove-power:<node>:<ip> mise exec -- just test resilience node-abrupt-loss <node>`
-  (DOUBLE-GATED, attended, and standalone: starts external five-second probes, requests
-  actual electrical disconnection without a prior cordon or drain, proves Talos,
-  Kubernetes, and target-etcd loss while the two-member quorum survives, then persists
-  containment. It observes autonomous workload, PVC, Longhorn, Cilium, API, DNS, and HTTPS
-  behavior for ten minutes before requesting electrical restoration and completing the
-  common cordoned recovery acceptance. It is intentionally excluded from campaigns.)
+
+The attended electrical-loss scenario is owned by `homelab-playbook`. Run
+`mise run playbook -- talos abrupt-loss-test production -e @/absolute/private/request.json`
+from that repository. It is not a catalog suite or campaign member here.
 
 The retired Plex-node reboot assertions remain allocated to
 `plex-cross-node-reschedule`: replacement readiness, unchanged PVC identity, Longhorn

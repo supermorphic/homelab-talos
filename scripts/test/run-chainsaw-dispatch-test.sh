@@ -49,8 +49,6 @@ e2e_entry="$(catalog_dispatch_entry "$catalog" e2e qbit-manage-policy '')"
 integration_entry="$(catalog_dispatch_entry "$catalog" integration media-hardlink '')"
 [[ "$(yq -r '.dispatch.runtime' - <<<"$integration_entry")" == 'bash' ]]
 
-resilience_entry="$(catalog_dispatch_entry "$catalog" resilience node-abrupt-loss '')"
-[[ "$(yq -r '.dispatch.mode' - <<<"$resilience_entry")" == 'direct' ]]
 if catalog_dispatch_entry "$catalog" resilience plex-node-reboot '' >/dev/null 2>&1; then
   echo 'Retired plex-node-reboot dispatch remains registered.' >&2
   exit 1
@@ -94,17 +92,6 @@ set -euo pipefail
 printf '%s\n' "$*" >"${DISPATCH_TEST_CALLS:?}"
 EOF
 chmod +x "$fixture_root/scripts/test/run-catalog-suite.sh"
-dispatch_calls="$fixture_root/calls"
-(
-  cd "$fixture_root"
-  DISPATCH_TEST_CALLS="$dispatch_calls" \
-    scripts/test/run-live-suite.sh resilience node-abrupt-loss nuc2
-)
-[[ "$(<"$dispatch_calls")" == \
-  'test.resilience.node-abrupt-loss -- uv run --locked --no-dev python scripts/test/scenarios/node_abrupt_loss.py nuc2 .kube/config .talos/config' ]]
-expect_dispatch_rejection 'node-abrupt-loss requires a target node' \
-  resilience node-abrupt-loss
-
 mkdir -p "$fixture_root/bin"
 touch "$fixture_root/kubeconfig"
 cat >"$fixture_root/blocked-nodes.json" <<'EOF'
