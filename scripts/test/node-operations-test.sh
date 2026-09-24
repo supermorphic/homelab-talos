@@ -140,4 +140,4 @@ if rg -qx resize "$calls"; then
 fi
 renewal_failure_phase=''
 
-echo 'Retained node operation tests passed.'
+echo 'Node operation tests passed.'
