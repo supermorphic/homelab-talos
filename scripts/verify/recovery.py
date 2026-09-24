@@ -13,7 +13,7 @@ import sys
 import tarfile
 import time
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
 
@@ -178,9 +178,20 @@ def expected_charts(source_dir: Path) -> dict[str, tuple[str, str]]:
 def _archive_identity(path: Path) -> tuple[str, str]:
     try:
         with tarfile.open(path, "r:gz") as bundle:
-            members = [member for member in bundle.getmembers() if member.name.endswith("/Chart.yaml")]
+            members = bundle.getmembers()
+            for member in members:
+                member_path = PurePosixPath(member.name)
+                if member_path.is_absolute() or ".." in member_path.parts:
+                    raise ContractError(f"chart archive {path.name} contains an unsafe path")
+            members = [
+                member
+                for member in members
+                if member.isfile()
+                and len(PurePosixPath(member.name).parts) == 2
+                and PurePosixPath(member.name).name == "Chart.yaml"
+            ]
             if len(members) != 1:
-                raise ContractError(f"chart archive {path.name} has no unique Chart.yaml")
+                raise ContractError(f"chart archive {path.name} has no unique root Chart.yaml")
             stream = bundle.extractfile(members[0])
             if stream is None:
                 raise ContractError(f"cannot read Chart.yaml from {path.name}")

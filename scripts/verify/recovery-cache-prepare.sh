@@ -39,6 +39,7 @@ pull_chart() {
   }
   archive="${archives[0]}"
   mv "$archive" "$temp_dir/$logical.tgz"
+  rmdir "$work"
 }
 
 pull_chart cilium oci://quay.io/cilium/charts/cilium --version "$cilium_version"

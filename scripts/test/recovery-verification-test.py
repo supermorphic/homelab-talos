@@ -111,6 +111,13 @@ class RecoveryContractTest(unittest.TestCase):
                 info = tarfile.TarInfo(f"{chart_name}/Chart.yaml")
                 info.size = len(payload)
                 bundle.addfile(info, io.BytesIO(payload))
+                if logical == "metallb":
+                    dependency = b"name: frr-k8s\nversion: 0.0.1\n"
+                    dependency_info = tarfile.TarInfo(
+                        f"{chart_name}/charts/frr-k8s/Chart.yaml"
+                    )
+                    dependency_info.size = len(dependency)
+                    bundle.addfile(dependency_info, io.BytesIO(dependency))
             charts[logical] = {
                 "file": archive.name,
                 "chartName": chart_name,
@@ -206,6 +213,23 @@ class RecoveryContractTest(unittest.TestCase):
         (cache / "cilium.tgz").unlink()
         with self.assertRaises(module.ContractError):
             module.validate_chart_cache(self.request, self.source, cache)
+
+    def test_chart_identity_rejects_duplicate_root_and_traversal(self) -> None:
+        module = load_module()
+        for case, names in {
+            "duplicate": ["chart/Chart.yaml", "chart/Chart.yaml"],
+            "traversal": ["../Chart.yaml"],
+        }.items():
+            with self.subTest(case=case):
+                archive = Path(self.temp.name) / f"{case}.tgz"
+                payload = b"name: chart\nversion: 1.2.3\n"
+                with tarfile.open(archive, "w:gz") as bundle:
+                    for name in names:
+                        info = tarfile.TarInfo(name)
+                        info.size = len(payload)
+                        bundle.addfile(info, io.BytesIO(payload))
+                with self.assertRaises(module.ContractError):
+                    module._archive_identity(archive)
 
     def test_node_state_modes_have_distinct_containment_rules(self) -> None:
         module = load_module()
