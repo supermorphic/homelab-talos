@@ -175,40 +175,12 @@ cilium-postflight:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    just kube cilium-diagnostics
-
-    terminating_test_namespaces="$(kubectl --kubeconfig "$kubeconfig" get namespaces --output json | \
-      yq -r '.items[] | select(.metadata.name | test("^cilium-test")) | select(.metadata.deletionTimestamp != null) | .metadata.name')"
-    while IFS= read -r namespace; do
-      [[ -n "$namespace" ]] || continue
-      kubectl --kubeconfig "$kubeconfig" wait \
-        --for=delete "namespace/$namespace" \
-        --timeout=2m
-    done <<<"$terminating_test_namespaces"
-
-    remaining_test_namespaces="$(kubectl --kubeconfig "$kubeconfig" get namespaces --output json | \
-      yq -r '.items[].metadata.name | select(test("^cilium-test"))')"
-    [[ -z "$remaining_test_namespaces" ]] || {
-      echo "Cilium test namespaces remain: $remaining_test_namespaces" >&2
-      exit 1
-    }
-
+    talosconfig='{{talosconfig}}'
+    kube_context="$(kubectl --kubeconfig "$kubeconfig" config current-context)"
+    talos_context="$(yq -r '.context' "$talosconfig")"
     nodes_csv='192.168.90.10,192.168.90.11,192.168.90.12'
-    etcd_status="$(talosctl etcd status \
-      --nodes "$nodes_csv" \
-      --endpoints "$nodes_csv" \
-      --talosconfig "{{talosconfig}}")"
-    printf '%s\n' "$etcd_status"
-    [[ "$(awk 'NR > 1 && NF {count++} END {print count + 0}' <<<"$etcd_status")" == '3' ]]
-
-    alarm_status="$(talosctl etcd alarm list \
-      --nodes "$nodes_csv" \
-      --endpoints "$nodes_csv" \
-      --talosconfig "{{talosconfig}}")"
-    printf '%s\n' "$alarm_status"
-    [[ "$(awk 'NR > 1 && NF {count++} END {print count + 0}' <<<"$alarm_status")" == '0' ]]
-
-    echo 'Cilium postflight passed: test resources removed, no Talos diagnostics, three etcd members, and no etcd alarms.'
+    scripts/verify/cilium-postflight.sh "$kubeconfig" "$kube_context" \
+      "$talosconfig" "$talos_context" "$nodes_csv"
 
 # Fail unless running under bash >= 5; macOS /bin/bash 3.2 does not honor set -e
 # for a failed bare [[ ]] mid-recipe, so these acceptance assertions would not gate.
@@ -380,6 +352,14 @@ require-bash:
 # Verify the live Cilium state without changing cluster resources.
 cilium-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.cilium -- scripts/verify/cilium.sh {{quote(kubeconfig)}} {{quote(cilium_values)}}
+
+# Observe platform preparation, baseline, or recovery through one strict request file.
+recovery-verify request: require-bash
+    @python scripts/verify/recovery.py {{quote(request)}}
+
+# Download the five exact chart archives for later cache-only recovery verification.
+recovery-cache-prepare destination="{{justfile_directory()}}/../.cache/recovery-helm": require-bash
+    @scripts/verify/recovery-cache-prepare.sh {{quote(destination)}}
 
 # Run the state-changing Cilium connectivity suite and clean up its temporary
 # workloads after CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity.

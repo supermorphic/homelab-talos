@@ -7,7 +7,8 @@ require_bash
 app_dir='kubernetes/apps/kube-system/cilium/app'
 monitoring_dir='kubernetes/apps/kube-system/cilium/monitoring'
 values_file='kubernetes/apps/kube-system/cilium/app/values.yaml'
-chart='oci://quay.io/cilium/charts/cilium'
+source_chart='oci://quay.io/cilium/charts/cilium'
+chart="${RECOVERY_CILIUM_CHART:-$source_chart}"
 version="$(yq -r '.spec.ref.tag' "$app_dir/ocirepository.yaml")"
 temp_dir="$(mktemp -d /tmp/homelab-talos-cilium-validate.XXXXXX)"
 trap 'rm -rf -- "$temp_dir"' EXIT
@@ -28,7 +29,7 @@ for file in \
 done
 
 [[ -n "$version" && "$version" != 'null' ]]
-[[ "$(yq -r '.spec.url' "$app_dir/ocirepository.yaml")" == "$chart" ]]
+[[ "$(yq -r '.spec.url' "$app_dir/ocirepository.yaml")" == "$source_chart" ]]
 [[ "$(yq -r '.spec.releaseName' "$app_dir/helmrelease.yaml")" == 'cilium' ]]
 [[ "$(yq -r '.spec.targetNamespace' "$app_dir/helmrelease.yaml")" == 'kube-system' ]]
 [[ "$(yq -r '.spec.storageNamespace' "$app_dir/helmrelease.yaml")" == 'kube-system' ]]

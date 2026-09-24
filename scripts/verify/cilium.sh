@@ -13,11 +13,18 @@ kubeconfig="$1"
 values_file="$2"
 kc=(kubectl --kubeconfig "$kubeconfig")
 cilium_context_args=()
-if "${kc[@]}" config get-contexts homelab-diagnostic --no-headers >/dev/null 2>&1; then
+if [[ -n "${RECOVERY_KUBE_CONTEXT:-}" ]]; then
+  kc+=(--context "$RECOVERY_KUBE_CONTEXT")
+  cilium_context_args=(--context "$RECOVERY_KUBE_CONTEXT")
+elif "${kc[@]}" config get-contexts homelab-diagnostic --no-headers >/dev/null 2>&1; then
   kc+=(--context homelab-diagnostic)
   cilium_context_args=(--context homelab-diagnostic)
 fi
-expected_names=$'nuc1\nnuc2\nnuc3'
+if [[ -n "${RECOVERY_NODES_JSON:-}" ]]; then
+  expected_names="$(yq -r 'keys | .[]' <<<"$RECOVERY_NODES_JSON" | sort)"
+else
+  expected_names=$'nuc1\nnuc2\nnuc3'
+fi
 temp_dir="$(mktemp -d /tmp/homelab-talos-cilium-verify.XXXXXX)"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
@@ -36,7 +43,7 @@ assert_equal() {
   exit 1
 }
 api_server="$("${kc[@]}" config view --minify --output jsonpath='{.clusters[0].cluster.server}')"
-assert_equal 'Kubernetes API server' 'https://192.168.90.20:6443' "$api_server"
+assert_equal 'Kubernetes API server' "${RECOVERY_API_SERVER:-https://192.168.90.20:6443}" "$api_server"
 
 release_json="$("${kc[@]}" --namespace kube-system \
   get helmrelease cilium --output json)"
@@ -74,9 +81,11 @@ cmp -s "$temp_dir/expected-values.json" "$temp_dir/normalized-live-values.json" 
 nodes_json="$("${kc[@]}" get nodes --output json)"
 node_names="$(yq -r '.items[].metadata.name' - <<<"$nodes_json" | sort)"
 assert_equal 'Cilium node names' "$expected_names" "$node_names"
-node_states="$(yq -r '.items[] | .metadata.name + " " + ([.status.conditions[] | select(.type == "Ready") | .status][0]) + " " + ((.spec.unschedulable // false) | tostring)' - <<<"$nodes_json" | sort)"
-assert_equal 'Cilium node readiness and schedulability' \
-  $'nuc1 True false\nnuc2 True false\nnuc3 True false' "$node_states"
+if [[ -z "${RECOVERY_MODE:-}" ]]; then
+  node_states="$(yq -r '.items[] | .metadata.name + " " + ([.status.conditions[] | select(.type == "Ready") | .status][0]) + " " + ((.spec.unschedulable // false) | tostring)' - <<<"$nodes_json" | sort)"
+  assert_equal 'Cilium node readiness and schedulability' \
+    $'nuc1 True false\nnuc2 True false\nnuc3 True false' "$node_states"
+fi
 # shellcheck disable=SC2016  # $name is a yq expression variable, not a shell variable
 forbidden_taints="$(yq -r '.items[] | .metadata.name as $name | (.spec.taints // [])[] | select(.effect == "NoSchedule" or .effect == "NoExecute") | $name + " " + .key' - <<<"$nodes_json")"
 [[ -z "$forbidden_taints" ]]
@@ -123,6 +132,11 @@ assert_equal 'Cilium agent Hubble states' 'Ok' \
 assert_equal 'Hubble Relay Cilium errors and warnings' '0' \
   "$(yq -r '.errors."hubble-relay"."hubble-relay" | ((.Errors | length) + (.Warnings | length))' - <<<"$cilium_status_json")"
 
-just kube cilium-postflight
+if [[ -n "${RECOVERY_MODE:-}" ]]; then
+  scripts/verify/cilium-postflight.sh "$kubeconfig" "$RECOVERY_KUBE_CONTEXT" \
+    "$RECOVERY_TALOSCONFIG" "$RECOVERY_TALOS_CONTEXT" "$RECOVERY_TALOS_ENDPOINTS"
+else
+  just kube cilium-postflight
+fi
 
 echo 'Cilium read-only verification passed: Cilium 1.19.6, three Ready nodes, healthy DNS and Hubble, expected architecture, Talos, and etcd.'

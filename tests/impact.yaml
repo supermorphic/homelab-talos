@@ -194,6 +194,10 @@ core_paths:
   - scripts/test/bootstrap-recovery-test.sh
   - scripts/test/cilium-validator-test.sh
   - scripts/test/cilium-verify-test.sh
+  - scripts/test/recovery-verification-test.py
+  - scripts/test/recovery-verification-chain-test.sh
+  - scripts/lib/recovery-verification.sh
+  - scripts/verify/cilium-postflight.sh
   - scripts/test/cluster-commands-test.sh
   - scripts/test/external-dns-provider-rollout-test.sh
   - scripts/test/gatus-media-integration-secrets-test.sh

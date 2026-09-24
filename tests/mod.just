@@ -10,6 +10,11 @@ validate group="all":
 catalog-validate:
     @scripts/test/validate-catalog.sh
 
+# Exercise the strict recovery-verification request and response contract offline.
+recovery-verification:
+    @python scripts/test/recovery-verification-test.py
+    @bash scripts/test/recovery-verification-chain-test.sh
+
 # Validate a clean committed publication candidate against freshly fetched main.
 ci-publish:
     @uv run --locked python scripts/test/ci_publish.py

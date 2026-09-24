@@ -8,10 +8,14 @@ require_bash
 scripts/validate/public-webhook-routes.sh
 scripts/validate/internal-dns-endpoints.sh
 
-cert_manager_chart='oci://quay.io/jetstack/charts/cert-manager'
+cert_manager_source_chart='oci://quay.io/jetstack/charts/cert-manager'
+cert_manager_chart="${RECOVERY_CERT_MANAGER_CHART:-$cert_manager_source_chart}"
 metallb_repository='https://metallb.github.io/metallb'
-envoy_gateway_chart='oci://docker.io/envoyproxy/gateway-helm'
+metallb_chart="${RECOVERY_METALLB_CHART:-metallb}"
+envoy_gateway_source_chart='oci://docker.io/envoyproxy/gateway-helm'
+envoy_gateway_chart="${RECOVERY_ENVOY_GATEWAY_CHART:-$envoy_gateway_source_chart}"
 external_dns_repository='https://kubernetes-sigs.github.io/external-dns'
+external_dns_chart="${RECOVERY_EXTERNAL_DNS_CHART:-external-dns}"
 expected_recipient="$(yq -r '.creation_rules[] | select(.path_regex | test("kubernetes")) | .age' .sops.yaml)"
 cloudflare_secret='kubernetes/apps/security/cert-manager/config/cloudflare-api-token.sops.yaml'
 pihole_secret='kubernetes/apps/networking/external-dns/app/pihole-password.sops.yaml'
@@ -102,8 +106,8 @@ external_dns_chart_version="$(yq -r '.spec.chart.spec.version' kubernetes/apps/n
 for v in "$cert_manager_version" "$metallb_version" "$envoy_gateway_version" "$external_dns_chart_version"; do
   [[ -n "$v" && "$v" != 'null' ]]
 done
-[[ "$(yq -r '.spec.url' kubernetes/apps/security/cert-manager/app/ocirepository.yaml)" == "$cert_manager_chart" ]]
-[[ "$(yq -r '.spec.url' kubernetes/apps/networking/envoy-gateway/app/ocirepository.yaml)" == "$envoy_gateway_chart" ]]
+[[ "$(yq -r '.spec.url' kubernetes/apps/security/cert-manager/app/ocirepository.yaml)" == "$cert_manager_source_chart" ]]
+[[ "$(yq -r '.spec.url' kubernetes/apps/networking/envoy-gateway/app/ocirepository.yaml)" == "$envoy_gateway_source_chart" ]]
 
 cert_ks='kubernetes/apps/security/cert-manager/ks.yaml'
 [[ "$(yq ea -r 'select(.metadata.name == "cert-manager") | .spec.dependsOn[].name' "$cert_ks")" == 'cilium' ]]
@@ -226,8 +230,10 @@ helm template cert-manager "$cert_manager_chart" \
   select(.kind == "ServiceMonitor" or .kind == "PodMonitor")
   | .kind
 ' "$temp_dir/cert-manager.yaml")" ]]
-helm template metallb metallb \
-  --repo "$metallb_repository" \
+metallb_repo_args=(--repo "$metallb_repository")
+[[ -z "${RECOVERY_METALLB_CHART:-}" ]] || metallb_repo_args=()
+helm template metallb "$metallb_chart" \
+  "${metallb_repo_args[@]}" \
   --version "$metallb_version" \
   --namespace metallb-system \
   --values "$metallb_values" >"$temp_dir/metallb.yaml"
@@ -236,8 +242,10 @@ helm template envoy-gateway "$envoy_gateway_chart" \
   --namespace envoy-gateway-system \
   --include-crds \
   --values kubernetes/apps/networking/envoy-gateway/app/values.yaml >"$temp_dir/envoy-gateway.yaml"
-helm template external-dns-internal external-dns \
-  --repo "$external_dns_repository" \
+external_dns_repo_args=(--repo "$external_dns_repository")
+[[ -z "${RECOVERY_EXTERNAL_DNS_CHART:-}" ]] || external_dns_repo_args=()
+helm template external-dns-internal "$external_dns_chart" \
+  "${external_dns_repo_args[@]}" \
   --version "$external_dns_chart_version" \
   --namespace external-dns \
   --values "$dns_values" >"$temp_dir/external-dns.yaml"

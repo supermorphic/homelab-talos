@@ -14,6 +14,7 @@ executions:
     - validation.metrics-server
     - validation.flux
     - validation.foundation
+    - validation.recovery-verification
     - validation.storage
     - validation.csi-driver-smb
     - validation.media-storage
@@ -60,6 +61,7 @@ executions:
     - validation.metrics-server
     - validation.flux
     - validation.foundation
+    - validation.recovery-verification
     - validation.storage
     - validation.csi-driver-smb
     - validation.media-storage
@@ -506,6 +508,10 @@ suites:
     access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube metrics-server-verify", implementation: scripts/verify/metrics-server.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.recovery-verification, source: validation, framework: python, suite: ci, tier: offline, target: recovery-verification, scenario: contract, scope: cluster, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test recovery-verification", implementation: scripts/test/recovery-verification-test.py}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.cilium, source: verification, framework: bash, suite: platform, tier: verification, target: cilium, scenario: null, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: human}
     access: {tier: diagnostic}
