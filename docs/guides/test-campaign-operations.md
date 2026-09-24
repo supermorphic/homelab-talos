@@ -168,8 +168,7 @@ must create both a new n8n dump and a new automation-data bundle before the rest
 Use the private inputs and paired-backup procedure in
 [automation-data operations](automation-data-operations.md#5-validate-provisioning-and-rotation)
 and the [testing contract](../../tests/README.md). Recorded publication retains the
-provisioning evidence without changing that execution boundary. Suspended NocoDB
-verification remains excluded until enabled.
+provisioning evidence without changing that execution boundary.
 
 ## Run scoped verification
 

@@ -50,8 +50,7 @@ it rotates credentials and requires a matching new n8n dump and automation-data 
 before restore. Automatically enrolling it in integration, weekly, or full would break
 that recovery evidence boundary. The catalog and validator document this deliberate exclusion.
 Host-local disposable NocoDB integration remains a standalone acceptance choice;
-attended electrical node-loss testing remains outside automatic campaigns. Suspended
-service verification remains excluded until its deployment is enabled. Setup and
+attended electrical node-loss testing remains outside automatic campaigns. Setup and
 bootstrap commands keep their own lifecycle: record the relevant catalog acceptance
 afterward instead of making individual verification commands publish.
 
