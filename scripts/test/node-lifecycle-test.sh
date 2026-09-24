@@ -58,17 +58,15 @@ node_lifecycle_main maintenance-exit nuc1 "$FIXTURE_LOG" "$FIXTURE_LOG"
 EOF
 mkdir -p "$state_dir/clusterconfig"
 : >"$state_dir/clusterconfig/nuc1.yaml"
-for fixture_action in lifecycle; do
-  : >"$state_dir/cleanup.log"
-  cleanup_status=0
-  FIXTURE_ACTION="$fixture_action" FIXTURE_DIR="$state_dir" FIXTURE_LOG="$state_dir/cleanup.log" \
-    bash "$state_dir/cleanup-fixture.sh" >"$state_dir/cleanup-output" 2>&1 || cleanup_status=$?
-  [[ "$cleanup_status" == 23 ]] || fail "$fixture_action cleanup lost the original failure status."
-  rg -q '^released$' "$state_dir/cleanup.log" || fail "$fixture_action cleanup did not release its Lease."
-  if rg -q 'unbound variable' "$state_dir/cleanup-output"; then
-    fail "$fixture_action cleanup used expired local variables."
-  fi
-done
+: >"$state_dir/cleanup.log"
+cleanup_status=0
+FIXTURE_DIR="$state_dir" FIXTURE_LOG="$state_dir/cleanup.log" \
+  bash "$state_dir/cleanup-fixture.sh" >"$state_dir/cleanup-output" 2>&1 || cleanup_status=$?
+[[ "$cleanup_status" == 23 ]] || fail 'lifecycle cleanup lost the original failure status.'
+rg -q '^released$' "$state_dir/cleanup.log" || fail 'lifecycle cleanup did not release its Lease.'
+if rg -q 'unbound variable' "$state_dir/cleanup-output"; then
+  fail 'lifecycle cleanup used expired local variables.'
+fi
 
 
 reboot_record='{"schemaVersion":1,"kind":"reboot"}'

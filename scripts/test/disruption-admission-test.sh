@@ -71,7 +71,7 @@ touch "$temp_dir/resize/kubeconfig" "$temp_dir/resize/talosconfig" \
   "$temp_dir/resize/clusterconfig/node-a.yaml"
 cp "$temp_dir/talconfig.yaml" "$temp_dir/resize/talos/talconfig.yaml"
 resize_calls="$temp_dir/resize-calls"
-resolve_cluster_node() { NODE_NAME=node-a; NODE_IP=192.0.2.10; }
+resolve_cluster_node() { NODE_NAME='node-a'; NODE_IP='192.0.2.10'; }
 require_operator_checkout() { :; }
 require_exact_confirmation() { :; }
 resize_kube_context() { printf '%s\n' fixture; }
@@ -137,7 +137,7 @@ cat >"$temp_dir/resize-cleanup.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 source scripts/node/resize-longhorn.sh
-resolve_cluster_node() { NODE_NAME=node-a; NODE_IP=192.0.2.10; }
+resolve_cluster_node() { NODE_NAME='node-a'; NODE_IP='192.0.2.10'; }
 require_operator_checkout() { :; }
 require_exact_confirmation() { :; }
 resize_kube_context() { echo fixture; }
