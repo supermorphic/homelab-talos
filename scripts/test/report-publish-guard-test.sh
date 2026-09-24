@@ -11,39 +11,35 @@ run_id="20260727T120000Z-${sha:0:12}-operator-deadbeef"
 run_dir="$fixture/results/$run_id"
 mkdir -p "$run_dir/logs" "$run_dir/diagnostics"
 
+source scripts/test/lib/report-publication.sh
 confirmation_output="$fixture/confirmation.log"
 if TEST_RESULTS_ROOT="$fixture/results" \
   "$repo_root/scripts/test/publish-report.sh" "$run_id" \
   >"$confirmation_output" 2>&1; then
-  echo 'Publisher accepted a missing run-scoped confirmation.' >&2
+  echo 'Publisher accepted an incomplete canonical run.' >&2
   exit 1
 fi
-rg -q 'Refusing to publish test evidence' "$confirmation_output"
+rg -q 'Run root does not match the canonical six-entry structure' "$confirmation_output"
 
-# Explicit recorded acceptance supplies execution intent itself. It must get as
-# far as canonical validation without needing the operator-only confirmation.
-recorded_output="$fixture/recorded.log"
-if TEST_RESULTS_ROOT="$fixture/results" \
-  TEST_REPORT_PUBLICATION_CONTEXT=recorded-acceptance \
-  "$repo_root/scripts/test/publish-report.sh" "$run_id" \
-  >"$recorded_output" 2>&1; then
-  echo 'Recorded acceptance accepted an incomplete canonical run.' >&2
+# The public publisher must derive scoped intent from its worktree, not an
+# environment variable that a caller can set. Outside a linked worktree the
+# exact run confirmation remains required.
+if TEST_REPORT_PUBLICATION_CONTEXT=recorded-acceptance \
+  require_report_publication_confirmation false "$run_id" \
+  >"$fixture/manual-missing.log" 2>&1; then
+  echo 'Operator publication accepted a forged scoped context.' >&2
   exit 1
 fi
-if rg -q 'Refusing to publish test evidence' "$recorded_output"; then
-  echo 'Recorded acceptance still requires operator publication confirmation.' >&2
+rg -q 'Refusing to publish test evidence' "$fixture/manual-missing.log"
+if TEST_REPORT_PUBLISH_CONFIRM=wrong \
+  require_report_publication_confirmation false "$run_id" \
+  >"$fixture/manual-wrong.log" 2>&1; then
+  echo 'Operator publication accepted a wrong confirmation.' >&2
   exit 1
 fi
-rg -q 'Run root does not match the canonical six-entry structure' "$recorded_output"
-
-if TEST_REPORT_PUBLICATION_CONTEXT=unknown \
-  TEST_REPORT_PUBLISH_CONFIRM="publish:test-report:$run_id" \
-  "$repo_root/scripts/test/publish-report.sh" "$run_id" \
-  >"$fixture/unknown.log" 2>&1; then
-  echo 'Publisher accepted an unknown publication context.' >&2
-  exit 1
-fi
-rg -q 'Unknown report publication context' "$fixture/unknown.log"
+TEST_REPORT_PUBLISH_CONFIRM="publish:test-report:$run_id" \
+  require_report_publication_confirmation false "$run_id"
+require_report_publication_confirmation true "$run_id"
 
 write_result_case_junit \
   "$run_dir/junit.xml" validation.fixture fixture passed 1

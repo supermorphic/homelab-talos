@@ -16,18 +16,14 @@ run_id="$1"
   echo "Invalid canonical run ID: $run_id" >&2
   exit 2
 }
-expected_confirmation="publish:test-report:$run_id"
-publication_context="${TEST_REPORT_PUBLICATION_CONTEXT:-manual}"
-case "$publication_context" in
-  manual|recorded-acceptance) ;;
-  *) echo "Unknown report publication context: $publication_context" >&2; exit 2 ;;
-esac
-[[ "$publication_context" == 'recorded-acceptance' ||
-  "${TEST_REPORT_PUBLISH_CONFIRM:-}" == "$expected_confirmation" ]] || {
-  echo 'Refusing to publish test evidence.' >&2
-  echo "Set TEST_REPORT_PUBLISH_CONFIRM='$expected_confirmation' after reviewing the run." >&2
-  exit 1
-}
+source scripts/test/lib/report-publication.sh
+linked_worktree=false
+git_dir="$(git rev-parse --path-format=absolute --git-dir)"
+common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
+if [[ "$git_dir" != "$common_dir" && "$git_dir" == "$common_dir"/worktrees/* ]]; then
+  linked_worktree=true
+fi
+require_report_publication_confirmation "$linked_worktree" "$run_id"
 
 repo_root="$(git rev-parse --show-toplevel)"
 results_root="${TEST_RESULTS_ROOT:-$repo_root/.test-results}"
@@ -89,9 +85,6 @@ gitleaks dir --redact --no-banner --max-archive-depth 1 "$run_dir"
   exit 1
 }
 
-source scripts/test/lib/report-publication.sh
-linked_worktree=false
-[[ "$(git rev-parse --git-dir)" == "$(git rev-parse --git-common-dir)" ]] || linked_worktree=true
 if [[ "$linked_worktree" == true ]]; then
   scripts/test/scoped-campaign-preflight.sh "$repo_root" "$kubeconfig" "$repo_root/.talos/config"
 fi

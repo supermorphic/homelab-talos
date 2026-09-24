@@ -60,17 +60,10 @@ report-latest:
 report-open run:
     @scripts/test/open-allure-report.sh {{quote(run)}}
 
-# Guardedly publish one canonical run and its generated report to persistent
-# in-cluster storage. Operator-only; requires the exact confirmation.
+# Guardedly retain one finalized canonical run and its generated report. Linked
+# worktrees use scoped publication; other callers supply the exact confirmation.
 publish run:
     @scripts/test/publish-report.sh {{quote(run)}}
-
-# Retain one already-finalized canonical run as intentional acceptance evidence.
-# This explicit context supplies publication intent and preserves candidate status.
-acceptance-publish run:
-    @TEST_REPORT_PUBLICATION_CONTEXT=recorded-acceptance \
-      TEST_REPORT_REQUIRE_AUTHORITATIVE=false \
-      scripts/test/publish-report.sh {{quote(run)}}
 
 # Preview an ordered campaign and print its exact plan-bound confirmation.
 campaign-plan campaign:

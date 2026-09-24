@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 # Select publication authority without changing a worktree's default context.
 
+require_report_publication_confirmation() {
+  local linked_worktree="$1"
+  local run_id="$2"
+  local expected="publish:test-report:$run_id"
+  [[ "$linked_worktree" != true ]] || return 0
+  [[ "${TEST_REPORT_PUBLISH_CONFIRM:-}" == "$expected" ]] || {
+    echo 'Refusing to publish test evidence.' >&2
+    echo "Set TEST_REPORT_PUBLISH_CONFIRM='$expected' after reviewing the run." >&2
+    return 1
+  }
+}
+
 select_report_publication_context() {
   local kubeconfig="$1"
   local linked_worktree="$2"
