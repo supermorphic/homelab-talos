@@ -87,14 +87,14 @@ campaign campaign:
 campaign-resume campaign_run:
     @scripts/test/run-campaign.sh resume {{quote(campaign_run)}}
 
-# Run and automatically retain one intentional acceptance selection. Linked
-# worktrees are restricted to scoped verifiers and non-mutating shared suites.
-acceptance selection:
-    @scripts/test/run-campaign.sh acceptance-run {{quote(selection)}}
+# Run a canonical selection and retain its child evidence. Linked worktrees are
+# restricted to scoped verifiers and non-mutating shared suites.
+record selection:
+    @scripts/test/run-campaign.sh record {{quote(selection)}}
 
-# Retry publication and continue an unchanged recorded acceptance journal.
-acceptance-resume campaign_run:
-    @scripts/test/run-campaign.sh acceptance-resume {{quote(campaign_run)}}
+# Retry publication and continue an unchanged record session.
+record-resume session_id:
+    @scripts/test/run-campaign.sh record-resume {{quote(session_id)}}
 
 # Render the latest canonical run as a GitHub-compatible Markdown summary.
 summary-latest:

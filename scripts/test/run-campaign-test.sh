@@ -499,7 +499,7 @@ run_acceptance() {
   TEST_RESULTS_ROOT="$root/results" \
   TEST_CAMPAIGNS_ROOT="$root/campaigns" \
   TEST_CAMPAIGN_TEST_MODE=true \
-  TEST_ACCEPTANCE_LINKED_WORKTREE="$linked" \
+  TEST_RECORD_LINKED_WORKTREE="$linked" \
   TEST_CAMPAIGN_SKIP_LEASE=true \
   TEST_CAMPAIGN_SOURCE_CHECK_BIN="$repo_root/tests/fixtures/campaign/source-check.sh" \
   TEST_CAMPAIGN_PUBLISH_BIN="$repo_root/tests/fixtures/campaign/fake-publisher.sh" \
@@ -515,12 +515,12 @@ acceptance_single_root="$fixture/acceptance-single"
 mkdir -p "$acceptance_single_root"
 run_acceptance "$acceptance_single_root" true \
   env -u TEST_EXECUTION_ORIGIN -u TEST_CAMPAIGN_CONFIRM \
-  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  "$repo_root/scripts/test/run-campaign.sh" record \
   verification.metrics-server >"$acceptance_single_root/run.log" 2>&1
 acceptance_single_manifest="$(find "$acceptance_single_root/campaigns" \
   -name campaign.json -print)"
 [[ "$(yq -r '.execution_mode' "$acceptance_single_manifest")" == \
-  'recorded-acceptance-scoped' ]]
+  'recorded-evidence-scoped' ]]
 [[ "$(yq -r '.selection_type + ":" + .selection' \
   "$acceptance_single_manifest")" == \
   'suite:verification.metrics-server' ]]
@@ -528,7 +528,7 @@ acceptance_single_manifest="$(find "$acceptance_single_root/campaigns" \
   'completed:passed' ]]
 [[ "$(cat "$acceptance_single_root/commands")" == 'acceptance-pass' ]]
 [[ "$(cat "$acceptance_single_root/publish-contexts")" == \
-  $'recorded-acceptance\tfalse\tunset' ]]
+  $'unset\tfalse\tunset' ]]
 rg -Fq 'https://fixture.invalid/reports/' "$acceptance_single_root/run.log"
 [[ "$(wc -l <"$acceptance_single_root/preflight-calls" | tr -d ' ')" == '1' ]]
 
@@ -539,7 +539,7 @@ yq -i '(.suites[] | select(.metadata.id == "verification.metrics-server") |
   "$acceptance_catalog"
 set +e
 run_acceptance "$source_mismatch_root" true \
-  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  "$repo_root/scripts/test/run-campaign.sh" record \
   verification.metrics-server >"$source_mismatch_root/run.log" 2>&1
 source_mismatch_exit="$?"
 set -e
@@ -557,7 +557,7 @@ acceptance_drift_root="$fixture/acceptance-drift"
 mkdir -p "$acceptance_drift_root"
 set +e
 CAMPAIGN_TEST_DRIFT_AT=3 run_acceptance "$acceptance_drift_root" true \
-  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  "$repo_root/scripts/test/run-campaign.sh" record \
   verification.metrics-server >"$acceptance_drift_root/run.log" 2>&1
 acceptance_drift_exit="$?"
 set -e
@@ -573,16 +573,16 @@ acceptance_drift_manifest="$(find "$acceptance_drift_root/campaigns" \
 acceptance_shared_root="$fixture/acceptance-shared"
 mkdir -p "$acceptance_shared_root"
 run_acceptance "$acceptance_shared_root" true \
-  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  "$repo_root/scripts/test/run-campaign.sh" record \
   test.nocodb-local-integration >"$acceptance_shared_root/run.log" 2>&1
 [[ "$(cat "$acceptance_shared_root/commands")" == 'acceptance-shared' ]]
 [[ "$(cat "$acceptance_shared_root/publish-contexts")" == \
-  $'recorded-acceptance\tfalse\tunset' ]]
+  $'unset\tfalse\tunset' ]]
 
 acceptance_validation_root="$fixture/acceptance-validation"
 mkdir -p "$acceptance_validation_root"
 run_acceptance "$acceptance_validation_root" true \
-  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  "$repo_root/scripts/test/run-campaign.sh" record \
   validation.ci >"$acceptance_validation_root/run.log" 2>&1
 [[ "$(cat "$acceptance_validation_root/commands")" == \
   'acceptance-validation' ]]
@@ -594,7 +594,7 @@ acceptance_broken_root="$fixture/acceptance-broken"
 mkdir -p "$acceptance_broken_root"
 set +e
 run_acceptance "$acceptance_broken_root" true \
-  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  "$repo_root/scripts/test/run-campaign.sh" record \
   scoped-verification >"$acceptance_broken_root/run.log" 2>&1
 acceptance_broken_exit="$?"
 set -e
@@ -615,7 +615,7 @@ touch "$acceptance_unsafe_marker"
 set +e
 CAMPAIGN_TEST_PUBLISH_FAILURE_MARKER="$acceptance_unsafe_marker" \
   run_acceptance "$acceptance_unsafe_publish_root" true \
-  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  "$repo_root/scripts/test/run-campaign.sh" record \
   scoped-verification >"$acceptance_unsafe_publish_root/run.log" 2>&1
 acceptance_unsafe_publish_exit="$?"
 set -e
@@ -628,10 +628,10 @@ acceptance_unsafe_run_id="$(yq -r '.runs[0].run_id' "$acceptance_unsafe_manifest
   'broken:unsafe-child-publication-failed' ]]
 [[ "$(cat "$acceptance_unsafe_publish_root/commands")" == \
   'acceptance-broken' ]]
-rg -Fqx "mise exec -- just test acceptance-publish $acceptance_unsafe_run_id" \
+rg -Fqx "mise exec -- just test publish $acceptance_unsafe_run_id" \
   "$acceptance_unsafe_publish_root/run.log"
 if run_acceptance "$acceptance_unsafe_publish_root" true \
-  "$repo_root/scripts/test/run-campaign.sh" acceptance-resume \
+  "$repo_root/scripts/test/run-campaign.sh" record-resume \
   "$acceptance_unsafe_id" >"$acceptance_unsafe_publish_root/resume.log" 2>&1; then
   echo 'Unsafe recorded acceptance unexpectedly became resumable.' >&2
   exit 1
@@ -646,7 +646,7 @@ mkdir -p "$acceptance_campaign_root"
 set +e
 run_acceptance "$acceptance_campaign_root" true \
   env TEST_EXECUTION_ORIGIN=operator \
-  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  "$repo_root/scripts/test/run-campaign.sh" record \
   scoped-verification >"$acceptance_campaign_root/run.log" 2>&1
 acceptance_campaign_exit="$?"
 set -e
@@ -669,7 +669,7 @@ for forbidden_selection in test.ntfy-publish validation.nocodb diagnostics.clust
   set +e
   run_acceptance "$forbidden_root" true \
     env TEST_EXECUTION_ORIGIN=operator \
-    "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+    "$repo_root/scripts/test/run-campaign.sh" record \
     "$forbidden_selection" >"$forbidden_root/run.log" 2>&1
   forbidden_exit="$?"
   set -e
@@ -685,7 +685,7 @@ mkdir -p "$operator_root"
 set +e
 run_acceptance "$operator_root" false \
   env -u NTFY_PUBLISH_TEST_CONFIRM \
-  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  "$repo_root/scripts/test/run-campaign.sh" record \
   test.ntfy-publish >"$operator_root/missing-confirm.log" 2>&1
 operator_missing_exit="$?"
 set -e
@@ -693,9 +693,13 @@ set -e
 [[ ! -s "$operator_root/commands" ]]
 NTFY_PUBLISH_TEST_CONFIRM=test:ntfy:publish:media-critical-homelab \
   run_acceptance "$operator_root/confirmed" false \
-  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  "$repo_root/scripts/test/run-campaign.sh" record \
   test.ntfy-publish >"$operator_root/confirmed.log" 2>&1
 [[ "$(cat "$operator_root/confirmed/commands")" == 'acceptance-operator' ]]
+operator_manifest="$(find "$operator_root/confirmed/campaigns" -name campaign.json -print)"
+operator_run_id="$(yq -r '.runs[0].run_id' "$operator_manifest")"
+[[ "$(cat "$operator_root/confirmed/publish-contexts")" == \
+  "$(printf 'unset\tfalse\tpublish:test-report:%s' "$operator_run_id")" ]]
 
 acceptance_resume_root="$fixture/acceptance-resume"
 mkdir -p "$acceptance_resume_root"
@@ -703,7 +707,7 @@ touch "$acceptance_resume_root-marker"
 set +e
 CAMPAIGN_TEST_PUBLISH_FAILURE_MARKER="$acceptance_resume_root-marker" \
   run_acceptance "$acceptance_resume_root" true \
-  "$repo_root/scripts/test/run-campaign.sh" acceptance-run \
+  "$repo_root/scripts/test/run-campaign.sh" record \
   scoped-verification >"$acceptance_resume_root-start.log" 2>&1
 acceptance_resume_start_exit="$?"
 set -e
@@ -713,10 +717,13 @@ acceptance_resume_manifest="$(find "$acceptance_resume_root/campaigns" \
 acceptance_resume_id="$(yq -r '.campaign_id' "$acceptance_resume_manifest")"
 [[ "$(yq -r '.status' "$acceptance_resume_manifest")" == 'publish-failed' ]]
 [[ "$(cat "$acceptance_resume_root/commands")" == 'acceptance-pass' ]]
+# A session created before this public rename keeps its stored journal mode.
+yq -i '.execution_mode = "recorded-acceptance-scoped" |
+  .campaign = "recorded-acceptance"' "$acceptance_resume_manifest"
 rm "$acceptance_resume_root-marker"
 set +e
 run_acceptance "$acceptance_resume_root" true \
-  "$repo_root/scripts/test/run-campaign.sh" acceptance-resume \
+  "$repo_root/scripts/test/run-campaign.sh" record-resume \
   "$acceptance_resume_id" >"$acceptance_resume_root-finish.log" 2>&1
 acceptance_resume_exit="$?"
 set -e

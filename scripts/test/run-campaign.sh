@@ -8,7 +8,7 @@ source scripts/lib/lease.sh
 require_bash
 
 [[ "$#" -eq 2 ]] || {
-  echo 'Usage: run-campaign.sh <plan|run|resume|scoped-plan|scoped-run|acceptance-run|acceptance-resume> <selection|campaign-run-id>' >&2
+  echo 'Usage: run-campaign.sh <plan|run|resume|scoped-plan|scoped-run|record|record-resume> <selection|campaign-run-id>' >&2
   exit 2
 }
 
@@ -16,9 +16,9 @@ action="$1"
 requested="$2"
 scoped_mode=false
 [[ "$action" != scoped-* ]] || scoped_mode=true
-acceptance_mode=false
-[[ "$action" != acceptance-* ]] || acceptance_mode=true
-acceptance_scoped=false
+record_mode=false
+[[ "$action" != record && "$action" != record-resume ]] || record_mode=true
+record_scoped=false
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 catalog="${TEST_CATALOG_PATH:-tests/catalog.yaml}"
@@ -68,21 +68,21 @@ elif [[ "$test_mode" != 'false' ]]; then
   echo 'TEST_CAMPAIGN_TEST_MODE must be true or false.' >&2
   exit 2
 fi
-if [[ -n "${TEST_ACCEPTANCE_LINKED_WORKTREE:-}" ]]; then
+if [[ -n "${TEST_RECORD_LINKED_WORKTREE:-}" ]]; then
   [[ "$test_mode" == 'true' ]] || {
-    echo 'TEST_ACCEPTANCE_LINKED_WORKTREE is available only in campaign test mode.' >&2
+    echo 'TEST_RECORD_LINKED_WORKTREE is available only in campaign test mode.' >&2
     exit 2
   }
-  case "$TEST_ACCEPTANCE_LINKED_WORKTREE" in
-    true) acceptance_scoped=true ;;
-    false) acceptance_scoped=false ;;
-    *) echo 'TEST_ACCEPTANCE_LINKED_WORKTREE must be true or false.' >&2; exit 2 ;;
+  case "$TEST_RECORD_LINKED_WORKTREE" in
+    true) record_scoped=true ;;
+    false) record_scoped=false ;;
+    *) echo 'TEST_RECORD_LINKED_WORKTREE must be true or false.' >&2; exit 2 ;;
   esac
-elif [[ "$acceptance_mode" == 'true' ]]; then
+elif [[ "$record_mode" == 'true' ]]; then
   git_dir="$(git rev-parse --path-format=absolute --git-dir)"
   common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
   if [[ "$git_dir" != "$common_dir" && "$git_dir" == "$common_dir"/worktrees/* ]]; then
-    acceptance_scoped=true
+    record_scoped=true
   fi
 fi
 if [[ "$test_mode" != 'true' && -n "${TEST_SCOPED_PREFLIGHT_BIN:-}" ]]; then
@@ -109,13 +109,13 @@ source_state() {
     printf '%s %s\n' "$head_sha" "$head_sha"
     return
   fi
-  if [[ "$acceptance_mode" == 'true' ]]; then
+  if [[ "$record_mode" == 'true' ]]; then
     if [[ "$test_mode" == 'true' && -n "${TEST_CAMPAIGN_SOURCE_CHECK_BIN:-}" ]]; then
       "$TEST_CAMPAIGN_SOURCE_CHECK_BIN"
       return
     fi
     [[ -z "$(git status --porcelain)" ]] || {
-      echo 'Refusing recorded acceptance: commit or stash all checkout changes first.' >&2
+      echo 'Refusing record session: commit or stash all checkout changes first.' >&2
       return 1
     }
     head_sha="$(git rev-parse HEAD)"
@@ -163,7 +163,7 @@ source_state() {
 }
 
 selected_member_ids() {
-  if [[ "$acceptance_mode" == 'true' && "$selection_type" == 'suite' ]]; then
+  if [[ "$record_mode" == 'true' && "$selection_type" == 'suite' ]]; then
     printf '%s\n' "$selection"
   else
     catalog_campaign_ids "$catalog" "$campaign"
@@ -171,7 +171,7 @@ selected_member_ids() {
 }
 
 selection_digest() {
-  if [[ "$acceptance_mode" == 'true' ]]; then
+  if [[ "$record_mode" == 'true' ]]; then
     {
       printf '%s\n%s\n' "$selection_type" "$selection"
       while IFS= read -r digest_suite; do
@@ -187,10 +187,10 @@ selection_digest() {
 
 campaign_uses_test_lease() {
   [[ "$scoped_mode" != 'true' ]] || return 1
-  [[ "$acceptance_mode" != 'true' || "$acceptance_scoped" != 'true' ]]
+  [[ "$record_mode" != 'true' || "$record_scoped" != 'true' ]]
 }
 
-acceptance_suite_allowed() {
+record_suite_allowed() {
   local suite_id="$1"
   local entry tier scenario owner mutates
 
@@ -200,21 +200,21 @@ acceptance_suite_allowed() {
   owner="$(yq -r '.metadata.execution_owner' - <<<"$entry")"
   mutates="$(yq -r '.metadata.mutates_cluster' - <<<"$entry")"
   [[ "$tier" != 'diagnostics' && "$scenario" != 'diagnostics-self-test' ]] || {
-    echo "Recorded acceptance excludes diagnostic suite: $suite_id." >&2
+    echo "Record session excludes diagnostic suite: $suite_id." >&2
     return 1
   }
-  if [[ "$acceptance_scoped" == 'true' ]]; then
+  if [[ "$record_scoped" == 'true' ]]; then
     if [[ "$suite_id" != 'validation.ci' &&
       ("$owner" != 'shared' || "$mutates" != 'false' || "$tier" == 'offline') ]] &&
       ! catalog_campaign_ids "$catalog" scoped-verification |
         SUITE_ID="$suite_id" awk '$0 == ENVIRON["SUITE_ID"] { found = 1 } END { exit !found }'; then
-      echo "Linked-worktree recorded acceptance accepts scoped-verification members, validation.ci, or non-mutating shared live suites: $suite_id. Use validation.ci to retain offline validation." >&2
+      echo "Linked-worktree record session accepts scoped-verification members, validation.ci, or non-mutating shared live suites: $suite_id. Use validation.ci to retain offline validation." >&2
       return 1
     fi
   fi
 }
 
-require_acceptance_confirmation() {
+require_record_suite_confirmation() {
   local suite_id="$1"
   local entry confirmation_type variable expected
 
@@ -224,13 +224,13 @@ require_acceptance_confirmation() {
     variable="$(yq -r '.confirmation.variable' - <<<"$entry")"
     expected="$(yq -r '.confirmation.expected' - <<<"$entry")"
     [[ -n "$variable" && "${!variable:-}" == "$expected" ]] || {
-      echo "Refusing recorded acceptance for $suite_id: set $variable to the documented exact value." >&2
+      echo "Refusing record session for $suite_id: set $variable to the documented exact value." >&2
       return 1
     }
   }
 }
 
-validate_recorded_acceptance_runs() {
+validate_recorded_runs() {
   local expected_members expected_json actual_json suite_id run_id result cleanup recovery
   local run_dir
 
@@ -239,19 +239,19 @@ validate_recorded_acceptance_runs() {
     '[strenv(MEMBERS) | split("\n")[] | select(. != "")]')"
   actual_json="$(yq -o=json -I=0 '.members' "$manifest")"
   [[ "$actual_json" == "$expected_json" ]] || {
-    echo 'Recorded acceptance journal members do not match the frozen selection.' >&2
+    echo 'Record session journal members do not match the frozen selection.' >&2
     return 1
   }
   yq -e '(.runs | length) == (.runs | unique_by(.suite_id) | length)' "$manifest" \
     >/dev/null || {
-      echo 'Recorded acceptance journal contains duplicate suite runs.' >&2
+      echo 'Record session journal contains duplicate suite runs.' >&2
       return 1
     }
   while IFS=$'\t' read -r suite_id run_id result cleanup recovery; do
     [[ -n "$suite_id" ]] || continue
     printf '%s\n' "$expected_members" |
       SUITE_ID="$suite_id" awk '$0 == ENVIRON["SUITE_ID"] { found = 1 } END { exit !found }' || {
-        echo "Recorded acceptance journal contains unexpected suite: $suite_id." >&2
+        echo "Record session journal contains unexpected suite: $suite_id." >&2
         return 1
       }
     run_dir="$results_root/$run_id"
@@ -263,13 +263,13 @@ validate_recorded_acceptance_runs() {
         "$run_dir/summary.json")" == "$cleanup" &&
       "$(yq -r '.phases.recovery.status // "not-required"' \
         "$run_dir/summary.json")" == "$recovery" ]] || {
-        echo "Recorded acceptance journal does not match canonical run: $run_id." >&2
+        echo "Record session journal does not match canonical run: $run_id." >&2
         return 1
       }
     [[ "$result" != 'broken' &&
       ("$cleanup" == 'passed' || "$cleanup" == 'not-required') &&
       ("$recovery" == 'passed' || "$recovery" == 'not-required') ]] || {
-        echo "Recorded acceptance cannot resume unsafe canonical run: $run_id." >&2
+        echo "Record session cannot resume unsafe canonical run: $run_id." >&2
         return 1
       }
   done < <(yq -r '.runs[] | [
@@ -284,9 +284,9 @@ require_source_snapshot() {
 
   state="$(source_state)" || return "$?"
   read -r current_source current_flux <<<"$state"
-  if [[ "$acceptance_mode" == 'true' ]]; then
+  if [[ "$record_mode" == 'true' ]]; then
     [[ "$current_source" == "$expected_source" ]] || {
-      echo "Recorded acceptance source drifted: expected HEAD=$expected_source, got $current_source." >&2
+      echo "Record session source drifted: expected HEAD=$expected_source, got $current_source." >&2
       return 1
     }
     return 0
@@ -305,9 +305,9 @@ expected_published_confirmation() {
 print_frozen_inputs() {
   local campaign_entry count description mutates disruptive
 
-  if [[ "$acceptance_mode" == 'true' && "$selection_type" == 'suite' ]]; then
+  if [[ "$record_mode" == 'true' && "$selection_type" == 'suite' ]]; then
     campaign_entry="$(catalog_entry_by_id "$catalog" "$selection")"
-    description="Recorded acceptance for $selection"
+    description="Record session for $selection"
     mutates="$(yq -r '.metadata.mutates_cluster' - <<<"$campaign_entry")"
     disruptive="$(yq -r '.metadata.tier == "resilience"' - <<<"$campaign_entry")"
   else
@@ -317,8 +317,8 @@ print_frozen_inputs() {
     disruptive="$(yq -r '.disruptive' - <<<"$campaign_entry")"
   fi
   count="$(selected_member_ids | wc -l | tr -d ' ')"
-  if [[ "$acceptance_mode" == 'true' ]]; then
-    echo 'Campaign: recorded-acceptance'
+  if [[ "$record_mode" == 'true' ]]; then
+    echo 'Campaign: recorded-evidence'
     echo "Selection: $selection"
   else
     echo "Campaign: $campaign"
@@ -326,16 +326,16 @@ print_frozen_inputs() {
   echo "Description: $description"
   echo "Suites: $count"
   echo "Source: $source_sha"
-  if [[ "$acceptance_mode" == 'true' ]]; then
+  if [[ "$record_mode" == 'true' ]]; then
     echo 'Flux: evaluated at publication'
   else
     echo "Flux: $flux_sha"
   fi
   echo "Plan digest: $plan_digest"
-  if [[ "$acceptance_mode" == 'true' && "$acceptance_scoped" == 'true' ]]; then
-    echo 'Mode: recorded acceptance (scoped worktree)'
-  elif [[ "$acceptance_mode" == 'true' ]]; then
-    echo 'Mode: recorded acceptance (operator)'
+  if [[ "$record_mode" == 'true' && "$record_scoped" == 'true' ]]; then
+    echo 'Mode: record session (scoped worktree)'
+  elif [[ "$record_mode" == 'true' ]]; then
+    echo 'Mode: record session (operator)'
   elif [[ "$scoped_mode" == 'true' ]]; then
     echo 'Mode: scoped local-only'
   else
@@ -353,8 +353,8 @@ print_plan() {
   print_frozen_inputs
   echo
   echo 'Run with:'
-  if [[ "$acceptance_mode" == 'true' ]]; then
-    printf 'mise exec -- just test acceptance %s\n' "$selection"
+  if [[ "$record_mode" == 'true' ]]; then
+    printf 'mise exec -- just test record %s\n' "$selection"
   elif [[ "$scoped_mode" == 'true' ]]; then
     echo 'mise exec -- just test scoped-campaign'
   else
@@ -368,10 +368,10 @@ initialize_manifest() {
   local members members_json campaign_entry execution_mode mutates disruptive manifest_campaign flux_json
 
   manifest_campaign="$campaign"
-  if [[ "$acceptance_mode" == 'true' ]]; then
-    manifest_campaign='recorded-acceptance'
-    execution_mode='recorded-acceptance-operator'
-    [[ "$acceptance_scoped" != 'true' ]] || execution_mode='recorded-acceptance-scoped'
+  if [[ "$record_mode" == 'true' ]]; then
+    manifest_campaign='recorded-evidence'
+    execution_mode='recorded-evidence-operator'
+    [[ "$record_scoped" != 'true' ]] || execution_mode='recorded-evidence-scoped'
   else
     execution_mode="$(yq -r '.execution_mode // "operator-published"' \
       - <<<"$(catalog_campaign_entry "$catalog" "$campaign")")"
@@ -384,7 +384,7 @@ initialize_manifest() {
     MEMBERS="$members" yq --null-input --output-format json -I=0 \
       '[strenv(MEMBERS) | split("\n")[] | select(. != "")]'
   )"
-  if [[ "$acceptance_mode" == 'true' && "$selection_type" == 'suite' ]]; then
+  if [[ "$record_mode" == 'true' && "$selection_type" == 'suite' ]]; then
     campaign_entry="$(catalog_entry_by_id "$catalog" "$selection")"
     mutates="$(yq -r '.metadata.mutates_cluster' - <<<"$campaign_entry")"
     disruptive="$(yq -r '.metadata.tier == "resilience"' - <<<"$campaign_entry")"
@@ -394,7 +394,7 @@ initialize_manifest() {
     disruptive="$(yq -r '.disruptive' - <<<"$campaign_entry")"
   fi
   flux_json="$(FLUX_SHA="$flux_sha" yq -n -o=json 'strenv(FLUX_SHA)')"
-  [[ "$acceptance_mode" != 'true' ]] || flux_json='null'
+  [[ "$record_mode" != 'true' ]] || flux_json='null'
   CAMPAIGN_ID="$campaign_id" CAMPAIGN="$manifest_campaign" PLAN_DIGEST="$plan_digest" \
   SOURCE_SHA="$source_sha" FLUX_JSON="$flux_json" MEMBERS_JSON="$members_json" \
   EXECUTION_MODE="$execution_mode" MUTATES="$mutates" DISRUPTIVE="$disruptive" \
@@ -417,7 +417,7 @@ initialize_manifest() {
       "members": (strenv(MEMBERS_JSON) | from_json),
       "runs": []
     }' >"$manifest"
-  if [[ "$acceptance_mode" == 'true' ]]; then
+  if [[ "$record_mode" == 'true' ]]; then
     SELECTION="$selection" SELECTION_TYPE="$selection_type" \
       yq --output-format json --indent 2 -i '
         .selection = strenv(SELECTION) |
@@ -495,19 +495,19 @@ print_summary() {
   echo "Manifest: $manifest"
   if [[ "$(yq -r '.status' "$manifest")" == 'publish-failed' ]]; then
     echo 'Resume with:'
-    if [[ "$acceptance_mode" == 'true' ]]; then
-      printf 'mise exec -- just test acceptance-resume %s\n' "$campaign_id"
+    if [[ "$record_mode" == 'true' ]]; then
+      printf 'mise exec -- just test record-resume %s\n' "$campaign_id"
     else
       printf "TEST_CAMPAIGN_CONFIRM='resume-publish:%s' mise exec -- just test campaign-resume %s\n" \
       "$campaign_id" "$campaign_id"
     fi
-  elif [[ "$acceptance_mode" == 'true' &&
+  elif [[ "$record_mode" == 'true' &&
     "$(yq -r '.stop_reason // ""' "$manifest")" == \
       'unsafe-child-publication-failed' ]]; then
     echo 'Retry retained evidence publication without continuing the campaign:'
     while IFS= read -r failed_run_id; do
       [[ -n "$failed_run_id" ]] || continue
-      printf 'mise exec -- just test acceptance-publish %s\n' "$failed_run_id"
+      printf 'mise exec -- just test publish %s\n' "$failed_run_id"
     done < <(yq -r '.runs[] | select(.publish_status == "failed") | .run_id' \
       "$manifest")
   fi
@@ -610,11 +610,18 @@ publish_run() {
   rm -f "$result_file"
   for ((attempt = 1; attempt <= publish_attempts; attempt++)); do
     publish_exit=0
-    if [[ "$acceptance_mode" == 'true' ]]; then
+    if [[ "$record_mode" == 'true' && "$record_scoped" == 'true' ]]; then
+      env -u TEST_REPORT_PUBLISH_CONFIRM \
+        TEST_RESULTS_ROOT="$results_root" \
+        TEST_PUBLISH_RESULT_FILE="$result_file" \
+        TEST_REPORT_REQUIRE_AUTHORITATIVE=false \
+        KUBECONFIG="$kubeconfig" \
+        "$publish_bin" "$run_id" || publish_exit="$?"
+    elif [[ "$record_mode" == 'true' ]]; then
       TEST_RESULTS_ROOT="$results_root" \
       TEST_PUBLISH_RESULT_FILE="$result_file" \
-      TEST_REPORT_PUBLICATION_CONTEXT=recorded-acceptance \
       TEST_REPORT_REQUIRE_AUTHORITATIVE=false \
+      TEST_REPORT_PUBLISH_CONFIRM="publish:test-report:$run_id" \
       KUBECONFIG="$kubeconfig" \
         "$publish_bin" "$run_id" || publish_exit="$?"
     else
@@ -684,7 +691,7 @@ run_member() {
     echo "$suite_id emitted a canonical run for a different suite." >&2
     return 20
   }
-  if [[ "$acceptance_mode" == 'true' &&
+  if [[ "$record_mode" == 'true' &&
     "$(yq -r '.git.sha' "$run_dir/environment.json")" != "$source_sha" ]]; then
     echo "$suite_id emitted a canonical run for a different source revision." >&2
     return 20
@@ -770,8 +777,8 @@ execute_remaining_members() {
       finish_manifest stopped broken source-drift-before-suite
       return 2
     }
-    if [[ "$acceptance_mode" == 'true' ]] &&
-      ! require_acceptance_confirmation "$suite_id"; then
+    if [[ "$record_mode" == 'true' ]] &&
+      ! require_record_suite_confirmation "$suite_id"; then
       finish_manifest stopped broken missing-suite-confirmation
       return 2
     fi
@@ -871,7 +878,7 @@ prepare_new_campaign() {
   initialize_manifest
 }
 
-prepare_new_acceptance() {
+prepare_new_record() {
   local state suite_id
 
   selection="$requested"
@@ -880,14 +887,14 @@ prepare_new_acceptance() {
     campaign='scoped-verification'
     while IFS= read -r suite_id; do
       [[ -n "$suite_id" ]] || continue
-      acceptance_suite_allowed "$suite_id" || exit "$?"
+      record_suite_allowed "$suite_id" || exit "$?"
     done < <(selected_member_ids)
   else
     selection_type='suite'
-    campaign='recorded-acceptance'
-    acceptance_suite_allowed "$selection" || exit "$?"
+    campaign='recorded-evidence'
+    record_suite_allowed "$selection" || exit "$?"
   fi
-  if [[ "$acceptance_scoped" == 'true' ]]; then
+  if [[ "$record_scoped" == 'true' ]]; then
     "$scoped_preflight_bin" "$repo_root" "$kubeconfig" "$talosconfig"
   fi
   [[ "$test_mode" == 'true' ]] || scripts/test/validate-catalog.sh "$catalog" >/dev/null
@@ -895,7 +902,7 @@ prepare_new_acceptance() {
   state="$(source_state)"
   read -r source_sha flux_sha <<<"$state"
   [[ "$source_sha" =~ ^[0-9a-f]{40}$ && "$flux_sha" =~ ^[0-9a-f]{40}$ ]] || {
-    echo 'Recorded acceptance source check did not return two full Git SHAs.' >&2
+    echo 'Record session source check did not return two full Git SHAs.' >&2
     exit 1
   }
   print_frozen_inputs
@@ -917,45 +924,45 @@ prepare_resume() {
   }
   campaign="$(yq -r '.campaign' "$manifest")"
   execution_mode="$(yq -r '.execution_mode // "operator-published"' "$manifest")"
-  if [[ "$acceptance_mode" == 'true' ]]; then
+  if [[ "$record_mode" == 'true' ]]; then
     case "$execution_mode" in
-      recorded-acceptance-scoped)
-        [[ "$acceptance_scoped" == 'true' ]] || {
-          echo 'Scoped recorded acceptance must resume from a linked worktree.' >&2
+      recorded-evidence-scoped|recorded-acceptance-scoped)
+        [[ "$record_scoped" == 'true' ]] || {
+          echo 'Scoped record session must resume from a linked worktree.' >&2
           exit 1
         }
         ;;
-      recorded-acceptance-operator)
-        [[ "$acceptance_scoped" != 'true' ]] || {
-          echo 'Operator recorded acceptance cannot resume from a linked worktree.' >&2
+      recorded-evidence-operator|recorded-acceptance-operator)
+        [[ "$record_scoped" != 'true' ]] || {
+          echo 'Operator record session cannot resume from a linked worktree.' >&2
           exit 1
         }
         ;;
       *)
-        echo 'Only recorded acceptance journals can use acceptance-resume.' >&2
+        echo 'Only record session journals can use record-resume.' >&2
         exit 1
         ;;
     esac
     selection="$(yq -r '.selection // ""' "$manifest")"
     selection_type="$(yq -r '.selection_type // ""' "$manifest")"
     [[ "$selection_type" == 'suite' || "$selection_type" == 'campaign' ]] || {
-      echo 'Recorded acceptance journal has an invalid selection type.' >&2
+      echo 'Record session journal has an invalid selection type.' >&2
       exit 1
     }
     if [[ "$selection_type" == 'campaign' ]]; then
       [[ "$selection" == 'scoped-verification' ]] || {
-        echo 'Recorded acceptance journal has an unsupported campaign selection.' >&2
+        echo 'Record session journal has an unsupported campaign selection.' >&2
         exit 1
       }
       campaign="$selection"
     else
-      campaign='recorded-acceptance'
+      campaign='recorded-evidence'
     fi
     while IFS= read -r completed_suite; do
       [[ -n "$completed_suite" ]] || continue
-      acceptance_suite_allowed "$completed_suite" || exit "$?"
+      record_suite_allowed "$completed_suite" || exit "$?"
     done < <(selected_member_ids)
-    [[ "$acceptance_scoped" != 'true' ]] ||
+    [[ "$record_scoped" != 'true' ]] ||
       "$scoped_preflight_bin" "$repo_root" "$kubeconfig" "$talosconfig"
   else
     [[ "$campaign" != 'scoped-verification' && "$execution_mode" != 'scoped-local' ]] || {
@@ -987,9 +994,9 @@ prepare_resume() {
     echo 'Campaign source check did not return two full Git SHAs.' >&2
     exit 1
   }
-  if [[ "$acceptance_mode" == 'true' ]]; then
+  if [[ "$record_mode" == 'true' ]]; then
     [[ "$current_source" == "$source_sha" ]] || {
-      echo 'Recorded acceptance source is stale and cannot be resumed.' >&2
+      echo 'Record session source is stale and cannot be resumed.' >&2
       exit 1
     }
   else
@@ -998,8 +1005,8 @@ prepare_resume() {
       exit 1
     }
   fi
-  [[ "$acceptance_mode" != 'true' ]] || validate_recorded_acceptance_runs || {
-    echo 'Recorded acceptance journal is unsafe to resume.' >&2
+  [[ "$record_mode" != 'true' ]] || validate_recorded_runs || {
+    echo 'Record session journal is unsafe to resume.' >&2
     exit 1
   }
   overall_failed=false
@@ -1020,8 +1027,8 @@ prepare_resume() {
 
 case "$action" in
   plan|run|scoped-plan|scoped-run) prepare_new_campaign ;;
-  acceptance-run) prepare_new_acceptance ;;
-  resume|acceptance-resume) prepare_resume ;;
+  record) prepare_new_record ;;
+  resume|record-resume) prepare_resume ;;
   *)
     echo "Unknown campaign action: $action" >&2
     exit 2
@@ -1035,7 +1042,7 @@ acquire_campaign_lease || {
 }
 
 campaign_exit=0
-if [[ "$action" == 'resume' || "$action" == 'acceptance-resume' ]]; then
+if [[ "$action" == 'resume' || "$action" == 'record-resume' ]]; then
   if retry_pending_publications; then
     retry_status=0
   else
