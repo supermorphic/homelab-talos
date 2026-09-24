@@ -511,20 +511,6 @@ run_acceptance() {
     "$@"
 }
 
-acceptance_plan_root="$fixture/acceptance-plan"
-mkdir -p "$acceptance_plan_root"
-run_acceptance "$acceptance_plan_root" true \
-  "$repo_root/scripts/test/run-campaign.sh" acceptance-plan \
-  verification.metrics-server >"$acceptance_plan_root/plan.log"
-rg -Fqx 'Selection: verification.metrics-server' "$acceptance_plan_root/plan.log"
-rg -Fqx 'Mode: recorded acceptance (scoped worktree)' "$acceptance_plan_root/plan.log"
-rg -Fqx 'mise exec -- just test acceptance verification.metrics-server' \
-  "$acceptance_plan_root/plan.log"
-if rg -q 'TEST_.*CONFIRM' "$acceptance_plan_root/plan.log"; then
-  echo 'Recorded acceptance plan unexpectedly requested confirmation.' >&2
-  exit 1
-fi
-
 acceptance_single_root="$fixture/acceptance-single"
 mkdir -p "$acceptance_single_root"
 run_acceptance "$acceptance_single_root" true \

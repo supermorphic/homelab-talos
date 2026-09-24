@@ -94,11 +94,6 @@ campaign campaign:
 campaign-resume campaign_run:
     @scripts/test/run-campaign.sh resume {{quote(campaign_run)}}
 
-# Preview one intentional recorded acceptance selection. A selection is one exact
-# catalog suite ID or the fixed scoped-verification campaign.
-acceptance-plan selection:
-    @scripts/test/run-campaign.sh acceptance-plan {{quote(selection)}}
-
 # Run and automatically retain one intentional acceptance selection. Linked
 # worktrees are restricted to scoped verifiers and non-mutating shared suites.
 acceptance selection:

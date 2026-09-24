@@ -8,7 +8,7 @@ source scripts/lib/lease.sh
 require_bash
 
 [[ "$#" -eq 2 ]] || {
-  echo 'Usage: run-campaign.sh <plan|run|resume|scoped-plan|scoped-run|acceptance-plan|acceptance-run|acceptance-resume> <selection|campaign-run-id>' >&2
+  echo 'Usage: run-campaign.sh <plan|run|resume|scoped-plan|scoped-run|acceptance-run|acceptance-resume> <selection|campaign-run-id>' >&2
   exit 2
 }
 
@@ -898,10 +898,6 @@ prepare_new_acceptance() {
     echo 'Recorded acceptance source check did not return two full Git SHAs.' >&2
     exit 1
   }
-  if [[ "$action" == 'acceptance-plan' ]]; then
-    print_plan
-    exit 0
-  fi
   print_frozen_inputs
   initialize_manifest
 }
@@ -1024,7 +1020,7 @@ prepare_resume() {
 
 case "$action" in
   plan|run|scoped-plan|scoped-run) prepare_new_campaign ;;
-  acceptance-plan|acceptance-run) prepare_new_acceptance ;;
+  acceptance-run) prepare_new_acceptance ;;
   resume|acceptance-resume) prepare_resume ;;
   *)
     echo "Unknown campaign action: $action" >&2

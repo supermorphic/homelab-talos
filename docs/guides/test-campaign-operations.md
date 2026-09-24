@@ -82,7 +82,6 @@ Then inspect one campaign's exact ordered membership with `campaign-plan`.
 | `mise exec -- just test campaign-resume <id>` | Continues only a campaign stopped by supported publication failure | Operator-run controlled resume |
 | `mise exec -- just kube conformance` | Runs standalone quick Sonobuoy conformance | Operator-run state-changing suite; no automatic publication |
 | `mise exec -- just test publish <run-id>` | Publishes one finalized canonical run | Operator-run report-state mutation |
-| `mise exec -- just test acceptance-plan <suite-id\|scoped-verification>` | Previews an intentional acceptance selection | Read-only |
 | `mise exec -- just test acceptance <suite-id\|scoped-verification>` | Runs and automatically publishes canonical children | Scoped agent acceptance or separately authorized operator suite execution |
 | `mise exec -- just test acceptance-resume <id>` | Retries publication and continues eligible remaining acceptance members | Same authority as the original acceptance |
 | `mise exec -- just test acceptance-publish <run-id>` | Retains an existing finalized canonical run without rerunning it | Guarded recorded-evidence publication |
@@ -107,7 +106,7 @@ mise exec -- just test acceptance verification.foundation
 mise exec -- just test acceptance scoped-verification
 ```
 
-The optional `acceptance-plan` command previews the same selection. `acceptance` itself
+`acceptance` prints its selection and source revision, checks prerequisites, and
 supplies publication intent: an agent does not need an operator confirmation or separate
 manual publication step. The worktree installer supplies `homelab-report-publisher` as
 the third scoped context. Verification keeps using observer/diagnostic; only publication
