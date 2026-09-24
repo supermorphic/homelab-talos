@@ -176,6 +176,7 @@ register_group_shell_case ci-framework chainsaw-dispatch scripts/test/run-chains
 register_group_shell_case core media-hardlink scripts/test/scenarios/media-hardlink-test.sh
 register_group_shell_case ci-framework probe-dispatch scripts/test/run-probe-dispatch-test.sh
 register_group_shell_case ci-framework lease scripts/test/lease-test.sh
+register_group_shell_case ci-framework disruption-admission scripts/test/disruption-admission-test.sh
 register_group_shell_case core node-lifecycle scripts/test/node-lifecycle-test.sh
 register_group_shell_case core cluster-commands scripts/test/cluster-commands-test.sh
 register_group_shell_case ci-framework catalog-suite-runner scripts/test/run-catalog-suite-test.sh

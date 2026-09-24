@@ -48,9 +48,8 @@ resize_longhorn_main() (
   holder="node:resize-longhorn:${NODE_NAME}:$$"
   temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-resize-longhorn.XXXXXX")"
   renewal_failure="$temp_dir/lease-renewal-failed"
-  acquire_test_lease "$kubeconfig" "$holder"
+  acquire_test_lease "$kubeconfig" "$holder" || return "$?"
   lease_acquired=true
-  start_test_lease_renewal "$kubeconfig" "$holder" "$renewal_failure"
   # shellcheck disable=SC2154  # task_exit is assigned inside the trap body.
   trap '
     task_exit=$?
@@ -61,12 +60,14 @@ resize_longhorn_main() (
     rm -rf -- "$temp_dir"
     exit "$task_exit"
   ' EXIT INT TERM
-  run_resize_longhorn_transaction "$kubeconfig" "$kube_context" "$NODE_NAME" "$holder"
+  start_test_lease_renewal "$kubeconfig" "$holder" "$renewal_failure" || return "$?"
+  run_resize_longhorn_transaction \
+    "$kubeconfig" "$kube_context" "$NODE_NAME" "$holder" || return "$?"
   [[ ! -f "$renewal_failure" ]] || {
     echo 'Shared disruption Lease renewal failed during Longhorn resize.' >&2
     return 1
   }
-  release_test_lease "$kubeconfig" "$holder"
+  release_test_lease "$kubeconfig" "$holder" || return "$?"
   lease_acquired=false
   rm -rf -- "$temp_dir"
   trap - EXIT INT TERM

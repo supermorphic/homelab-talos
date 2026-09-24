@@ -7,7 +7,6 @@ source scripts/node/longhorn.sh
 source scripts/node/drain.sh
 source scripts/node/recovery.sh
 source scripts/node/lifecycle.sh
-source scripts/node/resize-longhorn.sh
 
 state_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-node-lifecycle-test.XXXXXX")"
 trap 'rm -rf -- "$state_dir"' EXIT
@@ -43,7 +42,6 @@ cat >"$state_dir/cleanup-fixture.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 source scripts/node/lifecycle.sh
-source scripts/node/resize-longhorn.sh
 resolve_node_target() { NODE_NAME=nuc1; NODE_IP=192.0.2.1; }
 resolve_cluster_node() { NODE_NAME=nuc1; NODE_IP=192.0.2.1; }
 require_operator_checkout() { :; }
@@ -56,17 +54,11 @@ read_node_lifecycle_record() { echo '{"schemaVersion":1,"kind":"reboot"}'; }
 require_exact_confirmation() { :; }
 resize_kube_context() { echo fixture; }
 run_maintenance_exit_transaction() { return 23; }
-run_resize_longhorn_transaction() { return 23; }
-if [[ "$FIXTURE_ACTION" == resize ]]; then
-  cd "$FIXTURE_DIR"
-  resize_longhorn_main nuc1 "$FIXTURE_LOG" "$FIXTURE_LOG"
-else
-  node_lifecycle_main maintenance-exit nuc1 "$FIXTURE_LOG" "$FIXTURE_LOG"
-fi
+node_lifecycle_main maintenance-exit nuc1 "$FIXTURE_LOG" "$FIXTURE_LOG"
 EOF
 mkdir -p "$state_dir/clusterconfig"
 : >"$state_dir/clusterconfig/nuc1.yaml"
-for fixture_action in lifecycle resize; do
+for fixture_action in lifecycle; do
   : >"$state_dir/cleanup.log"
   cleanup_status=0
   FIXTURE_ACTION="$fixture_action" FIXTURE_DIR="$state_dir" FIXTURE_LOG="$state_dir/cleanup.log" \
@@ -892,15 +884,5 @@ assert_fails 'Rejected recovery was reported as a successful reboot.' \
   run_reboot_transaction fake-kubeconfig fake-talosconfig nuc1 \
     192.168.90.10 holder "$reboot_record" fake-inventory
 [[ "$transaction_calls" != *uncordon* ]]
-
-resize_calls=''
-verify_test_lease_holder() { resize_calls+="${resize_calls:+ }lease"; }
-assert_disruption_admissible() { resize_calls+="${resize_calls:+ }admission"; }
-resize_just() {
-  [[ "$*" == 'bootstrap _resize-longhorn-raw nuc1' ]] || return 2
-  resize_calls+="${resize_calls:+ }resize"
-}
-run_resize_longhorn_transaction fake-kubeconfig fixture nuc1 holder
-[[ "$resize_calls" == 'lease admission resize' ]]
 
 echo 'Node lifecycle state tests passed.'

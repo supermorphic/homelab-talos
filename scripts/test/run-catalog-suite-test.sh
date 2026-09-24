@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/homelab-catalog-runner-test.XXXXXX")"
 trap 'rm -rf -- "$fixture_root"' EXIT
+mkdir -p "$fixture_root/bin"
 touch "$fixture_root/kubeconfig"
 run_id_file="$fixture_root/passed.run-id"
 
@@ -64,11 +65,24 @@ lease_state="$fixture_root/campaign-lease.json"
 healthy_nodes="$fixture_root/healthy-nodes.json"
 blocked_nodes="$fixture_root/blocked-nodes.json"
 cat >"$healthy_nodes" <<'EOF'
-{"items":[{"metadata":{"name":"nuc1"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"nuc2"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}
+{"items":[{"metadata":{"name":"nuc1"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"nuc2"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"nuc3"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}
 EOF
 cat >"$blocked_nodes" <<'EOF'
-{"items":[{"metadata":{"name":"nuc1"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"False"}]}},{"metadata":{"name":"nuc2"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}
+{"items":[{"metadata":{"name":"nuc1"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"False"}]}},{"metadata":{"name":"nuc2"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"nuc3"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}
 EOF
+cat >"$fixture_root/bin/kubectl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case " $* " in
+  *' config current-context '*) printf '%s\n' fixture ;;
+  *' get nodes --output json '*)
+    [[ " $* " == *' --context fixture '* ]] || exit 65
+    cat "${DISRUPTION_TEST_NODES:?}"
+    ;;
+  *) echo "unexpected disruption admission call: $*" >&2; exit 64 ;;
+esac
+EOF
+chmod +x "$fixture_root/bin/kubectl"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)" \
   yq --null-input --output-format json '{
     "apiVersion": "coordination.k8s.io/v1",
@@ -89,8 +103,8 @@ NOW="$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)" \
 CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity \
 CAMPAIGN_TEST_LEASE_STATE="$lease_state" \
 TEST_LEASE_KUBECTL="$repo_root/tests/fixtures/campaign/fake-lease-kubectl.sh" \
-NODE_LIFECYCLE_KUBECTL="$repo_root/tests/fixtures/node-lifecycle/fake-kubectl.sh" \
-NODE_LIFECYCLE_TEST_NODES="$healthy_nodes" \
+PATH="$fixture_root/bin:$PATH" \
+DISRUPTION_TEST_NODES="$healthy_nodes" \
 TEST_CAMPAIGN_LEASE_HOLDER=campaign:fixture \
 TEST_RESULTS_ROOT="$fixture_root/joined" \
 TEST_KUBECONFIG="$fixture_root/kubeconfig" \
@@ -108,8 +122,8 @@ set +e
 CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity \
 CAMPAIGN_TEST_LEASE_STATE="$lease_state" \
 TEST_LEASE_KUBECTL="$repo_root/tests/fixtures/campaign/fake-lease-kubectl.sh" \
-NODE_LIFECYCLE_KUBECTL="$repo_root/tests/fixtures/node-lifecycle/fake-kubectl.sh" \
-NODE_LIFECYCLE_TEST_NODES="$blocked_nodes" \
+PATH="$fixture_root/bin:$PATH" \
+DISRUPTION_TEST_NODES="$blocked_nodes" \
 TEST_CAMPAIGN_LEASE_HOLDER=campaign:fixture \
 TEST_RESULTS_ROOT="$fixture_root/lifecycle-blocked" \
 TEST_KUBECONFIG="$fixture_root/kubeconfig" \

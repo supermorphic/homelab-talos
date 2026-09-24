@@ -6,7 +6,7 @@ source scripts/lib/common.sh
 source scripts/test/lib/catalog.sh
 source scripts/test/lib/results.sh
 source scripts/lib/lease.sh
-source scripts/lib/node-lifecycle-state.sh
+source scripts/lib/disruption-admission.sh
 require_bash
 
 [[ "$#" -ge 3 && "$2" == '--' ]] || {
@@ -144,7 +144,16 @@ fi
 
 if [[ "$mutates_cluster" == 'true' &&
   ("$lease_acquired" == 'true' || "$lease_joined" == 'true') ]]; then
-  if assert_cluster_disruption_admissible "$kubeconfig"; then
+  kube_context="${TEST_KUBE_CONTEXT:-}"
+  [[ -n "$kube_context" ]] ||
+    kube_context="$(kubectl --kubeconfig "$kubeconfig" config current-context)" || true
+  if [[ -z "$kube_context" ]]; then
+    echo 'Cannot resolve an explicit Kubernetes context for disruption admission.' >&2
+    write_result_case_junit "$run_dir/junit.xml" "$suite_id" \
+      disruption-admission broken 0
+    primary_exit_code=1
+    run_result='broken'
+  elif assert_disruption_admissible "$kubeconfig" "$kube_context"; then
     disruption_admitted=true
   else
     write_result_case_junit "$run_dir/junit.xml" "$suite_id" \

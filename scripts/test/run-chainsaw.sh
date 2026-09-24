@@ -4,6 +4,7 @@ set -euo pipefail
 source scripts/lib/common.sh
 source scripts/test/lib/catalog.sh
 source scripts/lib/lease.sh
+source scripts/lib/disruption-admission.sh
 source scripts/test/lib/results.sh
 require_bash
 
@@ -69,6 +70,7 @@ trap release_chainsaw_lease EXIT
 write_run_id_output "$run_id"
 if [[ "$mutates_cluster" == 'true' ]]; then
   lease_ready=false
+  coordination_case='lease-acquisition'
   if [[ -n "${TEST_CAMPAIGN_LEASE_HOLDER:-}" ]]; then
     if verify_test_lease_holder "$kubeconfig" "$TEST_CAMPAIGN_LEASE_HOLDER"; then
       lease_joined=true
@@ -80,11 +82,21 @@ if [[ "$mutates_cluster" == 'true' ]]; then
     start_test_lease_renewal "$kubeconfig" "$run_id" \
       "$(cd "$run_dir" && pwd)/diagnostics/lease-renewal-failed"
   fi
+  if [[ "$lease_ready" == 'true' ]]; then
+    kube_context="${TEST_KUBE_CONTEXT:-}"
+    [[ -n "$kube_context" ]] ||
+      kube_context="$(kubectl --kubeconfig "$kubeconfig" config current-context)" || true
+    if [[ -z "$kube_context" ]] ||
+      ! assert_disruption_admissible "$kubeconfig" "$kube_context"; then
+      lease_ready=false
+      coordination_case='disruption-admission'
+    fi
+  fi
   if [[ "$lease_ready" != 'true' ]]; then
     finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     duration_seconds=$((EPOCHSECONDS - started_epoch))
     write_result_case_junit "$run_dir/junit.xml" \
-      "$(yq -r '.metadata.id' - <<<"$entry_json")" lease-acquisition broken \
+      "$(yq -r '.metadata.id' - <<<"$entry_json")" "$coordination_case" broken \
       "$duration_seconds"
     write_environment "$run_dir" "$run_id" "$entry_json" "$execution_origin" \
       "$started_at" "$finished_at" "$namespace" "$kubeconfig" "$confirmation_variable"

@@ -3,6 +3,7 @@ set -euo pipefail
 
 source scripts/test/lib/catalog.sh
 
+repo_root="$(git rev-parse --show-toplevel)"
 runner='scripts/test/run-live-suite.sh'
 catalog='tests/catalog.yaml'
 
@@ -103,3 +104,57 @@ dispatch_calls="$fixture_root/calls"
   'test.resilience.node-abrupt-loss -- uv run --locked --no-dev python scripts/test/scenarios/node_abrupt_loss.py nuc2 .kube/config .talos/config' ]]
 expect_dispatch_rejection 'node-abrupt-loss requires a target node' \
   resilience node-abrupt-loss
+
+mkdir -p "$fixture_root/bin"
+touch "$fixture_root/kubeconfig"
+cat >"$fixture_root/blocked-nodes.json" <<'EOF'
+{"items":[{"metadata":{"name":"nuc1"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"False"}]}},{"metadata":{"name":"nuc2"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"nuc3"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}
+EOF
+cat >"$fixture_root/bin/kubectl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case " $* " in
+  *' config view --minify '*) printf '%s' fixture-cluster ;;
+  *' config current-context '*) printf '%s\n' fixture ;;
+  *' get nodes --output json '*)
+    [[ " $* " == *' --context fixture '* ]] || exit 65
+    cat "${DISRUPTION_TEST_NODES:?}"
+    ;;
+  *) echo "unexpected Chainsaw admission call: $*" >&2; exit 64 ;;
+esac
+EOF
+chmod +x "$fixture_root/bin/kubectl"
+NOW="$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)" \
+  mise exec -- yq -n -o=json '{
+    "apiVersion":"coordination.k8s.io/v1",
+    "kind":"Lease",
+    "metadata":{"name":"homelab-test-run-lock","namespace":"flux-system","resourceVersion":"1"},
+    "spec":{"holderIdentity":"campaign:fixture","leaseDurationSeconds":90,"acquireTime":strenv(NOW),"renewTime":strenv(NOW)}
+  }' >"$fixture_root/lease.json"
+chainsaw_calls="$fixture_root/chainsaw-calls"
+cat >"$fixture_root/bin/chainsaw" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${CHAINSAW_TEST_CALLS:?}"
+EOF
+chmod +x "$fixture_root/bin/chainsaw"
+set +e
+PATH="$fixture_root/bin:$PATH" \
+CLUSTER_CHAOS_CONFIRM=chaos:qbittorrent-vpn-disconnect \
+CAMPAIGN_TEST_LEASE_STATE="$fixture_root/lease.json" \
+TEST_LEASE_KUBECTL="$repo_root/tests/fixtures/campaign/fake-lease-kubectl.sh" \
+TEST_CAMPAIGN_LEASE_HOLDER=campaign:fixture \
+DISRUPTION_TEST_NODES="$fixture_root/blocked-nodes.json" \
+TEST_RESULTS_ROOT="$fixture_root/chainsaw-results" \
+TEST_KUBECONFIG="$fixture_root/kubeconfig" \
+TEST_EXECUTION_ORIGIN=agent \
+CHAINSAW_TEST_CALLS="$chainsaw_calls" \
+  scripts/test/run-chainsaw.sh resilience qbittorrent-vpn-disconnect \
+  >"$fixture_root/chainsaw.log" 2>&1
+chainsaw_exit="$?"
+set -e
+[[ "$chainsaw_exit" -ne 0 ]]
+if [[ -f "$chainsaw_calls" ]] && rg -q '^test ' "$chainsaw_calls"; then
+  cat "$fixture_root/chainsaw.log" >&2
+  echo 'Chainsaw ran after disruption admission failed.' >&2
+  exit 1
+fi
