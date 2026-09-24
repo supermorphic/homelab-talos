@@ -470,10 +470,11 @@ row and its state. NocoDB source rows remain in the control-database dump; their
 state also participates in the stable platform generation. The database set is never
 read from Git.
 
-During the staged NocoDB rollout, the backup path recognizes two exact control-schema
-states. The accepted specification-025 baseline has no platform revision metadata or
-NocoDB source registry. Revision `026-nocodb-v1` has both and includes the validated
-source array in the captured platform state. Unknown revision metadata, a missing
+The backup path recognizes three exact control-schema states. The accepted
+specification-025 baseline has no platform revision metadata or NocoDB source registry.
+Revision `026-nocodb-v1` has both and includes the validated source array in the
+captured platform state. Revision `026-nocodb-v2` also captures the immutable custom
+schema mappings. Unknown revision metadata, a missing
 registry at the installed revision, or other partial optional state stops publication.
 The bundle format remains version 1, so pre-extension bundles remain valid restore
 inputs. The extension install leaves the domain registry and platform generation

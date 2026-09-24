@@ -79,14 +79,16 @@ separate metadata identity has authority only within the NocoDB metadata databas
 
 ### Separate read and operator surfaces
 
-Each enabled domain presents two distinct schemas:
+Each enabled domain presents two distinct schemas. The standard names are:
 
 - `read_model`: workflow-produced facts and approved read-only projections;
 - `operator`: human-owned decisions, notes, priorities, follow-up state, and explicit
   correction or override records.
 
-The reader source reflects only `read_model`. The operator source reflects only
-`operator`; it does not inherit access to the read surface. Both sources appear in the
+An explicitly configured domain may use other schema names. Its immutable mapping
+selects one reader schema and an optional, different operator schema. The reader
+source reflects only its mapped read schema. The operator source reflects only
+its mapped operator schema; it does not inherit access to the read surface. Both sources appear in the
 same domain base so an operator can inspect facts and record a related decision.
 
 Human corrections do not mutate workflow-produced facts. Domain workflows explicitly
@@ -109,6 +111,28 @@ remains a `NOLOGIN` candidate until reviewed grants pass validation.
 Opt-in, grant eligibility, source identities, and lifecycle progress are runtime platform
 state. Adding a domain requires no per-domain `homelab-talos` manifest, SOPS Secret, or
 NetworkPolicy change.
+
+Custom schema configuration precedes access preparation and source registration.
+The fixed configuration function records the mapping and creates restricted,
+database-specific `NOLOGIN` reader/operator role candidates. It never changes a
+database connection grant, domain schema, object privilege, or default privilege. Exact retries verify the
+same mapping and roles; a different mapping is rejected. A reviewed domain
+migration grants CONNECT and the custom roles' exact privileges before preparation and
+sync. This permits domains that validate an immutable catalog to retain it.
+
+Custom preparation validates those grants without rewriting them. Reader access
+is limited to selecting its mapped read objects; operator access remains the
+domain's explicit controlled DML. Both roles retain the existing single-database,
+no-membership, no-DDL and outside-schema denial requirements. Broad reader default
+privileges are not required for custom schemas; subsequent domain migrations
+grant access to new objects explicitly. The platform does not remove inherited
+`PUBLIC` schema privileges for a custom domain; the domain migration must satisfy
+the same isolation checks before it can be connected.
+
+Sync, metadata reflection, source read-back and credential rotation obtain schema
+names from the stored mapping. Lifecycle requests cannot override a mapping.
+The platform revision and logical backup capture include custom mappings so
+restore preserves schema selection together with source and credential identity.
 
 ### NocoDB is removable
 
@@ -326,8 +350,9 @@ The migration contract requires:
 - compatible backup/restore handling for recognized prior and extended state; and
 - fail-closed rejection of unknown, incompatible, or ambiguous partial state.
 
-The persisted extension revision is `026-nocodb-v1`. It remains a live compatibility
-identifier despite specification renumbering. Revision validation must also detect
+The persisted extension revision is `026-nocodb-v2`. It includes custom schema
+mappings and accepts a guarded upgrade from the original `026-nocodb-v1` extension.
+Revision validation must also detect
 installed-contract drift; a matching label alone is insufficient.
 
 Deploy backup compatibility before applying the extension. Backup consistency checks

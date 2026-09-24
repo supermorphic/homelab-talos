@@ -68,11 +68,12 @@ FROM operation_tables, operation_functions
 \if :old_catalog_valid
   \set platform_revision '025-baseline'
 \elif :upgraded_catalog_candidate
-  SELECT platform_operations.read_platform_revision() = '026-nocodb-v1'
+  SELECT platform_operations.read_platform_revision() IN
+    ('026-nocodb-v1', '026-nocodb-v2')
     AS revision_oracle_valid
   \gset
   \if :revision_oracle_valid
-    \set platform_revision '026-nocodb-v1'
+    SELECT platform_operations.read_platform_revision() AS platform_revision \gset
   \endif
 \endif
 WITH captured AS MATERIALIZED (
@@ -96,6 +97,17 @@ platform_shape AS (
       jsonb_typeof(captured.state->'registry') = 'array' AND
       jsonb_typeof(captured.state->'nocodbSources') = 'array'
       THEN '026-nocodb-v1'
+    WHEN :'platform_revision' = '026-nocodb-v2' AND
+      (SELECT array_agg(key ORDER BY key)
+       FROM jsonb_object_keys(captured.state) AS key) =
+        ARRAY['generation', 'nocodbSchemaMappings', 'nocodbSources',
+          'platformRevision', 'registry']::text[] AND
+      captured.state->>'platformRevision' = '026-nocodb-v2' AND
+      jsonb_typeof(captured.state->'generation') = 'number' AND
+      jsonb_typeof(captured.state->'registry') = 'array' AND
+      jsonb_typeof(captured.state->'nocodbSources') = 'array' AND
+      jsonb_typeof(captured.state->'nocodbSchemaMappings') = 'array'
+      THEN '026-nocodb-v2'
     ELSE NULL
   END AS revision
   FROM captured
@@ -186,7 +198,7 @@ EOSQL
   esac
   [ -n "$encoded_state" ] && [ -n "$encoded_registry" ] || return 1
   case "$captured_revision" in
-    025-baseline | 026-nocodb-v1) ;;
+    025-baseline | 026-nocodb-v1 | 026-nocodb-v2) ;;
     *) return 1 ;;
   esac
   printf '%s' "$encoded_registry" | base64 -d >"$output_registry"
@@ -275,7 +287,8 @@ while [ "$attempt" -le "$max_attempts" ]; do
   pg_dumpall --globals-only --file="$temporary_bundle/globals.sql"
   [ -s "$temporary_bundle/globals.sql" ]
   start_revision="${start_platform_state##*|}"
-  if [ "$start_revision" = '026-nocodb-v1' ]; then
+  if [ "$start_revision" = '026-nocodb-v1' ] ||
+    [ "$start_revision" = '026-nocodb-v2' ]; then
     {
       printf '\n-- Fixed revision-026 maintenance database restrictions.\n'
       printf 'REVOKE CONNECT ON DATABASE postgres FROM PUBLIC;\n'

@@ -14,7 +14,14 @@ SELECT pg_try_advisory_xact_lock(
   $locked$;
 \endif
 
-SELECT (to_regclass('platform_operations.platform_schema_revision') IS NULL) AS apply_upgrade \gset
+SELECT (to_regclass('platform_operations.platform_schema_revision') IS NULL)
+  AS first_install \gset
+\if :first_install
+  \set apply_upgrade true
+\else
+  SELECT revision <> '026-nocodb-v2' AS apply_upgrade
+  FROM platform_operations.platform_schema_revision WHERE singleton \gset
+\endif
 
 DO $validation$
 DECLARE
@@ -27,8 +34,13 @@ BEGIN
   IF revision_table IS NOT NULL THEN
     EXECUTE 'SELECT CASE WHEN count(*) = 1 THEN min(revision) ELSE NULL END FROM platform_operations.platform_schema_revision'
       INTO recorded_revision;
-    IF recorded_revision IS DISTINCT FROM '026-nocodb-v1' THEN
+    IF recorded_revision IS NULL OR
+       recorded_revision NOT IN ('026-nocodb-v1', '026-nocodb-v2') THEN
       RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'unknown_platform_revision';
+    END IF;
+    IF recorded_revision = '026-nocodb-v1' AND
+       to_regclass('platform_operations.managed_nocodb_schema_mappings') IS NOT NULL THEN
+      RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'partial_nocodb_schema_mapping';
     END IF;
     IF to_regprocedure('platform_operations.read_platform_revision()') IS NULL THEN
       RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'incomplete_nocodb_extension';

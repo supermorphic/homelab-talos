@@ -188,7 +188,7 @@ provisioning acceptance.
 
 After confirmation, bootstrap runs a fixed ephemeral PostgreSQL preflight Job with the
 existing backup Secret by reference. Its read-only transaction invokes
-`platform_operations.read_platform_revision()` and requires revision `026-nocodb-v1`
+`platform_operations.read_platform_revision()` and requires revision `026-nocodb-v2`
 plus a complete logical backup whose `completed_at` is at or after the revision's
 `installed_at`. It repeats this preflight after the parent reconcile and immediately
 before NocoDB resume. The Job does not expose a general SQL surface or retrieve Secret
@@ -198,7 +198,7 @@ Preflight also compares the installed metadata and domain-validation function bo
 with the reviewed SQL.
 If it differs, run the confirmed `automation-data-upgrade` command from deployed main,
 then obtain a new complete backup and affected provisioning/restore evidence before
-retrying bootstrap. The schema revision remains `026-nocodb-v1`; revision alone does
+retrying bootstrap. The schema revision is `026-nocodb-v2`; revision alone does
 not prove the function correction is installed.
 
 Bootstrap then reconciles the parent package,
@@ -270,8 +270,35 @@ binding. Do not add credential IDs or values to the Git template.
 
 ### 4. Prepare domain access without NocoDB registration
 
+For a domain with custom, migration-owned schema grants, first configure its
+schema mapping through the deployed guarded source workflow. Use a ready domain
+that has no NocoDB sources or existing reader/operator role candidates:
+
+```bash
+NOCODB_SOURCE_CONFIGURE_CONFIRM='configure:nocodb:<domain>:reporting:requests' \
+  mise exec -- just kube nocodb-source-configure <domain> reporting requests
+```
+
+Replace the domain and schema names with the reviewed targets. For a reader-only
+domain, pass `-` as the operator schema and include it in the confirmation. The
+response must report `state: configured` with the exact selected names and the
+domain-specific role names. Configuration freezes the mapping and creates
+restricted `NOLOGIN` candidates; it does not change database connection access or
+create a NocoDB base, source, password, or domain schema grant.
+
+Run the domain's reviewed migration to grant database `CONNECT`, reader `SELECT`
+in its read schema, and only the approved operator DML in its separate operator
+schema. Satisfy the
+outside-schema checks, including inherited `PUBLIC` privileges, through that
+reviewed migration. Custom preparation validates the grants without changing
+them or requiring reader default grants. Then run prepare below and source sync.
+Repeated configure with exactly the same mapping verifies the original result;
+changing a stored mapping is refused. Do not use this operation to remap an
+existing source.
+
 The domain must already be `ready` in automation-data and must have a reviewed
-`read_model` schema. A valid domain matches `^[a-z][a-z0-9_]{0,47}$`. Supply the existing
+`read_model` schema or its configured custom reader schema. A valid domain matches
+`^[a-z][a-z0-9_]{0,47}$`. Supply the existing
 private source-provisioning header through the environment or hidden interactive prompt:
 
 ```bash
@@ -297,7 +324,8 @@ call NocoDB, create a base, register a source, or make a role available for logi
 ### 5. Adopt one domain
 
 The domain must already be `ready` in automation-data and must have a reviewed
-`read_model` schema. A valid domain matches `^[a-z][a-z0-9_]{0,47}$`.
+`read_model` schema or its configured custom reader schema. A valid domain matches
+`^[a-z][a-z0-9_]{0,47}$`.
 
 Run the first source sync with the private provisioning header supplied through the
 environment or hidden interactive prompt:
@@ -313,7 +341,8 @@ most ten minutes, discovers exactly one source only after the job reports `compl
 reads that source back, checks its schema and edit flags, performs a bounded data read,
 and validates PostgreSQL privileges before recording `ready`.
 
-Controlled-edit adoption has two phases:
+Standard controlled-edit adoption has two phases. Custom schema adoption uses
+the configuration and domain migration sequence above before source sync.
 
 1. A reviewed domain migration creates the `operator` schema and its intended tables.
    The first sync creates `<domain>_operator` as a `NOLOGIN` grant target. It creates the

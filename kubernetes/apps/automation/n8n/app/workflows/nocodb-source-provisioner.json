@@ -35,7 +35,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['domain', 'operation', 'accessKind']);\nif (Object.keys(body).some((key) => !allowedFields.has(key))) throw new Error('unexpected_request_field');\nconst { domain, operation, accessKind } = body;\nif (typeof domain !== 'string' || !/^[a-z][a-z0-9_]{0,47}$/.test(domain)) throw new Error('invalid_domain');\nif (!['prepare', 'sync', 'rotate'].includes(operation)) throw new Error('invalid_operation');\nif (operation === 'rotate') {\n  if (!['reader', 'operator'].includes(accessKind)) throw new Error('invalid_access_kind');\n} else if (accessKind !== undefined) {\n  throw new Error('access_kind_only_allowed_for_rotation');\n}\nreturn [{ json: { domain, operation, requestedAccessKind: accessKind || null, ...(accessKind ? { accessKind } : {}) } }];"
+        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['domain', 'operation', 'accessKind', 'readerSchema', 'operatorSchema']);\nif (Object.keys(body).some((key) => !allowedFields.has(key))) throw new Error('unexpected_request_field');\nconst { domain, operation, accessKind, readerSchema, operatorSchema } = body;\nif (typeof domain !== 'string' || !/^[a-z][a-z0-9_]{0,47}$/.test(domain)) throw new Error('invalid_domain');\nif (!['configure', 'prepare', 'sync', 'rotate'].includes(operation)) throw new Error('invalid_operation');\nif (operation === 'rotate') {\n  if (!['reader', 'operator'].includes(accessKind)) throw new Error('invalid_access_kind');\n} else if (accessKind !== undefined) {\n  throw new Error('access_kind_only_allowed_for_rotation');\n}\nconst validSchema = value => typeof value === 'string' && /^[a-z][a-z0-9_]{0,47}$/.test(value) && !value.startsWith('pg_') && !value.startsWith('platform') && !['public', 'app', 'read_model', 'operator', 'information_schema', 'platform_internal', 'platform_operations'].includes(value);\nif (operation === 'configure') {\n  if (!validSchema(readerSchema) || !(operatorSchema === null || validSchema(operatorSchema)) || readerSchema === operatorSchema) throw new Error('invalid_schema_mapping');\n} else if (readerSchema !== undefined || operatorSchema !== undefined) throw new Error('schema_mapping_only_allowed_for_configuration');\nreturn [{ json: { domain, operation, requestedAccessKind: accessKind || null, ...(operation === 'configure' ? {readerSchema, operatorSchema} : {}), ...(accessKind ? { accessKind } : {}) } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -150,7 +150,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const request = $('Normalize Source Request').first().json;\nconst plan = $json.result;\nif (request.operation === 'prepare' && plan?.allowed === false) {\n  if (plan.domain !== request.domain || plan.errorCode !== 'prepare_source_already_registered' || Object.keys(plan).sort().join(',') !== 'allowed,domain,errorCode') throw new Error('prepare_refusal_invalid');\n  throw new Error('prepare_source_already_registered');\n}\nif (!plan || plan.domain !== request.domain || plan.readerEligible !== true) throw new Error('reader_not_eligible');\nreturn [{ json: { ...request, plan } }];"
+        "jsCode": "const request = $('Normalize Source Request').first().json;\nconst plan = $json.result;\nif (request.operation === 'prepare' && plan?.allowed === false) {\n  if (plan.domain !== request.domain || plan.errorCode !== 'prepare_source_already_registered' || Object.keys(plan).sort().join(',') !== 'allowed,domain,errorCode') throw new Error('prepare_refusal_invalid');\n  throw new Error('prepare_source_already_registered');\n}\nif (!plan || plan.domain !== request.domain || plan.readerEligible !== true) throw new Error('reader_not_eligible');\nconst validSchema = value => typeof value === 'string' && /^[a-z][a-z0-9_]{0,62}$/.test(value) && !value.startsWith('pg_') && !value.startsWith('platform') && !['public','app','information_schema','platform_internal','platform_operations'].includes(value);\nif (!validSchema(plan.readerSchema) || (plan.operatorRequested ? !validSchema(plan.operatorSchema) || plan.operatorSchema === plan.readerSchema : plan.operatorSchema !== null)) throw new Error('invalid_stored_schema_mapping');\nreturn [{ json: { ...request, plan } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -324,7 +324,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $json;\nreturn [{ json: { ...context, accessKind: 'reader', alias: 'Read Model', schema: 'read_model', dataReadonly: true, schemaReadonly: true } }];"
+        "jsCode": "const context = $json;\nreturn [{ json: { ...context, accessKind: 'reader', alias: 'Read Model', schema: context.plan.readerSchema, dataReadonly: true, schemaReadonly: true } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -356,7 +356,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Start Reader').first().json;\nconst state = $json.result;\nreturn [{ json: { ...context, ...(state || {}), baseId: state?.baseId ?? context.baseId, operation: context.operation, registryOperation: state?.operation || null, accessKind: 'reader', alias: 'Read Model', schema: 'read_model', dataReadonly: true, schemaReadonly: true } }];"
+        "jsCode": "const context = $('Start Reader').first().json;\nconst state = $json.result;\nreturn [{ json: { ...context, ...(state || {}), baseId: state?.baseId ?? context.baseId, operation: context.operation, registryOperation: state?.operation || null, accessKind: 'reader', alias: 'Read Model', schema: context.schema, dataReadonly: true, schemaReadonly: true } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -602,7 +602,7 @@
     },
     {
       "parameters": {
-      "jsCode": "const context = $('Prepare Reader Begin').first().json;\nconst state = $('Begin Reader Source').first().json.result;\nconst integrations = Array.isArray($json) ? $json : ($json.list || $json.data || []);\nconst title = `automation-data/${context.domain}/reader`;\nconst named = integrations.filter((item) => item && item.title === title);\nif (named.length > 1) throw new Error('duplicate_integration');\nlet existing = null;\nif (state.integrationId) {\n  existing = integrations.find((item) => item.id === state.integrationId);\n  if (!existing || existing.title !== title) throw new Error('integration_identity_mismatch');\n} else if (named.length === 1) {\n  existing = named[0];\n}\nconst payload = {\n  title,\n  type: 'database',\n  sub_type: 'pg',\n  is_private: true,\n  config: {\n    client: 'pg',\n    connection: {\n      host: 'automation-data-postgresql.automation-data.svc.cluster.local',\n      port: 5432,\n      user: state.role,\n      password: context.generatedValue,\n      database: context.domain,\n      ssl: false\n    },\n    searchPath: ['read_model']\n  }\n};\nreturn [{ json: { ...context, ...state, integrationId: existing?.id || null, integrationExists: Boolean(existing), payload } }];"
+      "jsCode": "const context = $('Prepare Reader Begin').first().json;\nconst state = $('Begin Reader Source').first().json.result;\nconst integrations = Array.isArray($json) ? $json : ($json.list || $json.data || []);\nconst title = `automation-data/${context.domain}/reader`;\nconst named = integrations.filter((item) => item && item.title === title);\nif (named.length > 1) throw new Error('duplicate_integration');\nlet existing = null;\nif (state.integrationId) {\n  existing = integrations.find((item) => item.id === state.integrationId);\n  if (!existing || existing.title !== title) throw new Error('integration_identity_mismatch');\n} else if (named.length === 1) {\n  existing = named[0];\n}\nconst payload = {\n  title,\n  type: 'database',\n  sub_type: 'pg',\n  is_private: true,\n  config: {\n    client: 'pg',\n    connection: {\n      host: 'automation-data-postgresql.automation-data.svc.cluster.local',\n      port: 5432,\n      user: state.role,\n      password: context.generatedValue,\n      database: context.domain,\n      ssl: false\n    },\n    searchPath: [context.schema]\n  }\n};\nreturn [{ json: { ...context, ...state, integrationId: existing?.id || null, integrationExists: Boolean(existing), payload } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -723,7 +723,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Require Reader Queue Slot').first().json;\nreturn [{ json: { ...context, sourcePayload: {\n  fk_integration_id: context.integrationId,\n  alias: 'Read Model',\n  type: 'pg',\n  config: { client: 'pg', searchPath: ['read_model'] },\n  inflection_column: 'none',\n  inflection_table: 'none',\n  is_schema_readonly: true,\n  is_data_readonly: true\n} } }];"
+        "jsCode": "const context = $('Require Reader Queue Slot').first().json;\nreturn [{ json: { ...context, sourcePayload: {\n  fk_integration_id: context.integrationId,\n  alias: 'Read Model',\n  type: 'pg',\n  config: { client: 'pg', searchPath: [context.schema] },\n  inflection_column: 'none',\n  inflection_table: 'none',\n  is_schema_readonly: true,\n  is_data_readonly: true\n} } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1019,7 +1019,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const base = $('Start Reader').first().json;\nconst registry = $('Read Reader State').first().json.result || {};\nconst source = $json;\nconst selections = [];\nfor (const name of ['Discover Reader Source', 'Discover Reader Source After Job']) {\n  try { const candidate = $(name).first().json; if (candidate?.sourceId === source.id && candidate?.selectedIntegrationId) selections.push(candidate); } catch {}\n}\nif (selections.length !== 1) throw new Error('reader_source_identity_invalid');\nconst selected = selections[0];\nconst searchPath = source.config?.searchPath || source.config?.search_path || [];\nif (!source.id || source.id !== selected.sourceId || source.base_id !== base.baseId || source.fk_integration_id !== selected.selectedIntegrationId || source.alias !== 'Read Model') throw new Error('reader_source_identity_invalid');\nif (!source.fk_integration_id || !Array.isArray(searchPath) || searchPath.length !== 1 || searchPath[0] !== 'read_model') throw new Error('reader_schema_invalid');\nif (source.is_data_readonly !== true || source.is_schema_readonly !== true) throw new Error('reader_flags_invalid');\nconst sourceCreateJobId = selected.sourceCreateJobId || registry.sourceCreateJobId || base.sourceCreateJobId || null;\nconst sourceCreateJobState = selected.jobState === 'completed' ? 'completed' : null;\nreturn [{ json: { ...base, ...registry, baseId: registry.baseId ?? base.baseId, sourceId: source.id, integrationId: selected.selectedIntegrationId, sourceCreateJobId, sourceCreateJobState, accessKind: 'reader', sourceDiscovered: true, sourceReadBack: true, dataEditAllowed: source.is_data_readonly === false, schemaEditAllowed: source.is_schema_readonly === false } }];"
+        "jsCode": "const base = $('Start Reader').first().json;\nconst registry = $('Read Reader State').first().json.result || {};\nconst source = $json;\nconst selections = [];\nfor (const name of ['Discover Reader Source', 'Discover Reader Source After Job']) {\n  try { const candidate = $(name).first().json; if (candidate?.sourceId === source.id && candidate?.selectedIntegrationId) selections.push(candidate); } catch {}\n}\nif (selections.length !== 1) throw new Error('reader_source_identity_invalid');\nconst selected = selections[0];\nconst searchPath = source.config?.searchPath || source.config?.search_path || [];\nif (!source.id || source.id !== selected.sourceId || source.base_id !== base.baseId || source.fk_integration_id !== selected.selectedIntegrationId || source.alias !== 'Read Model') throw new Error('reader_source_identity_invalid');\nif (!source.fk_integration_id || !Array.isArray(searchPath) || searchPath.length !== 1 || searchPath[0] !== base.schema) throw new Error('reader_schema_invalid');\nif (source.is_data_readonly !== true || source.is_schema_readonly !== true) throw new Error('reader_flags_invalid');\nconst sourceCreateJobId = selected.sourceCreateJobId || registry.sourceCreateJobId || base.sourceCreateJobId || null;\nconst sourceCreateJobState = selected.jobState === 'completed' ? 'completed' : null;\nreturn [{ json: { ...base, ...registry, baseId: registry.baseId ?? base.baseId, sourceId: source.id, integrationId: selected.selectedIntegrationId, sourceCreateJobId, sourceCreateJobState, accessKind: 'reader', sourceDiscovered: true, sourceReadBack: true, dataEditAllowed: source.is_data_readonly === false, schemaEditAllowed: source.is_schema_readonly === false } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1147,7 +1147,7 @@
     },
     {
       "parameters": {
-      "jsCode": "const context = $('Prepare Reader Rotation').first().json;\nconst state = $json.result;\nif (!state || state.state !== 'rotating' || !state.integrationId || state.sourceId !== context.sourceId) throw new Error('reader_rotation_state_invalid');\nreturn [{ json: { ...context, ...state, payload: {\n  title: `automation-data/${context.domain}/reader`, type: 'database', sub_type: 'pg', is_private: true,\n  config: { client: 'pg', connection: { host: 'automation-data-postgresql.automation-data.svc.cluster.local', port: 5432, user: state.role, password: context.generatedValue, database: context.domain, ssl: false }, searchPath: ['read_model'] }\n} } }];"
+      "jsCode": "const context = $('Prepare Reader Rotation').first().json;\nconst state = $json.result;\nif (!state || state.state !== 'rotating' || !state.integrationId || state.sourceId !== context.sourceId) throw new Error('reader_rotation_state_invalid');\nreturn [{ json: { ...context, ...state, payload: {\n  title: `automation-data/${context.domain}/reader`, type: 'database', sub_type: 'pg', is_private: true,\n  config: { client: 'pg', connection: { host: 'automation-data-postgresql.automation-data.svc.cluster.local', port: 5432, user: state.role, password: context.generatedValue, database: context.domain, ssl: false }, searchPath: [context.schema] }\n} } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1293,7 +1293,7 @@
     },
     {
       "parameters": {
-        "jsCode": "return [{ json: { ...$json, accessKind: 'operator', alias: 'Operator', schema: 'operator', dataReadonly: false, schemaReadonly: true } }];"
+        "jsCode": "return [{ json: { ...$json, accessKind: 'operator', alias: 'Operator', schema: $json.plan.operatorSchema, dataReadonly: false, schemaReadonly: true } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1325,7 +1325,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Prepare Operator').first().json;\nconst state = $json.result;\nreturn [{ json: { ...context, ...(state || {}), baseId: state?.baseId ?? context.baseId, operation: context.operation, registryOperation: state?.operation || null, accessKind: 'operator', alias: 'Operator', schema: 'operator', dataReadonly: false, schemaReadonly: true } }];"
+        "jsCode": "const context = $('Prepare Operator').first().json;\nconst state = $json.result;\nreturn [{ json: { ...context, ...(state || {}), baseId: state?.baseId ?? context.baseId, operation: context.operation, registryOperation: state?.operation || null, accessKind: 'operator', alias: 'Operator', schema: context.schema, dataReadonly: false, schemaReadonly: true } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1571,7 +1571,7 @@
     },
     {
       "parameters": {
-      "jsCode": "const context = $('Prepare Operator Begin').first().json;\nconst state = $('Begin Operator Source').first().json.result;\nconst integrations = Array.isArray($json) ? $json : ($json.list || $json.data || []);\nconst title = `automation-data/${context.domain}/operator`;\nconst named = integrations.filter((item) => item && item.title === title);\nif (named.length > 1) throw new Error('duplicate_integration');\nlet existing = null;\nif (state.integrationId) {\n  existing = integrations.find((item) => item.id === state.integrationId);\n  if (!existing || existing.title !== title) throw new Error('integration_identity_mismatch');\n} else if (named.length === 1) existing = named[0];\nconst payload = {\n  title, type: 'database', sub_type: 'pg', is_private: true,\n  config: { client: 'pg', connection: { host: 'automation-data-postgresql.automation-data.svc.cluster.local', port: 5432, user: state.role, password: context.generatedValue, database: context.domain, ssl: false }, searchPath: ['operator'] }\n};\nreturn [{ json: { ...context, ...state, integrationId: existing?.id || null, integrationExists: Boolean(existing), payload } }];"
+      "jsCode": "const context = $('Prepare Operator Begin').first().json;\nconst state = $('Begin Operator Source').first().json.result;\nconst integrations = Array.isArray($json) ? $json : ($json.list || $json.data || []);\nconst title = `automation-data/${context.domain}/operator`;\nconst named = integrations.filter((item) => item && item.title === title);\nif (named.length > 1) throw new Error('duplicate_integration');\nlet existing = null;\nif (state.integrationId) {\n  existing = integrations.find((item) => item.id === state.integrationId);\n  if (!existing || existing.title !== title) throw new Error('integration_identity_mismatch');\n} else if (named.length === 1) existing = named[0];\nconst payload = {\n  title, type: 'database', sub_type: 'pg', is_private: true,\n  config: { client: 'pg', connection: { host: 'automation-data-postgresql.automation-data.svc.cluster.local', port: 5432, user: state.role, password: context.generatedValue, database: context.domain, ssl: false }, searchPath: [context.schema] }\n};\nreturn [{ json: { ...context, ...state, integrationId: existing?.id || null, integrationExists: Boolean(existing), payload } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1692,7 +1692,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $('Require Operator Queue Slot').first().json;\nreturn [{ json: { ...context, sourcePayload: {\n  fk_integration_id: context.integrationId, alias: 'Operator', type: 'pg',\n  config: { client: 'pg', searchPath: ['operator'] }, inflection_column: 'none', inflection_table: 'none',\n  is_schema_readonly: true, is_data_readonly: false\n} } }];"
+        "jsCode": "const context = $('Require Operator Queue Slot').first().json;\nreturn [{ json: { ...context, sourcePayload: {\n  fk_integration_id: context.integrationId, alias: 'Operator', type: 'pg',\n  config: { client: 'pg', searchPath: [context.schema] }, inflection_column: 'none', inflection_table: 'none',\n  is_schema_readonly: true, is_data_readonly: false\n} } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1988,7 +1988,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const base = $('Prepare Operator').first().json;\nconst registry = $('Read Operator State').first().json.result || {};\nconst source = $json;\nconst selections = [];\nfor (const name of ['Discover Operator Source', 'Discover Operator Source After Job']) {\n  try { const candidate = $(name).first().json; if (candidate?.sourceId === source.id && candidate?.selectedIntegrationId) selections.push(candidate); } catch {}\n}\nif (selections.length !== 1) throw new Error('operator_source_identity_invalid');\nconst selected = selections[0];\nconst searchPath = source.config?.searchPath || source.config?.search_path || [];\nif (!source.id || source.id !== selected.sourceId || source.base_id !== base.baseId || source.fk_integration_id !== selected.selectedIntegrationId || source.alias !== 'Operator') throw new Error('operator_source_identity_invalid');\nif (!source.fk_integration_id || !Array.isArray(searchPath) || searchPath.length !== 1 || searchPath[0] !== 'operator') throw new Error('operator_schema_invalid');\nif (source.is_data_readonly !== false || source.is_schema_readonly !== true) throw new Error('operator_flags_invalid');\nconst sourceCreateJobId = selected.sourceCreateJobId || registry.sourceCreateJobId || base.sourceCreateJobId || null;\nconst sourceCreateJobState = selected.jobState === 'completed' ? 'completed' : null;\nreturn [{ json: { ...base, ...registry, baseId: registry.baseId ?? base.baseId, sourceId: source.id, integrationId: selected.selectedIntegrationId, sourceCreateJobId, sourceCreateJobState, accessKind: 'operator', sourceDiscovered: true, sourceReadBack: true, dataEditAllowed: source.is_data_readonly === false, schemaEditAllowed: source.is_schema_readonly === false } }];"
+        "jsCode": "const base = $('Prepare Operator').first().json;\nconst registry = $('Read Operator State').first().json.result || {};\nconst source = $json;\nconst selections = [];\nfor (const name of ['Discover Operator Source', 'Discover Operator Source After Job']) {\n  try { const candidate = $(name).first().json; if (candidate?.sourceId === source.id && candidate?.selectedIntegrationId) selections.push(candidate); } catch {}\n}\nif (selections.length !== 1) throw new Error('operator_source_identity_invalid');\nconst selected = selections[0];\nconst searchPath = source.config?.searchPath || source.config?.search_path || [];\nif (!source.id || source.id !== selected.sourceId || source.base_id !== base.baseId || source.fk_integration_id !== selected.selectedIntegrationId || source.alias !== 'Operator') throw new Error('operator_source_identity_invalid');\nif (!source.fk_integration_id || !Array.isArray(searchPath) || searchPath.length !== 1 || searchPath[0] !== base.schema) throw new Error('operator_schema_invalid');\nif (source.is_data_readonly !== false || source.is_schema_readonly !== true) throw new Error('operator_flags_invalid');\nconst sourceCreateJobId = selected.sourceCreateJobId || registry.sourceCreateJobId || base.sourceCreateJobId || null;\nconst sourceCreateJobState = selected.jobState === 'completed' ? 'completed' : null;\nreturn [{ json: { ...base, ...registry, baseId: registry.baseId ?? base.baseId, sourceId: source.id, integrationId: selected.selectedIntegrationId, sourceCreateJobId, sourceCreateJobState, accessKind: 'operator', sourceDiscovered: true, sourceReadBack: true, dataEditAllowed: source.is_data_readonly === false, schemaEditAllowed: source.is_schema_readonly === false } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -2116,7 +2116,7 @@
     },
     {
       "parameters": {
-      "jsCode": "const context = $('Prepare Operator Rotation').first().json;\nconst state = $json.result;\nif (!state || state.state !== 'rotating' || !state.integrationId || state.sourceId !== context.sourceId) throw new Error('operator_rotation_state_invalid');\nreturn [{ json: { ...context, ...state, payload: {\n  title: `automation-data/${context.domain}/operator`, type: 'database', sub_type: 'pg', is_private: true,\n  config: { client: 'pg', connection: { host: 'automation-data-postgresql.automation-data.svc.cluster.local', port: 5432, user: state.role, password: context.generatedValue, database: context.domain, ssl: false }, searchPath: ['operator'] }\n} } }];"
+      "jsCode": "const context = $('Prepare Operator Rotation').first().json;\nconst state = $json.result;\nif (!state || state.state !== 'rotating' || !state.integrationId || state.sourceId !== context.sourceId) throw new Error('operator_rotation_state_invalid');\nreturn [{ json: { ...context, ...state, payload: {\n  title: `automation-data/${context.domain}/operator`, type: 'database', sub_type: 'pg', is_private: true,\n  config: { client: 'pg', connection: { host: 'automation-data-postgresql.automation-data.svc.cluster.local', port: 5432, user: state.role, password: context.generatedValue, database: context.domain, ssl: false }, searchPath: [context.schema] }\n} } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -2641,6 +2641,71 @@
       ],
       "id": "10000000-0000-4000-8000-000000000108",
       "name": "Respond"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.operation }}",
+              "rightValue": "configure",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        160
+      ],
+      "id": "configure-requested",
+      "name": "Configure Requested"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.configure_nocodb_schema_mapping($1, $2, $3) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain, $json.readerSchema, $json.operatorSchema] }}",
+          "queryBatching": "transaction"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        960,
+        -80
+      ],
+      "id": "configure-schema-mapping",
+      "name": "Configure Schema Mapping",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Normalize Source Request').first().json;\nconst result = $json.result;\nif (request.operation !== 'configure' || !result || Object.keys(result).sort().join(',') !== 'domain,operatorRole,operatorSchema,readerRole,readerSchema' || result.domain !== request.domain || result.readerSchema !== request.readerSchema || result.operatorSchema !== request.operatorSchema || result.readerRole !== `${request.domain}_reader` || result.operatorRole !== (request.operatorSchema === null ? null : `${request.domain}_operator`)) throw new Error('mapping_response_invalid');\nreturn [{json: {ok: true, operation: 'configure', state: 'configured', ...result}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        -80
+      ],
+      "id": "prepare-mapping-response",
+      "name": "Prepare Mapping Response",
+      "onError": "continueErrorOutput"
     }
   ],
   "pinData": {},
@@ -2696,7 +2761,7 @@
       "main": [
         [
           {
-            "node": "Initial Prepare Requested",
+            "node": "Configure Requested",
             "type": "main",
             "index": 0
           }
@@ -4754,6 +4819,60 @@
         [
           {
             "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configure Requested": {
+      "main": [
+        [
+          {
+            "node": "Configure Schema Mapping",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Initial Prepare Requested",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configure Schema Mapping": {
+      "main": [
+        [
+          {
+            "node": "Prepare Mapping Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Mapping Response": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
             "type": "main",
             "index": 0
           }

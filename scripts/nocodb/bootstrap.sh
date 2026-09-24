@@ -545,7 +545,7 @@ require_platform_preflight() {
     echo 'Refusing NocoDB bootstrap: the installed revision and post-upgrade backup preflight failed.' >&2
     return 1
   }
-  [[ "$(cat "$output")" == $'installed_revision=026-nocodb-v1\npost_upgrade_backup=true' ]] || {
+  [[ "$(cat "$output")" == $'installed_revision=026-nocodb-v2\npost_upgrade_backup=true' ]] || {
     echo 'Refusing NocoDB bootstrap: the platform preflight returned unexpected evidence.' >&2
     return 1
   }

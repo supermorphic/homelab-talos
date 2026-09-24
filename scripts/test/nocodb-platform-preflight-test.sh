@@ -105,7 +105,7 @@ elif [[ "$args" == *' logs job/'*' --container=preflight '* ]]; then
   if [[ "${PREFLIGHT_TEST_CASE:-}" == invalid-output ]]; then
     printf '%s\n' 'installed_revision=025-platform-v1' 'post_upgrade_backup=true'
   else
-    printf '%s\n' 'installed_revision=026-nocodb-v1' 'post_upgrade_backup=true'
+    printf '%s\n' 'installed_revision=026-nocodb-v2' 'post_upgrade_backup=true'
   fi
 elif [[ "$args" == *' get pods --selector='*'--output json '* ]]; then
   printf '%s\n' '{"items":[{"status":{"phase":"Failed","containerStatuses":[{"name":"preflight","state":{"terminated":{"reason":"Error","exitCode":1}}}]}}]}'
@@ -138,7 +138,7 @@ run_case() {
 
 run_case success
 [[ "$status" -eq 0 ]] || fail "success failed: $output"
-[[ "$output" == $'installed_revision=026-nocodb-v1\npost_upgrade_backup=true' ]] ||
+[[ "$output" == $'installed_revision=026-nocodb-v2\npost_upgrade_backup=true' ]] ||
   fail "success exposed unexpected output: $output"
 rg -Fxq create-job "$fixture/events.log" || fail 'success did not create the fixed Job'
 rg -Fxq delete-job "$fixture/events.log" || fail 'success did not remove the fixed Job'

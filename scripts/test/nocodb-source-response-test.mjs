@@ -109,9 +109,10 @@ printf '%s\\n' "\${NOCODB_SOURCE_RESPONSE_BODY:?}"
 `);
   await Promise.all([chmod(gitStub, 0o700), chmod(curlStub, 0o700)]);
 
-  const invoke = (response, operation = 'sync') => spawnSync(
+  const invoke = (response, operation = 'sync', operatorSchema = 'requests') => spawnSync(
     commandPath,
-    operation === 'rotate' ? ['rotate', 'domain_one', 'operator'] : ['sync', 'domain_one'],
+    operation === 'configure' ? ['configure', 'domain_one', 'reporting', operatorSchema ?? '-'] :
+      operation === 'rotate' ? ['rotate', 'domain_one', 'operator'] : ['sync', 'domain_one'],
     {
       cwd: repoRoot,
       encoding: 'utf8',
@@ -121,8 +122,11 @@ printf '%s\\n' "\${NOCODB_SOURCE_RESPONSE_BODY:?}"
         NOCODB_SOURCE_PROVISIONING_HEADER: 'fixture_nocodb_source_provisioning_header_0123456789',
         NOCODB_SOURCE_SYNC_CONFIRM: 'sync:nocodb:domain_one',
         NOCODB_SOURCE_ROTATE_CONFIRM: 'rotate:nocodb:domain_one:operator',
+        NOCODB_SOURCE_CONFIGURE_CONFIRM: `configure:nocodb:domain_one:reporting:${operatorSchema ?? '-'}`,
         NOCODB_SOURCE_RESPONSE_EXPECTED_REQUEST: JSON.stringify(
-          operation === 'rotate'
+          operation === 'configure'
+            ? { domain: 'domain_one', operation: 'configure', readerSchema: 'reporting', operatorSchema }
+            : operation === 'rotate'
             ? { domain: 'domain_one', operation: 'rotate', accessKind: 'operator' }
             : { domain: 'domain_one', operation: 'sync' },
         ),
@@ -172,6 +176,26 @@ printf '%s\\n' "\${NOCODB_SOURCE_RESPONSE_BODY:?}"
   wrongType.operator.credentialGeneration = '4';
   const wrongTypeResult = invoke(wrongType, 'rotate');
   assert.notEqual(wrongTypeResult.status, 0, 'response with a wrong bounded source field type was accepted');
+
+  for (const operatorSchema of ['requests', null]) {
+    const configured = {ok: true, operation: 'configure', state: 'configured', domain: 'domain_one',
+      readerSchema: 'reporting', readerRole: 'domain_one_reader', operatorSchema,
+      operatorRole: operatorSchema === null ? null : 'domain_one_operator'};
+    const result = invoke(configured, 'configure', operatorSchema);
+    assert.equal(result.status, 0, `configure command rejected exact mapping: ${result.stderr}`);
+    assert.deepEqual(JSON.parse(result.stdout), configured);
+    for (const invalid of [{...configured, readerSchema: 'wrong'}, {...configured, operatorRole: 'other_role'}, {...configured, unexpected: true}]) {
+      assert.notEqual(invoke(invalid, 'configure', operatorSchema).status, 0, 'configure accepted mismatched mapping response');
+    }
+  }
+  for (const readerSchema of ['platform_reporting', 'pg_reporting', 'public', 'app', 'read_model', 'a'.repeat(49)]) {
+    const rejected = spawnSync(commandPath, ['configure', 'domain_one', readerSchema, 'requests'], {
+      cwd: repoRoot, encoding: 'utf8', env: {...process.env, PATH: `${binDir}:${process.env.PATH}`,
+        NOCODB_SOURCE_CONFIGURE_CONFIRM: `configure:nocodb:domain_one:${readerSchema}:requests`,
+        NOCODB_SOURCE_PROVISIONING_HEADER: 'fixture_nocodb_source_provisioning_header_0123456789'},
+    });
+    assert.equal(rejected.status, 2, `reserved or invalid schema reached provisioning: ${readerSchema}`);
+  }
 } finally {
   await rm(fixture, { recursive: true, force: true });
 }

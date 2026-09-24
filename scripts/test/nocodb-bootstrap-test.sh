@@ -187,7 +187,7 @@ count=$((count + 1))
 printf '%s\n' "$count" >"$FAKE_CASE_ROOT/platform-preflight-count"
 [[ "${FAKE_FAILURE:-}" != platform-preflight ]] || exit 86
 [[ "${FAKE_FAILURE:-}" != platform-preflight-recheck || "$count" -lt 2 ]] || exit 86
-printf '%s\n' 'installed_revision=026-nocodb-v1' 'post_upgrade_backup=true'
+printf '%s\n' 'installed_revision=026-nocodb-v2' 'post_upgrade_backup=true'
 EOF
 
 cat >"$stub_bin/just" <<'EOF'

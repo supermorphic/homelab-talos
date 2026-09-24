@@ -275,13 +275,13 @@ PostgreSQL target, backup health, and absence of another upgrade before it creat
 bounded Job.
 
 ```bash
-AUTOMATION_DATA_UPGRADE_CONFIRM='upgrade:automation-data:nocodb-v1' \
+AUTOMATION_DATA_UPGRADE_CONFIRM='upgrade:automation-data:nocodb-v2' \
   mise exec -- just kube automation-data-upgrade
 ```
 
 The Job accepts no SQL, password, revision, database, or role argument. It uses the
-existing backup credential by Secret reference and applies only `026-nocodb-v1`. It
-serializes the transaction, validates the accepted pre-extension schema, installs the
+existing backup credential by Secret reference and applies only `026-nocodb-v2`. It
+serializes the transaction, validates the accepted pre-extension or v1 schema, installs the
 shared fresh-initialization definitions, and reads back
 `platform_operations.read_platform_revision()`. An unchanged rerun is a validated
 no-op. An unknown revision or partial schema fails without changing control-schema
@@ -289,7 +289,8 @@ state. Each run uses a unique `automation-data-nocodb-upgrade-*` Job name. Clean
 the run label and Kubernetes object UID before deletion, including after a Job failure,
 and the command does not retrieve a Secret.
 
-On installed `026-nocodb-v1`, this command also reconciles the reviewed metadata
+The command preserves existing source identities and adds the custom schema mapping
+registry. It also reconciles the reviewed metadata
 function from `nocodb-metadata.sql` and the validation functions from
 `domain-validation.sql`. Validation permits application-owned restrictions while
 rejecting excess runtime authority. Metadata provisioning permits never-ready registry
@@ -300,11 +301,11 @@ an unchanged rerun preserves that timestamp.
 
 After the command passes, create another complete automation-data logical backup. Keep
 NocoDB suspended until that post-upgrade bundle and the remaining NocoDB bootstrap
-prerequisites pass. Backup and restore accept both the exact pre-extension baseline and
-the exact `026-nocodb-v1` schema; they reject unknown or malformed optional state.
+prerequisites pass. Backup and restore recognize the exact pre-extension baseline,
+`026-nocodb-v1`, and `026-nocodb-v2`; they reject unknown or malformed optional state.
 The catalog-only upgrade does not change the platform generation or managed-domain
-rows. Instead, the captured backup state adds the installed revision and NocoDB source
-array in the same transaction. A backup that spans the upgrade therefore observes
+rows. Instead, the captured backup state includes the installed revision, NocoDB source
+array, and custom schema mappings. A backup that spans the upgrade therefore observes
 different before/after state and retries instead of publishing a mixed-schema bundle.
 
 ## Routine operation

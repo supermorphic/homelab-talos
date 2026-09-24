@@ -271,8 +271,10 @@ case "$restored_catalog_state" in
       --tuples-only --no-align \
       --command='SELECT platform_operations.read_platform_revision();'
     )" || restore_fail platform-revision-oracle
-    test "$restored_platform_revision" = '026-nocodb-v1' ||
-      restore_fail platform-revision-validation
+    case "$restored_platform_revision" in
+      026-nocodb-v1 | 026-nocodb-v2) ;;
+      *) restore_fail platform-revision-validation ;;
+    esac
     ;;
   *) restore_fail platform-catalog-validation ;;
 esac
@@ -297,13 +299,23 @@ WHERE
       ARRAY['generation', 'nocodbSources', 'platformRevision', 'registry']::text[] AND
     jsonb_typeof(captured.state->'generation') = 'number' AND
     jsonb_typeof(captured.state->'registry') = 'array' AND
-    jsonb_typeof(captured.state->'nocodbSources') = 'array');
+    jsonb_typeof(captured.state->'nocodbSources') = 'array') OR
+  ('$restored_platform_revision' = '026-nocodb-v2' AND
+    captured.state->>'platformRevision' = '026-nocodb-v2' AND
+    (SELECT array_agg(key ORDER BY key)
+     FROM captured, LATERAL jsonb_object_keys(captured.state) AS key) =
+      ARRAY['generation', 'nocodbSchemaMappings', 'nocodbSources',
+        'platformRevision', 'registry']::text[] AND
+    jsonb_typeof(captured.state->'generation') = 'number' AND
+    jsonb_typeof(captured.state->'registry') = 'array' AND
+    jsonb_typeof(captured.state->'nocodbSources') = 'array' AND
+    jsonb_typeof(captured.state->'nocodbSchemaMappings') = 'array');
 ")" || restore_fail platform-state-query
 test "$restored_platform_shape" = "$restored_platform_revision" ||
   restore_fail platform-state-validation
 case "$restored_platform_revision" in
   025-baseline) ;;
-  026-nocodb-v1)
+  026-nocodb-v1 | 026-nocodb-v2)
     nocodb_permission_contract="$(psql --dbname=automation_data_control --tuples-only --no-align --command="
 SELECT COALESCE(bool_and(
   source.state = 'ready' AND

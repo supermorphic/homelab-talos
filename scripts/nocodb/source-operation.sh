@@ -3,14 +3,17 @@
 set -euo pipefail
 
 usage() {
-  echo 'Usage: source-operation.sh <prepare|sync|rotate> <domain> [reader|operator]' >&2
+  echo 'Usage: source-operation.sh <prepare|sync|rotate> <domain> [reader|operator], or configure <domain> <reader-schema> [operator-schema|-]' >&2
   exit 2
 }
 
-[[ "$#" -ge 2 && "$#" -le 3 ]] || usage
+[[ "$#" -ge 2 && "$#" -le 4 ]] || usage
 operation="$1"
 domain="$2"
 access_kind="${3:-}"
+reader_schema=''
+operator_schema=''
+[[ "$operation" == configure || "$#" -le 3 ]] || usage
 
 [[ "$domain" =~ ^[a-z][a-z0-9_]{0,47}$ ]] || {
   echo 'NocoDB source domain must match ^[a-z][a-z0-9_]{0,47}$.' >&2
@@ -18,6 +21,23 @@ access_kind="${3:-}"
 }
 
 case "$operation" in
+  configure)
+    reader_schema="${3:-}"
+    operator_schema="${4:--}"
+    for schema in "$reader_schema" "$operator_schema"; do
+      [[ "$schema" == '-' && "$schema" == "$operator_schema" ]] && continue
+      [[ "$schema" =~ ^[a-z][a-z0-9_]{0,47}$ && "$schema" != pg_* && "$schema" != platform* &&
+        "$schema" != public && "$schema" != app && "$schema" != read_model &&
+        "$schema" != operator && "$schema" != information_schema &&
+        "$schema" != platform_internal && "$schema" != platform_operations ]] || usage
+    done
+    [[ "$reader_schema" != '-' && "$reader_schema" != "$operator_schema" ]] || usage
+    expected_confirmation="configure:nocodb:${domain}:${reader_schema}:${operator_schema}"
+    [[ "${NOCODB_SOURCE_CONFIGURE_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo "Refusing NocoDB schema mapping; set NOCODB_SOURCE_CONFIGURE_CONFIRM='$expected_confirmation'." >&2
+      exit 1
+    }
+    ;;
   prepare)
     [[ -z "$access_kind" ]] || usage
     expected_confirmation="prepare:nocodb:${domain}"
@@ -77,7 +97,11 @@ trap 'rm -rf -- "$temp_dir"' EXIT
 request_body="$temp_dir/request.json"
 curl_config="$temp_dir/request.curl"
 
-if [[ "$operation" == rotate ]]; then
+if [[ "$operation" == configure ]]; then
+  jq -cn --arg domain "$domain" --arg reader "$reader_schema" --arg operator "$operator_schema" \
+    '{domain: $domain, operation: "configure", readerSchema: $reader,
+      operatorSchema: (if $operator == "-" then null else $operator end)}' >"$request_body"
+elif [[ "$operation" == rotate ]]; then
   jq -cn --arg domain "$domain" --arg access_kind "$access_kind" \
     '{domain: $domain, operation: "rotate", accessKind: $access_kind}' >"$request_body"
 else
@@ -99,7 +123,19 @@ curl_status=$?
 set -e
 [[ "$curl_status" -eq 0 ]] || exit "$curl_status"
 
-if [[ "$operation" == prepare ]]; then
+if [[ "$operation" == configure ]]; then
+  jq -e --arg domain "$domain" --arg reader "$reader_schema" --arg operator "$operator_schema" '
+    type == "object" and
+    (keys | sort == ["domain", "ok", "operation", "operatorRole", "operatorSchema", "readerRole", "readerSchema", "state"]) and
+    .ok == true and .domain == $domain and .operation == "configure" and .state == "configured" and
+    .readerSchema == $reader and .readerRole == ($domain + "_reader") and
+    (if $operator == "-" then .operatorSchema == null and .operatorRole == null
+     else .operatorSchema == $operator and .operatorRole == ($domain + "_operator") end)
+  ' <<<"$response" >/dev/null || {
+    echo 'NocoDB source response did not satisfy the schema mapping contract.' >&2
+    exit 1
+  }
+elif [[ "$operation" == prepare ]]; then
   jq -e --arg domain "$domain" '
     type == "object" and
     (keys | sort == [
