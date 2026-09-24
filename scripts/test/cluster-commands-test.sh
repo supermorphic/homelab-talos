@@ -10,9 +10,7 @@ rg -q '^    node \.\.\.$' <<<"$root_list"
 rg -q '^    cluster \.\.\.$' <<<"$root_list"
 
 node_list="$(mise exec -- just --justfile .just/node.just --list --unsorted)"
-for command in maintenance-check maintenance-enter maintenance-exit reboot resize-longhorn; do
-  rg -q "^    ${command}( |$)" <<<"$node_list"
-done
+[[ "$node_list" == *'    resize-longhorn '* ]]
 
 cluster_list="$(mise exec -- just --justfile .just/cluster.just --list --unsorted)"
 rg -q '^    status( |$)' <<<"$cluster_list"

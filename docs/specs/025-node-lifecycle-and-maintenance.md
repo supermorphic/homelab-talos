@@ -11,18 +11,21 @@ This specification supports
 [GitHub issue 346](https://github.com/supermorphic/homelab-talos/issues/346). It applies
 the command profiles and safeguards established by
 [Repository Command Lifecycle](021-repository-command-lifecycle.md) to the platform in
-[Talos and Flux Platform](010-talos-flux-platform.md). Current repository policy,
-executable source, pinned versions, and operational documentation remain authoritative.
+[Talos and Flux Platform](010-talos-flux-platform.md). Current repository policy, executable source, pinned versions, and operational
+documentation remain authoritative. Lifecycle execution moved to `homelab-playbook` in
+2026. This specification remains the Talos repository record for the shared containment
+protocol and the local observation and recovery-verification boundary. The playbook
+repository's specification 011 is authoritative for the migrated action implementation.
 
 ## Scope
 
-This design introduces:
+This design introduced:
 
 - an established-node command domain for reboot, Longhorn volume resizing, and planned
   maintenance;
 - an established-cluster observation domain for aggregate status and verification;
 - a persistent Node-based containment state and a transient shared disruption Lease;
-- a repository-owned Kubernetes and Longhorn drain transaction;
+- a playbook-owned Kubernetes and Longhorn drain transaction;
 - a common recovery-acceptance path;
 - a controlled abrupt electrical power-loss resilience test; and
 - the missing requested-member postcondition for exceptional etcd join retry.
@@ -85,37 +88,28 @@ The lifecycle follows these rules:
 
 ## Public command surface
 
-The approved surface is:
+Established-node maintenance, reboot, and attended abrupt-loss execution is owned by
+`homelab-playbook`:
 
 | Command | Profile | Confirmation |
 | --- | --- | --- |
-| `mise exec -- just node maintenance-check <node>` | Read-only lifecycle check | None |
-| `mise exec -- just node maintenance-enter <node>` | Planned disruption | `NODE_MAINTENANCE_CONFIRM='enter:<node>:<ip>'` |
-| `mise exec -- just node maintenance-exit <node>` | Recovery acceptance | `NODE_LIFECYCLE_CONFIRM='accept:<node>:<kind>'` |
-| `mise exec -- just node reboot <node>` | Planned short disruption | `NODE_REBOOT_CONFIRM='reboot:<node>:<ip>'` |
-| `mise exec -- just node resize-longhorn <node>` | Destructive Talos volume operation | Existing `TALOS_RESIZE_LONGHORN_CONFIRM='resize-longhorn:<node>:<ip>'` |
+| `mise run playbook -- talos maintenance-check production -e @/absolute/private/request.json --check` | Read-only lifecycle check | None |
+| `mise run playbook -- talos maintenance-enter production -e @/absolute/private/request.json` | Planned disruption | `talos_confirmation: enter:<node>:<ip>` in the private request |
+| `mise run playbook -- talos maintenance-exit production -e @/absolute/private/request.json` | Recovery acceptance | `talos_confirmation: accept:<node>:<kind>` in the private request |
+| `mise run playbook -- talos reboot production -e @/absolute/private/request.json` | Planned short disruption | `talos_confirmation: reboot:<node>:<ip>` in the private request |
+| `mise run playbook -- talos abrupt-loss-test production -e @/absolute/private/request.json` | Controlled unprepared failure | Target-bound `talos_confirmation` and `talos_test_confirmation: chaos:node-abrupt-loss` in the private request |
+
+This repository retains these related commands:
+
+| Command | Profile | Confirmation |
+| --- | --- | --- |
+| `mise exec -- just node resize-longhorn <node>` | Destructive Talos volume operation | `TALOS_RESIZE_LONGHORN_CONFIRM='resize-longhorn:<node>:<ip>'` |
 | `mise exec -- just cluster status [node]` | Read-only diagnostic view | None |
 | `mise exec -- just cluster verify` | Read-only established-platform acceptance | None |
-| `mise exec -- just test resilience node-abrupt-loss <node>` | Controlled unprepared failure | `CLUSTER_CHAOS_CONFIRM='chaos:node-abrupt-loss'` and `NODE_ABRUPT_LOSS_CONFIRM='remove-power:<node>:<ip>'` |
 
-`NODE_REBOOT_CONFIRM` replaces `TALOS_REBOOT_CONFIRM` because the new operation owns a
-Kubernetes, Longhorn, and Talos lifecycle rather than only a Talos reboot.
-
-The recovery token follows the established repository grammar of an action prefix plus
-target context. Its lifecycle kind is read from persisted state, so a confirmation for
-one recovery state cannot accept a different state.
-
-The following semantic moves are atomic and leave no aliases:
-
-```text
-bootstrap reboot <node>          -> node reboot <node>
-bootstrap resize-longhorn <node> -> node resize-longhorn <node>
-bootstrap status [node]          -> cluster status [node]
-bootstrap verify                 -> cluster verify
-```
-
-`bootstrap retry-join <node>` remains exceptional bootstrap recovery. A command is not
-moved only because it accepts a node argument.
+The playbook action resolves its source revision and target from its request. It uses this
+repository's fixed `just kube recovery-verify REQUEST_FILE` interface for read-only
+baseline and recovery acceptance. No deprecated local lifecycle aliases remain.
 
 ## Lifecycle state model
 
@@ -136,11 +130,11 @@ acquire, renew, verify-holder, and release behavior.
 
 The Lease protects only an active transaction. It is acquired and renewed by:
 
-- `node reboot`;
-- `node maintenance-enter`;
-- `node maintenance-exit`;
+- playbook `talos reboot`;
+- playbook `talos maintenance-enter`;
+- playbook `talos maintenance-exit`;
 - `node resize-longhorn`;
-- `test resilience node-abrupt-loss`;
+- playbook `talos abrupt-loss-test`;
 - `bootstrap retry-join`; and
 - existing mutating test scenarios or campaigns whose current contract already requires
   the shared lock.
@@ -324,7 +318,7 @@ and cordoned for recovery through `maintenance-exit`.
 
 The pinned Talos 1.13.7 CLI has an optional `reboot --drain` path. Its implementation
 cordons and drains before reboot, then uses deferred cleanup to uncordon even when a
-later stage fails. That behavior conflicts with persistent containment, so `node reboot`
+later stage fails. That behavior conflicts with persistent containment, so `talos reboot`
 does not pass `--drain`.
 
 Talos 1.13.7 `shutdown` behaves differently: it performs its own cordon and drain unless
@@ -654,7 +648,7 @@ not make unrelated application health a cluster invariant. A lifecycle transacti
 verify the specific workloads it drained or observed without adding them to the general
 cluster contract.
 
-`node reboot` additionally proves safe reuse or convergence of replicas retained for the
+`talos reboot` additionally proves safe reuse or convergence of replicas retained for the
 short outage. `maintenance-exit` restores recorded Longhorn state before storage
 convergence. Abrupt-loss recovery requires both its separately recorded degraded-state
 result and full three-node recovery.
@@ -752,164 +746,71 @@ AND no relevant etcd alarms remain
 
 ## Authority and credential boundary
 
-These observational commands remain usable with linked-worktree scoped credentials:
+The local `cluster status`, `cluster verify`, and recovery-verification commands remain
+observational. The fixed recovery verifier requires explicit kubeconfig, talosconfig,
+and context values in its validated request and uses only the prepared Helm cache bound
+by the playbook adapter.
 
-```text
-node maintenance-check
-cluster status
-cluster verify
-```
-
-The observer receives only missing `get`, `list`, and `watch` access for:
-
-- the shared Lease;
-- PersistentVolumes, for PVC and PV identity checks;
-- Longhorn Replicas; and
-- Longhorn Settings.
-
-Existing read access covers the other required objects. Observer and diagnostic roles do
-not receive create, update, patch, delete, eviction, exec, port-forward, shutdown, or
-reboot authority.
-
-Mutating node lifecycle and abrupt-loss commands are operator-run and refuse scoped
-linked-worktree credentials before mutation. They require the authorized main-clone
-Kubernetes and Talos credentials. Permission failure never causes broader-credential
-fallback, RBAC modification, or ad hoc privilege escalation.
+Mutating node lifecycle and abrupt-loss actions are operator-run in `homelab-playbook`.
+That repository owns inventory selection, private request validation, credentials,
+confirmation, PTY handling, and invocation of the pinned Talos lifecycle role. It copies
+the selected clean Talos source revision into a private runtime directory before it calls
+the fixed verifier. Permission failure never causes broader-credential fallback, RBAC
+modification, or ad hoc privilege escalation.
 
 Confirmation is an execution-intent and target-binding guard, not authorization.
 
 ## Implementation structure
 
-The root Justfile imports thin `.just/node.just` and `.just/cluster.just` modules. Public
-recipes delegate to focused controllers under `scripts/node/` and `scripts/cluster/`.
-The shared node controller owns target resolution, Lease handling, structured-state
-parsing, optimistic patches, checks, drain, Longhorn handling, Talos operations,
-acceptance, and error reporting. The attended abrupt-loss controller is Python so its
-clock, prompts, observations, and evidence state are directly injectable in offline
-tests; a thin Bash bridge reuses the same Lease and lifecycle recovery functions.
+`homelab-playbook` owns the lifecycle state machine, drain, Longhorn handling, Talos
+operations, accepted recovery, and attended abrupt-loss controller. This repository owns
+the fixed read-only recovery verifier and its prepared chart cache, plus the generic
+Lease, disruption-admission, node-target, Longhorn-verification, resize, cluster
+observation, Cilium, foundation, and bootstrap retry-join support used by local workflows.
 
-The existing Bash Lease implementation moves to a shared `scripts/lib/` location and
-retains focused tests. A large inline Just implementation is rejected because the state
-machine and failure injection would be difficult to test. A separate Python lifecycle
-owner is also rejected because it would duplicate or split Lease ownership. Small pure
-helpers remain possible only when a demonstrated parsing need justifies them.
-
-Public commands share internal primitives but do not implement themselves by invoking
-another public lifecycle command. Each transaction owns its confirmation, state,
-failure boundary, and safety-critical rechecks.
+The root Justfile retains `.just/node.just` only for `node resize-longhorn`. Lifecycle
+commands no longer delegate to `scripts/node/` here. The shared Node annotation schema and
+Lease name remain a cross-repository protocol so the verifier and retained disruptive
+operations reject concurrent or malformed lifecycle state.
 
 ## Resilience-test allocation
 
-The application-specific `plex-node-reboot` test is retired. Its useful assertions remain
-under `plex-cross-node-reschedule`, which already verifies:
+The application-specific `plex-node-reboot` test remains retired. Its useful assertions
+remain under `plex-cross-node-reschedule`: replacement readiness, unchanged PVC identity,
+Longhorn attachment, persistence-marker survival, and SMB media remount.
 
-- Plex replacement readiness on another node;
-- unchanged PVC identity;
-- Longhorn attachment to the landing node;
-- persistence-marker survival; and
-- SMB media remount.
-
-The new `node-abrupt-loss` scenario is target-node-driven and cluster-scoped. It does not
-depend on Plex being scheduled on the selected target. If Plex is affected, generic
-workload and storage inventory observes it, while the durable Plex-specific contract
-continues to belong to `plex-cross-node-reschedule`.
-
-`node-abrupt-loss` is cataloged as a standalone operator-run resilience test. It is not
-added to a frozen campaign because it requires explicit physical target selection and
-two attended electrical actions.
+The former local `node-abrupt-loss` catalog scenario is retired. Its complete attended
+experiment and its offline regression coverage moved to the `homelab-playbook` `talos
+abrupt-loss-test` action. It is not a Talos catalog suite or campaign member.
 
 ## Command migration
 
-The semantic moves update all repository-owned consumers in one change:
-
-- root and module recipes;
-- internal dependencies;
-- scripts and fixtures;
-- catalog entries and campaign membership;
-- focused tests and validators;
-- README command tables and examples;
-- testing references;
-- guides and runbooks; and
-- the current repository command-lifecycle reference where needed.
-
-Old public names, deprecated aliases, and parallel confirmation terminology are removed.
-`plex-node-reboot` source, catalog registration, tests, and campaign references are also
-removed.
-
-Code must not be downgraded to a version that cannot interpret the lifecycle annotation
-while any Node remains annotated or cordoned. Recovery with the matching implementation
-must complete first.
+The migration removes the local maintenance, reboot, and abrupt-loss recipes,
+controllers, lifecycle-only fixtures, catalog registration, dispatch, and publication
+references in one cutover. It retains the shared protocol readers and unrelated generic
+support named above. A Node with an existing lifecycle annotation must be recovered with
+the matching playbook action; downgrading to an implementation that cannot interpret the
+record remains unsafe.
 
 ## Validation
 
-Cluster-independent validation uses economical table-driven and state-transition tests
-instead of duplicating similar cases. Focused coverage proves:
+Cluster-independent validation is split across the two repositories. `homelab-playbook`
+proves request validation, target resolution, confirmation, credentials, lifecycle state
+transitions, ordered mutation, failure containment, PTY interaction, and the attended
+abrupt-loss controller. This repository proves:
 
-- exact new command domains and removal of old names;
-- confirmation and credential guards;
-- observer read grants and continued mutation denial;
-- Lease acquire, renew, ownership loss, expiry, and release behavior;
-- lifecycle record parsing and fail-closed schema handling;
-- optimistic concurrency on Node and Longhorn objects;
-- every compare-and-restore branch;
-- atomic Node containment and final acceptance patches;
-- drain arguments and absence of eviction, PDB, unmanaged-pod, or storage bypasses;
-- operation-specific reboot and maintenance storage behavior;
-- failure containment before and after every material disruption boundary;
-- absence of automatic uncordon cleanup;
-- passive abrupt-loss observation, continuous probes, and separate primary/recovery
-  outcomes;
-- `retry-join` requested-member, exact-membership, and alarm postconditions;
-- removal of `plex-node-reboot` with retained Plex reschedule coverage;
-- standalone abrupt-loss catalog registration and campaign exclusion; and
-- complete documentation migration without old public command names.
+- the fixed prepare, baseline, and recovery verifier contract;
+- fail-closed lifecycle annotation parsing and recovery gates;
+- cache-only chart identity, version, and digest validation before target calls;
+- the real Cilium, foundation, Flux, Talos, etcd, and Longhorn verification chain;
+- generic Lease and disruption-admission behavior;
+- retained Longhorn resize and bootstrap retry-join serialization;
+- the local command, catalog, harness, impact, and publication inventories; and
+- retained Plex reschedule coverage after the local abrupt-loss scenario retirement.
 
-The implementation adds at most two new top-level offline harness cases:
-
-- one node-lifecycle case for state transitions, ordered calls, failure injection,
-  workload readiness, storage handling, and recovery; and
-- one cluster-commands case for command migration, established verification composition,
-  and the private pre-Cilium bootstrap prerequisite.
-
-Existing Lease, bootstrap recovery, observer access, resilience-controller, catalog, and
-dispatch suites are extended in place. State combinations and failure boundaries are
-data rows or subtests inside those cases rather than separate process-heavy scripts. The
-expected addition is approximately 40 to 60 logical rows across the new and extended
-suites, not 40 to 60 new top-level test processes.
-
-The CI runtime budget for this specification is:
-
-```text
-expected added runtime: no more than 7 seconds
-review ceiling: 10 seconds or 1.5% of the current hosted just-ci median,
-                whichever is lower
-```
-
-The focused lifecycle tests and a same-machine before-and-after `just ci` comparison are
-reported during implementation review. This is a review budget, not a timing assertion
-inside CI. If the focused additions exceed the ceiling, implementation must first remove
-avoidable process starts, repeated parsing, rendering, or duplicated cases. An exception
-requires a concrete coverage and runtime justification.
-
-The implemented top-level cases measured 2.08 seconds for `node-lifecycle` and 0.69
-seconds for `cluster-commands` on the implementation workstation, or 2.77 seconds
-combined. The additional rows in existing Python, catalog, and access tests use injected
-commands and clocks. Their expected total CI increase remains below four seconds and the
-seven-second budget; hosted CI timing remains the final comparison.
-
-Offline lifecycle tests use fake command adapters, an injected clock, and immediate
-fixture results. They perform no cluster access, network access, real sleep, watch, retry
-delay, Helm render added solely for lifecycle coverage, or destructive action. Attended
-reboot, maintenance, and electrical-loss validation remains outside CI and campaigns.
-
-The canonical pre-merge gate remains:
-
-```text
-mise exec -- just ci
-```
-
-No destructive live cluster execution is required to prove implementation control flow
-when command stubs and fixtures provide independent ordering and failure evidence.
+The canonical Talos pre-publication gate is `mise exec -- just test ci-publish`. Live
+node disruption is outside CI and requires separate operator authorization in the
+playbook repository.
 
 ## Live validation
 
@@ -917,10 +818,13 @@ Linked-worktree credentials cannot run disruptive validation. After merge and re
 Flux reconciliation, operator-owned live validation increases disruption in this order:
 
 1. Verify the updated scoped observer RBAC.
-2. Run `cluster status`, `cluster verify`, and `maintenance-check` against each node.
-3. Run one graceful `node reboot` transaction.
-4. Run one `maintenance-enter`, physical power-on, and `maintenance-exit` cycle.
-5. Run `node-abrupt-loss` last with actual electrical disconnection and restoration.
+2. Run local `cluster status` and `cluster verify`, then playbook `talos
+   maintenance-check` against each node.
+3. Run one graceful playbook `talos reboot` transaction.
+4. Run one playbook `talos maintenance-enter`, physical power-on, and `talos
+   maintenance-exit` cycle.
+5. Run playbook `talos abrupt-loss-test` last with actual electrical disconnection and
+   restoration.
 
 All three nodes must be fully established before advancing to the next disruptive step.
 `node resize-longhorn` is not executed merely to validate its rename.
@@ -930,8 +834,8 @@ All three nodes must be fully established before advancing to the next disruptiv
 ### Talos-owned client drain
 
 Talos exposes client-side drain options, but that path owns cordon and uncordon behavior
-without this repository's independent PDB, workload, Longhorn, persistent containment,
-and recovery-acceptance contract. The repository therefore owns drain explicitly and
+without the playbook's independent PDB, workload, Longhorn, persistent containment,
+and recovery-acceptance contract. The playbook therefore owns drain explicitly and
 uses Talos only for the machine reboot or shutdown stage.
 
 ### Full replica evacuation for every reboot
@@ -988,32 +892,19 @@ upstream operational guidance:
 
 The initiative is complete when:
 
-1. `maintenance-check` reports whether one selected node is safe to disrupt without
-   mutation.
-2. `maintenance-enter` safely drains, fully evacuates Longhorn replicas, shuts down, and
-   leaves exactly one node persistently contained.
-3. `maintenance-exit` restores lifecycle-owned state, accepts recovery, and uncordons as
-   its final mutation.
-4. `node reboot` performs a graceful drain without routine full replica evacuation and
-   keeps failed recovery cordoned.
-5. One shared Lease and persistent Node state enforce the one-node invariant across all
-   qualifying workflows.
-6. Failure semantics distinguish mutation, disruption, containment, recovery, and
-   unresolved incident state without false rollback claims.
-7. `node-abrupt-loss` passively measures a genuine electrical-loss event and separately
-   reports recovery.
-8. Plex-specific persistence coverage remains without `plex-node-reboot`.
-9. Established node and cluster commands use only the new public domains, with no old
-   aliases.
-10. `cluster verify` composes core established-platform verification while the
-    pre-Cilium gate remains private to bootstrap.
-11. `bootstrap retry-join` remains exceptional and proves the requested healthy member
-    result under shared serialization.
-12. Scoped identities gain required observations but no disruptive authority.
-13. Focused cluster-independent tests and `mise exec -- just ci` pass within the approved
-    incremental runtime budget.
-14. The specification is reconciled with the implemented and validated result before
-    merge.
+1. `homelab-playbook` owns maintenance check, maintenance enter, maintenance exit, reboot,
+   and abrupt-loss execution through its registered `talos` actions.
+2. The fixed Talos recovery verifier provides prepare, baseline, and recovery modes and
+   performs no runtime chart fetch.
+3. The shared Lease and persistent Node state enforce the one-node invariant across the
+   playbook actions and retained Talos workflows.
+4. This repository retains cluster observation, Longhorn resize, bootstrap retry-join,
+   and generic protocol support without a runtime dependency on the retired lifecycle
+   controller.
+5. Plex-specific persistence coverage remains without `plex-node-reboot`.
+6. The old abrupt-loss catalog scenario, lifecycle commands, implementation bodies,
+   fixtures, and publication references are absent.
+7. Both repositories' focused offline gates pass at the recorded cutover revisions.
 
 ## Consequences
 
@@ -1022,7 +913,7 @@ one node, drains workloads, contains the target, accepts its return, and only th
 it schedulable. Planned maintenance can span an arbitrary physical-work interval without
 holding an active Lease. Reboot remains efficient by preserving reusable replicas.
 
-The repository also retains honest high-availability evidence. Abrupt electrical loss
+The combined repositories retain honest high-availability evidence. Abrupt electrical loss
 is tested explicitly without graceful preparation, application-specific Plex coverage
 stays with the Plex scenario, and passive behavior remains distinguishable from incident
 intervention.

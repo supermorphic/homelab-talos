@@ -230,9 +230,12 @@ with `homelab.supermorphic.com/node-lifecycle`. This is intentional containment,
 cleanup failure. Correct the reason the node cannot return, start it physically when
 needed, and inspect the recorded kind. Then run:
 
+From `homelab-playbook`, create a private request with
+`"talos_confirmation": "accept:<node>:<kind>"`, then run:
+
 ```bash
-NODE_LIFECYCLE_CONFIRM='accept:<node>:<kind>' \
-  mise exec -- just node maintenance-exit <node>
+mise run playbook -- talos maintenance-exit production \
+  -e @/absolute/private/request.json
 ```
 
 The command accepts only `maintenance`, `reboot`, or `abrupt-loss` state for that exact

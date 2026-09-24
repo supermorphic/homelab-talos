@@ -265,7 +265,7 @@ from that repository. It is not a catalog suite or campaign member here.
 The retired Plex-node reboot assertions remain allocated to
 `plex-cross-node-reschedule`: replacement readiness, unchanged PVC identity, Longhorn
 attachment, persistence marker, and SMB remount. Routine node reboot behavior belongs to
-`mise exec -- just node reboot <node>` and is not a resilience test.
+the `homelab-playbook` `talos reboot` action and is not a resilience test.
 
 Every live command requires an explicit registered target. Smoke additionally
 accepts an optional registered scenario after the target; target and scenario

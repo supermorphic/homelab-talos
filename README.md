@@ -233,9 +233,9 @@ available for focused developer validation.
 | `just cluster status [node]` | Print read-only etcd membership, service, discovery, and recent logs; optionally select one node | — | Diagnostic |
 | `just bootstrap retry-join <node>` | Guard and reboot a failed nuc2/nuc3 etcd join, then require healthy three-member convergence without re-bootstrap | `TALOS_ETCD_RETRY_CONFIRM` | Recovery; mutating after confirmation |
 | `just cluster verify` | Verify the established core platform: Nodes, etcd, Talos, Cilium, Longhorn, and foundation dependencies | — | Operator-only and read-only |
-| `just node maintenance-check <node>` | Report whether the established cluster can safely disrupt one node | — | Operator-only and read-only |
-| `just node maintenance-enter <node>` | Cordon and drain one node, evacuate Longhorn replicas, and shut it down for physical work | `NODE_MAINTENANCE_CONFIRM` | Operator-only; disruptive after confirmation |
-| `just node maintenance-exit <node>` | Restore lifecycle-owned Longhorn state, accept recovery while cordoned, then uncordon | `NODE_LIFECYCLE_CONFIRM` | Operator-only; mutating after confirmation |
+| From `homelab-playbook`, `mise run playbook -- talos maintenance-check production -e @/absolute/private/request.json --check` | Report whether the established cluster can safely disrupt one node | Private request file | Operator-only and read-only |
+| From `homelab-playbook`, `mise run playbook -- talos maintenance-enter production -e @/absolute/private/request.json` | Cordon and drain one node, evacuate Longhorn replicas, and shut it down for physical work | Target-bound confirmation in the private request | Operator-only; disruptive after confirmation |
+| From `homelab-playbook`, `mise run playbook -- talos maintenance-exit production -e @/absolute/private/request.json` | Restore lifecycle-owned Longhorn state, accept recovery while cordoned, then uncordon | Target-bound confirmation in the private request | Operator-only; mutating after confirmation |
 | `just kube cilium-render` | Render the pinned Cilium OCI chart to standard output | — | Read-only |
 | `just kube cilium-validate` | Validate Cilium sources, values, and the Helm render | — | Read-only |
 | `just kube n8n-validate` | Validate n8n, PostgreSQL, backup, route, monitoring, and operations source contracts | — | Cluster-independent and read-only |
@@ -272,7 +272,7 @@ available for focused developer validation.
 | `just kube foundation-status` | Print certificate, MetalLB, Gateway, ExternalDNS, and echo state | — | Read-only |
 | `just bootstrap foundation` | Reconcile the nine staged foundation units in guarded dependency order | `SOPS_AGE_KEY`[`_FILE`]; `FOUNDATION_NETWORK_CONFIRM`; `FOUNDATION_BOOTSTRAP_CONFIRM` | Mutating after confirmation |
 | `just kube foundation-verify` | Verify DNS, trusted HTTPS, echo, Cilium, Talos, and etcd acceptance | — | Read-only |
-| `just node reboot <node>` | Cordon, gracefully drain, reboot one established node without routine replica evacuation, accept recovery, then uncordon | `NODE_REBOOT_CONFIRM` | Operator-only; disruptive after confirmation |
+| From `homelab-playbook`, `mise run playbook -- talos reboot production -e @/absolute/private/request.json` | Cordon, gracefully drain, reboot one established node without routine replica evacuation, accept recovery, then uncordon | Target-bound confirmation in the private request | Operator-only; disruptive after confirmation |
 | From `homelab-playbook`, `mise run playbook -- talos abrupt-loss-test production -e @/absolute/private/request.json` | Observe an unprepared electrical node loss, then contain and recover the node | Target-bound confirmations in the private request | Operator-only; attended standalone playbook action |
 | `just kube flux-restart` | Restart the flux-system controllers and prove reconciliation resumes | `FLUX_RESTART_CONFIRM` | Mutating after confirmation |
 | `just repo storage-secrets` | Validate the UNAS CIFS credentials and write only the encrypted Longhorn backup Secret | `SOPS_AGE_KEY`[`_FILE`]; `CIFS_USERNAME`; `CIFS_PASSWORD`; `STORAGE_SECRETS_CONFIRM` | Mutating tracked ciphertext after confirmation |

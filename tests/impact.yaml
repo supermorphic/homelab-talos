@@ -207,7 +207,6 @@ core_paths:
   - scripts/test/hooks-test.sh
   - scripts/test/install-worktree-credentials-test.sh
   - scripts/test/metrics-server-verify-test.sh
-  - scripts/test/node-lifecycle-test.sh
   - scripts/test/plex-network-observe-test.sh
   - scripts/test/plex-network-policy-guard-test.sh
   - scripts/test/plex-relay-status-test.sh
@@ -245,7 +244,6 @@ core_paths:
   - scripts/test/scenarios/test_tailscale_subnet_router_replica_recovery.py
   - tests/fixtures/cluster-commands/**
   - tests/fixtures/links/**
-  - tests/fixtures/node-lifecycle/**
   - tests/probes/**
   - tests/prometheus/media-alerts_test.yaml
   - tests/prometheus/networking-alerts_test.yaml

@@ -199,8 +199,9 @@ URLs, and observability.
 ## What the Leases protect
 
 Published campaigns hold `flux-system/homelab-test-run-lock` for the complete ordered
-sequence. This shared disruption Lease also serializes node reboot, maintenance
-transitions, Longhorn resize, bootstrap join retry, and the electrical-loss test.
+sequence. This shared disruption Lease also serializes playbook-owned node reboot,
+maintenance transitions and electrical-loss testing with repository-owned Longhorn
+resize and bootstrap join retry.
 Mutating campaign children join the campaign holder and do not release the Lease
 themselves. The Lease protects only an executing transaction; a Node cordon and lifecycle
 annotation preserve planned maintenance or pending recovery after command exit. It does

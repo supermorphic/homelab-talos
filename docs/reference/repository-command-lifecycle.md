@@ -38,7 +38,7 @@ retain a deprecated alias or parallel terminology.
 | Local validation | `validate`; precise `lint`, `scan`, or `render` where useful | Read local inputs, prove correctness, and return an actionable result. It needs no live credentials or confirmation. Explicit local outputs are allowed. |
 | Live or external observation | `verify`; specialized `check`, `status`, `diagnostics`, or `observe` | Use bounded read or diagnostic access, do not intentionally mutate the target, require no ordinary confirmation, and never fall back to broader credentials. |
 | Existing-state reconciliation and administration | `apply` or a precise action such as `sync`, `reset`, `restart`, or `publish` | Use plan or preflight when useful, obtain required authority, confirm in proportion to consequence, mutate, and read back the result. Repeat safety-critical checks immediately before mutation. |
-| Established-node lifecycle | `node`; precise actions such as `reboot`, `maintenance-enter`, `maintenance-exit`, or `resize-longhorn` | Prove disruption safety, serialize the active transaction, persist containment across command exit when required, and make uncordon the final accepted-recovery mutation. |
+| Established-node lifecycle | `homelab-playbook` `talos` actions such as `reboot`, `maintenance-enter`, and `maintenance-exit`; local `node resize-longhorn` | Prove disruption safety, serialize the active transaction, persist containment across command exit when required, and make uncordon the final accepted-recovery mutation. |
 | Exceptional initialization and recovery | `bootstrap`; precise recovery actions such as `retry-join` or `adopt` | Check the initial or suspended state, bind source and target, confirm, initialize or recover, wait, verify, and safely contain failure when supported. |
 | Controlled experiments and tests | `test`; precise subtypes such as `resilience`, `conformance`, benchmark, or mutating probe | Bind temporary state to a run or target, use authority and confirmation proportional to risk, collect evidence, clean up or recover, and preserve cleanup failure separately. |
 | Artifact creation and local setup | Purpose-specific names such as `generate`, `secrets`, `refresh`, `tools`, or `kubeconfig` | Validate inputs and capability, stage output, validate it, and install atomically when practical. Secret and encryption boundaries stay explicit. |
@@ -128,7 +128,7 @@ describes the operation.
   bootstrap preflight as its deferred verification gate. `apply-live` uses a preview
   dry-run, applies after confirmation, and uses a second dry-run as immediate convergence
   verification. Both conform to reconciliation without exposing identical interfaces.
-- Established-node reboot and maintenance share disruption admission, a transient Lease,
+- Playbook-owned established-node reboot and maintenance share disruption admission, a transient Lease,
   durable cordon and lifecycle annotation, graceful workload drain, and common recovery
   acceptance. Maintenance adds Longhorn evacuation and compare-and-restore state because
   its absence can be indefinite.
