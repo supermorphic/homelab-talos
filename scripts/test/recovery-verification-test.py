@@ -10,8 +10,10 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import tarfile
 import tempfile
+import time
 import unittest
 import uuid
 from pathlib import Path
@@ -136,6 +138,20 @@ class RecoveryContractTest(unittest.TestCase):
         )
         return cache
 
+    def assert_process_stopped(self, pid: int) -> None:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            state = subprocess.run(
+                ["ps", "-o", "state=", "-p", str(pid)],
+                text=True,
+                capture_output=True,
+                check=False,
+            ).stdout.strip()
+            if not state or state.startswith("Z"):
+                return
+            time.sleep(0.05)
+        self.fail(f"verifier descendant {pid} survived cleanup")
+
     def test_accepts_literal_prepare_request(self) -> None:
         module = load_module()
         validated = module.validate_request(self.request, self.source)
@@ -211,8 +227,27 @@ class RecoveryContractTest(unittest.TestCase):
         with self.assertRaises(subprocess.TimeoutExpired):
             module.run_supervised(command, cwd=self.source, env=os.environ.copy(), timeout=1)
         child_pid = int(pid_file.read_text(encoding="utf-8"))
-        with self.assertRaises(ProcessLookupError):
-            os.kill(child_pid, signal.SIGCONT)
+        self.assert_process_stopped(child_pid)
+
+    def test_termination_stops_and_waits_for_process_group(self) -> None:
+        pid_file = Path(self.temp.name) / "terminated-child.pid"
+        runner = (
+            "import importlib.util,os,sys; "
+            "spec=importlib.util.spec_from_file_location('recovery_verifier',sys.argv[1]); "
+            "module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+            "module.run_supervised(['bash','-c',f'sleep 30 & echo $! > {sys.argv[2]}; wait'],"
+            "cwd=__import__('pathlib').Path(sys.argv[3]),env=os.environ.copy(),timeout=30)"
+        )
+        process = subprocess.Popen(
+            [sys.executable, "-c", runner, str(MODULE_PATH), str(pid_file), str(self.source)]
+        )
+        deadline = time.monotonic() + 3
+        while not pid_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(pid_file.exists())
+        os.kill(process.pid, signal.SIGTERM)
+        self.assertEqual(process.wait(timeout=5), 128 + signal.SIGTERM)
+        self.assert_process_stopped(int(pid_file.read_text(encoding="utf-8")))
 
     def test_chart_cache_rejects_missing_archive_and_digest_drift(self) -> None:
         module = load_module()

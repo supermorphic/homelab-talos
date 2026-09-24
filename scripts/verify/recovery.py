@@ -48,6 +48,48 @@ class ContractError(ValueError):
     """The request, desired source, or observed state violates the contract."""
 
 
+class _InvocationInterrupted(BaseException):
+    def __init__(self, signum: int) -> None:
+        self.signum = signum
+
+
+def _process_group_exists(group: int) -> bool:
+    try:
+        os.killpg(group, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
+def _stop_process_group(process: subprocess.Popen[str], grace_seconds: float = 2) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        pass
+    deadline = time.monotonic() + grace_seconds
+    while _process_group_exists(process.pid) and time.monotonic() < deadline:
+        if process.poll() is None:
+            try:
+                process.communicate(timeout=min(0.1, max(0.01, deadline - time.monotonic())))
+            except subprocess.TimeoutExpired:
+                pass
+        else:
+            time.sleep(0.05)
+    if _process_group_exists(process.pid):
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    try:
+        process.communicate(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        process.wait()
+
+
 class NodeState(NamedTuple):
     name: str
     ready: bool
@@ -447,16 +489,30 @@ def run_supervised(
         text=True,
         start_new_session=True,
     )
+    previous_handlers: dict[int, signal.Handlers] = {}
+
+    def interrupted(signum: int, _frame: object) -> None:
+        raise _InvocationInterrupted(signum)
+
     try:
+        previous_handlers = {
+            signum: signal.signal(signum, interrupted)
+            for signum in (signal.SIGINT, signal.SIGTERM)
+        }
         stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        os.killpg(process.pid, signal.SIGTERM)
-        try:
-            process.communicate(timeout=2)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.communicate()
+        for signum in previous_handlers:
+            signal.signal(signum, signal.SIG_IGN)
+        _stop_process_group(process)
         raise
+    except _InvocationInterrupted as error:
+        for signum in previous_handlers:
+            signal.signal(signum, signal.SIG_IGN)
+        _stop_process_group(process)
+        raise SystemExit(128 + error.signum) from None
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
     if process.returncode != 0:
         safe_lines = [
             line
