@@ -893,12 +893,13 @@ assert_fails 'Rejected recovery was reported as a successful reboot.' \
 
 resize_calls=''
 verify_test_lease_holder() { resize_calls+="${resize_calls:+ }lease"; }
-assert_cluster_disruption_admissible() { resize_calls+="${resize_calls:+ }admission"; }
+assert_established_disruption_admissible() { resize_calls+="${resize_calls:+ }admission"; }
 resize_just() {
   [[ "$*" == 'bootstrap _resize-longhorn-raw nuc1' ]] || return 2
   resize_calls+="${resize_calls:+ }resize"
 }
-run_resize_longhorn_transaction fake-kubeconfig nuc1 holder
-[[ "$resize_calls" == 'lease admission resize' ]]
+run_resize_longhorn_transaction fake-kubeconfig nuc1 holder \
+  "$state_dir/lease-renewal-failed"
+[[ "$resize_calls" == 'lease admission lease resize' ]]
 
 echo 'Node lifecycle state tests passed.'

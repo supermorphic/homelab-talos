@@ -21,8 +21,8 @@ mkdir -p \
 
 cp "$repo_root/.just/bootstrap.just" "$test_repo/.just/bootstrap.just"
 cp "$repo_root/scripts/lib/lease.sh" "$test_repo/scripts/lib/lease.sh"
-cp "$repo_root/scripts/lib/node-lifecycle-state.sh" \
-  "$test_repo/scripts/lib/node-lifecycle-state.sh"
+cp "$repo_root/scripts/lib/disruption-admission.sh" \
+  "$test_repo/scripts/lib/disruption-admission.sh"
 
 cat >"$test_repo/.justfile" <<'EOF'
 #!/usr/bin/env -S just --justfile
@@ -122,10 +122,15 @@ case "$*" in
     mv "$FAKE_STATE_DIR/lease-next.json" "$FAKE_STATE_DIR/lease.json"
     ;;
   *'get nodes --output json')
-    if [[ "${FAKE_LIFECYCLE_ACTIVE:-}" == 'true' ]]; then
-      printf '%s\n' '{"items":[{"metadata":{"name":"nuc1","annotations":{"homelab.supermorphic.com/node-lifecycle":"{\"schemaVersion\":1,\"kind\":\"maintenance\"}"}},"spec":{"unschedulable":true}},{"metadata":{"name":"nuc2","annotations":{}},"spec":{"unschedulable":false}},{"metadata":{"name":"nuc3","annotations":{}},"spec":{"unschedulable":false}}]}'
+    count=0
+    [[ ! -f "$FAKE_STATE_DIR/node-read-count" ]] || count="$(<"$FAKE_STATE_DIR/node-read-count")"
+    count=$((count + 1))
+    printf '%s\n' "$count" >"$FAKE_STATE_DIR/node-read-count"
+    if [[ "${FAKE_LIFECYCLE_ACTIVE:-}" == 'true' ||
+      "${FAKE_CONTAINMENT_ON_READ:-0}" == "$count" ]]; then
+      printf '%s\n' '{"items":[{"metadata":{"name":"nuc1","annotations":{"homelab.supermorphic.com/node-lifecycle":""}},"spec":{"unschedulable":true},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"nuc2","annotations":{}},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"False"}]}},{"metadata":{"name":"nuc3","annotations":{}},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}'
     else
-      printf '%s\n' '{"items":[{"metadata":{"name":"nuc1","annotations":{}},"spec":{"unschedulable":false}},{"metadata":{"name":"nuc2","annotations":{}},"spec":{"unschedulable":false}},{"metadata":{"name":"nuc3","annotations":{}},"spec":{"unschedulable":false}}]}'
+      printf '%s\n' '{"items":[{"metadata":{"name":"nuc1","annotations":{}},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"nuc2","annotations":{}},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"False"}]}},{"metadata":{"name":"nuc3","annotations":{}},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}'
     fi
     ;;
   *'get kustomization cilium --output jsonpath={.spec.suspend}')
@@ -227,6 +232,9 @@ case "${1:-} ${2:-}" in
     fi
     ;;
   'get members')
+    if [[ "${FAKE_LEASE_RENEWAL_FAILURE_BEFORE_REBOOT:-}" == true ]]; then
+      : >"$FAKE_STATE_DIR/lease-failure-marker"
+    fi
     cat <<'TABLE'
 NODE NAMESPACE TYPE NAME
 192.0.2.11 runtime Member nuc1
@@ -270,6 +278,18 @@ cat >"$stub_bin/sleep" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'sleep %s\n' "$*" >>"$FAKE_CALL_LOG"
+EOF
+
+cat >"$stub_bin/mktemp" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  *homelab-retry-join-lease*)
+    : >"$FAKE_STATE_DIR/lease-failure-marker"
+    printf '%s\n' "$FAKE_STATE_DIR/lease-failure-marker"
+    ;;
+  *) exec /usr/bin/mktemp "$@" ;;
+esac
 EOF
 
 chmod +x "$stub_bin"/*
@@ -420,6 +440,31 @@ if run_recipe \
   TALOS_ETCD_RETRY_CONFIRM=retry-etcd-reboot:nuc2:192.168.90.11 \
   bootstrap retry-join nuc2 >"$state_dir/retry-lifecycle-active.out" 2>&1; then
   echo 'retry-join continued while another Node had lifecycle state.' >&2
+  exit 1
+fi
+assert_count 0 '^talosctl reboot '
+
+reset_case
+if run_recipe \
+  FAKE_CONTAINMENT_ON_READ=2 \
+  FAKE_ETCD_SCENARIO=healthy \
+  TALOS_ETCD_RETRY_CONFIRM=retry-etcd-reboot:nuc2:192.168.90.11 \
+  bootstrap retry-join nuc2 >"$state_dir/retry-lifecycle-second-read.out" 2>&1; then
+  echo 'retry-join ignored containment that appeared before reboot.' >&2
+  exit 1
+fi
+assert_count 0 '^talosctl reboot '
+assert_count 1 '^talosctl etcd members '
+assert_count 1 '^talosctl service etcd '
+assert_count 1 '^talosctl get members '
+
+reset_case
+if run_recipe \
+  FAKE_LEASE_RENEWAL_FAILURE_BEFORE_REBOOT=true \
+  FAKE_ETCD_SCENARIO=healthy \
+  TALOS_ETCD_RETRY_CONFIRM=retry-etcd-reboot:nuc2:192.168.90.11 \
+  bootstrap retry-join nuc2 >"$state_dir/retry-lease-renewal-failed.out" 2>&1; then
+  echo 'retry-join ignored a Lease renewal failure before reboot.' >&2
   exit 1
 fi
 assert_count 0 '^talosctl reboot '

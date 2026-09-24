@@ -48,6 +48,7 @@ full_paths:
   - scripts/test/repository_shell_validation.py
   - scripts/test/test_*.py
   - scripts/test/lease-test.sh
+  - scripts/test/disruption-admission-test.sh
   - scripts/test/run-campaign*
   - scripts/test/run-catalog-suite*
   - scripts/test/run-chainsaw*
@@ -72,6 +73,7 @@ full_paths:
   - kubernetes/flux/**
   - clusterconfig/**
   - talos/**
+  - tests/fixtures/disruption-admission/**
 conditional_paths:
   observability:
     - .sops.yaml
@@ -195,6 +197,7 @@ core_paths:
   - scripts/test/cilium-validator-test.sh
   - scripts/test/cilium-verify-test.sh
   - scripts/test/cluster-commands-test.sh
+  - scripts/test/cluster-verification-boundary-test.sh
   - scripts/test/external-dns-provider-rollout-test.sh
   - scripts/test/gatus-media-integration-secrets-test.sh
   - scripts/test/homepage-portainer-rollout-test.sh
@@ -203,6 +206,7 @@ core_paths:
   - scripts/test/install-worktree-credentials-test.sh
   - scripts/test/metrics-server-verify-test.sh
   - scripts/test/node-lifecycle-test.sh
+  - scripts/test/node-operations-test.sh
   - scripts/test/plex-network-observe-test.sh
   - scripts/test/plex-network-policy-guard-test.sh
   - scripts/test/plex-relay-status-test.sh

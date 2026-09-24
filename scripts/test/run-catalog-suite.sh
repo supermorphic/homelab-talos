@@ -6,7 +6,7 @@ source scripts/lib/common.sh
 source scripts/test/lib/catalog.sh
 source scripts/test/lib/results.sh
 source scripts/lib/lease.sh
-source scripts/lib/node-lifecycle-state.sh
+source scripts/lib/disruption-admission.sh
 require_bash
 
 [[ "$#" -ge 3 && "$2" == '--' ]] || {
@@ -144,13 +144,36 @@ fi
 
 if [[ "$mutates_cluster" == 'true' &&
   ("$lease_acquired" == 'true' || "$lease_joined" == 'true') ]]; then
-  if assert_cluster_disruption_admissible "$kubeconfig"; then
+  if assert_established_disruption_admissible "$kubeconfig"; then
     disruption_admitted=true
   else
     write_result_case_junit "$run_dir/junit.xml" "$suite_id" \
       disruption-admission broken 0
     primary_exit_code=1
     run_result='broken'
+  fi
+fi
+
+if [[ "$mutates_cluster" == 'true' && "$disruption_admitted" == 'true' ]]; then
+  lease_ready=false
+  if [[ "$lease_acquired" == 'true' ]]; then
+    if verify_test_lease_holder "$kubeconfig" "$run_id" &&
+      [[ ! -e "$run_dir_abs/diagnostics/lease-renewal-failed" ]]; then
+      lease_ready=true
+    fi
+  elif [[ "$lease_joined" == 'true' ]]; then
+    if verify_test_lease_holder "$kubeconfig" "$TEST_CAMPAIGN_LEASE_HOLDER" &&
+      [[ -z "${TEST_CAMPAIGN_LEASE_FAILURE_MARKER:-}" ||
+        ! -e "$TEST_CAMPAIGN_LEASE_FAILURE_MARKER" ]]; then
+      lease_ready=true
+    fi
+  fi
+  if [[ "$lease_ready" != 'true' ]]; then
+    write_result_case_junit "$run_dir/junit.xml" "$suite_id" \
+      lease-pre-mutation broken 0
+    primary_exit_code=1
+    run_result='broken'
+    disruption_admitted=false
   fi
 fi
 

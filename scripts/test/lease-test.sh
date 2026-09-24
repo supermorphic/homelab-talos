@@ -7,6 +7,7 @@ state_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-lease-test.XXXXXX")"
 trap 'rm -rf -- "$state_dir"' EXIT
 state_file="$state_dir/lease.json"
 force_create_error=false
+force_replace_conflict="$state_dir/force-replace-conflict"
 
 lease_kubectl() {
   local _kubeconfig="$1"
@@ -42,6 +43,19 @@ lease_kubectl() {
       input="$(cat)"
       existing_version="$(yq -r '.metadata.resourceVersion' "$state_file")"
       input_version="$(yq -r '.metadata.resourceVersion' - <<<"$input")"
+      if [[ -f "$force_replace_conflict" ]]; then
+        rm -f "$force_replace_conflict"
+        LIVE_TIME="$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)" \
+          yq --output-format json '
+            .metadata.resourceVersion = "8" |
+            .spec.holderIdentity = "playbook:reboot:node-b:fresh-run" |
+            .spec.acquireTime = strenv(LIVE_TIME) |
+            .spec.renewTime = strenv(LIVE_TIME) |
+            .spec.leaseDurationSeconds = 90
+          ' "$state_file" >"$state_dir/conflicting.json"
+        mv "$state_dir/conflicting.json" "$state_file"
+        return 1
+      fi
       [[ "$input_version" == "$existing_version" ]] || return 1
       NEXT_VERSION="$((existing_version + 1))" \
         yq --output-format json \
@@ -52,41 +66,102 @@ lease_kubectl() {
   esac
 }
 
-acquire_test_lease fake-kubeconfig run-one
-verify_test_lease_holder fake-kubeconfig run-one
-[[ "$(yq -r '.spec.holderIdentity' "$state_file")" == 'run-one' ]]
+seed_foreign_lease() {
+  local holder="$1" timestamp="$2" resource_version="${3:-7}"
+  HOLDER="$holder" TIMESTAMP="$timestamp" RESOURCE_VERSION="$resource_version" \
+    yq --null-input --output-format json '{
+      "apiVersion": "coordination.k8s.io/v1",
+      "kind": "Lease",
+      "metadata": {
+        "namespace": "flux-system",
+        "name": "homelab-test-run-lock",
+        "resourceVersion": strenv(RESOURCE_VERSION)
+      },
+      "spec": {
+        "holderIdentity": strenv(HOLDER),
+        "leaseDurationSeconds": 90,
+        "acquireTime": strenv(TIMESTAMP),
+        "renewTime": strenv(TIMESTAMP)
+      }
+    }' >"$state_file"
+}
+
+live_time="$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)"
+seed_foreign_lease playbook:maintenance:node-a:run-42 "$live_time"
+cp "$state_file" "$state_dir/before-live-denial.json"
+if acquire_test_lease fake-kubeconfig local:run >/dev/null 2>&1; then
+  echo 'A live foreign Lease was acquired.' >&2
+  exit 1
+fi
+cmp "$state_dir/before-live-denial.json" "$state_file"
+
+seed_foreign_lease playbook:maintenance:node-a:run-42 \
+  '2000-01-01T00:00:00.000000Z'
+acquire_test_lease fake-kubeconfig local:reclaimed
+[[ "$(yq -r '.metadata.resourceVersion' "$state_file")" == 8 ]]
+[[ "$(yq -r '.spec.holderIdentity' "$state_file")" == local:reclaimed ]]
+
+seed_foreign_lease playbook:maintenance:node-a:run-42 \
+  '2000-01-01T00:00:00.000000Z'
+: >"$force_replace_conflict"
+if acquire_test_lease fake-kubeconfig local:conflicted >/dev/null 2>&1; then
+  echo 'A conflicting expired-Lease takeover overwrote the fresh holder.' >&2
+  exit 1
+fi
+[[ "$(yq -r '.metadata.resourceVersion' "$state_file")" == 8 ]]
+[[ "$(yq -r '.spec.holderIdentity' "$state_file")" == \
+  playbook:reboot:node-b:fresh-run ]]
+
+acquire_test_lease fake-kubeconfig playbook:reboot:node-b:fresh-run
+verify_test_lease_holder fake-kubeconfig playbook:reboot:node-b:fresh-run
 [[ "$(yq -r '.spec.acquireTime' "$state_file")" =~ \
   ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z$ ]]
+before_renew_version="$(yq -r '.metadata.resourceVersion' "$state_file")"
+renew_test_lease fake-kubeconfig playbook:reboot:node-b:fresh-run
+[[ "$(yq -r '.metadata.resourceVersion' "$state_file")" == \
+  "$((before_renew_version + 1))" ]]
 [[ "$(yq -r '.spec.renewTime' "$state_file")" =~ \
   ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z$ ]]
-if acquire_test_lease fake-kubeconfig run-two >/dev/null 2>&1; then
-  echo 'A live Lease held by another run was acquired.' >&2
+cp "$state_file" "$state_dir/before-wrong-owner.json"
+if renew_test_lease fake-kubeconfig local:not-owner >/dev/null 2>&1; then
+  echo 'A non-owner renewed the disruption Lease.' >&2
   exit 1
 fi
-if verify_test_lease_holder fake-kubeconfig run-two >/dev/null 2>&1; then
-  echo 'A non-holder joined the test Lease.' >&2
+cmp "$state_dir/before-wrong-owner.json" "$state_file"
+if release_test_lease fake-kubeconfig local:not-owner >/dev/null 2>&1; then
+  echo 'A non-owner released the disruption Lease.' >&2
+  exit 1
+fi
+cmp "$state_dir/before-wrong-owner.json" "$state_file"
+
+seed_foreign_lease local:expired-owner '2000-01-01T00:00:00.000000Z'
+if verify_test_lease_holder fake-kubeconfig local:expired-owner >/dev/null 2>&1; then
+  echo 'An expired same-owner Lease was accepted.' >&2
   exit 1
 fi
 
-renew_test_lease fake-kubeconfig run-one
-[[ "$(yq -r '.metadata.resourceVersion' "$state_file")" == '2' ]]
-if release_test_lease fake-kubeconfig run-two >/dev/null 2>&1; then
-  echo 'A non-holder released the test Lease.' >&2
-  exit 1
-fi
-release_test_lease fake-kubeconfig run-one
+seed_foreign_lease local:release-owner "$live_time"
+release_test_lease fake-kubeconfig local:release-owner
+[[ -f "$state_file" ]]
 [[ "$(yq -r '.spec.holderIdentity // ""' "$state_file")" == '' ]]
+[[ "$(yq -r '.metadata.resourceVersion' "$state_file")" == 8 ]]
 
-OLD_TIME='2000-01-01T00:00:00Z' \
-  yq --output-format json '
-    .spec.holderIdentity = "abandoned-run" |
-    .spec.acquireTime = strenv(OLD_TIME) |
-    .spec.renewTime = strenv(OLD_TIME) |
-    .spec.leaseDurationSeconds = 1
-  ' "$state_file" >"$state_dir/expired.json"
-mv "$state_dir/expired.json" "$state_file"
-acquire_test_lease fake-kubeconfig reclaimed-run
-[[ "$(yq -r '.spec.holderIdentity' "$state_file")" == 'reclaimed-run' ]]
+sleep_calls="$state_dir/sleep.calls"
+fake_sleep="$state_dir/fake-sleep"
+cat >"$fake_sleep" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"${LEASE_TEST_SLEEP_CALLS:?}"
+EOF
+chmod +x "$fake_sleep"
+seed_foreign_lease playbook:maintenance:node-a:run-42 "$live_time"
+renewal_failure="$state_dir/renewal-failed"
+LEASE_TEST_SLEEP_CALLS="$sleep_calls" TEST_LEASE_SLEEP="$fake_sleep" \
+  start_test_lease_renewal fake-kubeconfig local:renewal "$renewal_failure"
+wait "$TEST_LEASE_RENEW_PID" || true
+TEST_LEASE_RENEW_PID=''
+[[ -f "$renewal_failure" ]]
+[[ "$(cat "$sleep_calls")" == 30 ]]
 
 rm -f "$state_file"
 force_create_error=true

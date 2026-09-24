@@ -14,6 +14,11 @@ the command profiles and safeguards established by
 [Talos and Flux Platform](010-talos-flux-platform.md). Current repository policy,
 executable source, pinned versions, and operational documentation remain authoritative.
 
+The [issue 431 migration amendment](#issue-431-migration-amendment-proposed) below
+records the proposed repository ownership after migration. The original command
+surface and implementation described in this specification remain current until
+the companion replacement is validated and the cutover is complete.
+
 ## Scope
 
 This design introduces:
@@ -1031,3 +1036,149 @@ The design adds operational machinery and attended validation, but it avoids an
 in-cluster controller, another persistent resource, a transaction journal, compatibility
 aliases, and broader agent authority. The resulting lifecycle is explicit enough to
 recover safely while remaining proportional to a three-node homelab cluster.
+
+## Issue 431 migration amendment (proposed)
+
+This amendment covers [issue 431](https://github.com/supermorphic/homelab-talos/issues/431)
+and companion [playbook issue 55](https://github.com/supermorphic/homelab-playbook/issues/55).
+The operator has directed that `homelab-talos` have no runtime dependency on the
+migrated lifecycle implementation. The ownership boundary below is the design
+constraint; the abrupt-loss scenario placement is a recommendation for joint review.
+This amendment does not claim that migration or replacement validation has occurred.
+
+### Ownership and caller classification
+
+| Bucket | Functionality | Disposition |
+| --- | --- | --- |
+| 1: lifecycle moves | `maintenance-check`, `maintenance-enter`, `maintenance-exit`, `reboot` | Playbook owns and runs all four through its canonical workstation interface. Remove the local recipes without forwarding wrappers. |
+| 1: lifecycle moves | `scripts/node/{lifecycle,drain,longhorn,recovery}.sh` and lifecycle portions of `common.sh` | Move transaction sequencing, drain, evacuation, containment, owned-state restoration, and recovery acceptance. Cluster verifier implementations stay here. |
+| 1: lifecycle moves | Recovery parsing and compare-and-restore functions in `scripts/lib/node-lifecycle-state.sh` | Playbook owns interpretation and mutation of persisted recovery records. |
+| 1: lifecycle moves | `scripts/node/abrupt-loss-bridge.sh` | Move containment and recovery mechanics, including parent-holder checks. Remove the local bridge without a playbook-calling replacement. |
+| 2: retained and refactored | `scripts/node/resize-longhorn.sh` | Keep resize and its exceptional two-reboot procedure. Replace lifecycle imports with local target, authority, confirmation, and disruption-admission helpers. |
+| 2: retained and refactored | `.just/bootstrap.just` `retry-join` | Keep failed-join recovery and local Lease use. Replace lifecycle-state imports with a conservative annotation guard, preserving the failed-join preconditions. |
+| 2: retained and refactored | `scripts/test/run-catalog-suite.sh` | Use a local read-only established-node admission guard. Keep test execution and campaign-holder semantics. |
+| 2: retained and refactored | Command tests, fixture copies, catalogs, dispatch, and operational references | Remove references to transferred implementation and entrypoints after equivalent replacement validation. Split mixed test files by ownership. |
+| 3: generic local behavior | `scripts/lib/lease.sh`, its tests, campaign and Chainsaw runners | Retain local implementation of the coordination protocol. Playbook maintains its own implementation for its workflows. |
+| 3: generic local behavior | Workload restore/persistence/provisioning tests and automation-data migration | Keep local workload operations and Lease coordination. |
+| 3: generic local behavior | Report publication and diagnostics | Keep their distinct publication Lease, local helper, and deployed-source checks. |
+| 3: generic local behavior | `scripts/lib/longhorn-verification.sh` | Retain workload claim-health predicates; this helper is not a node-lifecycle dependency today. |
+| 3: generic local behavior | Cilium/foundation verification | Keep cluster verification, its public commands, and transitive checks in this repository. |
+
+There is no lifecycle distribution mechanism between the repositories. Do not add a
+release bundle, submodule, pinned package, runtime fetch, sibling-checkout import, or
+cluster-side wrapper invoking playbook. Compatibility is defined by cluster protocols
+and tested behavior, not a shared implementation. The generic Lease code remaining
+here is not a second lifecycle state machine.
+
+Extract only the target, authority, and exact-confirmation checks needed by retained
+operations from `scripts/node/common.sh`. Do not preserve its containment or recovery
+functions under another filename. Retained disruptive workflows need to observe a
+blocking annotation, not understand Longhorn recovery fields.
+
+### Abrupt-loss scenario placement
+
+The existing Python scenario interleaves physical prompts and passive measurement
+with bridge calls that contain the Node and accept recovery. Its failure paths also
+retry containment and recovery, and its preflight executes `scripts/node/capacity.py`.
+Removing those calls without replacing their orchestration would weaken the test.
+
+The recommended placement is to move the complete attended node-abrupt-loss scenario,
+its capacity helper, and its specific offline cases to playbook with the lifecycle
+transactions. This is a justified exception for node-disruption testing; application
+and workload tests, their controllers, and the report publication platform stay here.
+Playbook must preserve continuous Lease ownership, physical prompts, survivor checks,
+failure containment, and separate primary and recovery results. It must provide the
+scenario's result integration before the local scenario or catalog entry is retired.
+This placement requires companion design agreement before implementation.
+
+A local observer is an alternative only if it is independently runnable and limited
+to measurement. Playbook would invoke and coordinate that observer; the observer
+must not invoke playbook or mutate lifecycle state. Such a split requires an explicit
+readiness, result, and ownership protocol. An uncoordinated manual handoff or a
+renamed bridge is not an equivalent replacement. No observer split is implied here.
+
+### Local admission and coordination protocols
+
+Retain the disruption Lease identity `flux-system/homelab-test-run-lock`, with the
+current 90-second duration and 30-second renewal interval. Both implementations
+respect opaque `holderIdentity` values, timestamps, lease duration, and optimistic
+`resourceVersion` checks. A live foreign holder blocks acquisition; expired takeover
+must tolerate conflicting updates safely. Only the current owner renews or releases.
+Joined children verify the parent's ownership and never release its Lease. Loss of
+ownership prevents further consequential mutation.
+
+Report publication keeps `flux-system/homelab-test-report-publish-lock`. Reusing the
+parameterized local Lease helper does not make publication a node-disruption operation.
+Its deployed-source check continues to include the local helper; no playbook artifact
+or dependency resolver enters the publication inputs.
+
+A local read-only guard treats the presence of
+`homelab.supermorphic.com/node-lifecycle` as a refusal condition, including empty,
+malformed, and unknown-version values. It never clears the annotation, restores
+Longhorn state, or uncordons a Node. Established-node workflows additionally retain
+their Ready and schedulable requirements. Exceptional `retry-join` keeps its own
+failed-join health conditions rather than adopting the established-node requirement.
+Repeat the relevant admission and holder checks immediately before consequential
+mutation. A free Lease does not override persistent containment.
+
+### Recovery compatibility and verifier boundary
+
+Playbook must recover existing schema-version-1 `maintenance`, `reboot`, and
+`abrupt-loss` records. Preserve maintenance `before` and `during` values, optimistic
+Node updates, compare-and-restore behavior, refusal on ownership conflicts, and final
+uncordon only after accepted recovery. Local callers only refuse persisted records
+and direct the operator to the playbook recovery interface. They do not need playbook
+installed to refuse safely.
+
+Cluster verification remains owned here. Playbook invokes public commands from an
+explicitly selected, prepared `homelab-talos` checkout through its pinned toolchain:
+`mise exec -- just kube foundation-verify`. It does not import verifier internals,
+discover arbitrary sibling checkouts, or fetch code during recovery. This dependency
+direction is playbook to cluster verification; cluster commands never call back into
+playbook lifecycle code.
+
+Preserve foundation source validation, Flux checks, DNS/Gateway/TLS acceptance, Cilium
+postflight, and canonical verifier results. The selected checkout must have approved
+`.kube/config` and `.talos/config`; Cilium postflight uses the latter for Talos and etcd
+reads. Playbook validates command availability, both files, Kubernetes cluster/context,
+and Talos access to the intended cluster before disruption. These fixed checkout paths
+must reach nested recipes as well as the outer command. These observational verifiers
+do not acquire the disruption Lease held by playbook. Missing commands, nonzero exits,
+and timeouts prevent accepted recovery and uncordon; record references to the local
+verification evidence in playbook results.
+
+The original recovery path performs a target-specific Cilium check and calls
+`foundation-verify`, which includes Cilium postflight. Preserve that acceptance
+behavior. The broader `mise exec -- just kube cilium-verify` command remains locally
+owned and available, but this migration does not introduce it as a new mandatory
+recovery stage. Playbook retains target-specific lifecycle acceptance observations
+while cluster verification stays local.
+
+### Cutover and acceptance
+
+1. Agree the companion ownership, abrupt-loss placement, and verification invocation
+   contract. Credential issuance, Semaphore templates, and upgrade sequencing remain
+   outside this migration.
+2. Validate the four replacement commands, old-record recovery, and any moved
+   abrupt-loss scenario in playbook before removing local operations.
+3. Refactor retained callers and prove that they operate without playbook installed.
+   Preserve local workload testing, bootstrap, resize, and publication coverage.
+4. Exercise protocol interoperability with synthetic Lease and recovery-record
+   fixtures. Cover foreign holders, expiration, conflicting writes, parent joining,
+   renewal loss, and non-owner release. Local tests prove conservative refusal;
+   playbook tests prove old-record recovery, ownership conflicts, already-restored
+   values, malformed records, and transitive verifier failure.
+5. Prevent new starts on retiring entrypoints and allow active old transactions to
+   finish using their original checkout before replacing code. Persisted containment
+   may be recovered with the validated playbook implementation; never clear it merely
+   to complete migration.
+6. Remove the four local entrypoints, migrated files, bridge, and agreed scenario
+   entries together with their obsolete tests and references. Update mixed tests,
+   catalogs, publication inputs, runbooks, and this specification to the actual result.
+7. Audit retained source/import/exec references for lifecycle dependencies and run
+   the repository-owned publication gate before a cutover PR. Offline evidence does
+   not authorize or substitute for separately approved live acceptance.
+
+The migration is complete only when the replacement is validated, retained workflows
+have no playbook runtime dependency, and all coordination and recovery compatibility
+checks pass. The existing implementation remains operational until that cutover.
