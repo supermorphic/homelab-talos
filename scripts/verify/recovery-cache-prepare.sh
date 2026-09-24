@@ -9,6 +9,10 @@ require_bash
   exit 2
 }
 destination="$1"
+[[ -z "$(git status --porcelain=v1 --untracked-files=all)" ]] || {
+  echo 'Recovery cache preparation refused: selected source checkout is dirty.' >&2
+  exit 1
+}
 [[ ! -e "$destination" ]] || {
   echo "Refusing to overwrite existing recovery chart cache: $destination" >&2
   exit 1

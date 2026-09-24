@@ -16,7 +16,6 @@ import uuid
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
-
 ANNOTATION = "homelab.supermorphic.com/node-lifecycle"
 REQUEST_KEYS = {
     "schemaVersion",
@@ -106,9 +105,7 @@ def _load_desired_source(source_dir: Path) -> tuple[str, dict[str, str], list[st
         endpoint = data["endpoint"]
         rows = data["nodes"]
         nodes = {
-            row["hostname"]: row["ipAddress"]
-            for row in rows
-            if row.get("controlPlane") is True
+            row["hostname"]: row["ipAddress"] for row in rows if row.get("controlPlane") is True
         }
     except (subprocess.CalledProcessError, KeyError, TypeError, json.JSONDecodeError) as exc:
         raise ContractError("selected Talos desired source is malformed") from exc
@@ -154,23 +151,43 @@ def expected_charts(source_dir: Path) -> dict[str, tuple[str, str]]:
     return {
         "cilium": (
             "cilium",
-            _yaml_value(source_dir, "kubernetes/apps/kube-system/cilium/app/ocirepository.yaml", ".spec.ref.tag"),
+            _yaml_value(
+                source_dir,
+                "kubernetes/apps/kube-system/cilium/app/ocirepository.yaml",
+                ".spec.ref.tag",
+            ),
         ),
         "cert-manager": (
             "cert-manager",
-            _yaml_value(source_dir, "kubernetes/apps/security/cert-manager/app/ocirepository.yaml", ".spec.ref.tag"),
+            _yaml_value(
+                source_dir,
+                "kubernetes/apps/security/cert-manager/app/ocirepository.yaml",
+                ".spec.ref.tag",
+            ),
         ),
         "metallb": (
             "metallb",
-            _yaml_value(source_dir, "kubernetes/apps/networking/metallb/app/helmrelease.yaml", ".spec.chart.spec.version"),
+            _yaml_value(
+                source_dir,
+                "kubernetes/apps/networking/metallb/app/helmrelease.yaml",
+                ".spec.chart.spec.version",
+            ),
         ),
         "envoy-gateway": (
             "gateway-helm",
-            _yaml_value(source_dir, "kubernetes/apps/networking/envoy-gateway/app/ocirepository.yaml", ".spec.ref.tag"),
+            _yaml_value(
+                source_dir,
+                "kubernetes/apps/networking/envoy-gateway/app/ocirepository.yaml",
+                ".spec.ref.tag",
+            ),
         ),
         "external-dns": (
             "external-dns",
-            _yaml_value(source_dir, "kubernetes/apps/networking/external-dns/app/helmrelease.yaml", ".spec.chart.spec.version"),
+            _yaml_value(
+                source_dir,
+                "kubernetes/apps/networking/external-dns/app/helmrelease.yaml",
+                ".spec.chart.spec.version",
+            ),
         ),
     }
 
@@ -225,6 +242,7 @@ def validate_chart_cache(request: dict, source_dir: Path, cache_dir: Path) -> di
     if not isinstance(charts, dict) or set(charts) != set(expected):
         raise ContractError("chart cache entries differ from required charts")
     resolved: dict[str, Path] = {}
+    expected_files = {"manifest.json"}
     for logical, (expected_name, expected_version) in expected.items():
         entry = charts[logical]
         if not isinstance(entry, dict):
@@ -233,6 +251,9 @@ def validate_chart_cache(request: dict, source_dir: Path, cache_dir: Path) -> di
         filename = _required_string(entry["file"], f"chart cache entry {logical}.file")
         if Path(filename).name != filename:
             raise ContractError(f"chart cache entry {logical} file must be a basename")
+        if filename in expected_files:
+            raise ContractError("chart cache archive filenames must be unique")
+        expected_files.add(filename)
         archive = cache_dir / filename
         if archive.is_symlink() or not archive.is_file():
             raise ContractError(f"chart cache archive {logical} is missing")
@@ -242,8 +263,12 @@ def validate_chart_cache(request: dict, source_dir: Path, cache_dir: Path) -> di
         if entry["chartName"] != expected_name or entry["version"] != expected_version:
             raise ContractError(f"chart cache entry {logical} differs from desired source")
         if _archive_identity(archive) != (expected_name, expected_version):
-            raise ContractError(f"chart cache archive {logical} identity differs from desired source")
+            raise ContractError(
+                f"chart cache archive {logical} identity differs from desired source"
+            )
         resolved[logical] = archive
+    if {entry.name for entry in cache_dir.iterdir()} != expected_files:
+        raise ContractError("recovery Helm cache contains unexpected entries")
     return resolved
 
 
@@ -319,9 +344,7 @@ def validate_request(value: dict, source_dir: Path) -> dict:
                 raise ContractError(f"credentials.{key} must be an absolute regular file")
     kube_data = _load_yaml_object(Path(credentials["kubeconfig"]), "kubeconfig")
     kube_contexts = {
-        item.get("name")
-        for item in kube_data.get("contexts", [])
-        if isinstance(item, dict)
+        item.get("name") for item in kube_data.get("contexts", []) if isinstance(item, dict)
     }
     if credentials["kubeContext"] not in kube_contexts:
         raise ContractError("explicit Kubernetes context is absent from kubeconfig")
@@ -356,6 +379,18 @@ def validate_request(value: dict, source_dir: Path) -> dict:
         raise ContractError("selected source is not a Git checkout") from exc
     if head != revision:
         raise ContractError("sourceRevision does not match selected source HEAD")
+    try:
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=source_dir,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout
+    except subprocess.CalledProcessError as exc:
+        raise ContractError("cannot establish selected source cleanliness") from exc
+    if dirty:
+        raise ContractError("selected source checkout is dirty")
     endpoint, desired_nodes, desired_endpoints = _load_desired_source(source_dir)
     if value["apiServer"] != endpoint or nodes != desired_nodes:
         raise ContractError("request endpoint or nodes differ from selected source")
@@ -401,7 +436,7 @@ def _response(request: dict, live: bool) -> dict:
 
 
 def run_supervised(
-    command: list[str], *, cwd: Path, env: dict[str, str], timeout: int, capture: bool = False
+    command: list[str], *, cwd: Path, env: dict[str, str], timeout: float, capture: bool = False
 ) -> str:
     process = subprocess.Popen(
         command,
@@ -434,6 +469,13 @@ def run_supervised(
     return stdout or ""
 
 
+def _remaining_timeout(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise ContractError("verification deadline expired before the next subprocess")
+    return remaining
+
+
 def _run_checks(request: dict, source_dir: Path, deadline: float) -> None:
     credentials = request["credentials"]
     environment = os.environ.copy()
@@ -458,7 +500,7 @@ def _run_checks(request: dict, source_dir: Path, deadline: float) -> None:
     )
     for logical, variable in CHART_ENV.items():
         environment[variable] = str(chart_paths[logical])
-    remaining = max(1, int(deadline - time.monotonic()))
+    remaining = _remaining_timeout(deadline)
     if request["mode"] != "prepare":
         nodes_output = run_supervised(
             [
@@ -495,7 +537,7 @@ def _run_checks(request: dict, source_dir: Path, deadline: float) -> None:
         except (json.JSONDecodeError, KeyError, TypeError, StopIteration) as exc:
             raise ContractError("Kubernetes returned malformed node state") from exc
         validate_node_states(request, states)
-        remaining = max(1, int(deadline - time.monotonic()))
+        remaining = _remaining_timeout(deadline)
     run_supervised(
         ["bash", "scripts/lib/recovery-verification.sh"],
         cwd=source_dir,

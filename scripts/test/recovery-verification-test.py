@@ -10,13 +10,12 @@ import json
 import os
 import signal
 import subprocess
-import sys
 import tarfile
 import tempfile
 import unittest
 import uuid
 from pathlib import Path
-
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "scripts/verify/recovery.py"
@@ -70,7 +69,16 @@ class RecoveryContractTest(unittest.TestCase):
         subprocess.run(["git", "init", "-q"], cwd=self.source, check=True)
         subprocess.run(["git", "add", "."], cwd=self.source, check=True)
         subprocess.run(
-            ["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture"],
+            [
+                "git",
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "-qm",
+                "fixture",
+            ],
             cwd=self.source,
             check=True,
         )
@@ -113,9 +121,7 @@ class RecoveryContractTest(unittest.TestCase):
                 bundle.addfile(info, io.BytesIO(payload))
                 if logical == "metallb":
                     dependency = b"name: frr-k8s\nversion: 0.0.1\n"
-                    dependency_info = tarfile.TarInfo(
-                        f"{chart_name}/charts/frr-k8s/Chart.yaml"
-                    )
+                    dependency_info = tarfile.TarInfo(f"{chart_name}/charts/frr-k8s/Chart.yaml")
                     dependency_info.size = len(dependency)
                     bundle.addfile(dependency_info, io.BytesIO(dependency))
             charts[logical] = {
@@ -125,9 +131,7 @@ class RecoveryContractTest(unittest.TestCase):
                 "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
             }
         (cache / "manifest.json").write_text(
-            json.dumps(
-                {"schemaVersion": 1, "sourceRevision": revision, "charts": charts}
-            ),
+            json.dumps({"schemaVersion": 1, "sourceRevision": revision, "charts": charts}),
             encoding="utf-8",
         )
         return cache
@@ -155,6 +159,13 @@ class RecoveryContractTest(unittest.TestCase):
         bad_revision = dict(self.request, sourceRevision="0" * 40)
         with self.assertRaises(module.ContractError):
             module.validate_request(bad_revision, self.source)
+
+    def test_rejects_dirty_selected_source(self) -> None:
+        module = load_module()
+        with (self.source / "talos/talconfig.yaml").open("a", encoding="utf-8") as stream:
+            stream.write("# unreviewed change\n")
+        with self.assertRaises(module.ContractError):
+            module.validate_request(self.request, self.source)
 
     def test_recovery_requires_exact_schema_one_record(self) -> None:
         module = load_module()
@@ -214,6 +225,25 @@ class RecoveryContractTest(unittest.TestCase):
         with self.assertRaises(module.ContractError):
             module.validate_chart_cache(self.request, self.source, cache)
 
+    def test_chart_cache_rejects_unexpected_entries(self) -> None:
+        module = load_module()
+        cache = self.make_chart_cache(self.source, self.request["sourceRevision"])
+        (cache / "unexpected").write_text("not part of the prepared cache\n", encoding="utf-8")
+        with self.assertRaises(module.ContractError):
+            module.validate_chart_cache(self.request, self.source, cache)
+
+    def test_expired_deadline_starts_no_subprocess(self) -> None:
+        module = load_module()
+        cache = self.make_chart_cache(self.source, self.request["sourceRevision"])
+        request = dict(self.request, mode="baseline")
+        with (
+            mock.patch.dict(os.environ, {"RECOVERY_HELM_CACHE": str(cache)}),
+            mock.patch.object(module, "run_supervised") as run_supervised,
+            self.assertRaises(module.ContractError),
+        ):
+            module._run_checks(request, self.source, module.time.monotonic() - 1)
+        run_supervised.assert_not_called()
+
     def test_chart_identity_rejects_duplicate_root_and_traversal(self) -> None:
         module = load_module()
         for case, names in {
@@ -249,9 +279,7 @@ class RecoveryContractTest(unittest.TestCase):
         module.validate_node_states(recovery, contained)
         with self.assertRaises(module.ContractError):
             module.validate_node_states(self.request, contained)
-        contained[1] = module.NodeState(
-            name="node-b", ready=True, unschedulable=True, record=""
-        )
+        contained[1] = module.NodeState(name="node-b", ready=True, unschedulable=True, record="")
         with self.assertRaises(module.ContractError):
             module.validate_node_states(recovery, contained)
 

@@ -206,6 +206,23 @@ chmod +x "$fixture/bin"/*
 
 revision="$(git rev-parse HEAD)"
 chart_cache="$fixture/recovery-helm"
+
+dirty_source="$fixture/dirty-source"
+mkdir -p "$dirty_source/scripts/verify" "$dirty_source/scripts/lib"
+cp scripts/verify/recovery-cache-prepare.sh "$dirty_source/scripts/verify/"
+cp scripts/lib/common.sh "$dirty_source/scripts/lib/"
+git -C "$dirty_source" init -q
+git -C "$dirty_source" add scripts
+git -C "$dirty_source" -c user.name=Fixture -c user.email=fixture@example.invalid \
+  commit -qm fixture
+printf '%s\n' dirty >"$dirty_source/unreviewed"
+if (cd "$dirty_source" && scripts/verify/recovery-cache-prepare.sh "$fixture/dirty-cache" \
+  >"$fixture/dirty-prepare.out" 2>"$fixture/dirty-prepare.err"); then
+  echo 'recovery cache preparation accepted a dirty source checkout' >&2
+  exit 1
+fi
+rg -q 'selected source checkout is dirty' "$fixture/dirty-prepare.err"
+
 PATH="$fixture/bin:$PATH" scripts/verify/recovery-cache-prepare.sh "$chart_cache"
 [[ "$(yq -r '.sourceRevision' "$chart_cache/manifest.json")" == "$revision" ]]
 request="$fixture/request.json"
