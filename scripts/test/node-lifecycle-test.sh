@@ -45,6 +45,7 @@ set -euo pipefail
 source scripts/node/lifecycle.sh
 source scripts/node/resize-longhorn.sh
 resolve_node_target() { NODE_NAME=nuc1; NODE_IP=192.0.2.1; }
+resolve_cluster_node() { NODE_NAME=nuc1; NODE_IP=192.0.2.1; }
 require_operator_checkout() { :; }
 acquire_test_lease() { :; }
 start_test_lease_renewal() { :; }
@@ -53,6 +54,7 @@ release_test_lease() { echo released >> "$FIXTURE_LOG"; }
 assert_cluster_disruption_admissible() { :; }
 read_node_lifecycle_record() { echo '{"schemaVersion":1,"kind":"reboot"}'; }
 require_exact_confirmation() { :; }
+resize_kube_context() { echo fixture; }
 run_maintenance_exit_transaction() { return 23; }
 run_resize_longhorn_transaction() { return 23; }
 if [[ "$FIXTURE_ACTION" == resize ]]; then
@@ -893,12 +895,12 @@ assert_fails 'Rejected recovery was reported as a successful reboot.' \
 
 resize_calls=''
 verify_test_lease_holder() { resize_calls+="${resize_calls:+ }lease"; }
-assert_cluster_disruption_admissible() { resize_calls+="${resize_calls:+ }admission"; }
+assert_disruption_admissible() { resize_calls+="${resize_calls:+ }admission"; }
 resize_just() {
   [[ "$*" == 'bootstrap _resize-longhorn-raw nuc1' ]] || return 2
   resize_calls+="${resize_calls:+ }resize"
 }
-run_resize_longhorn_transaction fake-kubeconfig nuc1 holder
+run_resize_longhorn_transaction fake-kubeconfig fixture nuc1 holder
 [[ "$resize_calls" == 'lease admission resize' ]]
 
 echo 'Node lifecycle state tests passed.'

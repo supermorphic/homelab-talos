@@ -14,6 +14,7 @@ mkdir -p \
   "$test_repo/.just" \
   "$test_repo/.kube" \
   "$test_repo/.talos" \
+  "$test_repo/talos" \
   "$test_repo/scripts/lib" \
   "$test_repo/kubernetes/apps/kube-system/cilium" \
   "$stub_bin" \
@@ -21,8 +22,14 @@ mkdir -p \
 
 cp "$repo_root/.just/bootstrap.just" "$test_repo/.just/bootstrap.just"
 cp "$repo_root/scripts/lib/lease.sh" "$test_repo/scripts/lib/lease.sh"
-cp "$repo_root/scripts/lib/node-lifecycle-state.sh" \
-  "$test_repo/scripts/lib/node-lifecycle-state.sh"
+cp "$repo_root/scripts/lib/disruption-admission.sh" "$test_repo/scripts/lib/disruption-admission.sh"
+
+cat >"$test_repo/talos/talconfig.yaml" <<'EOF'
+nodes:
+  - {hostname: nuc1, ipAddress: 192.0.2.10, controlPlane: true}
+  - {hostname: nuc2, ipAddress: 192.0.2.11, controlPlane: true}
+  - {hostname: nuc3, ipAddress: 192.0.2.12, controlPlane: true}
+EOF
 
 cat >"$test_repo/.justfile" <<'EOF'
 #!/usr/bin/env -S just --justfile
@@ -107,6 +114,9 @@ set -euo pipefail
 printf 'kubectl %s\n' "$*" >>"$FAKE_CALL_LOG"
 [[ "${FAKE_KUBE_UNAVAILABLE:-}" != 'true' ]] || exit 1
 case "$*" in
+  *'config current-context')
+    printf '%s\n' fixture
+    ;;
   *'get lease homelab-test-run-lock --output json')
     [[ -f "$FAKE_STATE_DIR/lease.json" ]] || exit 1
     cat "$FAKE_STATE_DIR/lease.json"
@@ -123,9 +133,9 @@ case "$*" in
     ;;
   *'get nodes --output json')
     if [[ "${FAKE_LIFECYCLE_ACTIVE:-}" == 'true' ]]; then
-      printf '%s\n' '{"items":[{"metadata":{"name":"nuc1","annotations":{"homelab.supermorphic.com/node-lifecycle":"{\"schemaVersion\":1,\"kind\":\"maintenance\"}"}},"spec":{"unschedulable":true}},{"metadata":{"name":"nuc2","annotations":{}},"spec":{"unschedulable":false}},{"metadata":{"name":"nuc3","annotations":{}},"spec":{"unschedulable":false}}]}'
+      printf '%s\n' '{"items":[{"metadata":{"name":"nuc1","annotations":{"homelab.supermorphic.com/node-lifecycle":"{\"schemaVersion\":1,\"kind\":\"maintenance\",\"longhorn\":{\"allowScheduling\":{\"before\":true,\"during\":false},\"evictionRequested\":{\"before\":false,\"during\":true}}}"}},"spec":{"unschedulable":true},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"nuc2","annotations":{}},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"nuc3","annotations":{}},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}'
     else
-      printf '%s\n' '{"items":[{"metadata":{"name":"nuc1","annotations":{}},"spec":{"unschedulable":false}},{"metadata":{"name":"nuc2","annotations":{}},"spec":{"unschedulable":false}},{"metadata":{"name":"nuc3","annotations":{}},"spec":{"unschedulable":false}}]}'
+      printf '%s\n' '{"items":[{"metadata":{"name":"nuc1","annotations":{}},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"nuc2","annotations":{}},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"nuc3","annotations":{}},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}'
     fi
     ;;
   *'get kustomization cilium --output jsonpath={.spec.suspend}')
