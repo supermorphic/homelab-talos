@@ -898,7 +898,8 @@ resize_just() {
   [[ "$*" == 'bootstrap _resize-longhorn-raw nuc1' ]] || return 2
   resize_calls+="${resize_calls:+ }resize"
 }
-run_resize_longhorn_transaction fake-kubeconfig nuc1 holder
-[[ "$resize_calls" == 'lease admission resize' ]]
+run_resize_longhorn_transaction fake-kubeconfig nuc1 holder \
+  "$state_dir/lease-renewal-failed"
+[[ "$resize_calls" == 'lease admission lease resize' ]]
 
 echo 'Node lifecycle state tests passed.'

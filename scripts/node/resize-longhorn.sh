@@ -13,8 +13,14 @@ run_resize_longhorn_transaction() {
   local kubeconfig="$1"
   local node="$2"
   local holder="$3"
+  local renewal_failure="$4"
   verify_test_lease_holder "$kubeconfig" "$holder" || return 1
   assert_established_disruption_admissible "$kubeconfig" || return 1
+  verify_test_lease_holder "$kubeconfig" "$holder" || return 1
+  [[ ! -f "$renewal_failure" ]] || {
+    echo 'Shared disruption Lease renewal failed before Longhorn resize.' >&2
+    return 1
+  }
   resize_just bootstrap _resize-longhorn-raw "$node" || return 1
 }
 
@@ -55,7 +61,7 @@ resize_longhorn_main() (
     echo 'Shared disruption Lease renewal failed before Longhorn resize.' >&2
     return 1
   }
-  run_resize_longhorn_transaction "$kubeconfig" "$NODE_NAME" "$holder"
+  run_resize_longhorn_transaction "$kubeconfig" "$NODE_NAME" "$holder" "$renewal_failure"
   [[ ! -f "$renewal_failure" ]] || {
     echo 'Shared disruption Lease renewal failed during Longhorn resize.' >&2
     return 1

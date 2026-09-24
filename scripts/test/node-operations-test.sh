@@ -60,12 +60,16 @@ NODE_ALLOW_LINKED_WORKTREE_FOR_TESTS=true run_checkout_case linked
 
 calls="$fixture_root/transaction.calls"
 transaction_failure=''
+renewal_failure_phase=''
 verify_test_lease_holder() {
   printf 'holder\n' >>"$calls"
   [[ "$transaction_failure" != holder ]]
 }
 assert_established_disruption_admissible() {
   printf 'admission\n' >>"$calls"
+  if [[ "$renewal_failure_phase" == admission ]]; then
+    : >"${NODE_OPERATIONS_RENEWAL_MARKER:?}"
+  fi
   [[ "$transaction_failure" != admission ]]
 }
 resize_just() {
@@ -74,13 +78,15 @@ resize_just() {
 }
 
 : >"$calls"
-run_resize_longhorn_transaction fixture-kubeconfig nuc1 holder-example
-[[ "$(cat "$calls")" == $'holder\nadmission\nresize' ]]
+run_resize_longhorn_transaction fixture-kubeconfig nuc1 holder-example \
+  "$fixture_root/renewal-failed"
+[[ "$(cat "$calls")" == $'holder\nadmission\nholder\nresize' ]]
 
 for transaction_failure in holder admission; do
   : >"$calls"
   assert_fails "$transaction_failure failure did not stop the resize transaction." \
-    run_resize_longhorn_transaction fixture-kubeconfig nuc1 holder-example
+    run_resize_longhorn_transaction fixture-kubeconfig nuc1 holder-example \
+    "$fixture_root/renewal-failed"
   if rg -qx resize "$calls"; then
     fail "$transaction_failure failure allowed the raw resize."
   fi
@@ -116,5 +122,22 @@ if (
   fail 'A pre-transaction Lease renewal failure was accepted.'
 fi
 [[ ! -s "$calls" ]] || fail 'A pre-transaction Lease renewal failure reached the raw resize.'
+
+start_test_lease_renewal() { export NODE_OPERATIONS_RENEWAL_MARKER="$3"; }
+renewal_failure_phase=admission
+: >"$calls"
+if (
+  cd "$top_level"
+  NODE_JUST="$fake_just" \
+  NODE_OPERATIONS_TEST_CALLS="$calls" \
+  TALOS_RESIZE_LONGHORN_CONFIRM=resize-longhorn:nuc1:192.168.90.10 \
+    resize_longhorn_main nuc1 "$top_level/kubeconfig" "$top_level/talosconfig"
+) >/dev/null 2>&1; then
+  fail 'A Lease renewal failure during admission was accepted.'
+fi
+if rg -qx resize "$calls"; then
+  fail 'A Lease renewal failure during admission reached the raw resize.'
+fi
+renewal_failure_phase=''
 
 echo 'Retained node operation tests passed.'
