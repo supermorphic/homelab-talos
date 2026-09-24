@@ -58,7 +58,7 @@ Authority is based on what an operation can do, not which command spells it.
 - Agents may use approved workflows to mint the task-scoped observer, diagnostic,
   report-publisher, and Talos reader credential set. Observer and Talos reader operations are read-only.
   Diagnostic access is reduced privilege and is authorized only through approved named
-  verifiers or separate specific operator authorization. Recorded acceptance separately
+  verifiers or separate specific operator authorization. Recording evidence separately
   authorizes the report-publisher identity to retain canonical evidence. Seeking or using
   other elevated, write, administrative, or break-glass credentials requires explicit operator
   authorization for the specific task. Secret creation, privileged platform rollout,
@@ -89,8 +89,8 @@ Credentials are separated by scope and checkout location.
   approved named verifier or with separate specific operator authorization. Any
   other elevated, write, administrative, or break-glass credential requires explicit
   authorization for the specific task. The report-publisher identity is used only by the
-  approved recorded-acceptance publication path described in
-  [the test reporting standard](011-test-reporting-standard.md#recorded-acceptance-evolution--issue-371).
+  approved recorded-evidence publication path described in
+  [the test reporting standard](011-test-reporting-standard.md#recorded-evidence-evolution--issue-371).
   This is separate authority to retain evidence, not permission to execute suite mutations.
 - Observer access covers the bounded resource reads needed by registered verifiers and
   denies Secret reads and mutation. Diagnostic access adds the named pod subresources

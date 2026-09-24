@@ -9,7 +9,7 @@ repository policy or executable behavior.
 [`AGENTS.md`](../../AGENTS.md) defines the authority boundary. Agents may use approved
 repository workflows to create task-scoped credentials and perform scoped verification
 without asking the operator to run those workflows for them. This includes the dedicated
-publisher identity through recorded acceptance. An agent must not adopt or use other write,
+publisher identity for approved evidence publication. An agent must not adopt or use other write,
 administrator, elevated, or break-glass credentials unless the operator explicitly
 authorizes that credential for the specific task.
 
@@ -119,7 +119,7 @@ diagnostic
   → agent discretion only through approved named verifier workflows
 
 report-publisher
-  → guarded recorded-acceptance publication only
+  → guarded evidence publication only
 
 anything broader or ad hoc
   → operator boundary
@@ -149,10 +149,12 @@ Within an approved task, an agent may:
   `homelab-diagnostic`.
 - Run the approved scoped verification campaign directly after its required preflight;
   the separate plan is an optional preview.
-- Run recorded acceptance for approved scoped verifiers with
-  `mise exec -- just test acceptance <suite-id|scoped-verification>`. The coordinator
+- Record approved scoped verifiers with
+  `mise exec -- just test record <suite-id|scoped-verification>`. The coordinator
   selects `homelab-report-publisher` only for publication; no operator confirmation is
   required for that approved evidence mutation.
+- Retain an already-finalized canonical run with `mise exec -- just test publish <run-id>`
+  under the same scoped publication guards, without rerunning the suite.
 
 The publisher identity has namespace-limited report reads and pod execution, read access
 to the named Flux source, and get/update on
@@ -161,7 +163,7 @@ reads, general workload writes, cluster-wide pod execution, or general Lease cre
 It does not inherit `view` and must never be selected for suite execution. The publisher
 keeps secret scans, deployed-source checks, serialization, and guarded atomic installation.
 Feature-branch evidence remains candidate evidence. See
-[recorded acceptance](test-campaign-operations.md#record-initiative-and-infrequent-acceptance).
+[recorded evidence](test-campaign-operations.md#record-initiative-and-infrequent-assurance).
 
 If an approved verifier fails because its scoped identity lacks permission, stop at that
 boundary. Do not switch to an administrator credential or expand RBAC to make the check
@@ -173,7 +175,7 @@ The autonomous cases above include approved observer reads as well as approved s
 verifiers. Before performing any other scoped cluster operation, the agent must stop and
 surface the proposed action to the operator when it would:
 
-- Mutate live cluster state beyond the approved recorded-acceptance publication path.
+- Mutate live cluster state beyond the approved evidence-publication path.
 - Perform an ad-hoc `kubectl exec`.
 - Perform an ad-hoc `kubectl port-forward`.
 - Expose or inspect sensitive runtime or process data outside an approved verifier.

@@ -98,13 +98,17 @@ solely to satisfy these style rules.
 - Treat confirmation as an execution-intent guard, not as operator authorization.
 - Treat repository `verify` and `check` workflows as observational toward their target. Use a
   registered `test` workflow when evidence requires deliberate temporary mutation.
-- Use `mise exec -- just test acceptance <suite-id|scoped-verification>` for intentional
+- Use `mise exec -- just test record <suite-id|scoped-verification>` for intentional
   initiative completion, bootstrap, setup, initialization, recovery, and other infrequent
-  assurance evidence. This orchestration publishes each canonical child automatically;
-  agents may use its worktree-scoped `homelab-report-publisher` identity without operator
-  confirmation. This publication authority does not authorize the selected suite's
-  mutations or broader credentials. Ordinary CI, iterative verification, and diagnostics
-  remain local. Feature-branch evidence remains candidate evidence; only clean deployed-main
+  assurance evidence. This orchestration publishes each canonical child automatically.
+  Use `mise exec -- just test record-resume <session-id>` after an eligible publication
+  failure, or `mise exec -- just test publish <run-id>` to retain one already-finalized
+  canonical run without rerunning it. In a linked worktree, agents may use the scoped
+  `homelab-report-publisher` identity for approved publication without operator
+  confirmation; outside that context, manual publication requires exact run-scoped
+  confirmation. Publication authority does not authorize the selected suite's mutations
+  or broader credentials. Ordinary CI, iterative verification, and diagnostics remain
+  local. Feature-branch evidence remains candidate evidence; only clean deployed-main
   evidence may drive authoritative latest links, Homepage status, and last-run metrics.
 - When an approved task needs scoped cluster access, agents must run
   `mise exec -- just talos kubeconfig` themselves from their assigned linked worktree
@@ -125,7 +129,7 @@ solely to satisfy these style rules.
   testing, benchmarking, verification, diagnostics, and cleanup of resources
   they create for those purposes. Privileged, destructive, or persistent
   live-state changes outside Git remain operator-run, except retained test evidence written
-  through the approved recorded-acceptance publisher. That identity is limited to the
+  through the approved report publisher. That identity is limited to the
   report namespace and the named publication Lease; it must not execute test suites.
 
 ## Agent orchestration

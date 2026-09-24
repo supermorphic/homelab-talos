@@ -456,7 +456,7 @@ TEST_CAMPAIGN_CONFIRM="$mutating_confirmation" \
 [[ "$(rg -c ' replace --filename -$' "$mutating_root/lease-calls")" == 1 ]]
 [[ "$(yq -r '.spec.holderIdentity // ""' "$mutating_root/lease.json")" == '' ]]
 [[ "$(cat "$mutating_root/commands")" == mutating-pass ]]
-# Recorded acceptance is explicit execution intent. It freezes a clean candidate
+# Recording is explicit execution intent. It freezes a clean candidate
 # source, publishes canonical child reports without an additional confirmation,
 # and keeps its journal resumable after publication failure.
 acceptance_catalog="$fixture/acceptance-catalog.yaml"
@@ -633,7 +633,7 @@ rg -Fqx "mise exec -- just test publish $acceptance_unsafe_run_id" \
 if run_acceptance "$acceptance_unsafe_publish_root" true \
   "$repo_root/scripts/test/run-campaign.sh" record-resume \
   "$acceptance_unsafe_id" >"$acceptance_unsafe_publish_root/resume.log" 2>&1; then
-  echo 'Unsafe recorded acceptance unexpectedly became resumable.' >&2
+  echo 'Unsafe record session unexpectedly became resumable.' >&2
   exit 1
 fi
 rm "$acceptance_unsafe_marker"

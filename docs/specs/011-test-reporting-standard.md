@@ -10,20 +10,22 @@ identity, result semantics, canonical evidence, and clear execution authority.
 This specification preserves the design rationale. The current catalog, executable
 source, test-report reference, campaign guide, and repository policy remain authoritative.
 
-## Recorded acceptance evolution — issue 371
+## Recorded evidence evolution — issue 371
 
 Intentional initiative completion, bootstrap, setup, initialization, provisioning, and
-recovery assurance use an explicit recorded-acceptance command. Publication depends on
-this invocation context, not on whether the underlying suite touches the cluster.
+recovery assurance use `test record <selection>`. Publication depends on
+this explicit recording action, not on whether the underlying suite touches the cluster.
 Ordinary CI, scoped campaigns, standalone verification, and diagnostics remain local.
-The command selects a catalog suite or the scoped-verification campaign, freezes clean
+`record` selects a catalog suite or the scoped-verification campaign, freezes clean
 source and membership, runs existing children, and retains their canonical reports.
-An optional plan previews execution; the acceptance command itself supplies publication
-intent and does not require operator confirmation. Suite execution authority remains
-separate, including existing controls for mutation and attended operations.
-`acceptance-publish <run-id>` retains an existing finalized canonical run from a
-parameterized or previously completed procedure without rerunning it. Individual offline
-validators use `validation.ci` when a canonical recorded acceptance result is required.
+`record-resume <session-id>` retries publication after a supported failure and continues
+only eligible remaining members without rerunning completed suites. The recording action
+supplies publication intent. Suite execution authority remains separate, including
+existing controls for mutation and attended operations. `publish <run-id>` retains one
+already-finalized canonical run from a parameterized or previously completed procedure
+without rerunning or continuing anything. The publisher uses the scoped worktree context
+when authorized; otherwise it requires exact run-scoped manual confirmation. Individual
+offline validators use `validation.ci` when a canonical recorded result is required.
 
 Worktree credential installation supplies a third identity, `homelab-report-publisher`.
 The observer stays current. Publication explicitly selects the publisher context for
@@ -46,7 +48,7 @@ last failure across report pruning. The two time blocks use short relative dates
 Candidate reports cannot change these values. The Kubernetes RUNNING badge continues to
 represent service availability separately.
 
-The campaign audit retains automation-data provisioning as standalone recorded acceptance:
+The campaign audit retains automation-data provisioning as standalone recorded evidence:
 it rotates credentials and requires a matching new n8n dump and automation-data bundle
 before restore. Automatically enrolling it in integration, weekly, or full would break
 that recovery evidence boundary. The catalog and validator document this deliberate exclusion.
@@ -134,7 +136,7 @@ guard contract. It is not a complete statement of credential capability or task-
 agent authorization. Current repository policy authorizes an agent to mint worktree-
 local observer, diagnostic, report-publisher, and Talos reader credentials and run the registered
 `scoped-verification` campaign for an approved task even though its member entries retain
-`execution_owner: human`. Recorded acceptance separately authorizes guarded evidence
+`execution_owner: human`. Recording separately authorizes guarded evidence
 publication. Neither authorization grants disruptive execution or administrative credentials.
 
 ## Framework and dispatch ownership
@@ -230,7 +232,7 @@ operational obligation even when the original resilience assertion already faile
 Allure generates static reports from canonical JUnit plus only the evidence paths named
 by `evidence.json`. Native diagnostic JUnit is not ingested a second time. Local report
 generation is available for any valid run. Persistent publication is a guarded workstation
-push, invoked manually by an operator or automatically by recorded acceptance.
+push, invoked manually by an operator or automatically by `test record`.
 
 Allure was selected as a presentation layer because it can consume generic JUnit and
 generate static output. Canonical JUnit and the four root metadata documents remain the
@@ -295,7 +297,7 @@ the child run as the unit of evidence.
 - `full` adds certified Kubernetes conformance and represents every implemented assurance
   suite. Diagnostics and intentional harness failures remain excluded.
 - `scoped-campaign` runs the `scoped-verification` members locally. Explicit
-  `acceptance scoped-verification` runs the same checks with separate publication authority.
+  `record scoped-verification` runs the same checks with separate publication authority.
 
 Before execution, a campaign freezes its ordered member list, source revision, deployed
 Flux revision, and plan digest. It requires a clean current `origin/main` checkout and a

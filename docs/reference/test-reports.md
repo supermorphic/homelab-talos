@@ -65,7 +65,8 @@ its configuration. Caddy itself listens only on the unprivileged 8080 and 9090 p
 Publishing is intentionally a push operation from the workstation. There is
 no cluster upload service to attack or authenticate. The recipe requires:
 
-- explicit recorded acceptance or the manual publisher's exact run-scoped confirmation;
+- an authorized linked-worktree publication context or the manual publisher's exact
+  run-scoped confirmation;
 - a canonical, finalized run with complete JUnit/evidence indexing;
 - clean captured Git metadata and a locally available commit;
 - the publisher and server sources already merged to `origin/main`;
@@ -80,19 +81,20 @@ authoritative; candidates never drive Homepage data, stable latest links, or
 last-run metrics.
 
 For initiative completion and infrequent assurance, use
-`mise exec -- just test acceptance <suite-id|scoped-verification>`. In a linked worktree,
+`mise exec -- just test record <suite-id|scoped-verification>`. In a linked worktree,
 this uses the existing verifier identities to execute approved scoped checks, then selects
 `homelab-report-publisher` only for publication. Agents need no operator confirmation for
 that publication. The observer remains the kubeconfig's default context. Publisher access
 is restricted to the report namespace, named Flux source reads, and get/update on the
 Git-created publication Lease. It grants no authority to execute mutating suites.
-`mise exec -- just test acceptance-publish <run-id>` deliberately retains an existing
-finalized canonical run using the same publication authority, without rerunning its suite.
+`mise exec -- just test publish <run-id>` deliberately retains an existing finalized
+canonical run without rerunning its suite. In a linked worktree it uses the scoped
+publisher; outside that context it requires exact run-scoped manual confirmation.
 
 For routine multi-suite publication, use the catalog-backed campaigns documented in
 [`docs/guides/test-campaign-operations.md`](../guides/test-campaign-operations.md). Operator-published campaign mode requires exact
 current-main authority and therefore never uploads candidate children. Standalone
-`just test publish` keeps the historical and candidate workflow above.
+`just test publish` retains historical and candidate evidence under the same guards.
 
 Republishing the same run ID and digest is a no-op. Reusing a run ID with different
 content is rejected. Normal retention keeps reports that are both among the newest 200

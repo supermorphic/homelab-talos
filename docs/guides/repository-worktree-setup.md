@@ -214,7 +214,7 @@ The linked-worktree path creates ignored, worktree-local files with mode `0600`:
 
 - `.kube/config` contains 30-day credentials for exactly
   `homelab-observer`, `homelab-diagnostic`, and `homelab-report-publisher`;
-  `homelab-observer` is current. Recorded acceptance selects the publisher only while
+  `homelab-observer` is current. `test record` and `test publish` select the publisher only while
   retaining evidence; it is never a suite-execution credential.
 - `.talos/config` contains a 90-day Talos credential with exactly the `os:reader` role.
 
