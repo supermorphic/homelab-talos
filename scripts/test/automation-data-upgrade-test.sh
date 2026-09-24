@@ -1321,7 +1321,7 @@ fi
 ! rg -q 'synthetic-private-value|credential' "$integration_root/permission-malformed.log" ||
   fail 'restore permission gate exposed an unrelated validator field'
 
-# An installed v1 catalog must upgrade in place without losing its source rows.
+# An installed v1 catalog must upgrade in place to the v2 mapping contract.
 v1_container="$(new_container_name v1)"
 start_database "$v1_container" baseline
 v1_extension="$integration_root/private/nocodb-v1.sql"
@@ -1600,6 +1600,7 @@ mapping_bundle="$(find "$integration_root/backups/mapping" -mindepth 1 -maxdepth
 restore_bundle "$mapping_bundle" 026-nocodb-v2 mapping
 
 # A v2 backup must reject a capture that drops the mapping registry key.
+# shellcheck disable=SC2016 # PostgreSQL dollar quoting must reach psql literally.
 psql_query "$mapping_container" automation_data_control '
 CREATE OR REPLACE FUNCTION platform_operations.capture_backup_state()
 RETURNS jsonb LANGUAGE sql SECURITY DEFINER
