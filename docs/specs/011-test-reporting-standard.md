@@ -39,11 +39,12 @@ revisions immediately before installation. Failures preserve local evidence and 
 for publication retry without rerunning completed suites; unsafe child results never
 authorize continuation. Exact report links appear in the terminal summary.
 
-Homepage uses three Custom API blocks: LATEST, LAST RUN, and LAST FAILURE. The first two
+Homepage uses three Custom API blocks: STATUS, LAST RUN, and LAST FAIL. The first two
 describe the latest authoritative result by completion time; the third records the most
 recent authoritative failed or broken completion. A retained state timestamp preserves
-last failure across report pruning. Candidate reports cannot change these values. The
-Kubernetes RUNNING badge continues to represent service availability separately.
+last failure across report pruning. The two time blocks use short relative dates.
+Candidate reports cannot change these values. The Kubernetes RUNNING badge continues to
+represent service availability separately.
 
 The campaign audit retains automation-data provisioning as standalone recorded acceptance:
 it rotates credentials and requires a matching new n8n dump and automation-data bundle

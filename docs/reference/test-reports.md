@@ -116,9 +116,9 @@ No command is required to view already-published reports:
 Caddy exposes its native metrics on the internal-only metrics port. The generated
 low-cardinality test metrics are served at `/api/metrics.prom`; the ServiceMonitor
 scrapes both. Homepage consumes `/api/homepage.json` as three Custom API blocks:
-`LATEST`, `LAST RUN`, and `LAST FAILURE`. The latest result and both completion times
-use authoritative evidence only; Homepage formats timestamps as relative ages. Publication
-state retains the most recent failed or broken completion even after its report is pruned.
+`STATUS`, `LAST RUN`, and `LAST FAIL`. The latest result and both completion times
+use authoritative evidence only; Homepage formats timestamps as short relative ages.
+Publication state retains the most recent failed or broken completion even after its report is pruned.
 Unavailable history leaves a blank value. The Kubernetes `RUNNING` badge measures service
 availability separately from test evidence health. When upgrading an existing archive,
 the first fresh publication creates the new summary contract from retained authoritative

@@ -89,11 +89,13 @@ suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
   .metadata.annotations."gethomepage.dev/widget.mappings.1.field",
   .metadata.annotations."gethomepage.dev/widget.mappings.1.label",
   .metadata.annotations."gethomepage.dev/widget.mappings.1.format",
+  .metadata.annotations."gethomepage.dev/widget.mappings.1.style",
   .metadata.annotations."gethomepage.dev/widget.mappings.2.field",
   .metadata.annotations."gethomepage.dev/widget.mappings.2.label",
-  .metadata.annotations."gethomepage.dev/widget.mappings.2.format"
+  .metadata.annotations."gethomepage.dev/widget.mappings.2.format",
+  .metadata.annotations."gethomepage.dev/widget.mappings.2.style"
 ] | join(",")' "$route")" == \
-  'latest,LATEST,last_run,LAST RUN,relativeDate,last_failure,LAST FAILURE,relativeDate' ]]
+  'latest,STATUS,last_run,LAST RUN,relativeDate,short,last_failure,LAST FAIL,relativeDate,short' ]]
 if rg -q 'gethomepage\.dev/widget\.(display|mappings\.(items|name|label|limit|format|target)):' \
   "$route"; then
   echo 'Test Reports must not use the obsolete Homepage dynamic-list fields.' >&2

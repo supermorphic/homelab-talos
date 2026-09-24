@@ -17,13 +17,15 @@ metadata:
     gethomepage.dev/widget.url: "http://test-reports.test-reports.svc.cluster.local:8080/api/homepage.json"
     gethomepage.dev/widget.refreshInterval: "300000"
     gethomepage.dev/widget.mappings.0.field: "latest"
-    gethomepage.dev/widget.mappings.0.label: "LATEST"
+    gethomepage.dev/widget.mappings.0.label: "STATUS"
     gethomepage.dev/widget.mappings.1.field: "last_run"
     gethomepage.dev/widget.mappings.1.label: "LAST RUN"
     gethomepage.dev/widget.mappings.1.format: "relativeDate"
+    gethomepage.dev/widget.mappings.1.style: "short"
     gethomepage.dev/widget.mappings.2.field: "last_failure"
-    gethomepage.dev/widget.mappings.2.label: "LAST FAILURE"
+    gethomepage.dev/widget.mappings.2.label: "LAST FAIL"
     gethomepage.dev/widget.mappings.2.format: "relativeDate"
+    gethomepage.dev/widget.mappings.2.style: "short"
 spec:
   hostnames:
     - tests.lab.supermorphic.com

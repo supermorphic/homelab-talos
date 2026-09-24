@@ -110,11 +110,13 @@ done
   .metadata.annotations."gethomepage.dev/widget.mappings.1.field",
   .metadata.annotations."gethomepage.dev/widget.mappings.1.label",
   .metadata.annotations."gethomepage.dev/widget.mappings.1.format",
+  .metadata.annotations."gethomepage.dev/widget.mappings.1.style",
   .metadata.annotations."gethomepage.dev/widget.mappings.2.field",
   .metadata.annotations."gethomepage.dev/widget.mappings.2.label",
-  .metadata.annotations."gethomepage.dev/widget.mappings.2.format"
+  .metadata.annotations."gethomepage.dev/widget.mappings.2.format",
+  .metadata.annotations."gethomepage.dev/widget.mappings.2.style"
 ] | join(",")' "$test_reports_route")" == \
-  'latest,LATEST,last_run,LAST RUN,relativeDate,last_failure,LAST FAILURE,relativeDate' ]]
+  'latest,STATUS,last_run,LAST RUN,relativeDate,short,last_failure,LAST FAIL,relativeDate,short' ]]
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/group"' "$longhorn_route")" == \
   'Platform' ]]
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/group"' "$portainer_route")" == \
