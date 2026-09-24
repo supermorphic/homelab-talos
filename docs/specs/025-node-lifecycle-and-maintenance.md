@@ -1138,8 +1138,10 @@ direction is playbook to cluster verification; cluster commands never call back 
 playbook lifecycle code.
 
 Preserve foundation source validation, Flux checks, DNS/Gateway/TLS acceptance, Cilium
-postflight, and canonical verifier results. Playbook validates command availability
-and matching cluster/credential contexts before disruption. The chosen configuration
+postflight, and canonical verifier results. The selected checkout must have approved
+`.kube/config` and `.talos/config`; Cilium postflight uses the latter for Talos and etcd
+reads. Playbook validates command availability, both files, Kubernetes cluster/context,
+and Talos access to the intended cluster before disruption. These fixed checkout paths
 must reach nested recipes as well as the outer command. These observational verifiers
 do not acquire the disruption Lease held by playbook. Missing commands, nonzero exits,
 and timeouts prevent accepted recovery and uncordon; record references to the local

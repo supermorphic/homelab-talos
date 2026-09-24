@@ -116,17 +116,19 @@ operator to the validated playbook recovery interface after that replacement exi
 
 The playbook selects an absolute path to a Talos repository checkout that the operator
 prepared before the disruption. That checkout must already contain the approved
-`.kube/config`, and its pinned toolchain must provide this public command:
+`.kube/config` and `.talos/config`, and its pinned toolchain must provide this public
+command:
 
 ```text
 mise exec -- just kube foundation-verify
 ```
 
-Before disruption, playbook preflight verifies that the command is available and compares
-the prepared kubeconfig's cluster and current context with the transaction target. The
-playbook invokes the command from the selected checkout, with `TEST_KUBECONFIG` unset and
-other test-only credential overrides removed. An ambient `KUBECONFIG` does not replace the
-fixed `.kube/config` argument used by the recipe.
+Before disruption, playbook preflight verifies that the command and both credential files
+are available. It compares the prepared kubeconfig's cluster and current context with the
+transaction target and verifies that the Talos credential can read the intended cluster.
+The playbook invokes the command from the selected checkout, with `TEST_KUBECONFIG` unset
+and other test-only credential overrides removed. Ambient `KUBECONFIG` or `TALOSCONFIG`
+values do not replace the fixed checkout paths used by nested recipes.
 
 The playbook gives the command a bounded timeout. A missing command, target or context
 mismatch, timeout, or nonzero exit is a failed recovery verification; containment remains
@@ -135,7 +137,8 @@ described in [the test harness documentation](../../tests/README.md) with its tr
 record.
 
 This gate retains foundation source validation, Flux readiness, certificate, DNS, Gateway,
-TLS, and Cilium postflight checks. The broader `kube cilium-verify` command remains
+TLS, and Cilium postflight checks. Cilium postflight reads Talos and etcd state with the
+checkout's `.talos/config`. The broader `kube cilium-verify` command remains
 available but is not a new requirement of this recovery gate. The playbook calls the
 public repository command directly. The repository does not call back into the playbook or
 import playbook implementation code.
