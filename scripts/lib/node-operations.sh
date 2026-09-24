@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Target and authority helpers shared by retained node operations.
+# Target and authority helpers shared by local node operations.
 
 # These globals are the validated result consumed by node operation coordinators.
 # shellcheck disable=SC2034

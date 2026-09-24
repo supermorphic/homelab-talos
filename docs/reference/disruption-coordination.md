@@ -1,13 +1,8 @@
 # Disruption coordination
 
-This reference defines the Kubernetes wire protocol shared by independently maintained
-workflows that can make a node or required workload unavailable. It does not define a
-shared code package. Each repository owns and tests its own implementation.
-
-Stage A of the issue 431 migration keeps the current local lifecycle commands and the
-node abrupt-loss scenario operational. The companion replacement must pass the
-acceptance gate in [specification 025](../specs/025-node-lifecycle-and-maintenance.md)
-before those entrypoints or their implementation can be retired.
+This reference describes how local node lifecycle, Longhorn resize, bootstrap recovery,
+and mutating test workflows coordinate disruption. The lifecycle and recovery rules are
+defined in [specification 025](../specs/025-node-lifecycle-and-maintenance.md).
 
 ## Lease identities and timing
 
@@ -32,8 +27,8 @@ Lease helper does not combine these two coordination domains.
 
 Lease timestamps use Kubernetes `MicroTime`: UTC with exactly six fractional digits,
 for example `2026-09-23T12:34:56.000000Z`. A holder identity must match
-`[a-zA-Z0-9_.:-]+`. Implementations treat another valid holder identity as opaque;
-they do not infer authority or operation state from its segments.
+`[a-zA-Z0-9_.:-]+`. Another valid holder identity is opaque; callers do not infer
+authority or operation state from its segments.
 
 ## Optimistic ownership operations
 
@@ -70,75 +65,14 @@ presence of this Kubernetes Node annotation key:
 homelab.supermorphic.com/node-lifecycle
 ```
 
-Local admission refuses whenever any Node contains the key. The annotation value can be
-empty, malformed, or from an unknown schema version. Local retained workflows do not
-parse it, clear it, restore Longhorn values, or uncordon the Node. A free or expired
-Lease never overrides the annotation.
+The local admission helpers refuse whenever any Node contains the key, even when its
+value is empty, malformed, or from an unknown schema version. They do not parse or
+clear recovery records, restore Longhorn values, or uncordon a Node. A free or expired
+Lease never overrides the annotation. The local lifecycle commands own recovery and
+remove containment only after recovery is accepted.
 
-Established-node operations also require every Node to be `Ready=True` and schedulable.
-Exceptional `bootstrap retry-join` uses only the annotation guard because its target is
-expected to have a failed join and can be NotReady. Each workflow repeats the applicable
-holder and admission checks immediately before its consequential mutation.
-
-## Recovery record compatibility
-
-The replacement lifecycle implementation must recover the existing schema-version-1
-records. These examples use synthetic Node names:
-
-```json
-{"schemaVersion":1,"kind":"reboot"}
-```
-
-```json
-{"schemaVersion":1,"kind":"abrupt-loss"}
-```
-
-```json
-{
-  "schemaVersion": 1,
-  "kind": "maintenance",
-  "longhorn": {
-    "allowScheduling": {"before": true, "during": false},
-    "evictionRequested": {"before": false, "during": true}
-  }
-}
-```
-
-For maintenance, recovery restores a value only when its live value still equals the
-recorded `during` value. A value already equal to `before` needs no change. Any other
-value is an ownership conflict and preserves containment. Final annotation removal and
-uncordon occur only after accepted recovery.
-
-The local guards intentionally do not implement this recovery contract. They direct the
-operator to the validated playbook recovery interface after that replacement exists.
-
-## Recovery verification from a prepared checkout
-
-The playbook selects an absolute path to a Talos repository checkout that the operator
-prepared before the disruption. That checkout must already contain the approved
-`.kube/config` and `.talos/config`, and its pinned toolchain must provide this public
-command:
-
-```text
-mise exec -- just kube foundation-verify
-```
-
-Before disruption, playbook preflight verifies that the command and both credential files
-are available. It compares the prepared kubeconfig's cluster and current context with the
-transaction target and verifies that the Talos credential can read the intended cluster.
-The playbook invokes the command from the selected checkout, with `TEST_KUBECONFIG` unset
-and other test-only credential overrides removed. Ambient `KUBECONFIG` or `TALOSCONFIG`
-values do not replace the fixed checkout paths used by nested recipes.
-
-The playbook gives the command a bounded timeout. A missing command, target or context
-mismatch, timeout, or nonzero exit is a failed recovery verification; containment remains
-in place. The playbook retains the command's canonical run reference and the evidence
-described in [the test harness documentation](../../tests/README.md) with its transaction
-record.
-
-This gate retains foundation source validation, Flux readiness, certificate, DNS, Gateway,
-TLS, and Cilium postflight checks. Cilium postflight reads Talos and etcd state with the
-checkout's `.talos/config`. The broader `kube cilium-verify` command remains
-available but is not a new requirement of this recovery gate. The playbook calls the
-public repository command directly. The repository does not call back into the playbook or
-import playbook implementation code.
+The established-node admission helper also requires every Node to be `Ready=True` and
+schedulable. Exceptional `bootstrap retry-join` uses the annotation guard without this
+readiness requirement because its target can be NotReady after a failed join. Each
+workflow repeats the applicable holder and admission checks immediately before
+consequential mutation.

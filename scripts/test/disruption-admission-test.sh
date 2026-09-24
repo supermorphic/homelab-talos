@@ -10,15 +10,8 @@ fail() {
   exit 1
 }
 
-layout="$test_root/layout"
-mkdir -p "$layout/lib"
-cp "$repo_root/scripts/lib/disruption-admission.sh" "$layout/lib/disruption-admission.sh"
 # shellcheck source=scripts/lib/disruption-admission.sh
-source "$layout/lib/disruption-admission.sh"
-
-[[ ! -e "$layout/scripts/node" ]] || fail 'The admission helper fixture unexpectedly contains node lifecycle code.'
-[[ ! -e "$layout/lib/node-lifecycle-state.sh" ]] || fail 'The admission helper fixture unexpectedly contains lifecycle-state code.'
-[[ ! -e "$layout/homelab-playbook" ]] || fail 'The admission helper fixture unexpectedly contains a playbook checkout.'
+source "$repo_root/scripts/lib/disruption-admission.sh"
 
 nodes="$test_root/nodes.json"
 calls="$test_root/kubectl.calls"

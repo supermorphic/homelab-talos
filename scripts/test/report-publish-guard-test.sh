@@ -117,7 +117,7 @@ fi
       "resourceVersion": "11"
     },
     "spec": {
-      "holderIdentity": "playbook:maintenance:node-a:run-42",
+      "holderIdentity": "node:maintenance:node-a:run-42",
       "leaseDurationSeconds": 90,
       "acquireTime": strenv(NOW),
       "renewTime": strenv(NOW)
