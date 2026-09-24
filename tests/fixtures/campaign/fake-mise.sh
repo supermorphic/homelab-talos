@@ -37,6 +37,10 @@ case "$target" in
     suite_id='verification.metrics-server'
     command=(bash -c '"${CAMPAIGN_TEST_REPO_ROOT:?}/scripts/test/run-catalog-suite.sh" verification.cilium -- true')
     ;;
+  mutating-pass)
+    suite_id='test.cilium-connectivity'
+    command=(true)
+    ;;
   *)
     echo "Unknown fixture target: $target" >&2
     exit 2

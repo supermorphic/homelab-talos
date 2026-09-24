@@ -395,4 +395,66 @@ if rg -n 'TEST_SCOPED_CAMPAIGN_CONFIRM' \
   exit 1
 fi
 
+mutating_root="$fixture/mutating"
+mutating_catalog="$mutating_root/catalog.yaml"
+mkdir -p "$mutating_root"
+touch "$mutating_root/commands" "$mutating_root/publishes" \
+  "$mutating_root/lease-calls" "$mutating_root/kubeconfig"
+cp tests/catalog.yaml "$mutating_catalog"
+yq -i '
+  .campaigns."mutating-fixture" = {
+    "description": "Parent Lease fixture",
+    "mutates_cluster": true,
+    "disruptive": true,
+    "members": ["test.cilium-connectivity"]
+  } |
+  (.suites[] | select(.metadata.id == "test.cilium-connectivity") |
+    .runner.command) = "mise exec -- just fixture mutating-pass"
+' "$mutating_catalog"
+cat >"$mutating_root/nodes.json" <<'EOF'
+{"items":[{"metadata":{"name":"node-a","annotations":{}},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"node-b","annotations":{}},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}
+EOF
+mutating_plan="$mutating_root/plan.log"
+CAMPAIGN_TEST_SOURCE_STATE="$mutating_root/source-state" \
+TEST_CATALOG_PATH="$mutating_catalog" \
+TEST_CAMPAIGN_TEST_MODE=true \
+TEST_CAMPAIGN_SOURCE_CHECK_BIN="$repo_root/tests/fixtures/campaign/source-check.sh" \
+TEST_CAMPAIGN_PUBLISH_BIN="$repo_root/tests/fixtures/campaign/fake-publisher.sh" \
+TEST_RESULTS_ROOT="$mutating_root/results" \
+TEST_CAMPAIGNS_ROOT="$mutating_root/campaigns" \
+KUBECONFIG="$mutating_root/kubeconfig" \
+  "$repo_root/scripts/test/run-campaign.sh" plan mutating-fixture >"$mutating_plan"
+mutating_source="$(sed -n 's/^Source: //p' "$mutating_plan")"
+mutating_digest="$(sed -n 's/^Plan digest: //p' "$mutating_plan")"
+mutating_confirmation="run-publish:mutating-fixture:${mutating_source:0:12}:$mutating_digest"
+
+PATH="$fixture/bin:$PATH" \
+CAMPAIGN_TEST_REPO_ROOT="$repo_root" \
+CAMPAIGN_TEST_COMMAND_CALLS="$mutating_root/commands" \
+CAMPAIGN_TEST_PUBLISH_CALLS="$mutating_root/publishes" \
+CAMPAIGN_TEST_SOURCE_STATE="$mutating_root/source-state" \
+CAMPAIGN_TEST_LEASE_STATE="$mutating_root/lease.json" \
+CAMPAIGN_TEST_LEASE_CALLS="$mutating_root/lease-calls" \
+TEST_CATALOG_PATH="$mutating_catalog" \
+TEST_RESULTS_ROOT="$mutating_root/results" \
+TEST_CAMPAIGNS_ROOT="$mutating_root/campaigns" \
+TEST_CAMPAIGN_TEST_MODE=true \
+TEST_CAMPAIGN_SOURCE_CHECK_BIN="$repo_root/tests/fixtures/campaign/source-check.sh" \
+TEST_CAMPAIGN_PUBLISH_BIN="$repo_root/tests/fixtures/campaign/fake-publisher.sh" \
+TEST_CAMPAIGN_PUBLISH_ATTEMPTS=1 \
+TEST_CAMPAIGN_RETRY_DELAY_SECONDS=0 \
+TEST_LEASE_KUBECTL="$repo_root/tests/fixtures/campaign/fake-lease-kubectl.sh" \
+DISRUPTION_KUBECTL="$repo_root/tests/fixtures/disruption-admission/fake-kubectl.sh" \
+DISRUPTION_TEST_NODES="$mutating_root/nodes.json" \
+CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity \
+TEST_EXECUTION_ORIGIN=agent \
+KUBECONFIG="$mutating_root/kubeconfig" \
+TEST_CAMPAIGN_CONFIRM="$mutating_confirmation" \
+  "$repo_root/scripts/test/run-campaign.sh" run mutating-fixture \
+  >"$mutating_root/run.log" 2>&1
+[[ "$(rg -c ' create --filename -$' "$mutating_root/lease-calls")" == 1 ]]
+[[ "$(rg -c ' replace --filename -$' "$mutating_root/lease-calls")" == 1 ]]
+[[ "$(yq -r '.spec.holderIdentity // ""' "$mutating_root/lease.json")" == '' ]]
+[[ "$(cat "$mutating_root/commands")" == mutating-pass ]]
+
 echo 'Catalog-backed campaign coordinator tests passed.'

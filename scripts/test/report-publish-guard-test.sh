@@ -100,4 +100,82 @@ if rg -q 'Missing .*kube/config|does-not-exist' "$output"; then
   exit 1
 fi
 
+(
+  export TEST_LEASE_NAMESPACE=flux-system
+  export TEST_LEASE_NAME=homelab-test-report-publish-lock
+  source scripts/lib/lease.sh
+
+  publication_lease="$fixture/publication-lease.json"
+  disruption_lease="$fixture/disruption-lease.json"
+  now="$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)"
+  NOW="$now" yq --null-input --output-format json '{
+    "apiVersion": "coordination.k8s.io/v1",
+    "kind": "Lease",
+    "metadata": {
+      "namespace": "flux-system",
+      "name": "homelab-test-run-lock",
+      "resourceVersion": "11"
+    },
+    "spec": {
+      "holderIdentity": "playbook:maintenance:node-a:run-42",
+      "leaseDurationSeconds": 90,
+      "acquireTime": strenv(NOW),
+      "renewTime": strenv(NOW)
+    }
+  }' >"$disruption_lease"
+  cp "$disruption_lease" "$fixture/disruption-lease-before.json"
+
+  lease_kubectl() {
+    local _kubeconfig="$1"
+    shift
+    local operation='' lease_name='' input existing_version input_version
+    while [[ "$#" -gt 0 ]]; do
+      case "$1" in
+        get)
+          operation='get'
+          lease_name="$3"
+          break
+          ;;
+        create|replace)
+          operation="$1"
+          break
+          ;;
+        *) shift ;;
+      esac
+    done
+    case "$operation" in
+      get)
+        [[ "$lease_name" == homelab-test-report-publish-lock ]] || return 64
+        [[ -f "$publication_lease" ]] || return 1
+        cat "$publication_lease"
+        ;;
+      create)
+        input="$(cat)"
+        [[ "$(yq -r '.metadata.name' - <<<"$input")" == \
+          homelab-test-report-publish-lock ]] || return 64
+        yq --output-format json '.metadata.resourceVersion = "1"' \
+          <<<"$input" >"$publication_lease"
+        ;;
+      replace)
+        input="$(cat)"
+        existing_version="$(yq -r '.metadata.resourceVersion' "$publication_lease")"
+        input_version="$(yq -r '.metadata.resourceVersion' - <<<"$input")"
+        [[ "$input_version" == "$existing_version" ]] || return 1
+        NEXT_VERSION="$((existing_version + 1))" \
+          yq --output-format json \
+            '.metadata.resourceVersion = strenv(NEXT_VERSION)' \
+            <<<"$input" >"$publication_lease"
+        ;;
+      *) return 64 ;;
+    esac
+  }
+
+  acquire_test_lease fixture-kubeconfig publish:fixture
+  release_test_lease fixture-kubeconfig publish:fixture
+  [[ "$(yq -r '.metadata.name' "$publication_lease")" == \
+    homelab-test-report-publish-lock ]]
+  [[ "$(yq -r '.spec.holderIdentity // ""' "$publication_lease")" == '' ]]
+  cmp "$fixture/disruption-lease-before.json" "$disruption_lease"
+)
+
 echo 'Test-report confirmation and secret-scan guard passed.'
