@@ -249,6 +249,36 @@ class RecoveryContractTest(unittest.TestCase):
         self.assertEqual(process.wait(timeout=5), 128 + signal.SIGTERM)
         self.assert_process_stopped(int(pid_file.read_text(encoding="utf-8")))
 
+    def test_signal_during_spawn_is_deferred_until_process_group_can_be_reaped(self) -> None:
+        pid_file = Path(self.temp.name) / "spawn-signal-child.pid"
+        runner = (
+            "import importlib.util,os,pathlib,signal,sys; "
+            "spec=importlib.util.spec_from_file_location('recovery_verifier',sys.argv[1]); "
+            "module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+            "real=module.subprocess.Popen; pid_path=pathlib.Path(sys.argv[2]); "
+            "exec(\"def spawn(*args,**kwargs):\\n"
+            " process=real(*args,**kwargs)\\n"
+            " pid_path.write_text(str(process.pid))\\n"
+            " os.kill(os.getpid(),signal.SIGTERM)\\n"
+            " return process\"); "
+            "module.subprocess.Popen=spawn; "
+            "module.run_supervised(['bash','-c','sleep 30'],cwd=pathlib.Path(sys.argv[3]),"
+            "env=os.environ.copy(),timeout=30)"
+        )
+        process = subprocess.run(
+            [sys.executable, "-c", runner, str(MODULE_PATH), str(pid_file), str(self.source)],
+            check=False,
+            timeout=10,
+        )
+        child_pid = int(pid_file.read_text(encoding="utf-8"))
+        if process.returncode != 128 + signal.SIGTERM:
+            try:
+                os.killpg(child_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        self.assertEqual(process.returncode, 128 + signal.SIGTERM)
+        self.assert_process_stopped(child_pid)
+
     def test_chart_cache_rejects_missing_archive_and_digest_drift(self) -> None:
         module = load_module()
         cache = self.make_chart_cache(self.source, self.request["sourceRevision"])

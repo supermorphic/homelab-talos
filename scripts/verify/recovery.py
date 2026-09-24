@@ -480,39 +480,55 @@ def _response(request: dict, live: bool) -> dict:
 def run_supervised(
     command: list[str], *, cwd: Path, env: dict[str, str], timeout: float, capture: bool = False
 ) -> str:
-    process = subprocess.Popen(
-        command,
-        cwd=cwd,
-        env=env,
-        stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-        start_new_session=True,
-    )
     previous_handlers: dict[int, signal.Handlers] = {}
+    process: subprocess.Popen[str] | None = None
+    pending_signal: int | None = None
 
     def interrupted(signum: int, _frame: object) -> None:
-        raise _InvocationInterrupted(signum)
+        nonlocal pending_signal
+        pending_signal = signum
+        if process is not None:
+            raise _InvocationInterrupted(signum)
 
     try:
         previous_handlers = {
             signum: signal.signal(signum, interrupted)
             for signum in (signal.SIGINT, signal.SIGTERM)
         }
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=cwd,
+                env=env,
+                stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
+        except OSError as error:
+            if pending_signal is not None:
+                raise _InvocationInterrupted(pending_signal) from error
+            raise
+        if pending_signal is not None:
+            raise _InvocationInterrupted(pending_signal)
         stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         for signum in previous_handlers:
             signal.signal(signum, signal.SIG_IGN)
-        _stop_process_group(process)
+        if process is not None:
+            _stop_process_group(process)
         raise
     except _InvocationInterrupted as error:
         for signum in previous_handlers:
             signal.signal(signum, signal.SIG_IGN)
-        _stop_process_group(process)
+        if process is not None:
+            _stop_process_group(process)
         raise SystemExit(128 + error.signum) from None
     finally:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
+    if process is None:
+        raise ContractError("verification subprocess was unavailable")
     if process.returncode != 0:
         safe_lines = [
             line
