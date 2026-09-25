@@ -282,9 +282,9 @@ class OperatorClient:
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
             try:
-                guards.freeze_target(self.kubeconfig, "initialize")
+                observed = guards.freeze_target(self.kubeconfig, "initialize")
                 bootstrap._uninitialized(self)
-                return
+                return observed
             except SafeError:
                 time.sleep(2)
         raise SafeError("timeout")

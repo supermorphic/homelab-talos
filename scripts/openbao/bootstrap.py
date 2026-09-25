@@ -47,8 +47,13 @@ def run(
     secrets.preflight_recovery(recovery_directory, recipient)
     _uninitialized(client, absent_allowed=phase == "prepare")
     if phase == "prepare":
-        client.prepare(target)
-        return {"status": "prepared"}
+        observed = client.prepare(target)
+        # This output is for local attended review, never retained test evidence.
+        summary = {key: observed[key] for key in (
+            "source_revision", "cluster_uid", "namespace_uid", "statefulset_uid",
+            "pod_uids", "pvc_uids",
+        )}
+        return {"status": "prepared", "target": summary}
     password = random.token_urlsafe(32)
     # The transport never retries POST. A malformed success is also ambiguous.
     journal.append("initialization-requested")
