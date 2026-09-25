@@ -69,6 +69,8 @@ def acceptance(bao, kube, clock, *, wait_expiry=True):
     try:
         session = bao.login()
         data = bao.issue(session)
+        if bao.deny_unapproved(session) is not True:
+            raise AcceptanceError()
         # The OpenBao session also expires after 600 seconds. Revoke it before
         # waiting on the independently issued Kubernetes credential. Never retry
         # an ambiguous revoke; the run must fail if that one request fails.
@@ -113,6 +115,7 @@ def acceptance(bao, kube, clock, *, wait_expiry=True):
             "expires_at": expires,
             "canary": True,
             "protected_denied": True,
+            "openbao_issuance_denied": True,
             "expired": wait_expiry,
         }
     except Exception:  # noqa: BLE001 -- Discard credential-bearing adapter exception text.
