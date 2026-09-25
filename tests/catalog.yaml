@@ -908,3 +908,11 @@ suites:
     confirmation: {type: command, variable: null, expected: null}
     runner: {command: "MODE=certified mise exec -- just kube conformance", implementation: scripts/test/run-sonobuoy.sh}
     native_results: {strategy: sonobuoy-junit}
+
+  # Attended only; no periodic campaign enrollment. Confirmation binds the
+  # coordinator's canonical run ID and the selected snapshot checksum at /dev/tty.
+  - metadata: {id: test.openbao-restore-drill, source: test, framework: python, suite: platform, tier: integration, target: openbao, scenario: isolated-snapshot-restore, scope: system, intent: resilience, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: command, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube openbao-restore-drill", implementation: scripts/test/scenarios/openbao_restore.py}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: direct, runtime: uv-python, path: scripts/test/scenarios/openbao_restore.py, args: [], selector: null}
