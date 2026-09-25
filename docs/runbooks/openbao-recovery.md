@@ -93,6 +93,10 @@ prove the same peer-isolation acceptance in that state.
    acceptance issuance role and ACL serve as the non-secret configuration canary.
    All desired configuration must match the current source; an older incompatible
    snapshot fails acceptance instead of silently accepting historical policy.
+   The scratch server has no Kubernetes token, so its restored JWT provider's
+   ordinary config read must fail with the pinned missing-token error. The drill
+   then compares that one stored entry through scratch's loopback-only raw endpoint
+   with the retained operator login. Other configuration uses normal API reads.
 
 Only reviewed server version `2.7.0` is currently accepted, with the source-pinned
 image digest. Add compatibility and restore evidence before accepting another
