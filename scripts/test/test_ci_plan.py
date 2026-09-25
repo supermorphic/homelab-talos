@@ -454,6 +454,8 @@ class OwnershipContractTests(unittest.TestCase):
             "scripts/validate/openbao.sh",
             "scripts/verify/openbao.sh",
             "kubernetes/apps/monitoring/gatus/app/openbao-activation.values.yaml",
+            "kubernetes/apps/monitoring/gatus/app/values.yaml",
+            "kubernetes/apps/monitoring/gatus/app/kustomization.yaml",
             "tests/prometheus/openbao_test.yaml",
             "scripts/test/core/fixtures/openbao-2.7-jwt-config.json",
         }
@@ -466,6 +468,20 @@ class OwnershipContractTests(unittest.TestCase):
                 self.assertIn("core", selected)
                 selected_work = frozenset().union(*(self.group_work[group] for group in selected))
                 self.assertTrue(required.issubset(selected_work))
+
+    def test_openbao_active_gatus_inputs_select_observability_and_core(self):
+        fixture = yaml.safe_load(OWNERSHIP.read_text())
+        paths = {
+            "kubernetes/apps/monitoring/gatus/app/values.yaml",
+            "kubernetes/apps/monitoring/gatus/app/kustomization.yaml",
+        }
+        self.assertEqual(set(fixture["contracts"]["openbao-activation"]["changed_inputs"]), paths)
+        for path in paths:
+            with self.subTest(path=path):
+                selected = classify([Change("M", None, path)], self.impact, full=False)
+                self.assertEqual(selected, ("core", "observability", "automation"))
+                self.assertIn("catalog:validation.openbao", self.group_work["core"])
+                self.assertIn("catalog:validation.gatus", self.group_work["observability"])
 
     def test_python_modules_have_exactly_one_group_owner(self):
         owners = {}

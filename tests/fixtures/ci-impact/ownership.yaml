@@ -64,9 +64,18 @@ contracts:
       - tests/prometheus/openbao_test.yaml
     required_tests:
       - catalog:validation.monitoring-alerts
+  openbao-activation:
+    changed_inputs:
+      - kubernetes/apps/monitoring/gatus/app/kustomization.yaml
+      - kubernetes/apps/monitoring/gatus/app/values.yaml
+    required_tests:
+      - catalog:validation.openbao
+      - catalog:validation.gatus
   openbao-source:
     changed_inputs:
+      - kubernetes/apps/monitoring/gatus/app/kustomization.yaml
       - kubernetes/apps/monitoring/gatus/app/openbao-activation.values.yaml
+      - kubernetes/apps/monitoring/gatus/app/values.yaml
       - kubernetes/apps/security/openbao/README.md
       - kubernetes/apps/security/openbao/acceptance/canary.yaml
       - kubernetes/apps/security/openbao/acceptance/kustomization.yaml

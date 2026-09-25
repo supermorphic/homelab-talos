@@ -100,6 +100,98 @@ SAFE_RUNNER = re.compile(
 VERIFICATION_ACCESS_TIERS = {"observer", "diagnostic", "operator"}
 
 
+def openbao_seal_source_ready(root: Path, app_source: object) -> bool:
+    """Check encrypted source shape without decrypting operator material."""
+    relative = "kubernetes/apps/security/openbao/app/openbao-seal.sops.yaml"
+    seal_path = root / relative
+    if (
+        not seal_path.is_file()
+        or not isinstance(app_source, dict)
+        or not isinstance(app_source.get("resources"), list)
+        or app_source["resources"].count("./openbao-seal.sops.yaml") != 1
+    ):
+        return False
+    try:
+        document = yaml.safe_load(seal_path.read_text(encoding="utf-8"))
+        rules = yaml.safe_load((root / ".sops.yaml").read_text(encoding="utf-8"))
+        recipients = [
+            rule["age"]
+            for rule in rules["creation_rules"]
+            if re.fullmatch(rule["path_regex"], relative)
+        ]
+        status = subprocess.run(
+            ["sops", "filestatus", str(seal_path)],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        metadata = document["sops"]
+        return (
+            status.returncode == 0
+            and yaml.safe_load(status.stdout).get("encrypted") is True
+            and document.get("apiVersion") == "v1"
+            and document.get("kind") == "Secret"
+            and document.get("metadata") == {"name": "openbao-seal", "namespace": "openbao"}
+            and document.get("type") == "Opaque"
+            and set(document.get("data", {})) == {"key"}
+            and isinstance(document["data"]["key"], str)
+            and document["data"]["key"].startswith("ENC[AES256_GCM,")
+            and metadata.get("encrypted_regex") == "^(data|stringData)$"
+            and isinstance(metadata.get("mac"), str)
+            and metadata["mac"].startswith("ENC[AES256_GCM,")
+            and len(recipients) == 1
+            and [entry.get("recipient") for entry in metadata.get("age", [])] == recipients
+        )
+    except (
+        OSError,
+        subprocess.TimeoutExpired,
+        AttributeError,
+        KeyError,
+        TypeError,
+        ValueError,
+        yaml.YAMLError,
+    ):
+        return False
+
+
+def openbao_gatus_source_ready(root: Path) -> bool:
+    """Require the deployed Gatus values source to contain the private health probe."""
+    try:
+        app = root / "kubernetes/apps/monitoring/gatus/app"
+        kustomization = yaml.safe_load((app / "kustomization.yaml").read_text(encoding="utf-8"))
+        source = yaml.safe_load((app / "values.yaml").read_text(encoding="utf-8"))
+        generators = kustomization.get("configMapGenerator", [])
+        wired = [
+            generator
+            for generator in generators
+            if isinstance(generator, dict)
+            and generator.get("name") == "gatus-values"
+            and "values.yaml=values.yaml" in generator.get("files", [])
+        ]
+        expected = {
+            "name": "openbao",
+            "group": "Platform",
+            "url": "https://openbao.lab.supermorphic.com/v1/sys/health?standbyok=true",
+            "interval": "1m",
+            "conditions": [
+                "[STATUS] == 200",
+                "[BODY].initialized == true",
+                "[BODY].sealed == false",
+            ],
+        }
+        endpoints = source.get("config", {}).get("endpoints", [])
+        selected = [
+            endpoint
+            for endpoint in endpoints
+            if isinstance(endpoint, dict) and endpoint.get("name") == "openbao"
+        ]
+        return len(wired) == 1 and selected == [expected]
+    except (OSError, AttributeError, KeyError, TypeError, ValueError, yaml.YAMLError):
+        return False
+
+
 def campaign_exclusions() -> set[str]:
     exclusions = set(STANDALONE_SUITES)
     nocodb_source = yaml.safe_load(
@@ -125,31 +217,16 @@ def campaign_exclusions() -> set[str]:
         for unit in openbao_units
         if isinstance(unit, dict) and unit.get("spec", {}).get("suspend") is False
     }
-    seal_path = REPO_ROOT / "kubernetes/apps/security/openbao/app/openbao-seal.sops.yaml"
     app_source = yaml.safe_load(
         (REPO_ROOT / "kubernetes/apps/security/openbao/app/kustomization.yaml").read_text(
             encoding="utf-8"
         )
     )
-    gatus_source = yaml.safe_load(
-        (REPO_ROOT / "kubernetes/apps/monitoring/gatus/app/values.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
-    seal_active = (
-        seal_path.is_file()
-        and isinstance(app_source, dict)
-        and "./openbao-seal.sops.yaml" in app_source.get("resources", [])
-    )
-    gatus_active = isinstance(gatus_source, dict) and any(
-        isinstance(endpoint, dict) and endpoint.get("name") == "openbao"
-        for endpoint in gatus_source.get("config", {}).get("endpoints", [])
-    )
     if (
         active != expected
         or len(openbao_units) != len(expected)
-        or not seal_active
-        or not gatus_active
+        or not openbao_seal_source_ready(REPO_ROOT, app_source)
+        or not openbao_gatus_source_ready(REPO_ROOT)
     ):
         exclusions.add("verification.openbao")
     return exclusions
