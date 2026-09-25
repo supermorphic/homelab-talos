@@ -81,6 +81,14 @@ KINDS = {
     "kubernetes-config",
     "issuance-role",
 }
+INVENTORY_KINDS = {
+    "auth-method",
+    "secret-mount",
+    "jwt-role",
+    "userpass-user",
+    "policy",
+    "issuance-role",
+}
 
 
 def load_document(path: Path) -> dict:
@@ -97,6 +105,7 @@ def load_document(path: Path) -> dict:
             not isinstance(document["objects"], list)
             or not isinstance(document["inventories"], dict)
             or not isinstance(document["builtin_exceptions"], dict)
+            or set(document["inventories"]) != INVENTORY_KINDS
         ):
             raise SafeError("invalid-source")
         objects = []

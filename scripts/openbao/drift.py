@@ -1,8 +1,16 @@
 """Conservative comparison of readable OpenBao 2.7 API configuration."""
 
 import re
+from pathlib import Path
 
-from .configuration import Difference, ObjectSpec, SafeError, canonical_json, strict_json
+from .configuration import (
+    Difference,
+    ObjectSpec,
+    SafeError,
+    canonical_json,
+    load_document,
+    strict_json,
+)
 
 # Every accepted live key is reviewed for its endpoint. New upstream keys fail closed.
 FIELDS = {
@@ -139,6 +147,7 @@ VOLATILE = {
     "policy": {"modified", "version"},
 }
 DEFAULTS = {
+    "jwt-config": {"oidc_discovery_ca_pem": [], "jwt_validation_pubkeys": []},
     "jwt-role": {
         "role_type": "jwt",
         "bound_claims_type": "string",
@@ -148,7 +157,10 @@ DEFAULTS = {
         "token_explicit_max_ttl": 0,
         "user_claim_json_pointer": False,
         "verbose_oidc_logging": False,
+        "groups_claim": "",
+        "token_bound_cidrs": [],
     },
+    "policy": {"cas_required": False},
     "auth-method": {
         "description": "",
         "local": False,
@@ -244,6 +256,22 @@ DICTS = {
     "options",
     "user_lockout_config",
 }
+ALIASES = {
+    "jwt-role": {
+        "policies": "token_policies",
+        "ttl": "token_ttl",
+        "max_ttl": "token_max_ttl",
+        "period": "token_period",
+        "num_uses": "token_num_uses",
+        "bound_cidrs": "token_bound_cidrs",
+    },
+    "userpass-user": {
+        "token_policies": "policies",
+        "ttl": "token_ttl",
+        "max_ttl": "token_max_ttl",
+        "period": "token_period",
+    },
+}
 _DURATION = re.compile(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?")
 
 
@@ -313,6 +341,10 @@ def _normalized_value(key: str, value: object) -> object:
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             raise SafeError("invalid-response")
         return sorted(set(value))
+    if key == "oidc_discovery_ca_pem":
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise SafeError("invalid-response")
+        return value
     if key == "config":
         if not isinstance(value, dict):
             raise SafeError("invalid-response")
@@ -365,8 +397,29 @@ def compare(spec: ObjectSpec, data: dict | None | SafeError) -> list[Difference]
     unknown = set(data) - FIELDS.get(spec.kind, set())
     if unknown:
         findings.append(Difference(spec.kind, spec.name, None, "unexpected"))
+    if spec.kind == "policy" and "name" in data and data["name"] != spec.name:
+        findings.append(Difference(spec.kind, spec.name, "name", "changed"))
+    aliases = ALIASES.get(spec.kind, {})
+    for alias, canonical in aliases.items():
+        if alias not in data or alias in spec.fields:
+            continue
+        wanted = spec.fields.get(canonical, DEFAULTS.get(spec.kind, {}).get(canonical, object()))
+        try:
+            actual = _normalized_value(alias, data[alias])
+            expected = _normalized_value(canonical, wanted)
+            if canonical_json(actual) != canonical_json(expected):
+                findings.append(
+                    Difference(
+                        spec.kind,
+                        spec.name,
+                        alias,
+                        "changed" if canonical in spec.fields else "unexpected",
+                    )
+                )
+        except SafeError:
+            findings.append(Difference(spec.kind, spec.name, alias, "inaccessible"))
     for key in sorted(
-        set(data)
+        set(data) - set(aliases) - ({"name"} if spec.kind == "policy" else set())
         & FIELDS.get(spec.kind, set()) - set(spec.fields) - VOLATILE.get(spec.kind, set())
     ):
         default = DEFAULTS.get(spec.kind, {}).get(key, object())
@@ -409,7 +462,16 @@ def compare_inventory(expected: set[str], actual: set[str], kind: str) -> list[D
     return findings
 
 
-def sanitize(differences: list[Difference]) -> dict:
+def sanitize(differences: list[Difference], source: Path | None = None) -> dict:
+    document = load_document(
+        source
+        or Path(__file__).resolve().parents[2]
+        / "kubernetes/apps/security/openbao/config/desired.json"
+    )
+    known = {(spec.kind, spec.name) for spec in document["objects"]}
+    known.update(
+        (kind, name) for kind, names in document["builtin_exceptions"].items() for name in names
+    )
     output = []
     extra = {}
     for finding in differences:
@@ -420,6 +482,9 @@ def sanitize(differences: list[Difference]) -> dict:
             "inaccessible",
         }:
             raise SafeError("invalid-response")
+        if finding.name is not None and (finding.kind, finding.name) not in known:
+            extra[finding.kind] = extra.get(finding.kind, 0) + 1
+            continue
         if finding.name is None:
             if finding.state != "unexpected" or finding.field is not None:
                 raise SafeError("invalid-response")
