@@ -14,6 +14,7 @@ mkdir -p "$run_dir/logs" "$run_dir/diagnostics"
 source scripts/test/lib/report-publication.sh
 confirmation_output="$fixture/confirmation.log"
 if TEST_RESULTS_ROOT="$fixture/results" \
+  TEST_REPORT_PUBLISH_CONFIRM="publish:test-report:$run_id" \
   "$repo_root/scripts/test/publish-report.sh" "$run_id" \
   >"$confirmation_output" 2>&1; then
   echo 'Publisher accepted an incomplete canonical run.' >&2
