@@ -85,6 +85,7 @@ conditional_paths:
     - kubernetes/apps/automation/n8n/ks.yaml
     - kubernetes/apps/automation/n8n-postgresql/ks.yaml
     - kubernetes/apps/monitoring/**
+    - kubernetes/apps/security/openbao/monitoring/longhorn-servicemonitor.yaml
     - kubernetes/apps/security/openbao/monitoring/prometheusrule.yaml
     - scripts/diagnose/flux-alerts.sh
     - scripts/verify/logging.sh
