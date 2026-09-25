@@ -423,6 +423,84 @@ class ApiBridgeTests(unittest.TestCase):
             ],
         )
 
+    def test_discovery_summary_keeps_only_bounded_peer_and_tracker_signals(self):
+        class Client:
+            def torrents_info(self, *, torrent_hashes):
+                return [{"hash": torrent_hashes, "num_complete": 4, "num_incomplete": 2}]
+
+            def torrents_trackers(self, *, torrent_hash):
+                return [
+                    {
+                        "url": "udp://private.example/secret",
+                        "status": 2,
+                        "num_seeds": 4,
+                        "num_leeches": 2,
+                        "msg": "",
+                    },
+                    {
+                        "url": "https://private.example/passkey",
+                        "status": 4,
+                        "num_seeds": -1,
+                        "num_leeches": -1,
+                        "msg": "Could not resolve private.example/secret",
+                    },
+                    {
+                        "url": "udp://private.example/other",
+                        "status": 4,
+                        "num_seeds": -1,
+                        "num_leeches": -1,
+                        "msg": "Connection timed out private.example/secret",
+                    },
+                    {"url": "** [DHT] **", "status": 0, "msg": "private detail"},
+                ]
+
+            def app_preferences(self):
+                return {"dht": True, "pex": False, "lsd": True, "web_ui_password": "secret-value"}
+
+            def torrents_webseeds(self, *, torrent_hash):
+                return [{"url": "https://private.example/secret"}]
+
+            def transfer_info(self):
+                return {
+                    "dht_nodes": 31,
+                    "connection_status": "connected",
+                    "last_external_address_v4": "192.0.2.9",
+                }
+
+        summary = qbm_api.discovery_summary(Client(), qbm.FIXTURE_HASH)
+        self.assertEqual(summary["status"], "observed")
+        self.assertEqual(summary["knownSeeds"], 4)
+        self.assertEqual(summary["knownLeechers"], 2)
+        self.assertEqual(summary["dhtNodes"], 31)
+        self.assertEqual(summary["webSeedCount"], 1)
+        self.assertEqual(summary["discoveryEnabled"], {"dht": True, "pex": False, "lsd": True})
+        self.assertEqual(summary["connectionStatus"], "connected")
+        self.assertEqual(
+            summary["trackers"],
+            {
+                "udp": {
+                    "working": 1,
+                    "notWorking": 1,
+                    "timeoutErrors": 1,
+                    "maxReportedSeeds": 4,
+                    "maxReportedLeechers": 2,
+                },
+                "https": {"notWorking": 1, "dnsErrors": 1},
+            },
+        )
+        text = json.dumps(summary)
+        for sensitive in ("private.example", "secret-value", "192.0.2.9", "passkey"):
+            self.assertNotIn(sensitive, text)
+
+    def test_discovery_summary_rejects_missing_or_mismatched_fixture(self):
+        client = mock.Mock()
+        client.torrents_info.return_value = [{"hash": "other"}]
+        self.assertEqual(
+            qbm_api.discovery_summary(client, qbm.FIXTURE_HASH),
+            {"status": "fixture-missing"},
+        )
+        client.torrents_trackers.assert_not_called()
+
 
 class DownloadResilienceTests(unittest.TestCase):
     """The download step must trust fixture registration, not the add-response body."""
@@ -462,6 +540,9 @@ class DownloadResilienceTests(unittest.TestCase):
 
         def files(self, _info_hash):
             return [{"progress": 1, "size": 4321}]
+
+        def discovery(self, _info_hash):
+            return {"status": "observed", "knownSeeds": 0, "trackers": {"udp": {"notWorking": 2}}}
 
     def _scenario(self, directory, fake):
         clock = {"t": 0.0}
@@ -539,6 +620,11 @@ class DownloadResilienceTests(unittest.TestCase):
                         "connectedSeeds": 2,
                         "connectedPeers": 4,
                     },
+                    "discovery": {
+                        "status": "observed",
+                        "knownSeeds": 0,
+                        "trackers": {"udp": {"notWorking": 2}},
+                    },
                 },
             )
             self.assertNotIn("SENSITIVE-", evidence_text)
@@ -584,7 +670,15 @@ class DownloadResilienceTests(unittest.TestCase):
             download = json.loads(evidence_text)["phases"]["download"]
             self.assertEqual(
                 download,
-                {"status": "broken", "timeoutSnapshot": {"connectedPeers": 3}},
+                {
+                    "status": "broken",
+                    "timeoutSnapshot": {"connectedPeers": 3},
+                    "discovery": {
+                        "status": "observed",
+                        "knownSeeds": 0,
+                        "trackers": {"udp": {"notWorking": 2}},
+                    },
+                },
             )
             self.assertNotIn("SENSITIVE-", evidence_text)
 

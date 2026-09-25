@@ -585,6 +585,15 @@ class QbitClient:
             raise ScenarioFailure("qBittorrent files response was not a list")
         return value
 
+    def discovery(self, info_hash: str) -> dict[str, Any]:
+        value = self.json("discovery", info_hash)
+        if not isinstance(value, dict) or value.get("status") not in {
+            "observed",
+            "fixture-missing",
+        }:
+            raise ScenarioFailure("qBittorrent discovery summary was invalid")
+        return value
+
     def categories(self) -> dict[str, Any]:
         value = self.json("categories")
         if not isinstance(value, dict):
@@ -1130,6 +1139,7 @@ class Scenario:
 
         if not self.wait_for(20 * 60, 10, complete):
             snapshot: dict[str, int | float] = {}
+            owned_fixture = False
             if len(last_info) == 1:
                 torrent = last_info[0]
                 if (
@@ -1138,6 +1148,7 @@ class Scenario:
                     and normalized_save_path(str(torrent.get("save_path", "")))
                     == self.identity.download_root
                 ):
+                    owned_fixture = True
                     progress = torrent.get("progress")
                     if (
                         type(progress) in (int, float)
@@ -1157,6 +1168,11 @@ class Scenario:
             phase: dict[str, Any] = {"status": "broken"}
             if snapshot:
                 phase["timeoutSnapshot"] = snapshot
+            if owned_fixture:
+                try:
+                    phase["discovery"] = self.qbit.discovery(FIXTURE_HASH)
+                except (ScenarioFailure, ValueError, TypeError):
+                    phase["discovery"] = {"status": "unavailable"}
             self.recorder.phase("download", phase)
             raise ExternalDependencyFailure(
                 "Sintel did not complete through VPN egress within 20 minutes"

@@ -249,7 +249,10 @@ and each suite's catalog access tier to select an approved workflow.
   (up to 60 minutes; downloads WebTorrent's legal Sintel fixture through qBittorrent's VPN
   egress, observes the deployed public classification, proves private-tag exclusion, applies
   isolated one/two-minute share limits, verifies Stop + recycle cleanup and hardlink survival,
-  reruns cleanup idempotently, and tears down only exact run-owned state)
+  reruns cleanup idempotently, and tears down only exact run-owned state). A download timeout
+  records a bounded summary of tracker states, reported swarm size, DHT state, and web-seed
+  count for that fixture. The summary excludes tracker URLs, messages, peer addresses, and
+  credentials.
 - `FLUX_ALERT_E2E_CONFIRM=test:flux-alert:firing-resolved mise exec -- just kube flux-alert-delivery-test`
   (about 25 minutes; creates one labeled Flux Kustomization with a deliberately nonexistent
   source, waits through the production 15-minute alert timer, proves the firing and resolved
