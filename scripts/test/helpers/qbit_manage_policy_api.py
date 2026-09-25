@@ -181,6 +181,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     mutations: dict[str, tuple[int, Callable[..., Any]]] = {
+        "force-start": (
+            2,
+            lambda info_hash, enabled: client.torrents_set_force_start(
+                torrent_hashes=info_hash,
+                enable=enabled == "true",
+            ),
+        ),
         "add": (
             4,
             lambda url, save_path, category, name: client.torrents_add(
@@ -232,6 +239,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     count, operation = mutations[command]
     require_args(operands, count)
+    if command == "force-start" and operands[1] not in {"true", "false"}:
+        return 2
     result = operation(*operands)
     print("Ok." if result is None else result)
     return 0

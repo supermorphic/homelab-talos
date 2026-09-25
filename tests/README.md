@@ -252,7 +252,9 @@ and each suite's catalog access tier to select an approved workflow.
   reruns cleanup idempotently, and tears down only exact run-owned state). A download timeout
   records a bounded summary of tracker states, reported swarm size, DHT state, and web-seed
   count for that fixture. The summary excludes tracker URLs, messages, peer addresses, and
-  credentials.
+  credentials. The test force-starts only its run-owned fixture while downloading, so an
+  existing qBittorrent download queue cannot stall the fixture. It clears force-start
+  before testing share limits and cleanup.
 - `FLUX_ALERT_E2E_CONFIRM=test:flux-alert:firing-resolved mise exec -- just kube flux-alert-delivery-test`
   (about 25 minutes; creates one labeled Flux Kustomization with a deliberately nonexistent
   source, waits through the production 15-minute alert timer, proves the firing and resolved

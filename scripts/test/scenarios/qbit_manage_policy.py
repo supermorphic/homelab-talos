@@ -615,6 +615,9 @@ class QbitClient:
     def add(self, url: str, save_path: str, category: str, name: str) -> str:
         return self.call("add", url, save_path, category, name).strip()
 
+    def set_force_start(self, info_hash: str, enabled: bool) -> None:
+        self.call("force-start", info_hash, "true" if enabled else "false")
+
     def delete(self, info_hash: str) -> None:
         self.call("delete", info_hash)
 
@@ -1077,6 +1080,21 @@ class Scenario:
         self.ledger.tags_attempted = True
         self.qbit.create_tags(self.identity.run_tag)
 
+    def require_owned_fixture(self) -> dict[str, Any]:
+        assert self.qbit is not None
+        info = self.qbit.info(FIXTURE_HASH)
+        if len(info) != 1:
+            self.fail("fixture ownership could not be verified")
+        torrent = info[0]
+        if (
+            torrent.get("hash") != FIXTURE_HASH
+            or torrent.get("category") != self.identity.category
+            or normalized_save_path(str(torrent.get("save_path", "")))
+            != self.identity.download_root
+        ):
+            self.fail("fixture ownership changed")
+        return torrent
+
     def download(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         assert self.qbit is not None
         print(
@@ -1109,6 +1127,12 @@ class Scenario:
             raise ExternalDependencyFailure(
                 "qBittorrent did not register the public fixture within 2 minutes"
             )
+
+        if self.require_owned_fixture().get("force_start") is not False:
+            self.fail("fixture force-start state was not initially disabled")
+        self.qbit.set_force_start(FIXTURE_HASH, True)
+        if self.require_owned_fixture().get("force_start") is not True:
+            self.fail("qBittorrent did not force-start the owned fixture")
 
         observed: tuple[list[dict[str, Any]], list[dict[str, Any]]] = ([], [])
         last_info: list[dict[str, Any]] = []
@@ -1178,6 +1202,16 @@ class Scenario:
                 "Sintel did not complete through VPN egress within 20 minutes"
             )
         info, files = observed
+        if self.require_owned_fixture().get("force_start") is not True:
+            self.fail("fixture force-start state changed before reset")
+        self.qbit.set_force_start(FIXTURE_HASH, False)
+        cleared = self.require_owned_fixture()
+        if (
+            cleared.get("force_start") is not False
+            or cleared.get("progress") != 1
+            or cleared.get("amount_left") != 0
+        ):
+            self.fail("fixture force-start state or completion changed after reset")
         self.recorder.write_status(
             "external-dependency", "passed", "public fixture downloaded and verified complete"
         )
@@ -1188,6 +1222,7 @@ class Scenario:
                 "sizeBytes": int(info[0]["size"]),
                 "completionOn": int(info[0]["completion_on"]),
                 "fileCount": len(files),
+                "forceStartCleared": True,
             },
         )
         return info, files
