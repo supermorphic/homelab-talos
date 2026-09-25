@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import json
+import re
 import subprocess
 import sys
 
@@ -30,10 +31,18 @@ def _keys(value: object, kind: str) -> set[str]:
 
 
 def run(desired_path: Path, reader) -> dict:
+    try:
+        return _compare_live(desired_path, reader)
+    except (AttributeError, TypeError, KeyError, ValueError, IndexError):
+        raise SafeError('invalid-response') from None
+
+
+def _compare_live(desired_path: Path, reader) -> dict:
     document = load_document(desired_path)
     state = reader.preflight()
     if (not isinstance(state, dict) or state.get('source_revision') != state.get('deployed_revision')
-            or not state.get('source_revision')):
+            or not isinstance(state.get('source_revision'), str)
+            or not re.fullmatch(r'[0-9a-f]{40}', state['source_revision'])):
         raise SafeError('source-mismatch')
     phase = state.get('phase')
     if phase == 'staged-absent':
@@ -41,6 +50,9 @@ def run(desired_path: Path, reader) -> dict:
                 'deployed_revision': state['deployed_revision']}
     if phase != 'active':
         raise SafeError('source-mismatch')
+    observation_keys = ('kubernetes', 'placement', 'route', 'health', 'backup', 'monitoring')
+    if any(state.get(key) not in {'ready', 'inaccessible'} for key in observation_keys):
+        raise SafeError('invalid-response')
     differences = []
     snapshots = {}
     for kind, endpoint in INVENTORY_ENDPOINTS.items():
@@ -67,8 +79,7 @@ def run(desired_path: Path, reader) -> dict:
     result['source_revision'] = state['source_revision']
     result['deployed_revision'] = state['deployed_revision']
     result['phase'] = phase
-    result['observations'] = {key: state.get(key, 'inaccessible') for key in
-                              ('kubernetes', 'route', 'health', 'backup')}
+    result['observations'] = {key: state[key] for key in observation_keys}
     if result['status'] == 'pass' and any(value != 'ready' for value in result['observations'].values()):
         result['status'] = 'inaccessible'
     return result
@@ -91,9 +102,10 @@ def main(argv: list[str]) -> int:
         result = run(desired, DiagnosticReader(Path(argv[1]), revision))
         print(json.dumps(result, sort_keys=True))
         return 0 if result['status'] == 'pass' else 1
-    except (SafeError, OSError, subprocess.SubprocessError):
+    except (SafeError, OSError, subprocess.SubprocessError, AttributeError, TypeError,
+            KeyError, ValueError, IndexError):
         error = sys.exc_info()[1]
-        code = str(error) if isinstance(error, SafeError) else 'source-mismatch'
+        code = str(error) if isinstance(error, SafeError) else 'invalid-response'
         print(json.dumps({'status': 'inaccessible', 'classification': code}, sort_keys=True))
         return 1
 

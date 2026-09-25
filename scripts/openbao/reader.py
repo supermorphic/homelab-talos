@@ -25,6 +25,7 @@ READ_PATHS = {
     'kubernetes/config', 'kubernetes/roles/openbao-acceptance',
 }
 LIST_PATHS = set(INVENTORY_ENDPOINTS.values())
+READ_PATHS.add('sys/storage/raft/configuration')
 
 # This body is supplied on stdin. A token exists only in the server-side shell and
 # children, then is explicitly revoked. No shell tracing or raw stderr is enabled.
@@ -42,6 +43,16 @@ case "$1" in
   LIST) bao list -format=json "$2" 2>/dev/null ;;
   *) exit 42 ;;
 esac
+'''
+
+STATUS_SCRIPT = '''set +x
+set -eu
+export BAO_ADDR=https://127.0.0.1:8200
+export BAO_TLS_SERVER_NAME=openbao.lab.supermorphic.com
+export BAO_MAX_RETRIES=0
+export BAO_TOKEN=
+export BAO_TOKEN_PATH=/dev/null
+bao status -format=json 2>/dev/null
 '''
 
 
@@ -118,6 +129,77 @@ def backup_fresh(cronjob: dict) -> bool:
     return timedelta(0) <= age <= timedelta(hours=36)
 
 
+def placement_ready(pods: list[dict]) -> bool:
+    try:
+        names = [pod['metadata']['name'] for pod in pods]
+        nodes = [pod['spec']['nodeName'] for pod in pods]
+        return (set(names) == {'openbao-0', 'openbao-1', 'openbao-2'}
+                and len(names) == 3 and all(isinstance(node, str) and node for node in nodes)
+                and len(set(nodes)) == 3)
+    except (AttributeError, TypeError, KeyError):
+        return False
+
+
+def health_quorum(statuses: dict, raft: dict) -> bool:
+    try:
+        expected = {'openbao-0', 'openbao-1', 'openbao-2'}
+        if set(statuses) != expected:
+            return False
+        cluster_ids = {status['cluster_id'] for status in statuses.values()}
+        if (len(cluster_ids) != 1 or not all(isinstance(value, str) and value for value in cluster_ids)
+                or not all(status['initialized'] is True and status['sealed'] is False
+                           and status['ha_enabled'] is True and status['storage_type'] == 'raft'
+                           and type(status.get('is_self', False)) is bool for status in statuses.values())):
+            return False
+        active = {name for name, status in statuses.items() if status.get('is_self', False)}
+        servers = raft['config']['servers']
+        if not isinstance(servers, list) or len(servers) != 3:
+            return False
+        identifiers = {server['node_id'] for server in servers}
+        leaders = {server['node_id'] for server in servers if server['leader'] is True}
+        return (identifiers == expected and len(identifiers) == 3
+                and all(server['voter'] is True and type(server['leader']) is bool for server in servers)
+                and active == leaders and len(active) == 1)
+    except (AttributeError, TypeError, KeyError, ValueError):
+        return False
+
+
+def monitoring_ready(service: dict, monitor: dict, rules: dict) -> bool:
+    try:
+        labels = service['metadata']['labels']
+        ports = service['spec']['ports']
+        endpoints = monitor['spec']['endpoints']
+        groups = rules['spec']['groups']
+        return (
+            service['metadata']['name'] == 'openbao-monitoring'
+            and service['metadata']['namespace'] == NAMESPACE
+            and monitor['metadata']['name'] == 'openbao'
+            and monitor['metadata']['namespace'] == NAMESPACE
+            and rules['metadata']['name'] == 'openbao'
+            and rules['metadata']['namespace'] == NAMESPACE
+            and len(ports) == 1 and ports[0]['name'] == 'monitoring'
+            and ports[0]['port'] == 8203 and ports[0]['targetPort'] == 'monitoring'
+            and ports[0].get('protocol', 'TCP') == 'TCP'
+            and service['spec']['selector'] == {
+                'app.kubernetes.io/name': 'openbao',
+                'app.kubernetes.io/instance': 'openbao', 'component': 'server'}
+            and all(labels.get(key) == value for key, value in
+                    monitor['spec']['selector']['matchLabels'].items())
+            and bool(monitor['spec']['selector']['matchLabels'])
+            and len(endpoints) == 1 and endpoints[0]['port'] == 'monitoring'
+            and endpoints[0]['path'] == '/v1/sys/metrics'
+            and endpoints[0]['params']['format'] == ['prometheus']
+            and endpoints[0]['scheme'] == 'https'
+            and endpoints[0]['tlsConfig']['serverName'] == 'openbao.lab.supermorphic.com'
+            and endpoints[0]['tlsConfig'].get('insecureSkipVerify') is not True
+            and any(isinstance(group['rules'], list)
+                    and any(isinstance(rule.get('alert'), str) and rule['alert'] for rule in group['rules'])
+                    for group in groups)
+        )
+    except (AttributeError, TypeError, KeyError, ValueError):
+        return False
+
+
 def source_phase(path: Path) -> str:
     """Require all four source Flux units to agree on their activation phase."""
     expected = {'openbao-prerequisites', 'openbao', 'openbao-access', 'openbao-acceptance'}
@@ -171,6 +253,12 @@ class DiagnosticReader:
                                    '--request-timeout=10s'))
 
     def preflight(self) -> dict:
+        try:
+            return self._preflight()
+        except (AttributeError, TypeError, KeyError, ValueError, IndexError):
+            raise SafeError('invalid-response') from None
+
+    def _preflight(self) -> dict:
         root = Path(__file__).resolve().parents[2]
         phase = source_phase(root / 'kubernetes/apps/security/openbao/ks.yaml')
         expected_image = source_image(root / 'kubernetes/apps/security/openbao/app/values.yaml')
@@ -213,6 +301,8 @@ class DiagnosticReader:
         if not isinstance(pods, list) or len(pods) != 3:
             raise SafeError('source-mismatch')
         candidates = []
+        self._pod_uids = {}
+        self._pod_nodes = {}
         for pod in pods:
             name = pod.get('metadata', {}).get('name')
             owners = pod.get('metadata', {}).get('ownerReferences', [])
@@ -226,6 +316,10 @@ class DiagnosticReader:
                             and c.get('image') == expected_image]) != 1
                     or not pod.get('metadata', {}).get('uid')):
                 raise SafeError('source-mismatch')
+            if name in self._pod_uids:
+                raise SafeError('source-mismatch')
+            self._pod_uids[name] = pod['metadata']['uid']
+            self._pod_nodes[name] = pod.get('spec', {}).get('nodeName')
             if _ready(pod):
                 candidates.append(pod)
         if not candidates:
@@ -237,9 +331,19 @@ class DiagnosticReader:
         # These observations are bounded metadata reads. Missing integrations are
         # represented as inaccessible and can never produce a passing result.
         observations = {'kubernetes': 'ready' if len(candidates) == 3 else 'inaccessible',
+                        'placement': 'ready' if placement_ready(pods) else 'inaccessible',
                         'route': 'inaccessible',
-                        'health': 'ready' if len(candidates) == 3 else 'inaccessible',
-                        'backup': 'inaccessible'}
+                        'health': 'inaccessible', 'backup': 'inaccessible',
+                        'monitoring': 'inaccessible'}
+        if len(candidates) == 3:
+            try:
+                statuses = {pod['metadata']['name']: self._status(pod['metadata']['name'])
+                            for pod in candidates}
+                raft = self.request('GET', 'sys/storage/raft/configuration')
+                if health_quorum(statuses, raft):
+                    observations['health'] = 'ready'
+            except SafeError:
+                pass
         try:
             route = self._get(NAMESPACE, 'httproute', 'openbao')
             observations['route'] = 'ready' if route_ready(route) else 'inaccessible'
@@ -250,28 +354,53 @@ class DiagnosticReader:
             observations['backup'] = 'ready' if backup_fresh(cronjob) else 'inaccessible'
         except SafeError:
             pass
+        try:
+            service = self._get(NAMESPACE, 'service', 'openbao-monitoring')
+            monitor = self._get(NAMESPACE, 'servicemonitor', 'openbao')
+            rules = self._get(NAMESPACE, 'prometheusrule', 'openbao')
+            observations['monitoring'] = ('ready' if monitoring_ready(service, monitor, rules)
+                                          else 'inaccessible')
+        except SafeError:
+            pass
         return {'source_revision': self.source_revision, 'deployed_revision': deployed,
                 'phase': 'active', **observations}
 
     def request(self, method: str, path: str) -> object:
+        try:
+            return self._request(method, path)
+        except (AttributeError, TypeError, KeyError, ValueError, IndexError):
+            raise SafeError('invalid-response') from None
+
+    def _checked_pod(self, name: str) -> None:
+        pod = self._get(NAMESPACE, 'pod', name)
+        if (pod.get('metadata', {}).get('uid') != self._pod_uids.get(name)
+                or pod.get('metadata', {}).get('namespace') != NAMESPACE
+                or not _ready(pod)
+                or pod.get('spec', {}).get('nodeName') != self._pod_nodes.get(name)
+                or pod.get('spec', {}).get('serviceAccountName') != 'openbao'
+                or not any(o.get('uid') == self._statefulset_uid for o in
+                           pod.get('metadata', {}).get('ownerReferences', []))
+                or not any(c.get('name') == CONTAINER and c.get('image') == self._expected_image
+                           for c in pod.get('spec', {}).get('containers', []))):
+            raise SafeError('source-mismatch')
+
+    def _status(self, name: str) -> dict:
+        self._checked_pod(name)
+        output = _run(self._kubectl('--namespace', NAMESPACE, 'exec', '-i', name,
+                                    '-c', CONTAINER, '--', 'sh', '-s'),
+                      input_text=STATUS_SCRIPT, timeout=20)
+        value = strict_json(output, 'invalid-response')
+        if not isinstance(value, dict):
+            raise SafeError('invalid-response')
+        return value
+
+    def _request(self, method: str, path: str) -> object:
         if not ((method == 'GET' and path in READ_PATHS | {'sys/auth', 'sys/mounts'})
                 or (method == 'LIST' and path in LIST_PATHS - {'sys/auth', 'sys/mounts'})):
             raise SafeError('invalid-source')
         if not self._pod_name or not self._pod_uid:
             raise SafeError('source-mismatch')
-        pod = self._get(NAMESPACE, 'pod', self._pod_name)
-        if (pod.get('metadata', {}).get('uid') != self._pod_uid
-                or pod.get('metadata', {}).get('namespace') != NAMESPACE
-                or not _ready(pod)
-                or pod.get('spec', {}).get('serviceAccountName') != 'openbao'
-                or not any(o.get('uid') == self._statefulset_uid for o in
-                           pod.get('metadata', {}).get('ownerReferences', []))
-                or not any(c.get('name') == CONTAINER for c in pod.get('spec', {}).get('containers', []))):
-            raise SafeError('source-mismatch')
-        if (getattr(self, '_expected_image', None) is not None and
-                not any(c.get('name') == CONTAINER and c.get('image') == self._expected_image
-                        for c in pod.get('spec', {}).get('containers', []))):
-            raise SafeError('source-mismatch')
+        self._checked_pod(self._pod_name)
         self.configuration_requests.append((method, path))
         output = _run(self._kubectl('--namespace', NAMESPACE, 'exec', '-i', self._pod_name,
                                     '-c', CONTAINER, '--', 'sh', '-s', '--', method, path),

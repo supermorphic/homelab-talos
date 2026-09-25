@@ -2,6 +2,7 @@
   "path": {
     "sys/auth": {"capabilities": ["read"]},
     "sys/mounts": {"capabilities": ["read"]},
+    "sys/storage/raft/configuration": {"capabilities": ["read"]},
     "sys/policies/acl": {"capabilities": ["list"]},
     "sys/policies/acl/openbao-operator": {"capabilities": ["read"]},
     "sys/policies/acl/openbao-backup": {"capabilities": ["read"]},
