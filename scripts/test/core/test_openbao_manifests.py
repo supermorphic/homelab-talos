@@ -94,8 +94,9 @@ class OpenBaoManifestTests(unittest.TestCase):
         self.assertIn("tokenrequest-binding", validate_tokenrequest_binding(binding))
 
     def test_flux_units_require_exact_suspended_set(self):
-        names = ("openbao-prerequisites", "openbao", "openbao-access", "openbao-acceptance")
-        parts = ("namespace", "app", "access", "acceptance")
+        names = ("openbao-prerequisites", "openbao", "openbao-access", "openbao-acceptance",
+                 "openbao-backup", "openbao-monitoring")
+        parts = ("namespace", "app", "access", "acceptance", "backup", "monitoring")
         units = [{"kind": "Kustomization", "metadata": {"name": name, "namespace": "flux-system"},
                   "spec": {"suspend": True,
                            "path": "./kubernetes/apps/security/openbao/" + part}}
@@ -108,7 +109,7 @@ class OpenBaoManifestTests(unittest.TestCase):
         active[3]["spec"]["suspend"] = False
         self.assertIn("flux-activation", validate_flux_units(active))
         extra = copy.deepcopy(units)
-        extra.append({"kind": "Kustomization", "metadata": {"name": "openbao-backup"},
+        extra.append({"kind": "Kustomization", "metadata": {"name": "openbao-extra"},
                       "spec": {"suspend": False}})
         self.assertIn("flux-activation", validate_flux_units(extra))
         renamed = copy.deepcopy(units)

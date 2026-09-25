@@ -1,0 +1,15 @@
+# Retained activation source. Copy the endpoint into values.yaml after OpenBao
+# bootstrap, audit setup, and private route activation have succeeded.
+# standbyok permits a healthy standby to return 200; 501 uninitialized and
+# 503 sealed keep their upstream failure semantics. Per-member state is collected
+# separately by the OpenBao ServiceMonitor and alerted by PrometheusRule.
+config:
+  endpoints:
+    - name: openbao
+      group: Platform
+      url: "https://openbao.lab.supermorphic.com/v1/sys/health?standbyok=true"
+      interval: 1m
+      conditions:
+        - "[STATUS] == 200"
+        - "[BODY].initialized == true"
+        - "[BODY].sealed == false"

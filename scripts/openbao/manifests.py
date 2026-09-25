@@ -59,6 +59,8 @@ def validate_flux_units(documents: list[dict]) -> list[str]:
         "openbao": "app",
         "openbao-access": "access",
         "openbao-acceptance": "acceptance",
+        "openbao-backup": "backup",
+        "openbao-monitoring": "monitoring",
     }
     units = [d for d in documents if d.get("kind") == "Kustomization" and
              (str(_get(d, "metadata", "name") or "").startswith("openbao") or
