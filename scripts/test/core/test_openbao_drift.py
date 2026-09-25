@@ -230,40 +230,23 @@ class DriftTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "policies").mkdir()
+            for policy in (DESIRED.parent / "policies").glob("*.json"):
+                (root / "policies" / policy.name).write_bytes(policy.read_bytes())
             (root / "policies/operator.json").write_text(
                 '{"path":{"safe":{"capabilities":["read","read"]}}}'
             )
-            source = {
-                "schema_version": 1,
-                "objects": [
-                    {
-                        "kind": "policy",
-                        "name": "openbao-operator",
-                        "path": "sys/policies/acl/openbao-operator",
-                        "policy_file": "policies/operator.json",
-                    }
-                ],
-                "inventories": {"policy": ["openbao-operator"]},
-                "builtin_exceptions": {"policy": ["root"]},
-            }
+            source = json.loads(DESIRED.read_text())
             (root / "desired.json").write_text(json.dumps(source))
             # Duplicate capabilities do not broaden access, but malformed policy structure does.
-            self.assertEqual(len(load_desired(root / "desired.json")), 1)
+            self.assertEqual(len(load_desired(root / "desired.json")), len(source["objects"]))
             (root / "policies/operator.json").write_text(
                 '{"path":{"safe":{"capabilities":"read"}}}'
             )
             with self.assertRaises(SafeError):
                 load_desired(root / "desired.json")
-            source["objects"] = [
-                {
-                    "kind": "jwt-role",
-                    "name": "openbao-reader",
-                    "path": "auth/homelab-jwt/role/openbao-reader",
-                    "fields": {"unreviewed_security_field": MARKER},
-                }
-            ]
-            source["inventories"] = {"jwt-role": ["openbao-reader"]}
-            source["builtin_exceptions"] = {}
+            next(o for o in source["objects"] if o["kind"] == "jwt-role")["fields"][
+                "unreviewed_security_field"
+            ] = MARKER
             (root / "desired.json").write_text(json.dumps(source))
             with self.assertRaises(SafeError) as caught:
                 load_desired(root / "desired.json")
@@ -284,6 +267,127 @@ class DriftTest(unittest.TestCase):
         with self.assertRaises(SafeError) as caught:
             sanitize([Difference("policy", None, None, "inaccessible")])
         self.assertEqual(str(caught.exception), "invalid-response")
+
+    def test_complete_acl_policy_read_uses_identity_and_default_cas(self):
+        spec = ObjectSpec(
+            "policy",
+            "openbao-backup",
+            "sys/policies/acl/openbao-backup",
+            {"policy": {"path": {"sys/storage/raft/snapshot": {"capabilities": ["read"]}}}},
+        )
+        live = {
+            "name": "openbao-backup",
+            "policy": json.dumps(spec.fields["policy"]),
+            "modified": "2026-01-01T00:00:00Z",
+            "version": 3,
+            "cas_required": False,
+        }
+        self.assertEqual(compare(spec, live), [])
+        self.assertEqual(
+            [(x.field, x.state) for x in compare(spec, dict(live, cas_required=True))],
+            [("cas_required", "unexpected")],
+        )
+
+    def test_complete_jwt_config_read_keeps_empty_key_sources_benign(self):
+        spec = ObjectSpec(
+            "jwt-config",
+            "homelab-jwt",
+            "auth/homelab-jwt/config",
+            {
+                "bound_issuer": "https://kubernetes.default.svc.cluster.local",
+                "provider_config": {"provider": "kubernetes"},
+            },
+        )
+        live = dict(spec.fields, oidc_discovery_ca_pem=[], jwt_validation_pubkeys=[])
+        self.assertEqual(compare(spec, live), [])
+        changed = dict(live, jwt_validation_pubkeys=[MARKER])
+        self.assertEqual(
+            [(x.field, x.state) for x in compare(spec, changed)],
+            [("jwt_validation_pubkeys", "unexpected")],
+        )
+        self.assertNotIn(MARKER, json.dumps(sanitize(compare(spec, changed))))
+
+    def test_complete_jwt_role_read_checks_legacy_aliases(self):
+        spec = ObjectSpec(
+            "jwt-role",
+            "openbao-backup",
+            "auth/homelab-jwt/role/openbao-backup",
+            {
+                "bound_audiences": ["openbao-kubernetes-broker"],
+                "bound_subject": "system:serviceaccount:openbao:openbao-backup",
+                "user_claim": "sub",
+                "token_policies": ["openbao-backup"],
+                "token_ttl": 600,
+                "token_max_ttl": 600,
+                "token_no_default_policy": True,
+            },
+        )
+        live = dict(
+            spec.fields,
+            policies=["openbao-backup"],
+            ttl="10m0s",
+            max_ttl=600,
+            period=0,
+            num_uses=0,
+            bound_cidrs=[],
+            groups_claim="",
+        )
+        self.assertEqual(compare(spec, live), [])
+        changed = dict(live, policies=["default"], ttl=900)
+        self.assertEqual(
+            {(x.field, x.state) for x in compare(spec, changed)},
+            {("policies", "changed"), ("ttl", "changed")},
+        )
+
+    def test_userpass_policy_alias_does_not_mask_assignment_change(self):
+        spec = ObjectSpec(
+            "userpass-user",
+            "openbao-operator",
+            "auth/homelab-userpass/users/openbao-operator",
+            {"policies": ["openbao-operator"], "token_ttl": 3600},
+        )
+        live = {
+            "policies": ["openbao-operator"],
+            "token_policies": ["openbao-operator"],
+            "token_ttl": 3600,
+        }
+        self.assertEqual(compare(spec, live), [])
+        self.assertEqual(
+            [(x.field, x.state) for x in compare(spec, dict(live, token_policies=["default"]))],
+            [("token_policies", "changed")],
+        )
+
+    def test_sanitizer_counts_any_name_outside_source_allowlist(self):
+        findings = [
+            Difference("policy", MARKER, None, "missing"),
+            Difference("policy", "openbao-" + MARKER, "policy", "changed"),
+        ]
+        self.assertEqual(
+            sanitize(findings),
+            {"differences": [{"kind": "policy", "state": "unexpected", "count": 2}]},
+        )
+        self.assertNotIn(MARKER, json.dumps(sanitize(findings)))
+
+    def test_source_requires_all_inventory_kinds_even_when_objects_removed(self):
+        original = json.loads(DESIRED.read_text())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "policies").mkdir()
+            for policy in (DESIRED.parent / "policies").glob("*.json"):
+                (root / "policies" / policy.name).write_bytes(policy.read_bytes())
+            source = root / "desired.json"
+            missing_inventory = json.loads(json.dumps(original))
+            del missing_inventory["inventories"]["policy"]
+            source.write_text(json.dumps(missing_inventory))
+            with self.assertRaises(SafeError):
+                load_desired(source)
+            missing_both = json.loads(json.dumps(original))
+            missing_both["objects"] = [o for o in missing_both["objects"] if o["kind"] != "policy"]
+            del missing_both["inventories"]["policy"]
+            del missing_both["builtin_exceptions"]["policy"]
+            source.write_text(json.dumps(missing_both))
+            with self.assertRaises(SafeError):
+                load_desired(source)
 
 
 if __name__ == "__main__":
