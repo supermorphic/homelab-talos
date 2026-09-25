@@ -400,6 +400,39 @@ class PolicyConfigTests(unittest.TestCase):
 
 
 class ApiBridgeTests(unittest.TestCase):
+    def test_force_start_dispatch_changes_only_selected_fixture(self):
+        class Client:
+            def __init__(self):
+                self.calls = []
+
+            def auth_log_in(self):
+                return None
+
+            def torrents_set_force_start(self, *, torrent_hashes, enable):
+                self.calls.append((torrent_hashes, enable))
+
+            def __getattr__(self, name):
+                if name.startswith("torrents_"):
+                    return lambda **_kwargs: None
+                raise AttributeError(name)
+
+        client = Client()
+        module = mock.Mock(Client=lambda **_kwargs: client)
+        output = io.StringIO()
+        with (
+            mock.patch.dict(sys.modules, {"qbittorrentapi": module}),
+            mock.patch.dict(os.environ, {"QBT_USER": "user", "QBT_PASS": "password"}),
+            contextlib.redirect_stdout(output),
+        ):
+            self.assertEqual(qbm_api.main(["force-start", qbm.FIXTURE_HASH, "true"]), 0)
+            self.assertEqual(qbm_api.main(["force-start", qbm.FIXTURE_HASH, "false"]), 0)
+            self.assertEqual(qbm_api.main(["force-start", qbm.FIXTURE_HASH, "maybe"]), 2)
+        self.assertEqual(
+            client.calls,
+            [(qbm.FIXTURE_HASH, True), (qbm.FIXTURE_HASH, False)],
+        )
+        self.assertEqual(output.getvalue(), "Ok.\nOk.\n")
+
     def test_qbittorrent_user_collections_normalize_to_plain_json_values(self):
         response = UserList(
             [
@@ -516,6 +549,9 @@ class DownloadResilienceTests(unittest.TestCase):
             self.fields = fields or {}
             self.info_calls = 0
             self.add_args = None
+            self.force_start = False
+            self.force_calls = []
+            self.force_seen_during_download = False
 
         def add(self, url, save_path, category, name):
             self.add_args = (url, save_path, category, name)
@@ -534,12 +570,18 @@ class DownloadResilienceTests(unittest.TestCase):
                     "amount_left": 0 if self.complete else 1,
                     "size": 4321,
                     "completion_on": 1700000000,
+                    "force_start": self.force_start,
                     **self.fields,
                 }
             ]
 
         def files(self, _info_hash):
+            self.force_seen_during_download = self.force_start
             return [{"progress": 1, "size": 4321}]
+
+        def set_force_start(self, info_hash, enabled):
+            self.force_calls.append((info_hash, enabled))
+            self.force_start = enabled
 
         def discovery(self, _info_hash):
             return {"status": "observed", "knownSeeds": 0, "trackers": {"udp": {"notWorking": 2}}}
@@ -567,10 +609,20 @@ class DownloadResilienceTests(unittest.TestCase):
             self.assertEqual(info[0]["hash"], qbm.FIXTURE_HASH)
             self.assertTrue(files)
             self.assertIsNotNone(fake.add_args)
+            self.assertEqual(
+                fake.force_calls,
+                [(qbm.FIXTURE_HASH, True), (qbm.FIXTURE_HASH, False)],
+            )
+            self.assertTrue(fake.force_seen_during_download)
+            self.assertFalse(fake.force_start)
             status = json.loads(
                 (Path(directory) / RUN_ID / "external-dependency.json").read_text(encoding="utf-8")
             )
             self.assertEqual(status["status"], "passed")
+            evidence = json.loads(
+                (Path(directory) / RUN_ID / "evidence.json").read_text(encoding="utf-8")
+            )
+            self.assertTrue(evidence["phases"]["download"]["forceStartCleared"])
 
     def test_fixture_that_never_registers_is_an_external_dependency_failure(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -579,6 +631,51 @@ class DownloadResilienceTests(unittest.TestCase):
             scenario = self._scenario(directory, fake)
             with self.assertRaises(qbm.ExternalDependencyFailure):
                 scenario.download()
+            self.assertEqual(fake.force_calls, [])
+
+    def test_download_timeout_clears_force_start_even_when_teardown_delete_fails(self):
+        class FailedDelete(self._FakeQbit):
+            def delete(self, info_hash):
+                self.deleted_hash = info_hash
+                raise RuntimeError("injected deletion failure")
+
+        with tempfile.TemporaryDirectory() as directory:
+            identity = qbm.RunIdentity(RUN_ID)
+            fake = FailedDelete(identity, add_response="Ok.", complete=False)
+            scenario = self._scenario(directory, fake)
+            scenario.filesystem = FakeFilesystem(FailureController(), identity)
+            with self.assertRaises(qbm.ExternalDependencyFailure):
+                scenario.download()
+            self.assertTrue(fake.force_start)
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertFalse(scenario.teardown())
+            self.assertFalse(fake.force_start)
+            self.assertEqual(fake.deleted_hash, qbm.FIXTURE_HASH)
+            self.assertEqual(fake.force_calls[-1], (qbm.FIXTURE_HASH, False))
+            recovery = json.loads(
+                (Path(directory) / RUN_ID / "recovery.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(recovery["status"], "failed")
+
+    def test_download_cannot_pass_if_force_start_remains_enabled(self):
+        class FailedReset(self._FakeQbit):
+            def set_force_start(self, info_hash, enabled):
+                if enabled:
+                    super().set_force_start(info_hash, enabled)
+
+        with tempfile.TemporaryDirectory() as directory:
+            identity = qbm.RunIdentity(RUN_ID)
+            fake = FailedReset(identity, add_response="Ok.")
+            scenario = self._scenario(directory, fake)
+            with self.assertRaisesRegex(
+                qbm.AssertionFailure, "force-start state or completion changed after reset"
+            ):
+                scenario.download()
+            self.assertTrue(fake.force_start)
+            status = json.loads(
+                (Path(directory) / RUN_ID / "external-dependency.json").read_text(encoding="utf-8")
+            )
+            self.assertNotEqual(status["status"], "passed")
 
     def test_completion_timeout_records_only_owned_numeric_fixture_progress(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -629,7 +726,7 @@ class DownloadResilienceTests(unittest.TestCase):
             )
             self.assertNotIn("SENSITIVE-", evidence_text)
 
-    def test_completion_timeout_does_not_record_unowned_fixture(self):
+    def test_unowned_fixture_is_rejected_before_force_start_and_download_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             identity = qbm.RunIdentity(RUN_ID)
             fake = self._FakeQbit(
@@ -639,12 +736,13 @@ class DownloadResilienceTests(unittest.TestCase):
                 fields={"category": "other", "progress": 0.8},
             )
             scenario = self._scenario(directory, fake)
-            with self.assertRaises(qbm.ExternalDependencyFailure):
+            with self.assertRaisesRegex(qbm.AssertionFailure, "fixture ownership"):
                 scenario.download()
-            download = json.loads(
+            phases = json.loads(
                 (Path(directory) / RUN_ID / "evidence.json").read_text(encoding="utf-8")
-            )["phases"]["download"]
-            self.assertEqual(download, {"status": "broken"})
+            )["phases"]
+            self.assertNotIn("download", phases)
+            self.assertEqual(fake.force_calls, [])
 
     def test_completion_timeout_omits_invalid_numeric_values(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -725,6 +823,7 @@ class FakeQbit:
         self.identity = identity
         self.fixture_present = True
         self.owned_fixture = owned_fixture
+        self.force_start = False
         self.category_present = True
         self.tags_present = set(identity.owned_tags)
 
@@ -739,8 +838,15 @@ class FakeQbit:
                 "save_path": (
                     self.identity.download_root if self.owned_fixture else "/data/downloads/movies"
                 ),
+                "force_start": self.force_start,
             }
         ]
+
+    def set_force_start(self, info_hash, enabled):
+        if info_hash != qbm.FIXTURE_HASH:
+            raise ValueError("unexpected torrent hash")
+        self.controller.call("qbit.set_force_start")
+        self.force_start = enabled
 
     def delete(self, _info_hash):
         self.controller.call("qbit.delete")
@@ -838,6 +944,7 @@ class TeardownTests(unittest.TestCase):
             controller = FailureController()
             teardown, qbit, filesystem, kube = self.make_teardown(directory, controller)
             self.assertTrue(teardown.run())
+            self.assertNotIn("qbit.set_force_start", controller.calls)
             self.assertFalse(qbit.fixture_present)
             self.assertFalse(qbit.category_present)
             self.assertFalse(qbit.tags_present)
@@ -866,8 +973,42 @@ class TeardownTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             controller = FailureController()
             teardown, qbit, _, _ = self.make_teardown(directory, controller, owned_fixture=False)
+            qbit.force_start = True
             with contextlib.redirect_stderr(io.StringIO()):
                 self.assertFalse(teardown.run())
+            self.assertTrue(qbit.fixture_present)
+            self.assertTrue(qbit.force_start)
+            self.assertNotIn("qbit.set_force_start", controller.calls)
+            self.assertNotIn("qbit.delete", controller.calls)
+
+    def test_force_start_reset_failure_does_not_prevent_deletion_or_later_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            controller = FailureController("qbit.set_force_start")
+            teardown, qbit, filesystem, kube = self.make_teardown(directory, controller)
+            qbit.force_start = True
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertFalse(teardown.run())
+            self.assertFalse(qbit.fixture_present)
+            self.assertFalse(filesystem.paths)
+            self.assertFalse(kube.resources)
+            recovery = json.loads((Path(directory) / "recovery.json").read_text(encoding="utf-8"))
+            self.assertEqual(recovery["status"], "failed")
+
+    def test_ownership_is_rechecked_after_force_start_reset_before_deletion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            controller = FailureController()
+            teardown, qbit, _, _ = self.make_teardown(directory, controller)
+            qbit.force_start = True
+            reset = qbit.set_force_start
+
+            def reset_then_change_ownership(info_hash, enabled):
+                reset(info_hash, enabled)
+                qbit.owned_fixture = False
+
+            qbit.set_force_start = reset_then_change_ownership
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertFalse(teardown.run())
+            self.assertFalse(qbit.force_start)
             self.assertTrue(qbit.fixture_present)
             self.assertNotIn("qbit.delete", controller.calls)
 
@@ -981,6 +1122,20 @@ class RepositorySafetyTests(unittest.TestCase):
             container="app",
             input_text="helper source",
             timeout=45,
+        )
+
+    def test_force_start_bridge_encodes_exact_hash_and_boolean(self):
+        kube = mock.Mock()
+        kube.exec.return_value = "Ok."
+        client = qbm.QbitClient(kube, "qbit-manage-pod", "helper source")
+        client.set_force_start(qbm.FIXTURE_HASH, True)
+        client.set_force_start(qbm.FIXTURE_HASH, False)
+        self.assertEqual(
+            [call.args[1] for call in kube.exec.call_args_list],
+            [
+                ["python3", "-", "force-start", qbm.FIXTURE_HASH, "true"],
+                ["python3", "-", "force-start", qbm.FIXTURE_HASH, "false"],
+            ],
         )
 
     def test_orchestrator_never_collects_application_logs(self):
