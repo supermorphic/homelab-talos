@@ -217,7 +217,7 @@ class ReconciliationTests(unittest.TestCase):
         first = json_path.read_bytes()
         self.assertEqual(json.loads(first), expected)
         self.assertIn("| Group | Required | Run ID | Result | Suites | Tests |", markdown)
-        self.assertIn(f"| core | yes | {RUN_ID} | passed | 32 | 32 |", markdown)
+        self.assertIn(f"| core | yes | {RUN_ID} | passed | 33 | 33 |", markdown)
         self.assertEqual(self.cli().returncode, 0)
         self.assertEqual(json_path.read_bytes(), first)
         self.assertEqual(

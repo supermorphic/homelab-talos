@@ -457,7 +457,11 @@ class OwnershipContractTests(unittest.TestCase):
             "kubernetes/apps/monitoring/gatus/app/values.yaml",
             "kubernetes/apps/monitoring/gatus/app/kustomization.yaml",
             "tests/prometheus/openbao_test.yaml",
-            "scripts/test/core/fixtures/openbao-2.7-jwt-config.json",
+            *(
+                path.relative_to(ROOT).as_posix()
+                for path in (ROOT / "scripts/test/core/fixtures").glob("openbao*")
+                if path.is_file()
+            ),
         }
         self.assertEqual(owned, source)
         required = set(fixture["contracts"]["openbao-source"]["required_tests"])
