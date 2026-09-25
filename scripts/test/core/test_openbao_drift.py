@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from scripts.openbao.configuration import Difference, ObjectSpec, SafeError, load_desired
-from scripts.openbao.drift import compare, compare_inventory, sanitize
+from scripts.openbao.drift import compare, compare_inventory, normalize, sanitize
 
 ROOT = Path(__file__).resolve().parents[3]
 DESIRED = ROOT / "kubernetes/apps/security/openbao/config/desired.json"
@@ -355,6 +355,83 @@ class DriftTest(unittest.TestCase):
         self.assertEqual(
             [(x.field, x.state) for x in compare(spec, dict(live, token_policies=["default"]))],
             [("token_policies", "changed")],
+        )
+
+    def test_jwt_alias_only_read_satisfies_canonical_required_fields(self):
+        spec = ObjectSpec(
+            "jwt-role",
+            "openbao-backup",
+            "auth/homelab-jwt/role/openbao-backup",
+            {
+                "bound_audiences": ["openbao-kubernetes-broker"],
+                "bound_subject": "system:serviceaccount:openbao:openbao-backup",
+                "user_claim": "sub",
+                "token_policies": ["openbao-backup"],
+                "token_ttl": 600,
+                "token_max_ttl": 600,
+                "token_no_default_policy": True,
+            },
+        )
+        live = {
+            "bound_audiences": ["openbao-kubernetes-broker"],
+            "bound_subject": "system:serviceaccount:openbao:openbao-backup",
+            "user_claim": "sub",
+            "policies": ["openbao-backup"],
+            "ttl": "10m0s",
+            "max_ttl": 600,
+            "token_no_default_policy": True,
+            "period": 0,
+            "num_uses": 0,
+            "bound_cidrs": [],
+            "groups_claim": "",
+        }
+        self.assertEqual(compare(spec, live), [])
+        self.assertEqual(
+            [(x.field, x.state) for x in compare(spec, dict(live, ttl=900))],
+            [("ttl", "changed")],
+        )
+        conflict = dict(live, token_policies=["default"])
+        self.assertEqual(
+            [(x.field, x.state) for x in compare(spec, conflict)],
+            [("policies", "changed"), ("token_policies", "changed")],
+        )
+        with self.assertRaises(SafeError):
+            normalize(spec, conflict)
+
+    def test_userpass_alias_only_read_and_token_defaults(self):
+        spec = ObjectSpec(
+            "userpass-user",
+            "openbao-operator",
+            "auth/homelab-userpass/users/openbao-operator",
+            {
+                "policies": ["openbao-operator"],
+                "token_no_default_policy": True,
+                "token_ttl": 3600,
+                "token_max_ttl": 3600,
+            },
+        )
+        live = {
+            "token_policies": ["openbao-operator"],
+            "token_no_default_policy": True,
+            "token_ttl": "1h",
+            "token_max_ttl": 3600,
+            "token_period": 0,
+            "token_explicit_max_ttl": 0,
+            "token_num_uses": 0,
+            "token_type": "default",
+            "token_bound_cidrs": [],
+        }
+        self.assertEqual(compare(spec, live), [])
+        conflict = dict(live, policies=["default"])
+        self.assertEqual(
+            [(x.field, x.state) for x in compare(spec, conflict)],
+            [("token_policies", "changed"), ("policies", "changed")],
+        )
+        with self.assertRaises(SafeError):
+            normalize(spec, conflict)
+        self.assertEqual(
+            [(x.field, x.state) for x in compare(spec, dict(live, token_num_uses=1))],
+            [("token_num_uses", "unexpected")],
         )
 
     def test_sanitizer_counts_any_name_outside_source_allowlist(self):
