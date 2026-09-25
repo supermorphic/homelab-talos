@@ -7,6 +7,7 @@ import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
+from urllib.parse import urlsplit
 
 QBITTORRENT_URL = "http://qbittorrent.media.svc.cluster.local:8080"
 
@@ -31,6 +32,82 @@ def normalize_json(value: Any) -> Any:
 
 def emit_json(value: Any) -> None:
     print(json.dumps(normalize_json(value)))
+
+
+def discovery_summary(client: Any, info_hash: str) -> dict[str, Any]:
+    """Return only allowlisted discovery signals for one registered fixture."""
+    info = normalize_json(client.torrents_info(torrent_hashes=info_hash))
+    if len(info) != 1 or info[0].get("hash") != info_hash:
+        return {"status": "fixture-missing"}
+
+    torrent = info[0]
+    preferences = normalize_json(client.app_preferences())
+    transfer = normalize_json(client.transfer_info())
+    trackers = normalize_json(client.torrents_trackers(torrent_hash=info_hash))
+    webseeds = normalize_json(client.torrents_webseeds(torrent_hash=info_hash))
+    summary: dict[str, Any] = {
+        "status": "observed",
+        "discoveryEnabled": {
+            name: preferences[name] if type(preferences.get(name)) is bool else None
+            for name in ("dht", "pex", "lsd")
+        },
+        "trackers": {},
+        "webSeedCount": min(len(webseeds), 64),
+    }
+    for source, target in (
+        (torrent.get("num_complete"), "knownSeeds"),
+        (torrent.get("num_incomplete"), "knownLeechers"),
+        (transfer.get("dht_nodes"), "dhtNodes"),
+    ):
+        if type(source) is int and 0 <= source <= 10_000_000:
+            summary[target] = source
+    status = transfer.get("connection_status")
+    summary["connectionStatus"] = (
+        status
+        if isinstance(status, str) and status in {"connected", "firewalled", "disconnected"}
+        else "unknown"
+    )
+
+    status_names = {
+        0: "disabled",
+        1: "notContacted",
+        2: "working",
+        3: "updating",
+        4: "notWorking",
+        5: "trackerError",
+        6: "unreachable",
+    }
+    for tracker in trackers[:64]:
+        try:
+            scheme = urlsplit(str(tracker.get("url", ""))).scheme.lower()
+        except ValueError:
+            continue
+        if scheme not in {"udp", "http", "https"}:
+            continue
+        counts = summary["trackers"].setdefault(scheme, {})
+        tracker_status = tracker.get("status")
+        label = (
+            status_names.get(tracker_status, "unknown")
+            if type(tracker_status) is int
+            else "unknown"
+        )
+        counts[label] = counts.get(label, 0) + 1
+        for source, target in (
+            (tracker.get("num_seeds"), "maxReportedSeeds"),
+            (tracker.get("num_leeches"), "maxReportedLeechers"),
+        ):
+            if type(source) is int and 0 <= source <= 10_000_000:
+                counts[target] = max(counts.get(target, 0), source)
+        message = str(tracker.get("msg", "")).lower()
+        if label in {"notWorking", "trackerError", "unreachable"}:
+            if any(
+                phrase in message
+                for phrase in ("could not resolve", "name or service not known", "host not found")
+            ):
+                counts["dnsErrors"] = counts.get("dnsErrors", 0) + 1
+            elif "timed out" in message or "timeout" in message:
+                counts["timeoutErrors"] = counts.get("timeoutErrors", 0) + 1
+    return summary
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -78,6 +155,11 @@ def main(argv: list[str] | None = None) -> int:
     if command == "health":
         require_args(operands, 0)
         emit_json({"status": "passed"})
+        return 0
+
+    if command == "discovery":
+        require_args(operands, 1)
+        emit_json(discovery_summary(client, operands[0]))
         return 0
 
     readers: dict[str, tuple[int, Callable[..., Any]]] = {
