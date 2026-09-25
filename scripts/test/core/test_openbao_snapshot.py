@@ -263,6 +263,27 @@ class SourceTests(unittest.TestCase):
         self.assertNotIn("longhorn_volume_last_backup_at", expressions["OpenBaoLocalSnapshotStale"])
         self.assertNotIn("kube_cronjob_status_last_successful_time", expressions["OpenBaoOffsiteTransferStale"])
 
+    def test_backup_remains_eligible_after_cronjob_detaches(self):
+        base = Path("kubernetes/apps/storage/longhorn")
+        settings = yaml.safe_load((base / "app/values.yaml").read_text())["defaultSettings"]
+        self.assertIs(settings.get("allowRecurringJobWhileVolumeDetached"), True)
+        jobs = list(yaml.safe_load_all((base / "config/recurring-jobs.yaml").read_text()))
+        for name in ("daily-snapshot", "daily-backup"):
+            job = next(item for item in jobs if item["metadata"]["name"] == name)
+            self.assertIn("default", job["spec"]["groups"])
+        claim = self.doc("backup/pvc.yaml")
+        self.assertEqual(claim["metadata"]["labels"]["recurring-job-group.longhorn.io/default"], "enabled")
+
+    def test_longhorn_metrics_have_a_collector_for_the_alert_inputs(self):
+        monitor = self.doc("monitoring/longhorn-servicemonitor.yaml")
+        self.assertIn("./longhorn-servicemonitor.yaml", self.doc("monitoring/kustomization.yaml")["resources"])
+        self.assertEqual(monitor["spec"]["namespaceSelector"], {"matchNames": ["longhorn-system"]})
+        self.assertEqual(monitor["spec"]["selector"]["matchLabels"], {"app": "longhorn-manager"})
+        endpoint = monitor["spec"]["endpoints"][0]
+        self.assertEqual((endpoint["port"], endpoint["path"], endpoint["scheme"]),
+                         ("manager", "/metrics", "http"))
+        self.assertNotIn("metricRelabelings", endpoint)
+
     def test_activation_and_audit_are_safe_to_stage(self):
         from scripts.openbao.apply import AUDIT
         gatus = yaml.safe_load(Path(

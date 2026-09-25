@@ -12,6 +12,10 @@ kustomize build kubernetes/apps/security >"$temp_dir/security.yaml"
 helm template openbao oci://ghcr.io/openbao/charts/openbao@sha256:98c8fc901e2579ac6da9a805537fcd7a19525ef8e563ae8737dc16fc8f641e3e \
   --namespace openbao \
   --values "$base/app/values.yaml" >"$temp_dir/rendered.yaml"
+helm template longhorn longhorn --repo https://charts.longhorn.io \
+  --version "$(yq -r '.spec.chart.spec.version' kubernetes/apps/storage/longhorn/app/helmrelease.yaml)" \
+  --namespace longhorn-system --values kubernetes/apps/storage/longhorn/app/values.yaml \
+  >"$temp_dir/longhorn.yaml"
 
 uv run --locked python - "$temp_dir" <<'PY'
 import pathlib
@@ -157,6 +161,34 @@ assert monitor["spec"]["endpoints"][0]["params"] == {"format": ["prometheus"]}
 assert monitor["spec"]["endpoints"][0]["scheme"] == "https"
 assert monitor["spec"]["endpoints"][0]["tlsConfig"] == {
     "serverName": "openbao.lab.supermorphic.com"}
+longhorn = docs("longhorn")
+longhorn_service = one(longhorn, "Service", "longhorn-backend")
+longhorn_monitor = one(docs("monitoring"), "ServiceMonitor", "openbao-longhorn")
+assert longhorn_monitor["spec"]["namespaceSelector"] == {
+    "matchNames": [longhorn_service["metadata"]["namespace"]]}
+assert longhorn_monitor["spec"]["selector"]["matchLabels"] == {"app": "longhorn-manager"}
+assert all(longhorn_service["metadata"]["labels"].get(k) == v for k, v in
+           longhorn_monitor["spec"]["selector"]["matchLabels"].items())
+assert longhorn_monitor["spec"]["endpoints"] == [
+    {"port": "manager", "path": "/metrics", "scheme": "http", "interval": "1m"}]
+assert {"name": "manager", "port": 9500, "targetPort": "manager"} in longhorn_service["spec"]["ports"]
+prometheus = yaml.safe_load(pathlib.Path(
+    "kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml").read_text())
+prometheus_spec = prometheus["prometheus"]["prometheusSpec"]
+assert prometheus_spec["serviceMonitorSelectorNilUsesHelmValues"] is False
+assert not prometheus_spec.get("serviceMonitorSelector")
+assert not prometheus_spec.get("serviceMonitorNamespaceSelector")
+defaults = one(longhorn, "ConfigMap", "longhorn-default-setting")["data"]["default-setting.yaml"]
+assert yaml.safe_load(defaults)["allow-recurring-job-while-volume-detached"] is True
+claim = one(docs("backup"), "PersistentVolumeClaim", "openbao-backup")
+assert claim["metadata"]["labels"] == {
+    "recurring-job.longhorn.io/source": "enabled",
+    "recurring-job-group.longhorn.io/default": "enabled"}
+jobs = list(yaml.safe_load_all(pathlib.Path(
+    "kubernetes/apps/storage/longhorn/config/recurring-jobs.yaml").read_text()))
+for job_name, schedule in (("daily-snapshot", "0 2 * * *"), ("daily-backup", "0 3 * * *")):
+    job = one(jobs, "RecurringJob", job_name)
+    assert job["spec"]["cron"] == schedule and "default" in job["spec"]["groups"]
 assert one(docs("monitoring"), "PrometheusRule", "openbao")["spec"]["groups"]
 backup = one(docs("backup"), "CronJob", "openbao-backup")
 assert backup["spec"]["schedule"] == "0 1 * * *"

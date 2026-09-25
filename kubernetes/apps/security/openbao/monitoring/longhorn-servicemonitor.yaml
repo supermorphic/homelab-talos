@@ -1,0 +1,18 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: openbao-longhorn
+  namespace: openbao
+  labels:
+    app.kubernetes.io/name: openbao
+spec:
+  namespaceSelector:
+    matchNames: [longhorn-system]
+  selector:
+    matchLabels:
+      app: longhorn-manager
+  endpoints:
+    - port: manager
+      path: /metrics
+      scheme: http
+      interval: 1m
