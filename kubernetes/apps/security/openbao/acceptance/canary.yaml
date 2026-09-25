@@ -5,3 +5,11 @@ metadata:
   namespace: openbao-acceptance
 data:
   marker: synthetic-openbao-reader-canary
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openbao-protected
+  namespace: openbao-acceptance
+data:
+  marker: synthetic-openbao-protected-canary

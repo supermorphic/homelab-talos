@@ -86,7 +86,7 @@ def expect_acceptance(
         f"{name}: expected acceptance, got exit {completed.returncode}\n"
         f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
     )
-    assert completed.stdout == "Test catalog passed validation: suites=129.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=131.\n"
     assert completed.stderr == ""
 
 
@@ -467,9 +467,10 @@ def dispatch_contract(root: Path, canonical: dict[str, Any]) -> None:
 
 def campaign_contract(root: Path, canonical: dict[str, Any]) -> None:
     assert all(
-        "test.openbao-restore-drill" not in campaign.get("members", [])
+        not {"test.openbao-restore-drill", "test.openbao-issuance", "test.openbao-ha"}
+        & set(campaign.get("members", []))
         for campaign in canonical["campaigns"].values()
-    ), "OpenBao restore requires attended private recovery input, never periodic execution."
+    ), "OpenBao acceptance requires attended operator authority, never periodic execution."
     assert (
         "test.automation-data-provisioning" not in canonical["campaigns"]["integration"]["members"]
     ), "Periodic restore assurance must not rotate credentials without paired backups."
@@ -1145,7 +1146,7 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
 def main() -> int:
     completed = run_validator(CATALOG)
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout == "Test catalog passed validation: suites=129.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=131.\n"
     assert completed.stderr == ""
     canonical = yaml.safe_load(CATALOG.read_text(encoding="utf-8"))
     groups = {
