@@ -368,6 +368,16 @@ class PodAPI:
         )
         return body["data"]
 
+    def deny_unapproved(self, token):
+        # A 403 proves the session ACL rejects this path. A missing role (404),
+        # backend failure, or transport error cannot satisfy that assertion.
+        issuance.call(
+            self, "POST", "/v1/kubernetes/creds/openbao-unapproved", {403},
+            target="bao", token=token,
+            payload={"kubernetes_namespace": issuance.NAMESPACE, "ttl": "600s"},
+        )
+        return True
+
     def revoke(self, token):
         issuance.call(
             self,

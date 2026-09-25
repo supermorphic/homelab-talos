@@ -83,6 +83,9 @@ class API:
     def revoke(self, session):
         pass
 
+    def deny_unapproved(self, session):
+        return True
+
 
 class IssuanceTests(unittest.TestCase):
     def setUp(self):
@@ -92,6 +95,39 @@ class IssuanceTests(unittest.TestCase):
         self.module = importlib.import_module("scripts.openbao.issuance")
         self.clock = Clock()
         self.api = API(self.clock)
+
+    def test_openbao_denial_is_proved_before_revoke_and_kubernetes_use(self):
+        events = []
+        self.api.deny_unapproved = lambda session: events.append("denied") or True
+        self.api.revoke = lambda session: events.append("revoked")
+        self.module.acceptance(self.api, self.api, self.clock, wait_expiry=False)
+        self.assertEqual(events, ["denied", "revoked"])
+        self.api.calls.clear()
+        self.api.deny_unapproved = lambda session: False
+        with self.assertRaises(self.module.AcceptanceError):
+            self.module.acceptance(self.api, self.api, self.clock, wait_expiry=False)
+        self.assertEqual(self.api.calls, [])
+
+    def test_adapter_sends_unapproved_issuance_and_requires_exact_acl_denial(self):
+        from scripts.test.scenarios.openbao_issuance import PodAPI
+
+        adapter = PodAPI(None, None)
+        calls = []
+        for status in (403, 200, 400, 404, 500):
+            def request(method, path, **kwargs):
+                calls.append((method, path, kwargs))
+                return status, {"data": {"service_account_token": "synthetic-unexpected-token"}}
+            adapter.request = request
+            if status == 403:
+                self.assertIs(adapter.deny_unapproved("synthetic-session"), True)
+            else:
+                with self.assertRaises(self.module.AcceptanceError):
+                    adapter.deny_unapproved("synthetic-session")
+        self.assertEqual(len(calls), 5)
+        for method, path, kwargs in calls:
+            self.assertEqual((method, path), ("POST", "/v1/kubernetes/creds/openbao-unapproved"))
+            self.assertEqual(kwargs, {"target": "bao", "token": "synthetic-session",
+                                     "payload": {"kubernetes_namespace": "openbao-acceptance", "ttl": "600s"}})
 
     def test_real_identity_canary_and_elapsed_expiry_without_token_output(self):
         result = self.module.acceptance(self.api, self.api, self.clock)
