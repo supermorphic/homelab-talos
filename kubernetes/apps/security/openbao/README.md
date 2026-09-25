@@ -20,3 +20,9 @@ only skips the *initial install wait*; upgrades keep their normal readiness hand
 The native disruption budget protects a two-voter quorum, and StatefulSet claim retention
 preserves data after scale-down or deletion. An `OnDelete` upgrade needs an attended
 standby-first procedure.
+
+The network policy does not grant node-wide API ingress. Guarded bootstrap uses a
+loopback-only port-forward to one named Pod; Kubernetes RBAC and the temporary tunnel
+bound that access. Cilium's default local-host handling is expected to carry the
+kubelet-to-Pod segment. The guarded bootstrap must verify this path before initialization;
+no live tunnel behavior is claimed by this staged package.

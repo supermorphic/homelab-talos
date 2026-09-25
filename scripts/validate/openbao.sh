@@ -17,7 +17,10 @@ uv run --locked python - "$temp_dir" <<'PY'
 import pathlib
 import sys
 import yaml
-from scripts.openbao.manifests import validate_documents, validate_issuance_role
+from scripts.openbao.manifests import (
+    validate_documents, validate_issuance_role, validate_gateway_namespace,
+    validate_network_policy, validate_tokenrequest_binding, validate_flux_units,
+)
 
 root = pathlib.Path(sys.argv[1])
 def docs(name):
@@ -34,11 +37,9 @@ security = docs("security")
 failures = validate_documents(rendered + [one(app, "PodDisruptionBudget", "openbao")])
 assert not failures, f"rendered OpenBao invariants: {failures}"
 assert not validate_issuance_role(one(acceptance, "Role", "openbao-tokenrequest"))
-assert one(acceptance, "RoleBinding", "openbao-tokenrequest")["subjects"] == [
-    {"kind": "ServiceAccount", "name": "openbao", "namespace": "openbao"}]
-assert len([d for d in security if d.get("kind") == "Kustomization" and
-            d.get("metadata", {}).get("name", "").startswith("openbao") and
-            d.get("spec", {}).get("suspend") is True]) == 4
+assert not validate_tokenrequest_binding(one(acceptance, "RoleBinding", "openbao-tokenrequest"))
+assert not validate_flux_units(security)
+assert not validate_gateway_namespace(one(docs("namespace"), "Namespace", "openbao"))
 release = one(app, "HelmRelease", "openbao")
 assert release["spec"]["chart"]["spec"]["version"] == "0.29.6"
 assert release["spec"]["install"]["disableWait"] is True
@@ -85,6 +86,7 @@ assert policy["spec"]["validation"] == {"hostname": "openbao.lab.supermorphic.co
                                            "wellKnownCACertificates": "System"}
 assert policy["spec"]["targetRefs"] == [{"group": "", "kind": "Service", "name": "openbao"}]
 network = one(app, "CiliumNetworkPolicy", "openbao")["spec"]
+assert not validate_network_policy(one(app, "CiliumNetworkPolicy", "openbao"))
 assert network["endpointSelector"]["matchLabels"] == {
     "app.kubernetes.io/name": "openbao", "app.kubernetes.io/instance": "openbao",
     "component": "server"}
@@ -110,8 +112,7 @@ assert any(rule.get("toEntities") == ["kube-apiserver"] and
 assert any(rule.get("fromEndpoints", [{}])[0].get("matchLabels", {}).get("app.kubernetes.io/name") ==
            "openbao" and rule["toPorts"][0]["ports"] == [{"port": "8201", "protocol": "TCP"}]
            for rule in network["ingress"])
-assert all("fromEntities" not in rule or rule["fromEntities"] == ["host", "remote-node"]
-           for rule in network["ingress"])
+assert all("fromEntities" not in rule for rule in network["ingress"])
 metrics = one(docs("access"), "Service", "openbao-monitoring")
 assert metrics["spec"]["ports"] == [{"name": "monitoring", "port": 8203,
                                      "targetPort": "monitoring", "protocol": "TCP"}]
