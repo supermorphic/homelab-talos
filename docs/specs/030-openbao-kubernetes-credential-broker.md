@@ -6,7 +6,10 @@ Design for [issue 449](https://github.com/supermorphic/homelab-talos/issues/449)
 The operator approved automatic unseal and three voting replicas, one per physical
 node, after reviewing the existing cluster, and accepted this specification with
 refinements to the seal threat model and configuration-drift verification.
-Implementation and live acceptance are not complete.
+The source implementation is staged on a feature branch. All six OpenBao Flux
+Kustomizations remain suspended. Operator seal creation, live initialization,
+activation and live acceptance are not complete. A passing local or CI gate is
+candidate source evidence only; issue 449 remains open until deployed acceptance.
 
 Deploy OpenBao inside the Talos cluster to issue short-lived credentials for
 pre-existing Kubernetes ServiceAccounts. Git and Flux own every ServiceAccount,
@@ -521,6 +524,33 @@ not the recovery procedure.
 Implement commands using the [repository command lifecycle](../reference/repository-command-lifecycle.md)
 and register assurance in the [test catalog](../../tests/catalog.yaml).
 
+The implemented catalog uses `validation.openbao` in core CI and registers
+`verification.openbao` as diagnostic-tier observation. The verifier is excluded
+from verification and scoped-verification campaigns while any OpenBao Flux unit
+is suspended, the encrypted seal artifact is absent from the app Kustomization,
+or the Gatus endpoint is not enrolled. It fails on staged absence, incomplete
+reads and observed drift.
+The attended `test.openbao-issuance`, `test.openbao-ha`, and
+`test.openbao-restore-drill` suites are human-owned standalone entries. Their
+catalog registration does not authorize live mutation. Normal CI does not run
+them. Source-owned API objects are applied only by a confirmed command against
+clean deployed `main`; Git/Flux do not continuously write them through a
+privileged controller. The reader role can observe readable configuration but
+cannot compare the private operator password.
+
+The source pins chart `0.29.6` and the equivalent official OCI chart digest
+`sha256:98c8fc901e2579ac6da9a805537fcd7a19525ef8e563ae8737dc16fc8f641e3e`,
+OpenBao server image
+`quay.io/openbao/openbao:2.7.0@sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315`,
+and backup runtime image
+`docker.io/library/python:3.13.14-slim@sha256:9662417aace5ae7b8e2609cce472b72a8958e134ba372808abe9cc1a0c0125e6`.
+Each server currently requests `100m` CPU and `256Mi` memory and is limited to
+`1` CPU and `1Gi` memory; the backup job requests `50m` CPU and `128Mi` memory
+and is limited to `1` CPU and `512Mi` memory. These are source settings, not
+measured utilization or validated sizing. Restart, leadership transfer,
+issuance interruption, snapshot transfer and restore times remain unmeasured
+until authorized live tests record them.
+
 | Workflow | Authority and evidence |
 | --- | --- |
 | `just kube openbao-validate` | Offline chart render, schema, policy, source, and command-contract validation; no live credentials. |
@@ -574,9 +604,10 @@ publication does not grant permission for a suite's mutation. Retained evidence
 contains only sanitized assertions and measurements. No live acceptance is claimed
 until its independently authorized run passes.
 
-Reconcile this specification with implemented behavior, exact release pins,
-measured resources, recovery evidence, and remaining operator actions before merge
-or issue closure. A design commit does not mean issue 449 is deployed or complete.
+Reconcile the open measurements and recovery evidence above after the authorized
+live runs. Preserve their actual values and any changed release pins in this
+record before issue closure. A source commit does not mean issue 449 is deployed
+or complete.
 
 ## Upstream design references
 

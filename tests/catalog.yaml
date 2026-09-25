@@ -11,6 +11,7 @@ executions:
     - validation.policy-unit
     - validation.kubeconform
     - validation.cilium
+    - validation.openbao
     - validation.metrics-server
     - validation.flux
     - validation.foundation
@@ -57,6 +58,7 @@ executions:
     - validation.policy-unit
     - validation.kubeconform
     - validation.cilium
+    - validation.openbao
     - validation.metrics-server
     - validation.flux
     - validation.foundation
@@ -361,6 +363,10 @@ suites:
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube cilium-validate", implementation: scripts/validate/cilium.sh}
     native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.openbao, source: validation, framework: bash, suite: ci, tier: offline, target: openbao, scenario: source, scope: system, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube openbao-validate", implementation: scripts/validate/openbao.sh}
+    native_results: {strategy: wrapper-junit}
   - metadata: {id: validation.web-research, source: validation, framework: mixed, suite: ci, tier: offline, target: web-research, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube web-research-validate", implementation: scripts/validate/web-research.sh}
@@ -511,6 +517,11 @@ suites:
     access: {tier: diagnostic}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube cilium-verify", implementation: scripts/verify/cilium.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.openbao, source: verification, framework: bash, suite: platform, tier: verification, target: openbao, scenario: null, scope: system, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: diagnostic}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube openbao-verify", implementation: scripts/verify/openbao.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.flux, source: verification, framework: bash, suite: platform, tier: verification, target: flux, scenario: null, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: human}
     access: {tier: observer}

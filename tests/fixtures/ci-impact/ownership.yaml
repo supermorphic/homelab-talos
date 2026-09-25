@@ -58,3 +58,102 @@ contracts:
       - scripts/test/run-ci.sh
     required_tests:
       - shell:ci-runner
+  openbao-monitoring-alerts:
+    changed_inputs:
+      - kubernetes/apps/security/openbao/monitoring/prometheusrule.yaml
+      - tests/prometheus/openbao_test.yaml
+    required_tests:
+      - catalog:validation.monitoring-alerts
+  openbao-source:
+    changed_inputs:
+      - kubernetes/apps/monitoring/gatus/app/openbao-activation.values.yaml
+      - kubernetes/apps/security/openbao/README.md
+      - kubernetes/apps/security/openbao/acceptance/canary.yaml
+      - kubernetes/apps/security/openbao/acceptance/kustomization.yaml
+      - kubernetes/apps/security/openbao/acceptance/namespace.yaml
+      - kubernetes/apps/security/openbao/acceptance/rbac.yaml
+      - kubernetes/apps/security/openbao/access/backendtlspolicy.yaml
+      - kubernetes/apps/security/openbao/access/httproute.yaml
+      - kubernetes/apps/security/openbao/access/kustomization.yaml
+      - kubernetes/apps/security/openbao/access/service.yaml
+      - kubernetes/apps/security/openbao/app/ciliumnetworkpolicy.yaml
+      - kubernetes/apps/security/openbao/app/helmrelease.yaml
+      - kubernetes/apps/security/openbao/app/helmrepository.yaml
+      - kubernetes/apps/security/openbao/app/kustomization.yaml
+      - kubernetes/apps/security/openbao/app/pdb.yaml
+      - kubernetes/apps/security/openbao/app/serviceaccount.yaml
+      - kubernetes/apps/security/openbao/app/values.yaml
+      - kubernetes/apps/security/openbao/backup/ciliumnetworkpolicy.yaml
+      - kubernetes/apps/security/openbao/backup/cronjob.yaml
+      - kubernetes/apps/security/openbao/backup/kustomization.yaml
+      - kubernetes/apps/security/openbao/backup/pvc.yaml
+      - kubernetes/apps/security/openbao/backup/scripts/snapshot.py
+      - kubernetes/apps/security/openbao/backup/serviceaccount.yaml
+      - kubernetes/apps/security/openbao/config/desired.json
+      - kubernetes/apps/security/openbao/config/policies/acceptance.json
+      - kubernetes/apps/security/openbao/config/policies/backup.json
+      - kubernetes/apps/security/openbao/config/policies/config-reader.json
+      - kubernetes/apps/security/openbao/config/policies/operator.json
+      - kubernetes/apps/security/openbao/ks.yaml
+      - kubernetes/apps/security/openbao/monitoring/kustomization.yaml
+      - kubernetes/apps/security/openbao/monitoring/prometheusrule.yaml
+      - kubernetes/apps/security/openbao/monitoring/servicemonitor.yaml
+      - kubernetes/apps/security/openbao/namespace/certificate.yaml
+      - kubernetes/apps/security/openbao/namespace/kustomization.yaml
+      - kubernetes/apps/security/openbao/namespace/namespace.yaml
+      - scripts/openbao/__init__.py
+      - scripts/openbao/apply.py
+      - scripts/openbao/bootstrap.py
+      - scripts/openbao/client.py
+      - scripts/openbao/configuration.py
+      - scripts/openbao/drift.py
+      - scripts/openbao/guards.py
+      - scripts/openbao/issuance.py
+      - scripts/openbao/lock.sh
+      - scripts/openbao/maintenance.py
+      - scripts/openbao/manifests.py
+      - scripts/openbao/operator.py
+      - scripts/openbao/reader.py
+      - scripts/openbao/restore.py
+      - scripts/openbao/secrets.py
+      - scripts/openbao/verify.py
+      - scripts/operations/openbao-upgrade.sh
+      - scripts/secrets/openbao.sh
+      - scripts/test/core/fixtures/openbao-2.7-jwt-config.json
+      - scripts/test/core/test_openbao_apply.py
+      - scripts/test/core/test_openbao_bootstrap.py
+      - scripts/test/core/test_openbao_catalog.py
+      - scripts/test/core/test_openbao_client.py
+      - scripts/test/core/test_openbao_drift.py
+      - scripts/test/core/test_openbao_manifests.py
+      - scripts/test/core/test_openbao_secrets.py
+      - scripts/test/core/test_openbao_snapshot.py
+      - scripts/test/core/test_openbao_verify.py
+      - scripts/test/scenarios/openbao_ha.py
+      - scripts/test/scenarios/openbao_issuance.py
+      - scripts/test/scenarios/openbao_restore.py
+      - scripts/test/scenarios/test_openbao_ha.py
+      - scripts/test/scenarios/test_openbao_issuance.py
+      - scripts/test/scenarios/test_openbao_restore.py
+      - scripts/validate/openbao.sh
+      - scripts/verify/openbao.sh
+      - tests/fixtures/openbao/restore/ciliumnetworkpolicy.yaml
+      - tests/fixtures/openbao/restore/namespace.yaml
+      - tests/fixtures/openbao/restore/pvc.yaml
+      - tests/fixtures/openbao/restore/serviceaccount.yaml
+      - tests/fixtures/openbao/restore/statefulset.yaml
+      - tests/prometheus/openbao_test.yaml
+    required_tests:
+      - catalog:validation.openbao
+      - python:scripts/test/core/test_openbao_apply.py
+      - python:scripts/test/core/test_openbao_bootstrap.py
+      - python:scripts/test/core/test_openbao_catalog.py
+      - python:scripts/test/core/test_openbao_client.py
+      - python:scripts/test/core/test_openbao_drift.py
+      - python:scripts/test/core/test_openbao_manifests.py
+      - python:scripts/test/core/test_openbao_secrets.py
+      - python:scripts/test/core/test_openbao_snapshot.py
+      - python:scripts/test/core/test_openbao_verify.py
+      - python:scripts/test/scenarios/test_openbao_ha.py
+      - python:scripts/test/scenarios/test_openbao_issuance.py
+      - python:scripts/test/scenarios/test_openbao_restore.py

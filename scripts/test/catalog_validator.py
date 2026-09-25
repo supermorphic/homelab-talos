@@ -107,6 +107,51 @@ def campaign_exclusions() -> set[str]:
     )
     if nocodb_source.get("spec", {}).get("suspend") is True:
         exclusions.add("verification.nocodb")
+    openbao_units = list(
+        yaml.safe_load_all(
+            (REPO_ROOT / "kubernetes/apps/security/openbao/ks.yaml").read_text(encoding="utf-8")
+        )
+    )
+    expected = {
+        "openbao-prerequisites",
+        "openbao",
+        "openbao-access",
+        "openbao-backup",
+        "openbao-monitoring",
+        "openbao-acceptance",
+    }
+    active = {
+        unit.get("metadata", {}).get("name")
+        for unit in openbao_units
+        if isinstance(unit, dict) and unit.get("spec", {}).get("suspend") is False
+    }
+    seal_path = REPO_ROOT / "kubernetes/apps/security/openbao/app/openbao-seal.sops.yaml"
+    app_source = yaml.safe_load(
+        (REPO_ROOT / "kubernetes/apps/security/openbao/app/kustomization.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    gatus_source = yaml.safe_load(
+        (REPO_ROOT / "kubernetes/apps/monitoring/gatus/app/values.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    seal_active = (
+        seal_path.is_file()
+        and isinstance(app_source, dict)
+        and "./openbao-seal.sops.yaml" in app_source.get("resources", [])
+    )
+    gatus_active = isinstance(gatus_source, dict) and any(
+        isinstance(endpoint, dict) and endpoint.get("name") == "openbao"
+        for endpoint in gatus_source.get("config", {}).get("endpoints", [])
+    )
+    if (
+        active != expected
+        or len(openbao_units) != len(expected)
+        or not seal_active
+        or not gatus_active
+    ):
+        exclusions.add("verification.openbao")
     return exclusions
 
 
