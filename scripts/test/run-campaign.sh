@@ -662,12 +662,14 @@ run_member() {
   echo "=== campaign $campaign: $suite_id ==="
   command_exit=0
   if [[ "$scoped_mode" == 'true' ]]; then
+    env -u TEST_CAMPAIGN_CONFIRM \
     TEST_RUN_ID_FILE="$run_id_file" \
     TEST_RESULTS_ROOT="$results_root" \
     TEST_KUBECONFIG="$kubeconfig" \
     KUBECONFIG="$kubeconfig" \
       bash -o pipefail -c "$command" >"$log_file" 2>&1 || command_exit="$?"
   else
+    env -u TEST_CAMPAIGN_CONFIRM \
     TEST_RUN_ID_FILE="$run_id_file" \
     TEST_RESULTS_ROOT="$results_root" \
     TEST_KUBECONFIG="$kubeconfig" \
