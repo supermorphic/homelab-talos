@@ -57,6 +57,7 @@ class BootstrapClient:
 
     def prepare(self, approved):
         self.calls.append(("prepare", "owned-units"))
+        return copy.deepcopy(approved)
 
     def configure_audit(self, token):
         self.calls.append(("audit", "verified"))
@@ -72,6 +73,7 @@ class BootstrapTest(unittest.TestCase):
             "namespace_uid": "synthetic-ns",
             "statefulset_uid": "synthetic-sts",
             "pvc_uids": ["p0", "p1", "p2"],
+            "pod_uids": {"openbao-0": "synthetic-pod"},
             "recipient": "synthetic-recipient",
             "seal_key_id": "1",
         }
@@ -217,6 +219,18 @@ class BootstrapTest(unittest.TestCase):
         result = bootstrap.run("prepare", **self.inputs)
         self.assertEqual(result["status"], "prepared")
         self.assertEqual(self.client.calls, [("prepare", "owned-units")])
+
+    def test_prepare_returns_only_local_nonsecret_observed_target_summary(self):
+        self.inputs["confirm"] = guards.confirmation("prepare", "a" * 40, "b" * 64)
+        observed = {**self.target, "namespace_uid": "actually-prepared-namespace",
+                    "password": "synthetic-private", "recovery_directory": "/private/path"}
+        self.client.prepare = lambda target: observed
+        result = bootstrap.run("prepare", **self.inputs)
+        self.assertEqual(result["target"], {key: observed[key] for key in (
+            "source_revision", "cluster_uid", "namespace_uid", "statefulset_uid",
+            "pod_uids", "pvc_uids")})
+        self.assertNotIn("synthetic-private", str(result))
+        self.assertNotIn("/private/path", str(result))
 
 
 class PinnedReadbackTest(unittest.TestCase):
