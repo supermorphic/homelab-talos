@@ -443,3 +443,147 @@ class AdapterTests(unittest.TestCase):
             exec(compile(scenario.BRIDGE, "<synthetic-bridge>", "exec"), {})  # noqa: S102 -- Execute only the repository-owned bridge against synthetic transport.
         self.assertEqual(json.loads(output.getvalue()), {"status": 403, "body": {}})
         self.assertNotIn(MARKER, output.getvalue())
+
+    def test_cleanup_rejects_conflicting_marker_on_controller_owned_descendant(self):
+        from scripts.test.scenarios import openbao_restore as scenario
+
+        cluster = scenario.ScratchKube(Path("/synthetic/operator-config"), RUN, {}, b"x" * 32)
+        cluster.created = [{"metadata": {"uid": "owned-statefulset"}}]
+        cluster.command = lambda *a, **kw: b"controllerrevisions.apps\n"
+        cluster.json = lambda *a: {
+            "items": [
+                {
+                    "kind": "ControllerRevision",
+                    "metadata": {
+                        "name": "scratch-revision",
+                        "uid": "revision-uid",
+                        "annotations": {restore.OWNER: "another-run"},
+                        "ownerReferences": [{"uid": "owned-statefulset", "controller": True}],
+                    },
+                }
+            ]
+        }
+        with self.assertRaises(restore.RestoreError):
+            cluster.cleanup_inventory()
+
+    def cleanup_storage_fixture(self, pv, volume):
+        from scripts.test.scenarios import openbao_restore as scenario
+
+        cluster = scenario.ScratchKube(Path("/synthetic/operator-config"), RUN, {}, b"x" * 32)
+        documents = [
+            {
+                "kind": "Namespace",
+                "metadata": {"name": restore.namespace(RUN), "uid": "namespace-uid"},
+            },
+            {
+                "kind": "PersistentVolumeClaim",
+                "metadata": {"name": "scratch-data", "uid": "claim-uid"},
+            },
+        ]
+        cluster.created = documents
+        cluster.pv_uid = "original-pv-uid"
+        cluster.volume_uid = "original-volume-uid"
+        cluster.cleanup_inventory = lambda: None
+        deletes = []
+        reads = []
+        cluster.delete = lambda doc: deletes.append(doc["kind"])
+
+        def command(*args, **kwargs):
+            reads.append(args)
+            if "namespace" in args:
+                return b""
+            if "pv" in args:
+                return json.dumps(pv).encode() if pv else b""
+            if "volumes.longhorn.io" in args:
+                return json.dumps(volume).encode() if volume else b""
+            self.fail("Unexpected cleanup command")
+
+        cluster.command = command
+        return scenario, cluster, documents, deletes, reads
+
+    def test_cleanup_waits_for_recorded_pv_and_longhorn_volume_removal(self):
+        for pv, volume in [
+            ({"metadata": {"uid": "original-pv-uid"}}, None),
+            (None, {"metadata": {"uid": "original-volume-uid"}}),
+        ]:
+            with self.subTest(pv=pv, volume=volume):
+                scenario, cluster, docs, deletes, _ = self.cleanup_storage_fixture(pv, volume)
+                with (
+                    patch.object(restore, "recheck"),
+                    patch.object(scenario.time, "monotonic", side_effect=[0, 0, 181]),
+                    patch.object(scenario.time, "sleep"),
+                    self.assertRaises(restore.RestoreError),
+                ):
+                    cluster.cleanup(docs, RUN)
+                self.assertEqual(deletes, ["Namespace"])
+
+    def test_cleanup_refuses_reused_pv_or_longhorn_volume_identity(self):
+        for pv, volume in [
+            ({"metadata": {"uid": "replacement-pv-uid"}}, None),
+            (None, {"metadata": {"uid": "replacement-volume-uid"}}),
+        ]:
+            with self.subTest(pv=pv, volume=volume):
+                scenario, cluster, docs, deletes, _ = self.cleanup_storage_fixture(pv, volume)
+                with (
+                    patch.object(restore, "recheck"),
+                    patch.object(scenario.time, "monotonic", side_effect=[0, 0]),
+                    self.assertRaises(restore.RestoreError),
+                ):
+                    cluster.cleanup(docs, RUN)
+                self.assertEqual(deletes, ["Namespace"])
+
+    def test_cleanup_succeeds_only_after_both_storage_objects_are_gone(self):
+        scenario, cluster, docs, deletes, reads = self.cleanup_storage_fixture(None, None)
+        with (
+            patch.object(restore, "recheck"),
+            patch.object(scenario.time, "monotonic", side_effect=[0, 0]),
+        ):
+            cluster.cleanup(docs, RUN)
+        self.assertEqual(deletes, ["Namespace"])
+        self.assertTrue(any("pv" in args and "pvc-claim-uid" in args for args in reads))
+        self.assertTrue(
+            any("volumes.longhorn.io" in args and "pvc-claim-uid" in args for args in reads)
+        )
+
+    def test_storage_records_longhorn_uid_and_refuses_identity_replacement(self):
+        from scripts.test.scenarios import openbao_restore as scenario
+
+        cluster = scenario.ScratchKube(Path("/synthetic/operator-config"), RUN, {}, b"x" * 32)
+        claim = {
+            "kind": "PersistentVolumeClaim",
+            "metadata": {
+                "uid": "claim-uid",
+                "name": "scratch-data",
+                "namespace": restore.namespace(RUN),
+                "annotations": {restore.OWNER: RUN},
+            },
+            "spec": {"volumeName": "pvc-claim-uid"},
+        }
+        pv = {
+            "metadata": {"uid": "pv-uid"},
+            "spec": {
+                "claimRef": {
+                    "uid": "claim-uid",
+                    "namespace": restore.namespace(RUN),
+                    "name": "scratch-data",
+                },
+                "csi": {"driver": "driver.longhorn.io", "volumeHandle": "pvc-claim-uid"},
+                "persistentVolumeReclaimPolicy": "Delete",
+            },
+        }
+        volume = {
+            "metadata": {
+                "name": "pvc-claim-uid",
+                "namespace": "longhorn-system",
+                "uid": "volume-uid",
+            }
+        }
+        cluster.created = [claim]
+        cluster.read = lambda expected: claim
+        cluster.json = lambda *args: pv if "pv" in args else volume
+        cluster.assert_storage()
+        self.assertEqual(cluster.volume_uid, "volume-uid")
+        volume["metadata"]["uid"] = "replacement-volume-uid"
+        with self.assertRaises(restore.RestoreError):
+            cluster.assert_storage()
+        self.assertEqual(cluster.volume_uid, "volume-uid")

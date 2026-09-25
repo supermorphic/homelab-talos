@@ -81,6 +81,7 @@ class ScratchKube:
         self.extra = []
         self.created = []
         self.pv_uid = None
+        self.volume_uid = None
 
     def command(self, *args, input_bytes=None):
         return guards.command(
@@ -268,6 +269,18 @@ seal "static" {
         ):
             raise restore.RestoreError()
         self.pv_uid = pv["metadata"]["uid"]
+        volume = self.json(
+            "-n", "longhorn-system", "get", "volumes.longhorn.io", name, "-o", "json"
+        )
+        meta = volume["metadata"]
+        if (
+            meta.get("name") != name
+            or meta.get("namespace") != "longhorn-system"
+            or not meta.get("uid")
+            or (self.volume_uid is not None and meta["uid"] != self.volume_uid)
+        ):
+            raise restore.RestoreError()
+        self.volume_uid = meta["uid"]
 
     def inventory(self, namespace, run_id):
         if namespace != self.namespace or run_id != self.run_id:
@@ -403,6 +416,9 @@ seal "static" {
                 continue
             for item in self.json("-n", self.namespace, "get", kind, "-o", "json")["items"]:
                 meta = item["metadata"]
+                annotations = meta.get("annotations", {})
+                if restore.OWNER in annotations and annotations[restore.OWNER] != self.run_id:
+                    raise restore.RestoreError()
                 if meta.get("uid") in known:
                     if meta.get("annotations", {}).get(restore.OWNER) != self.run_id:
                         raise restore.RestoreError()
@@ -419,6 +435,28 @@ seal "static" {
                     continue
                 raise restore.RestoreError()
 
+    def storage_removed(self):
+        claims = [d for d in self.created if d["kind"] == "PersistentVolumeClaim"]
+        if not claims:
+            return True
+        name = "pvc-" + claims[0]["metadata"]["uid"]
+        removed = True
+        for prefix, kind, uid in (
+            ([], "pv", self.pv_uid),
+            (["-n", "longhorn-system"], "volumes.longhorn.io", self.volume_uid),
+        ):
+            value = self.command(*prefix, "get", kind, name, "--ignore-not-found", "-o", "json")
+            if not value.strip():
+                continue
+            meta = strict_json(value)["metadata"]
+            if not uid or meta.get("uid") != uid:
+                raise restore.RestoreError()
+            annotations = meta.get("annotations", {})
+            if restore.OWNER in annotations and annotations[restore.OWNER] != self.run_id:
+                raise restore.RestoreError()
+            removed = False
+        return removed
+
     def cleanup(self, documents, run_id):
         self.cleanup_inventory()
         restore.recheck(self, documents, run_id)
@@ -428,7 +466,7 @@ seal "static" {
             value = self.command(
                 "get", "namespace", self.namespace, "--ignore-not-found", "-o", "name"
             )
-            if not value.strip():
+            if not value.strip() and self.storage_removed():
                 return
             time.sleep(2)
         raise restore.RestoreError()
