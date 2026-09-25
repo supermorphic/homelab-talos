@@ -105,7 +105,7 @@ token_file="${NTFY_FLUX_ALERT_TOKEN_FILE:-}"
 repo_root="$(git rev-parse --show-toplevel)"
 token_file_mode=''
 if [[ -f "$token_file" && ! -L "$token_file" ]]; then
-  token_file_mode="$(stat -f %Lp "$token_file" 2>/dev/null || stat -c %a "$token_file")"
+  token_file_mode="$(stat -c %a "$token_file" 2>/dev/null || stat -f %Lp "$token_file")"
 fi
 [[ -d "$repo_root/.tmp" && ! -L "$repo_root/.tmp" &&
   "$token_file" == "$repo_root"/.tmp/* && "${token_file#"$repo_root/.tmp/"}" != */* &&

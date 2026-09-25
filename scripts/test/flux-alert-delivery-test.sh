@@ -29,6 +29,15 @@ cat >"$stub_bin/curl" <<'EOF'
 exit 99
 EOF
 chmod +x "$stub_bin/curl"
+cat >"$stub_bin/stat" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  -c) printf '600\n' ;;
+  -f) printf 'File system status instead of file mode\n' ;;
+  *) exit 2 ;;
+esac
+EOF
+chmod +x "$stub_bin/stat"
 
 expect_guard_rejection() {
   local confirmation="${1:-}"
