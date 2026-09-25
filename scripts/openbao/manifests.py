@@ -103,9 +103,9 @@ def validate_documents(documents: list[dict]) -> list[str]:
             errors.append("unattended-upgrade")
     if len(budgets) != 1 or _get(budgets[0], "spec", "minAvailable") != 2:
         errors.append("pdb-quorum")
-    elif _get(budgets[0], "spec", "selector", "matchLabels") != {
+    elif _get(budgets[0], "spec", "selector") != {"matchLabels": {
             "app.kubernetes.io/name": "openbao", "app.kubernetes.io/instance": "openbao",
-            "component": "server"}:
+            "component": "server"}}:
         errors.append("pdb-selector")
     for document in documents:
         if document.get("kind") in ("Role", "ClusterRole", "RoleBinding", "ClusterRoleBinding") and \
