@@ -1,0 +1,6 @@
+{
+  "path": {
+    "sys/storage/raft/snapshot": {"capabilities": ["read"]},
+    "auth/token/revoke-self": {"capabilities": ["update"]}
+  }
+}

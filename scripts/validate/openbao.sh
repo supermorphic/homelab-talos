@@ -21,6 +21,28 @@ from scripts.openbao.manifests import (
     validate_documents, validate_issuance_role, validate_gateway_namespace,
     validate_network_policy, validate_tokenrequest_binding, validate_flux_units,
 )
+from scripts.openbao.configuration import load_document
+
+desired = load_document(pathlib.Path("kubernetes/apps/security/openbao/config/desired.json"))
+assert desired["builtin_exceptions"] == {
+    "auth-method": ["token/"],
+    "secret-mount": ["cubbyhole/", "identity/", "sys/"],
+    "policy": ["default", "root"],
+}
+reader = next(obj for obj in desired["objects"] if obj.kind == "policy" and
+              obj.name == "openbao-config-reader")
+reader_paths = reader.fields["policy"]["path"]
+assert {path for path, rule in reader_paths.items() if "update" in rule["capabilities"]} == {
+    "auth/token/revoke-self"}
+assert all(set(rule["capabilities"]) <= {"read", "list", "update"} for rule in reader_paths.values())
+assert all("*" not in path and not path.startswith("kubernetes/creds/")
+           for path in reader_paths)
+assert all(path == "auth/token/revoke-self" or "update" not in rule["capabilities"]
+           for path, rule in reader_paths.items())
+for obj in desired["objects"]:
+    if obj.kind == "jwt-role":
+        assert obj.fields["token_no_default_policy"] is True
+        assert obj.fields["token_policies"] == [obj.name]
 
 root = pathlib.Path(sys.argv[1])
 def docs(name):
