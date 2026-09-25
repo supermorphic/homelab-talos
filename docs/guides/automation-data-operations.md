@@ -266,47 +266,27 @@ fresh post-recovery backup, and removes its temporary resources.
 authenticates to the isolated restored database, a fresh post-recovery backup exists,
 and the run-owned temporary resources are removed.
 
-## Install the staged NocoDB platform extension
+## Upgrade the NocoDB platform extension
 
-Use this one-time command only after the NocoDB extension source and backup-compatible
-PostgreSQL package are deployed on `origin/main`. Require a current complete logical
-backup before the command. The command validates source parity, the exact live
-PostgreSQL target, backup health, and absence of another upgrade before it creates a
-bounded Job.
+Run from deployed `main` after a complete, healthy pre-upgrade automation-data
+logical backup is available:
 
 ```bash
 AUTOMATION_DATA_UPGRADE_CONFIRM='upgrade:automation-data:nocodb-v2' \
   mise exec -- just kube automation-data-upgrade
 ```
 
-The Job accepts no SQL, password, revision, database, or role argument. It uses the
-existing backup credential by Secret reference and applies only `026-nocodb-v2`. It
-serializes the transaction, validates the accepted pre-extension or v1 schema, installs the
-shared fresh-initialization definitions, and reads back
-`platform_operations.read_platform_revision()`. An unchanged rerun is a validated
-no-op. An unknown revision or partial schema fails without changing control-schema
-state. Each run uses a unique `automation-data-nocodb-upgrade-*` Job name. Cleanup checks
-the run label and Kubernetes object UID before deletion, including after a Job failure,
-and the command does not retrieve a Secret.
+Wait for the command to succeed. It upgrades the installed extension to
+`026-nocodb-v2`, preserves existing NocoDB source identities, and makes custom
+schema mappings available.
 
-The command preserves existing source identities and adds the custom schema mapping
-registry. It also reconciles the reviewed metadata
-function from `nocodb-metadata.sql` and the validation functions from
-`domain-validation.sql`. Validation permits application-owned restrictions while
-rejecting excess runtime authority. Metadata provisioning permits never-ready registry
-rows without databases, but rejects missing databases for formerly ready domains before
-changing the metadata login. It preserves domain rows, credentials, and the backup
-format. Any changed reviewed function body advances `installed_at` to require a subsequent backup;
-an unchanged rerun preserves that timestamp.
+After success, create and verify a fresh complete automation-data logical backup
+before continuing with NocoDB bootstrap or source changes. If the command reports
+an unsupported or partial platform revision, stop and investigate instead of
+attempting a manual schema repair.
 
-After the command passes, create another complete automation-data logical backup. Keep
-NocoDB suspended until that post-upgrade bundle and the remaining NocoDB bootstrap
-prerequisites pass. Backup and restore recognize the exact pre-extension baseline,
-`026-nocodb-v1`, and `026-nocodb-v2`; they reject unknown or malformed optional state.
-The catalog-only upgrade does not change the platform generation or managed-domain
-rows. Instead, the captured backup state includes the installed revision, NocoDB source
-array, and custom schema mappings. A backup that spans the upgrade therefore observes
-different before/after state and retries instead of publishing a mixed-schema bundle.
+See [Spec 026](../specs/026-automation-data-postgresql-platform.md) for the
+upgrade, validation, backup, and restore design.
 
 ## Routine operation
 

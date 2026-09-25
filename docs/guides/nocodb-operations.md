@@ -268,33 +268,34 @@ Keep execution order `v1` and all saved manual, successful, failed, and progress
 execution data disabled. Publish **NocoDB Source Provisioner** only after checking every
 binding. Do not add credential IDs or values to the Git template.
 
+### Configure a domain with custom NocoDB schemas
+
+Use this only when a ready domain needs a NocoDB-facing schema name other than
+the standard `read_model` or `operator`.
+
+1. Configure the permanent mapping:
+
+   ```bash
+   NOCODB_SOURCE_CONFIGURE_CONFIRM='configure:nocodb:<domain>:<reader>:<operator>' \
+     mise exec -- just kube nocodb-source-configure <domain> <reader> <operator>
+   ```
+
+   Use `-` for `<operator>` when no operator schema is required. A successful
+   response records the mapping and returns the generated reader role name and,
+   when applicable, the operator role name. The mapping cannot be changed for
+   this domain.
+
+2. Apply the domain's reviewed migration to grant those roles their intended access.
+3. Run the guarded source prepare and sync commands in steps 4 and 5 below.
+
+If configuration conflicts with an existing mapping or source, stop. If source
+preparation or sync reports a privilege mismatch, stop and fix the domain
+migration. Do not change grants manually to make provisioning pass.
+
+See [Spec 028](../specs/028-nocodb-operator-ui.md) for the role-isolation,
+privilege-validation, backup/restore, and mapping design.
+
 ### 4. Prepare domain access without NocoDB registration
-
-For a domain with custom, migration-owned schema grants, first configure its
-schema mapping through the deployed guarded source workflow. Use a ready domain
-that has no NocoDB sources or existing reader/operator role candidates:
-
-```bash
-NOCODB_SOURCE_CONFIGURE_CONFIRM='configure:nocodb:<domain>:reporting:requests' \
-  mise exec -- just kube nocodb-source-configure <domain> reporting requests
-```
-
-Replace the domain and schema names with the reviewed targets. For a reader-only
-domain, pass `-` as the operator schema and include it in the confirmation. The
-response must report `state: configured` with the exact selected names and the
-domain-specific role names. Configuration freezes the mapping and creates
-restricted `NOLOGIN` candidates; it does not change database connection access or
-create a NocoDB base, source, password, or domain schema grant.
-
-Run the domain's reviewed migration to grant database `CONNECT`, reader `SELECT`
-in its read schema, and only the approved operator DML in its separate operator
-schema. Satisfy the
-outside-schema checks, including inherited `PUBLIC` privileges, through that
-reviewed migration. Custom preparation validates the grants without changing
-them or requiring reader default grants. Then run prepare below and source sync.
-Repeated configure with exactly the same mapping verifies the original result;
-changing a stored mapping is refused. Do not use this operation to remap an
-existing source.
 
 The domain must already be `ready` in automation-data and must have a reviewed
 `read_model` schema or its configured custom reader schema. A valid domain matches
@@ -341,8 +342,7 @@ most ten minutes, discovers exactly one source only after the job reports `compl
 reads that source back, checks its schema and edit flags, performs a bounded data read,
 and validates PostgreSQL privileges before recording `ready`.
 
-Standard controlled-edit adoption has two phases. Custom schema adoption uses
-the configuration and domain migration sequence above before source sync.
+Standard controlled-edit adoption has two phases:
 
 1. A reviewed domain migration creates the `operator` schema and its intended tables.
    The first sync creates `<domain>_operator` as a `NOLOGIN` grant target. It creates the
