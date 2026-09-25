@@ -1,0 +1,67 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: openbao-backup
+  namespace: openbao
+spec:
+  # Longhorn snapshots run at 02:00 UTC and off-cluster backup at 03:00 UTC.
+  schedule: "0 1 * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 2700
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: openbao-backup
+        spec:
+          serviceAccountName: openbao-backup
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: snapshot
+              image: docker.io/library/python:3.13.14-slim@sha256:9662417aace5ae7b8e2609cce472b72a8958e134ba372808abe9cc1a0c0125e6
+              imagePullPolicy: IfNotPresent
+              command: [python, /opt/openbao/snapshot.py]
+              env:
+                - {name: OPENBAO_SEAL_KEY_ID, value: openbao-static-seal-v1}
+                # Change with the attended recovery bundle generation, not the
+                # daily snapshot schedule.
+                - {name: OPENBAO_RECOVERY_GENERATION, value: "1"}
+              resources:
+                requests: {cpu: 50m, memory: 128Mi}
+                limits: {cpu: "1", memory: 512Mi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: [ALL]}
+              volumeMounts:
+                - {name: backup, mountPath: /backup}
+                - {name: script, mountPath: /opt/openbao, readOnly: true}
+                - {name: openbao-token, mountPath: /var/run/openbao-backup, readOnly: true}
+                - {name: python-tmp, mountPath: /tmp}
+          volumes:
+            - name: backup
+              persistentVolumeClaim: {claimName: openbao-backup}
+            - name: script
+              configMap: {name: openbao-snapshot-script, defaultMode: 0444}
+            - name: openbao-token
+              projected:
+                sources:
+                  - serviceAccountToken:
+                      path: token
+                      audience: openbao-kubernetes-broker
+                      expirationSeconds: 600
+            - name: python-tmp
+              emptyDir: {}

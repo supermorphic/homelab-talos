@@ -2060,3 +2060,7 @@ secret-scan:
       while IFS= read -r file; do printf '\nFILE: %s\n' "$file"; cat "$file"; done <<< "$untracked" \
         | gitleaks stdin --redact --no-banner
     fi
+
+# Operator-only creation of new OpenBao seal ciphertext and off-cluster recovery.
+openbao-secrets:
+    @scripts/secrets/openbao.sh

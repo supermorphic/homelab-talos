@@ -1,0 +1,6 @@
+{
+  "path": {
+    "kubernetes/creds/openbao-acceptance": {"capabilities": ["update"]},
+    "auth/token/revoke-self": {"capabilities": ["update"]}
+  }
+}

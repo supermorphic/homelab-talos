@@ -85,6 +85,8 @@ conditional_paths:
     - kubernetes/apps/automation/n8n/ks.yaml
     - kubernetes/apps/automation/n8n-postgresql/ks.yaml
     - kubernetes/apps/monitoring/**
+    - kubernetes/apps/security/openbao/monitoring/longhorn-servicemonitor.yaml
+    - kubernetes/apps/security/openbao/monitoring/prometheusrule.yaml
     - scripts/diagnose/flux-alerts.sh
     - scripts/verify/logging.sh
     - scripts/verify/alertmanager-ntfy.sh
@@ -118,6 +120,7 @@ conditional_paths:
     - scripts/validate/grafana-dashboard.py
     - scripts/secrets/ntfy-*
     - tests/prometheus/monitoring-alerts_test.yaml
+    - tests/prometheus/openbao_test.yaml
   automation:
     - .sops.yaml
     - docs/README.md
@@ -187,6 +190,8 @@ core_paths:
   - scripts/diagnose/**
   - scripts/hooks/**
   - scripts/node/**
+  - scripts/openbao/**
+  - scripts/operations/openbao-upgrade.sh
   - scripts/repository/**
   - scripts/secrets/**
   - scripts/talos/**
@@ -228,6 +233,7 @@ core_paths:
   - scripts/test/helpers/qbit_manage_policy_api.py
   - scripts/test/scenarios/cilium-connectivity.sh
   - scripts/test/scenarios/media-hardlink-test.sh
+  - scripts/test/scenarios/*openbao*.py
   - scripts/test/scenarios/media-hardlink.sh
   - scripts/test/scenarios/node_abrupt_loss.py
   - scripts/test/scenarios/plex-network-policy.sh
@@ -246,7 +252,9 @@ core_paths:
   - tests/fixtures/cluster-commands/**
   - tests/fixtures/links/**
   - tests/fixtures/node-lifecycle/**
+  - tests/fixtures/openbao/**
   - tests/probes/**
   - tests/prometheus/media-alerts_test.yaml
+  - tests/prometheus/openbao_test.yaml
   - tests/prometheus/networking-alerts_test.yaml
   - tests/prometheus/security-alerts_test.yaml

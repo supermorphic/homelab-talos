@@ -1,0 +1,19 @@
+{
+  "data": {
+    "oidc_discovery_url": "",
+    "oidc_discovery_ca_pem": "",
+    "oidc_client_id": "",
+    "oidc_response_mode": "",
+    "oidc_response_types": [],
+    "default_role": "",
+    "jwt_validation_pubkeys": [],
+    "jwt_supported_algs": [],
+    "jwks_url": "",
+    "jwks_ca_pem": "",
+    "bound_issuer": "https://kubernetes.default.svc.cluster.local",
+    "provider_config": {"provider": "kubernetes"},
+    "override_allowed_server_names": [],
+    "namespace_in_state": true,
+    "status": "valid"
+  }
+}

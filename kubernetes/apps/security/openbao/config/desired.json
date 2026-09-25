@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "objects": [
+    {"kind": "auth-method", "name": "homelab-jwt/", "path": "sys/auth/homelab-jwt/", "fields": {"type": "jwt", "description": "Homelab machine JWT authentication", "config": {"default_lease_ttl": 600, "max_lease_ttl": 600, "force_no_cache": false, "token_type": "default-service"}, "local": false, "seal_wrap": false}},
+    {"kind": "auth-method", "name": "homelab-userpass/", "path": "sys/auth/homelab-userpass/", "fields": {"type": "userpass", "description": "Homelab operator login", "config": {"default_lease_ttl": 3600, "max_lease_ttl": 3600, "force_no_cache": false, "token_type": "default-service"}, "local": false, "seal_wrap": false}},
+    {"kind": "secret-mount", "name": "kubernetes/", "path": "sys/mounts/kubernetes/", "fields": {"type": "kubernetes", "description": "Bound Kubernetes TokenRequest issuance", "config": {"default_lease_ttl": 600, "max_lease_ttl": 600, "force_no_cache": false}, "local": false, "seal_wrap": false}},
+    {"kind": "jwt-config", "name": "homelab-jwt", "path": "auth/homelab-jwt/config", "fields": {"bound_issuer": "https://kubernetes.default.svc.cluster.local", "default_role": "", "provider_config": {"provider": "kubernetes"}}},
+    {"kind": "jwt-role", "name": "openbao-backup", "path": "auth/homelab-jwt/role/openbao-backup", "fields": {"role_type": "jwt", "bound_audiences": ["openbao-kubernetes-broker"], "bound_subject": "system:serviceaccount:openbao:openbao-backup", "user_claim": "sub", "token_policies": ["openbao-backup"], "token_no_default_policy": true, "token_ttl": 600, "token_max_ttl": 600, "token_type": "service"}},
+    {"kind": "jwt-role", "name": "openbao-acceptance", "path": "auth/homelab-jwt/role/openbao-acceptance", "fields": {"role_type": "jwt", "bound_audiences": ["openbao-kubernetes-broker"], "bound_subject": "system:serviceaccount:openbao-acceptance:openbao-acceptance", "user_claim": "sub", "token_policies": ["openbao-acceptance"], "token_no_default_policy": true, "token_ttl": 600, "token_max_ttl": 600, "token_type": "service"}},
+    {"kind": "jwt-role", "name": "openbao-config-reader", "path": "auth/homelab-jwt/role/openbao-config-reader", "fields": {"role_type": "jwt", "bound_audiences": ["openbao-config-verification"], "bound_subject": "system:serviceaccount:openbao:openbao", "user_claim": "sub", "token_policies": ["openbao-config-reader"], "token_no_default_policy": true, "token_ttl": 300, "token_max_ttl": 300, "token_type": "service"}},
+    {"kind": "userpass-user", "name": "openbao-operator", "path": "auth/homelab-userpass/users/openbao-operator", "fields": {"policies": ["openbao-operator"], "token_no_default_policy": true, "token_ttl": 3600, "token_max_ttl": 3600}},
+    {"kind": "policy", "name": "openbao-operator", "path": "sys/policies/acl/openbao-operator", "policy_file": "policies/operator.json"},
+    {"kind": "policy", "name": "openbao-backup", "path": "sys/policies/acl/openbao-backup", "policy_file": "policies/backup.json"},
+    {"kind": "policy", "name": "openbao-acceptance", "path": "sys/policies/acl/openbao-acceptance", "policy_file": "policies/acceptance.json"},
+    {"kind": "policy", "name": "openbao-config-reader", "path": "sys/policies/acl/openbao-config-reader", "policy_file": "policies/config-reader.json"},
+    {"kind": "kubernetes-config", "name": "kubernetes", "path": "kubernetes/config", "fields": {"kubernetes_host": "https://kubernetes.default.svc:443", "disable_local_ca_jwt": false}},
+    {"kind": "issuance-role", "name": "openbao-acceptance", "path": "kubernetes/roles/openbao-acceptance", "fields": {"allowed_kubernetes_namespaces": ["openbao-acceptance"], "allowed_kubernetes_namespace_selector": "", "service_account_name": "openbao-issued-reader", "kubernetes_role_name": "", "generated_role_rules": "", "token_default_ttl": 600, "token_max_ttl": 600, "token_default_audiences": ["https://kubernetes.default.svc.cluster.local"]}}
+  ],
+  "inventories": {
+    "auth-method": ["homelab-jwt/", "homelab-userpass/"],
+    "secret-mount": ["kubernetes/"],
+    "jwt-role": ["openbao-backup", "openbao-acceptance", "openbao-config-reader"],
+    "userpass-user": ["openbao-operator"],
+    "policy": ["openbao-operator", "openbao-backup", "openbao-acceptance", "openbao-config-reader"],
+    "issuance-role": ["openbao-acceptance"]
+  },
+  "builtin_exceptions": {
+    "auth-method": ["token/"],
+    "secret-mount": ["cubbyhole/", "identity/", "sys/"],
+    "policy": ["default", "root"]
+  }
+}

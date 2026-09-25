@@ -1136,3 +1136,41 @@ ntfy-consumer-sync consumer: require-bash
 
     just repo secrets
     exec scripts/secrets/ntfy-consumer-sync.sh '{{consumer}}'
+
+# Render the exact pinned official OpenBao chart and local values without cluster access.
+openbao-render:
+    @helm template openbao oci://ghcr.io/openbao/charts/openbao@sha256:98c8fc901e2579ac6da9a805537fcd7a19525ef8e563ae8737dc16fc8f641e3e \
+      --namespace openbao \
+      --values kubernetes/apps/security/openbao/app/values.yaml
+
+# Check staged OpenBao source and independent rendered-manifest safety invariants.
+openbao-validate: require-bash
+    @scripts/validate/openbao.sh
+
+# Compare clean deployed source with live OpenBao configuration through the fixed
+# homelab-diagnostic collector. No configuration writes or acceptance tokens.
+openbao-verify: require-bash
+    @scripts/verify/openbao.sh {{quote(kubeconfig)}}
+
+# Apply reviewed OpenBao configuration with exact source/target/plan confirmation.
+openbao-config-apply: require-bash
+    @uv run --locked python -m scripts.openbao.operator config-apply
+
+# Attended isolated snapshot restore; explicit operator identity, exact per-run confirmation.
+openbao-restore-drill: require-bash
+    @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}"
+    @TEST_KUBECONFIG="$OPENBAO_OPERATOR_KUBECONFIG" scripts/test/run-catalog-suite.sh test.openbao-restore-drill -- uv run --locked python -m scripts.test.scenarios.openbao_restore
+
+# Attended real API issuance, denial, and actual expiration acceptance.
+openbao-issuance-test: require-bash
+    @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}"
+    @TEST_KUBECONFIG="$OPENBAO_OPERATOR_KUBECONFIG" scripts/test/run-catalog-suite.sh test.openbao-issuance -- uv run --locked python -m scripts.test.scenarios.openbao_issuance
+
+# Attended sequential follower and leader eviction under the catalog disruption Lease.
+openbao-ha-test: require-bash
+    @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}"
+    @TEST_KUBECONFIG="$OPENBAO_OPERATOR_KUBECONFIG" scripts/test/run-catalog-suite.sh test.openbao-ha -- uv run --locked python -m scripts.test.scenarios.openbao_ha
+
+# Attended standby-first replacement after a reviewed Git image update and fresh snapshot.
+openbao-upgrade: require-bash
+    @scripts/operations/openbao-upgrade.sh

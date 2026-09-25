@@ -1,0 +1,145 @@
+rule_files:
+  - openbao.yaml
+evaluation_interval: 1m
+tests:
+  - name: missing metrics
+    interval: 1m
+    input_series:
+      - series: 'unrelated_metric{scope="openbao"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: OpenBaoMetricsMissing
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: OpenBaoMetricsMissing
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: openbao}
+            exp_annotations: {summary: OpenBao metrics are missing}
+  - name: no leader and sealed quorum
+    interval: 1m
+    input_series:
+      - series: 'vault_core_active{namespace="openbao",pod="openbao-0"}'
+        values: '0x20'
+      - series: 'vault_core_active{namespace="openbao",pod="openbao-1"}'
+        values: '0x20'
+      - series: 'vault_core_unsealed{namespace="openbao",pod="openbao-0"}'
+        values: '1x20'
+      - series: 'vault_core_unsealed{namespace="openbao",pod="openbao-1"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: OpenBaoNoLeader
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations: {summary: OpenBao has no unique active member}
+      - eval_time: 5m
+        alertname: OpenBaoQuorumLost
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations: {summary: Fewer than two OpenBao members are unsealed}
+      - eval_time: 5m
+        alertname: OpenBaoSealed
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: openbao, pod: openbao-1}
+            exp_annotations: {summary: OpenBao member is sealed}
+      - eval_time: 15m
+        alertname: OpenBaoVoterMissing
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations: {summary: OpenBao has fewer than three unsealed members}
+  - name: one voter missing while quorum survives
+    interval: 1m
+    input_series:
+      - series: 'vault_core_unsealed{namespace="openbao",pod="openbao-0"}'
+        values: '1x25'
+      - series: 'vault_core_unsealed{namespace="openbao",pod="openbao-1"}'
+        values: '1x25'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: OpenBaoVoterMissing
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations: {summary: OpenBao has fewer than three unsealed members}
+      - eval_time: 15m
+        alertname: OpenBaoQuorumLost
+        exp_alerts: []
+  - name: missing backup observations remain visible
+    interval: 1m
+    input_series:
+      - series: 'unrelated_metric{scope="backup"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: OpenBaoLocalSnapshotStale
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: openbao, cronjob: openbao-backup}
+            exp_annotations: {summary: OpenBao local Raft snapshot is older than 36 hours}
+      - eval_time: 10m
+        alertname: OpenBaoOffsiteTransferStale
+        exp_alerts:
+          - exp_labels: {severity: critical, pvc_namespace: openbao, pvc: openbao-backup}
+            exp_annotations: {summary: OpenBao off-cluster Longhorn backup is older than 48 hours}
+  - name: local snapshot stale independently of offsite transfer
+    interval: 1m
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{namespace="openbao",cronjob="openbao-backup"}'
+        values: '1x3000'
+      - series: 'longhorn_volume_last_backup_at{pvc_namespace="openbao",pvc="openbao-backup"}'
+        values: '200000x3000'
+    alert_rule_test:
+      - eval_time: 38h
+        alertname: OpenBaoLocalSnapshotStale
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations: {summary: OpenBao local Raft snapshot is older than 36 hours}
+      - eval_time: 38h
+        alertname: OpenBaoOffsiteTransferStale
+        exp_alerts: []
+  - name: offsite transfer stale independently of local snapshot
+    interval: 1m
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{namespace="openbao",cronjob="openbao-backup"}'
+        values: '200000x3200'
+      - series: 'longhorn_volume_last_backup_at{pvc_namespace="openbao",pvc="openbao-backup"}'
+        values: '1x3200'
+    alert_rule_test:
+      - eval_time: 50h
+        alertname: OpenBaoOffsiteTransferStale
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations: {summary: OpenBao off-cluster Longhorn backup is older than 48 hours}
+      - eval_time: 50h
+        alertname: OpenBaoLocalSnapshotStale
+        exp_alerts: []
+  - name: backup storage and certificate expiry
+    interval: 1m
+    input_series:
+      - series: 'longhorn_volume_actual_size_bytes{pvc_namespace="openbao",pvc="openbao-backup"}'
+        values: '90x70'
+      - series: 'longhorn_volume_capacity_bytes{pvc_namespace="openbao",pvc="openbao-backup"}'
+        values: '100x70'
+      - series: 'certmanager_certificate_expiration_timestamp_seconds{namespace="openbao",name="openbao"}'
+        values: '1000000x70'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: OpenBaoBackupStorageLow
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations: {summary: OpenBao backup claim exceeds 85 percent of capacity}
+      - eval_time: 1h
+        alertname: OpenBaoCertificateExpiring
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: openbao, name: openbao}
+            exp_annotations: {summary: OpenBao server certificate expires within 14 days}
+  - name: audit write failure
+    interval: 1m
+    input_series:
+      - series: 'vault_audit_log_request_failure{namespace="openbao"}'
+        values: '0x3 1x8'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: OpenBaoAuditWriteFailure
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations: {summary: OpenBao audit device write failed}
