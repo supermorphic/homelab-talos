@@ -9,7 +9,7 @@
 # - credential: password marks the human-known account whose hash is written only by
 #   `just repo ntfy-subscriber-password`; reconcile fails instead of inventing one.
 # - consumer selects how the credential reaches its workload:
-#     none              human clients (iPhone/web/CLI password login)
+#     none              clients supplied with credentials outside Kubernetes
 #     alertmanager-auth auth.yml key inside ntfy-secret, mounted by the adapter
 #     homepage-secret   copied into Secret/homepage-ntfy (homepage namespace)
 #     seerr-api         pushed to Seerr via `just kube ntfy-consumer-sync seerr`
@@ -46,6 +46,12 @@ identities:
     access:
       - { topic: critical, permission: ro }
     consumer: homepage-secret
+  flux-alert-test:
+    status: active
+    credential: token
+    access:
+      - { topic: homelab, permission: ro }
+    consumer: none
   n8n:
     status: active
     credential: token

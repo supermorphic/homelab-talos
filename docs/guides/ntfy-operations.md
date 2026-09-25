@@ -48,6 +48,7 @@ Each client has a separate identity with only the access it needs:
 | `alertmanager` | The alert bridge publisher | Write `critical` and `homelab` |
 | `seerr` | The Seerr publisher | Write `media` |
 | `homepage` | The Homepage widget | Read `critical` |
+| `flux-alert-test` | The guarded Flux alert delivery test | Read `homelab` |
 | `n8n` | The shared workflow failure handler | Write `homelab` |
 
 Network reachability does not grant topic access. ntfy requires authentication and
@@ -122,7 +123,7 @@ the action.
 | `alertmanager-ntfy-verify` | Uses observer access to check the adapter and Alertmanager's loaded receiver/route | Agent-autonomous when an approved task needs scoped verification; sends no notification |
 | `ntfy-consumer-sync seerr` | Decrypts repository credentials, sends a Seerr test notification, then changes Seerr's stored ntfy settings | Operator-run: requires the age identity and changes application-owned state |
 | `ntfy-consumer-sync n8n` | Synchronizes only the named n8n publisher credential; workflow adoption remains explicit | Operator-run: requires the age identity and a private n8n API key |
-| `flux-alert-delivery-test` | Creates and removes a temporary failing Flux object; checks alert lifecycle and reports delivery evidence limits | Operator-run unless an agent is explicitly authorized for that invocation and its required elevated credential |
+| `flux-alert-delivery-test` | Creates and removes a temporary failing Flux object; checks its exact firing and resolved messages in the ntfy cache | Operator-run unless an agent is explicitly authorized for that invocation and its required elevated credential |
 | `bootstrap ntfy` | Resumes and verifies an intentionally suspended Flux deployment | Operator-run live mutation using the administrator path |
 
 Repository validation such as `mise exec -- just ci` is agent-owned and does not need
@@ -422,18 +423,27 @@ ntfy-consumer-sync seerr
 flux-alert-delivery-test
   → creates temporary failing Flux state
   → waits for the production alert interval
-  → checks alert routing and aggregate webhook activity
+  → checks alert routing and exact firing message in the ntfy homelab cache
   → removes its exact temporary resource
-  → reports delivery as inconclusive without test-specific publication evidence
+  → checks the exact resolved message in the ntfy homelab cache
 ```
 
-The full Alertmanager delivery test is intentionally state-changing and takes about 25
-minutes:
+Before the first run, the operator provisions the dedicated `flux-alert-test` identity
+with the operator-held age key. Its only grant is read access to `homelab`. The resulting
+SOPS-encrypted Secret and rollout stamp need a reviewed feature-branch change, validation,
+and merge. Wait for Flux to reconcile that change before treating the identity as live.
 
-```bash
-FLUX_ALERT_E2E_CONFIRM='test:flux-alert:firing-resolved' \
-  mise exec -- just kube flux-alert-delivery-test
-```
+The human-owned delivery test currently runs from the operator's primary checkout with
+administrator cluster access. The operator makes the identity's private read-only token
+available to that checkout before starting the suite. The test accepts only a protected
+local token file in the checkout that actually runs it; it does not decrypt the Secret or
+read a token from a live workload. Keep the token out of logs, reports, and commits, and
+remove the local copy after the run.
+
+Rerun the registered Flux alert delivery suite with its exact confirmation and token-file
+input after the identity is live. A recorded run or an operator campaign needs the same
+private input passed to the child suite; campaign confirmation alone does not provide it.
+The test is intentionally state-changing and takes about 25 minutes.
 
 The test creates one uniquely named Flux Kustomization that references a deliberately
 nonexistent source. It waits for the real 15-minute `FluxReconciliationFailure` rule,
@@ -443,13 +453,14 @@ deletion or absence check must remain visible.
 
 Webhook counters combine all ntfy notifications. Increases with no recorded failures
 are useful supporting evidence, but unrelated alerts can cause those increases. The
-test therefore returns a non-success, inconclusive result rather than claiming that
-its firing and resolved messages were published. Do not use that result to approve
-fallback removal or expand credential access to obtain a pass.
+test reads cached JSON messages since its start time and requires exact titles that
+contain its unique resource name. It fails if either title is absent, the ntfy response
+is truncated, or the token cannot read the topic. It does not put token values or
+message bodies in the recorded evidence.
 
-Record test-specific publication evidence separately. Human acceptance can confirm
-the iPhone receives the warning and matching `Resolved:` messages on `homelab` with
-the generated resource name; the automated test does not establish phone receipt.
+Human acceptance separately confirms that the iPhone receives the warning and matching
+`Resolved:` messages on `homelab` with the generated resource name. Cached messages
+prove ntfy accepted the publications; they do not establish phone receipt.
 
 For Seerr, also perform a real application acceptance event after synchronization. Use
 one of the three enabled event classes and confirm the resulting `media` notification on

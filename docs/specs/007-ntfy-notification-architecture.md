@@ -34,6 +34,7 @@ The active roles are deliberately separate:
 | `alertmanager` | Write `critical` and `homelab` |
 | `seerr` | Write `media` |
 | `homepage` | Read `critical` |
+| `flux-alert-test` | Read `homelab` for the guarded Flux alert delivery test |
 | `n8n` | Write `homelab` for shared workflow failure notifications |
 
 Topics describe notification semantics rather than applications: `critical` is for
