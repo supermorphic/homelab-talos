@@ -111,7 +111,7 @@ spec:
               kind: PrometheusRule
               metadata:
                 name: portainer
-                namespace: portainer
+                namespace: monitoring
               spec:
                 (groups[].rules[].alert):
                   - PortainerDown
