@@ -48,6 +48,7 @@ chart_version="$(yq -r '.spec.chart.spec.version' "$hr")"
 [[ "$(yq -r '.spec.url' "$repo")" == 'https://charts.longhorn.io' ]]
 [[ "$(yq -r '.defaultSettings.defaultDataPath' "$values")" == '/var/mnt/longhorn' ]]
 [[ "$(yq -r '.defaultSettings.replicaSoftAntiAffinity' "$values")" == 'false' ]]
+[[ "$(yq -r '.defaultSettings.allowRecurringJobWhileVolumeDetached' "$values")" == 'true' ]]
 [[ "$(yq -r '.persistence.defaultClassReplicaCount' "$values")" == '2' ]]
 [[ "$(yq -r '.kind' "$backuptarget")" == 'BackupTarget' ]]
 [[ "$(yq -r '.metadata.name' "$backuptarget")" == 'default' ]]

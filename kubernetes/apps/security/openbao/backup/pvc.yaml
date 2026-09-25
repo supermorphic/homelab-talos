@@ -3,6 +3,9 @@ kind: PersistentVolumeClaim
 metadata:
   name: openbao-backup
   namespace: openbao
+  labels:
+    recurring-job.longhorn.io/source: enabled
+    recurring-job-group.longhorn.io/default: enabled
   annotations:
     kustomize.toolkit.fluxcd.io/prune: disabled
 spec:

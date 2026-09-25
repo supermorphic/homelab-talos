@@ -18,6 +18,11 @@ SOPS-encrypted and created only by the guarded `just repo storage-secrets`
 workflow — never hand-edited or copied from the legacy repository.
 `config/recurring-jobs.yaml` runs a daily snapshot (retain 7) and a daily backup
 (retain 7) against the built-in `default` group.
+The chart enables `allowRecurringJobWhileVolumeDetached` so those jobs can attach
+and process labeled volumes after their last application Pod exits. This is a
+Longhorn-wide setting: it applies to every detached volume selected by a recurring
+job, including the OpenBao snapshot claim. Review its storage load when adding
+other recurring-job groups or labeled claims.
 
 Talos prerequisites: the `siderolabs/iscsi-tools` and
 `siderolabs/util-linux-tools` extensions, the `/var/mnt/longhorn` user volume, and

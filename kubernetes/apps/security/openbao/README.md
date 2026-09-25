@@ -50,12 +50,17 @@ The application backup CronJob runs at 01:00 UTC, before Longhorn's 02:00 snapsh
 audience and a snapshot-read-only OpenBao role. Its ServiceAccount has no Kubernetes
 API permissions. The retained Longhorn claim holds seven validated Raft archive and
 sanitized metadata pairs, with a `latest` pointer updated after each complete pair.
+The claim selects Longhorn's `default` recurring-job group. Longhorn is configured
+to run recurring jobs while selected volumes are detached, so the 02:00 and 03:00
+jobs can process this claim after the snapshot Pod exits. That Longhorn setting
+also affects other selected detached volumes.
 The Python 3.13.14 slim runtime image is pinned to registry index digest
 `sha256:9662417aace5ae7b8e2609cce472b72a8958e134ba372808abe9cc1a0c0125e6`.
 The archive check follows [OpenBao 2.7.0's snapshot format](https://github.com/openbao/openbao/blob/v2.7.0/internal/physical/raft/snapshot/archive.go).
 No seal or recovery material is mounted in the backup job or stored on its claim.
 
-The separate ServiceMonitor scrapes the HTTPS monitoring listener. Its alerts use
+One ServiceMonitor scrapes OpenBao's HTTPS monitoring listener; a second selects
+Longhorn's manager metrics Service for the backup and capacity alerts. The alerts use
 [OpenBao's documented metrics](https://openbao.org/docs/internals/telemetry/metrics/)
 and [Longhorn's last successful backup metric](https://longhorn.io/docs/1.12.0/monitoring/metrics/).
 The local CronJob success and off-cluster Longhorn transfer have separate freshness
