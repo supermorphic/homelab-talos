@@ -428,43 +428,22 @@ flux-alert-delivery-test
   → checks the exact resolved message in the ntfy homelab cache
 ```
 
-Before the first run, the operator must provision the new `flux-alert-test` identity
-with the operator-held age key from a reviewed feature branch, publish the resulting
-SOPS-encrypted `ntfy-secret` and rollout annotation through Git, and wait for Flux to
-reconcile ntfy. The registry grants that identity read-only access to `homelab`.
-Provision it with `NTFY_IDENTITY_CONFIRM='ensure:monitoring:ntfy:flux-alert-test:sops'
-mise exec -- just repo ntfy-identity ensure flux-alert-test`. Review the encrypted
-Secret and rollout stamp diff, commit them, pass `mise exec -- just test ci-publish`,
-and merge their PR before rerunning the test against deployed `main`.
+Before the first run, the operator provisions the dedicated `flux-alert-test` identity
+with the operator-held age key. Its only grant is read access to `homelab`. The resulting
+SOPS-encrypted Secret and rollout stamp need a reviewed feature-branch change, validation,
+and merge. Wait for Flux to reconcile that change before treating the identity as live.
 
-In the runner's linked worktree after that merge, the operator can write only this
-identity's token from the merged encrypted Secret into the worktree's ignored `.tmp/`
-directory. Run the following with the operator-held age identity available; it sends
-the token directly to a private file and prints no token or cached message:
+The human-owned delivery test currently runs from the operator's primary checkout with
+administrator cluster access. The operator makes the identity's private read-only token
+available to that checkout before starting the suite. The test accepts only a protected
+local token file in the checkout that actually runs it; it does not decrypt the Secret or
+read a token from a live workload. Keep the token out of logs, reports, and commits, and
+remove the local copy after the run.
 
-```bash
-set -o pipefail
-umask 077
-mkdir -p .tmp
-mise exec -- sops --decrypt kubernetes/apps/monitoring/ntfy/app/secret.sops.yaml |
-  mise exec -- yq -r '.stringData.NTFY_AUTH_TOKENS | split(",")[] | select(startswith("flux-alert-test:")) | split(":")[1]' \
-  > .tmp/flux-alert-test.token
-chmod 600 .tmp/flux-alert-test.token
-```
-
-The token file must be regular, non-symlink, and mode `0600` directly under this
-worktree's `.tmp/`. Set `NTFY_FLUX_ALERT_TOKEN_FILE` to its absolute path. Remove the
-file when no longer needed. The scenario never decrypts the Secret or retrieves a
-token from a live workload.
-
-The full Alertmanager delivery test is intentionally state-changing and takes about 25
-minutes. Run it only after the identity is live and the token file is ready:
-
-```bash
-FLUX_ALERT_E2E_CONFIRM='test:flux-alert:firing-resolved' \
-NTFY_FLUX_ALERT_TOKEN_FILE="$PWD/.tmp/flux-alert-test.token" \
-  mise exec -- just kube flux-alert-delivery-test
-```
+Rerun the registered Flux alert delivery suite with its exact confirmation and token-file
+input after the identity is live. A recorded run or an operator campaign needs the same
+private input passed to the child suite; campaign confirmation alone does not provide it.
+The test is intentionally state-changing and takes about 25 minutes.
 
 The test creates one uniquely named Flux Kustomization that references a deliberately
 nonexistent source. It waits for the real 15-minute `FluxReconciliationFailure` rule,

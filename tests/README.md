@@ -254,8 +254,8 @@ and each suite's catalog access tier to select an approved workflow.
   (about 25 minutes; creates one labeled Flux Kustomization with a deliberately nonexistent
   source, waits through the production 15-minute alert timer, proves the firing and resolved
   notifications reached ntfy by exact run-specific cached titles, and deletes only that
-  run-owned resource; requires `NTFY_FLUX_ALERT_TOKEN_FILE` pointing to a private 0600
-  file with the dedicated read-only `flux-alert-test` token under the worktree's `.tmp/`)
+  run-owned resource; requires the private read-only `flux-alert-test` token to be
+  available to the suite, including when run through `test record` or an operator campaign)
 - `CLUSTER_CHAOS_CONFIRM=chaos:<target> mise exec -- just test resilience <target>`
 - `CLUSTER_CHAOS_CONFIRM=chaos:qbittorrent-vpn-disconnect mise exec -- just test resilience qbittorrent-vpn-disconnect`
   (controlled VPN stop→recovery: continuous leak-sentinel evidence that the kill switch
