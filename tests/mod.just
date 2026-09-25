@@ -60,8 +60,8 @@ report-latest:
 report-open run:
     @scripts/test/open-allure-report.sh {{quote(run)}}
 
-# Guardedly publish one canonical run and its generated report to persistent
-# in-cluster storage. Operator-only; requires the exact confirmation.
+# Guardedly retain one finalized canonical run and its generated report. Linked
+# worktrees use scoped publication; other callers supply the exact confirmation.
 publish run:
     @scripts/test/publish-report.sh {{quote(run)}}
 
@@ -86,6 +86,15 @@ campaign campaign:
 # Resume only a campaign stopped by publication failure; completed suites are not rerun.
 campaign-resume campaign_run:
     @scripts/test/run-campaign.sh resume {{quote(campaign_run)}}
+
+# Run a canonical selection and retain its child evidence. Linked worktrees are
+# restricted to scoped verifiers and non-mutating shared suites.
+record selection:
+    @scripts/test/run-campaign.sh record {{quote(selection)}}
+
+# Retry publication and continue an unchanged record session.
+record-resume session_id:
+    @scripts/test/run-campaign.sh record-resume {{quote(session_id)}}
 
 # Render the latest canonical run as a GitHub-compatible Markdown summary.
 summary-latest:

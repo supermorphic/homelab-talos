@@ -17,14 +17,15 @@ if [ ! -f "$generation/catalog.json" ]; then
 fi
 if [ ! -f "$generation/state.json" ]; then
   printf '%s\n' \
-    '{"schema_version":1,"generation":"bootstrap","seen_runs":{},"runs_total":{},"cases_total":{},"last_success":{}}' \
+    '{"schema_version":1,"generation":"bootstrap","seen_runs":{},"runs_total":{},"cases_total":{},"last_success":{},"last_failure":null}' \
     >"$generation/state.json"
 fi
 if [ ! -f "$generation/history.jsonl" ]; then
   : >"$generation/history.jsonl"
 fi
 if [ ! -f "$generation/api/homepage.json" ]; then
-  printf '%s\n' '{"items":[]}' >"$generation/api/homepage.json"
+  printf '%s\n' '{"latest":null,"last_run":null,"last_failure":null}' \
+    >"$generation/api/homepage.json"
 fi
 if [ ! -f "$generation/api/metrics.prom" ]; then
   printf '%s\n' \

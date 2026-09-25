@@ -10,6 +10,53 @@ identity, result semantics, canonical evidence, and clear execution authority.
 This specification preserves the design rationale. The current catalog, executable
 source, test-report reference, campaign guide, and repository policy remain authoritative.
 
+## Recorded evidence evolution — issue 371
+
+Intentional initiative completion, bootstrap, setup, initialization, provisioning, and
+recovery assurance use `test record <selection>`. Publication depends on
+this explicit recording action, not on whether the underlying suite touches the cluster.
+Ordinary CI, scoped campaigns, standalone verification, and diagnostics remain local.
+`record` selects a catalog suite or the scoped-verification campaign, freezes clean
+source and membership, runs existing children, and retains their canonical reports.
+`record-resume <session-id>` retries publication after a supported failure and continues
+only eligible remaining members without rerunning completed suites. The recording action
+supplies publication intent. Suite execution authority remains separate, including
+existing controls for mutation and attended operations. `publish <run-id>` retains one
+already-finalized canonical run from a parameterized or previously completed procedure
+without rerunning or continuing anything. The publisher uses the scoped worktree context
+when authorized; otherwise it requires exact run-scoped manual confirmation. Individual
+offline validators use `validation.ci` when a canonical recorded result is required.
+
+Worktree credential installation supplies a third identity, `homelab-report-publisher`.
+The observer stays current. Publication explicitly selects the publisher context for
+report namespace reads and pod execution, read access to the Flux source, and get/update
+on the named publication Lease. The Lease is created through Git. The new identity has
+no Secret reads, general workload mutation, cluster-wide pod execution, or permission
+to create arbitrary Leases. Caddy continues to serve inert files without API credentials.
+
+Clean feature-branch runs are retained as candidates. Authoritative classification still
+requires the captured SHA to equal current main and the deployed Flux revision. Publisher
+and installer source guards remain mandatory. Publication rechecks its Lease and source
+revisions immediately before installation. Failures preserve local evidence and a journal
+for publication retry without rerunning completed suites; unsafe child results never
+authorize continuation. Exact report links appear in the terminal summary.
+
+Homepage uses three Custom API blocks: STATUS, LAST RUN, and LAST FAIL. The first two
+describe the latest authoritative result by completion time; the third records the most
+recent authoritative failed or broken completion. A retained state timestamp preserves
+last failure across report pruning. The two time blocks use short relative dates.
+Candidate reports cannot change these values. The Kubernetes RUNNING badge continues to
+represent service availability separately.
+
+The campaign audit retains automation-data provisioning as standalone recorded evidence:
+it rotates credentials and requires a matching new n8n dump and automation-data bundle
+before restore. Automatically enrolling it in integration, weekly, or full would break
+that recovery evidence boundary. The catalog and validator document this deliberate exclusion.
+Host-local disposable NocoDB integration remains a standalone acceptance choice;
+attended electrical node-loss testing remains outside automatic campaigns. Setup and
+bootstrap commands keep their own lifecycle: record the relevant catalog acceptance
+afterward instead of making individual verification commands publish.
+
 ## Problem and design choice
 
 Before this standard, result formats varied by runner, CI did not retain a complete
@@ -87,10 +134,10 @@ coverage is not represented correctly.
 `execution_owner` records who owns normal interactive execution and the base runner's
 guard contract. It is not a complete statement of credential capability or task-scoped
 agent authorization. Current repository policy authorizes an agent to mint worktree-
-local observer, diagnostic, and Talos reader credentials and run the registered
+local observer, diagnostic, report-publisher, and Talos reader credentials and run the registered
 `scoped-verification` campaign for an approved task even though its member entries retain
-`execution_owner: human`. That bounded authorization does not grant the agent mutation,
-disruptive execution, persistent publication, or administrative credentials.
+`execution_owner: human`. Recording separately authorizes guarded evidence
+publication. Neither authorization grants disruptive execution or administrative credentials.
 
 ## Framework and dispatch ownership
 
@@ -184,8 +231,8 @@ operational obligation even when the original resilience assertion already faile
 
 Allure generates static reports from canonical JUnit plus only the evidence paths named
 by `evidence.json`. Native diagnostic JUnit is not ingested a second time. Local report
-generation is available for any valid run, but persistent publication is an explicitly
-guarded operator workstation push.
+generation is available for any valid run. Persistent publication is a guarded workstation
+push, invoked manually by an operator or automatically by `test record`.
 
 Allure was selected as a presentation layer because it can consume generic JUnit and
 generate static output. Canonical JUnit and the four root metadata documents remain the
@@ -232,7 +279,7 @@ current comparison point. Publication state keeps monotonic lifetime counters ev
 individual report artifacts age out.
 
 Presentation deliberately separates exact-run evidence from operational summaries.
-Homepage exposes only a small set of latest authoritative categories, while Grafana uses
+Homepage exposes latest authoritative status and completion/failure times, while Grafana uses
 low-cardinality rollups keyed by stable dimensions such as tier, target, and scenario.
 Run IDs, Git SHAs, node identities, and report URLs stay out of Prometheus labels; stable
 links lead from the summaries to the exact canonical report when detail is needed.
@@ -249,8 +296,8 @@ the child run as the unit of evidence.
 - `weekly` adds live verification, integration, probes, and resilience.
 - `full` adds certified Kubernetes conformance and represents every implemented assurance
   suite. Diagnostics and intentional harness failures remain excluded.
-- `scoped-verification` is local-only and runs the observer/diagnostic-compatible live
-  checks without publication authority.
+- `scoped-campaign` runs the `scoped-verification` members locally. Explicit
+  `record scoped-verification` runs the same checks with separate publication authority.
 
 Before execution, a campaign freezes its ordered member list, source revision, deployed
 Flux revision, and plan digest. It requires a clean current `origin/main` checkout and a

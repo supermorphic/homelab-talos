@@ -156,12 +156,18 @@ observer_token="$("$kubectl_bin" --kubeconfig "$main_kubeconfig" --namespace kub
   create token homelab-observer --duration=720h)"
 diagnostic_token="$("$kubectl_bin" --kubeconfig "$main_kubeconfig" --namespace kube-system \
   create token homelab-diagnostic --duration=720h)"
+publisher_token="$("$kubectl_bin" --kubeconfig "$main_kubeconfig" --namespace kube-system \
+  create token homelab-report-publisher --duration=720h)"
 [[ -n "$observer_token" && "$observer_token" != *$'\n'* ]] || {
   echo 'Refusing observer credential: token output is empty or malformed.' >&2
   exit 1
 }
 [[ -n "$diagnostic_token" && "$diagnostic_token" != *$'\n'* ]] || {
   echo 'Refusing diagnostic credential: token output is empty or malformed.' >&2
+  exit 1
+}
+[[ -n "$publisher_token" && "$publisher_token" != *$'\n'* ]] || {
+  echo 'Refusing report publisher credential: token output is empty or malformed.' >&2
   exit 1
 }
 
@@ -182,6 +188,10 @@ contexts:
     context:
       cluster: homelab
       user: homelab-diagnostic
+  - name: homelab-report-publisher
+    context:
+      cluster: homelab
+      user: homelab-report-publisher
 current-context: homelab-observer
 users:
   - name: homelab-observer
@@ -190,6 +200,9 @@ users:
   - name: homelab-diagnostic
     user:
       token: $diagnostic_token
+  - name: homelab-report-publisher
+    user:
+      token: $publisher_token
 YAML
 chmod 600 "$staged_kubeconfig"
 
@@ -210,24 +223,28 @@ staged_observer_token="$("$kubectl_bin" --kubeconfig "$staged_kubeconfig" config
   --output 'jsonpath={.users[?(@.name == "homelab-observer")].user.token}')"
 staged_diagnostic_token="$("$kubectl_bin" --kubeconfig "$staged_kubeconfig" config view --raw \
   --output 'jsonpath={.users[?(@.name == "homelab-diagnostic")].user.token}')"
+staged_publisher_token="$("$kubectl_bin" --kubeconfig "$staged_kubeconfig" config view --raw \
+  --output 'jsonpath={.users[?(@.name == "homelab-report-publisher")].user.token}')"
 
 [[ "$staged_api_server" == 'https://192.168.90.20:6443' ]] || {
   echo 'Refusing staged kubeconfig: API VIP validation failed.' >&2
   exit 1
 }
-[[ "$staged_contexts" == $'homelab-diagnostic\nhomelab-observer' ]] || {
-  echo 'Refusing staged kubeconfig: expected exactly observer and diagnostic contexts.' >&2
+[[ "$staged_contexts" == $'homelab-diagnostic\nhomelab-observer\nhomelab-report-publisher' ]] || {
+  echo 'Refusing staged kubeconfig: expected exactly observer, diagnostic, and report publisher contexts.' >&2
   exit 1
 }
-[[ "$staged_users" == $'homelab-diagnostic\nhomelab-observer' ]] || {
-  echo 'Refusing staged kubeconfig: expected exactly observer and diagnostic users.' >&2
+[[ "$staged_users" == $'homelab-diagnostic\nhomelab-observer\nhomelab-report-publisher' ]] || {
+  echo 'Refusing staged kubeconfig: expected exactly observer, diagnostic, and report publisher users.' >&2
   exit 1
 }
 [[ "$staged_current_context" == 'homelab-observer' ]] || {
   echo 'Refusing staged kubeconfig: observer must be the current context.' >&2
   exit 1
 }
-[[ "$staged_observer_token" == "$observer_token" && "$staged_diagnostic_token" == "$diagnostic_token" ]] || {
+[[ "$staged_observer_token" == "$observer_token" &&
+  "$staged_diagnostic_token" == "$diagnostic_token" &&
+  "$staged_publisher_token" == "$publisher_token" ]] || {
   echo 'Refusing staged kubeconfig: minted scoped tokens were not installed correctly.' >&2
   exit 1
 }

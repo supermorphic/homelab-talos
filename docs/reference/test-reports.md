@@ -1,7 +1,7 @@
 # Persistent test reports
 
 `tests.lab.supermorphic.com` is the always-running, LAN-only archive for
-operator-published test evidence. It is not an Allure daemon and does not need an
+retained test evidence. It is not an Allure daemon and does not need an
 Allure process after publication: Allure 3 generates static HTML, Caddy serves those
 files continuously from a retained Longhorn volume, and the internal Gateway owns
 TLS.
@@ -13,10 +13,10 @@ TLS.
 - `report_publish.py` (operator workstation): validates structured metadata, merges the
   catalog, applies retention, updates lifetime counters, creates stable latest links,
   and builds a checksummed allowlisted bundle plus a deterministic portable tar stream.
-- `publish-report.sh` (operator workstation): enforces the exact confirmation and
+- `publish-report.sh` (workstation): enforces explicit publication intent and the
   deployed-source guard, scans for secrets, holds the publication Lease, and streams
   the prebuilt archive through a guarded `kubectl exec`.
-- `run-campaign.sh` (operator workstation): resolves an explicit catalog campaign,
+- `run-campaign.sh` (workstation): resolves explicit catalog acceptance or a campaign,
   captures each canonical run ID, and invokes the guarded publisher automatically.
   Child reports remain authoritative instead of being replaced by an aggregate run.
 - Caddy (cluster): serves static files only. It has no upload API, credentials,
@@ -62,10 +62,11 @@ its configuration. Caddy itself listens only on the unprivileged 8080 and 9090 p
 
 ## Publication and authority
 
-Publishing is intentionally a push operation from the operator workstation. There is
+Publishing is intentionally a push operation from the workstation. There is
 no cluster upload service to attack or authenticate. The recipe requires:
 
-- the exact run-scoped confirmation;
+- an authorized linked-worktree publication context or the manual publisher's exact
+  run-scoped confirmation;
 - a canonical, finalized run with complete JUnit/evidence indexing;
 - clean captured Git metadata and a locally available commit;
 - the publisher and server sources already merged to `origin/main`;
@@ -79,10 +80,21 @@ run whose Git SHA equals both current `origin/main` and the Flux artifact revisi
 authoritative; candidates never drive Homepage data, stable latest links, or
 last-run metrics.
 
+For initiative completion and infrequent assurance, use
+`mise exec -- just test record <suite-id|scoped-verification>`. In a linked worktree,
+this uses the existing verifier identities to execute approved scoped checks, then selects
+`homelab-report-publisher` only for publication. Agents need no operator confirmation for
+that publication. The observer remains the kubeconfig's default context. Publisher access
+is restricted to the report namespace, named Flux source reads, and get/update on the
+Git-created publication Lease. It grants no authority to execute mutating suites.
+`mise exec -- just test publish <run-id>` deliberately retains an existing finalized
+canonical run without rerunning its suite. In a linked worktree it uses the scoped
+publisher; outside that context it requires exact run-scoped manual confirmation.
+
 For routine multi-suite publication, use the catalog-backed campaigns documented in
-[`docs/guides/test-campaign-operations.md`](../guides/test-campaign-operations.md). Campaign publication requires exact
+[`docs/guides/test-campaign-operations.md`](../guides/test-campaign-operations.md). Operator-published campaign mode requires exact
 current-main authority and therefore never uploads candidate children. Standalone
-`just test publish` keeps the historical and candidate workflow above.
+`just test publish` retains historical and candidate evidence under the same guards.
 
 Republishing the same run ID and digest is a no-op. Reusing a run ID with different
 content is rejected. Normal retention keeps reports that are both among the newest 200
@@ -105,10 +117,15 @@ No command is required to view already-published reports:
 
 Caddy exposes its native metrics on the internal-only metrics port. The generated
 low-cardinality test metrics are served at `/api/metrics.prom`; the ServiceMonitor
-scrapes both. Homepage consumes `/api/homepage.json` as an up-to-six-row Custom API
-dynamic list; a category appears after its first authoritative publication. Result
-markers are rendered on the left and Homepage formats completion time as a live
-relative age on the right. Each row points to its stable rollup URL.
+scrapes both. Homepage consumes `/api/homepage.json` as three Custom API blocks:
+`STATUS`, `LAST RUN`, and `LAST FAIL`. The latest result and both completion times
+use authoritative evidence only; Homepage formats timestamps as short relative ages.
+Publication state retains the most recent failed or broken completion even after its report is pruned.
+Unavailable history leaves a blank value. The Kubernetes `RUNNING` badge measures service
+availability separately from test evidence health. When upgrading an existing archive,
+the first fresh publication creates the new summary contract from retained authoritative
+history. Until that publication, the new widget fields remain blank; republishing an
+identical run remains a no-op.
 
 The `Cluster Verification` Grafana dashboard is provisioned from a labeled ConfigMap
 and reads only the low-cardinality Prometheus series. It shows latest status and age,

@@ -103,7 +103,20 @@ done
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/name"' "$test_reports_route")" == \
   'Test Reports' ]]
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/description"' \
-  "$test_reports_route")" == 'Persistent operator-published test results' ]]
+  "$test_reports_route")" == 'Retained test evidence' ]]
+[[ "$(yq -r '[
+  .metadata.annotations."gethomepage.dev/widget.mappings.0.field",
+  .metadata.annotations."gethomepage.dev/widget.mappings.0.label",
+  .metadata.annotations."gethomepage.dev/widget.mappings.1.field",
+  .metadata.annotations."gethomepage.dev/widget.mappings.1.label",
+  .metadata.annotations."gethomepage.dev/widget.mappings.1.format",
+  .metadata.annotations."gethomepage.dev/widget.mappings.1.style",
+  .metadata.annotations."gethomepage.dev/widget.mappings.2.field",
+  .metadata.annotations."gethomepage.dev/widget.mappings.2.label",
+  .metadata.annotations."gethomepage.dev/widget.mappings.2.format",
+  .metadata.annotations."gethomepage.dev/widget.mappings.2.style"
+] | join(",")' "$test_reports_route")" == \
+  'latest,STATUS,last_run,LAST RUN,relativeDate,short,last_failure,LAST FAIL,relativeDate,short' ]]
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/group"' "$longhorn_route")" == \
   'Platform' ]]
 [[ "$(yq -r '.metadata.annotations."gethomepage.dev/group"' "$portainer_route")" == \

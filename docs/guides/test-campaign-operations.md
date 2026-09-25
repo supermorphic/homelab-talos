@@ -33,11 +33,16 @@ records orchestration state only.
 
 ## Choose an execution mode
 
+The suite or campaign selection says what is tested: validation, verification,
+integration, resilience, or another registered class. The command says what happens to
+its result: keep it local, run and record it, or publish an already-finalized run.
+
 | Mode | Cluster access | Publication | Use it for |
 | --- | --- | --- | --- |
 | `mise exec -- just ci` | None | None | Required pull-request and source validation |
 | Standalone suite | Depends on the suite | Manual, when wanted | Focused investigation or one assurance target |
 | Scoped campaign | Worktree-local observer/diagnostic credentials | None | Agent-autonomous, read-oriented live verification |
+| Recorded evidence | Existing suite credentials plus scoped publisher for worktrees | Automatic, including candidate results | Initiative completion and infrequent bootstrap, setup, provisioning, or recovery assurance |
 | Published campaign | Operator cluster access | Automatic for each child | Ordered retained assurance across several suites |
 
 `mise exec -- just ...` is the repository execution interface. It does not determine who
@@ -80,13 +85,93 @@ Then inspect one campaign's exact ordered membership with `campaign-plan`.
 | `mise exec -- just test campaign <name>` | Holds the shared test Lease, runs children, publishes each report, and journals progress | Operator-run live and publication workflow |
 | `mise exec -- just test campaign-resume <id>` | Continues only a campaign stopped by supported publication failure | Operator-run controlled resume |
 | `mise exec -- just kube conformance` | Runs standalone quick Sonobuoy conformance | Operator-run state-changing suite; no automatic publication |
-| `mise exec -- just test publish <run-id>` | Publishes one finalized canonical run | Operator-run report-state mutation |
+| `mise exec -- just test record <suite-id\|scoped-verification>` | Runs and automatically publishes canonical children | Approved scoped agent execution or separately authorized operator suite execution |
+| `mise exec -- just test record-resume <session-id>` | Retries publication and continues eligible remaining members without rerunning completed suites | Same authority as the original record session |
+| `mise exec -- just test publish <run-id>` | Retains one finalized canonical run without rerunning it | Scoped linked-worktree publication or manual publication with exact run-scoped confirmation |
 
 Published campaigns are operator-run because they acquire a live cluster-wide test Lease,
 publish retained evidence through the cluster, and can contain state-changing or disruptive
 children. Scoped verification is different: repository policy permits an agent to mint
 worktree-scoped credentials and run that approved local-only campaign without operator
 intervention.
+
+## Record initiative and infrequent assurance
+
+Use `record` when the result should remain available after this workstation
+session, including initiative completion and assurance after bootstrap, setup,
+initialization, provisioning, restore, or recovery. Invoke it deliberately from clean
+committed source:
+
+```bash
+mise exec -- just talos kubeconfig
+mise exec -- just test record verification.foundation
+# Or record the complete registered scoped verification campaign:
+mise exec -- just test record scoped-verification
+```
+
+`record` prints its selection and source revision, checks prerequisites, and
+supplies publication intent: an agent does not need an operator confirmation or separate
+manual publication step. The worktree installer supplies `homelab-report-publisher` as
+the third scoped context. Verification keeps using observer/diagnostic; only publication
+uses the publisher identity. After this feature's sources and RBAC deploy through Git,
+reinstall worktree credentials before first use. Do not use broader credentials if the
+publication preflight fails.
+
+Feature-branch results publish as candidate evidence. Clean deployed-main results follow
+the existing authoritative rules. Candidate reports are available in the archive but do
+not update authoritative latest links, Homepage health, or last-run metrics. The
+publisher and server sources must already be deployed even for candidate publication.
+
+Every child keeps its canonical run and report; the local journal records execution and
+publication progress, not another aggregate result. The summary prints exact report URLs.
+If publication fails, local results remain intact. Use the printed
+`mise exec -- just test record-resume <session-id>` command to retry without repeating
+completed suites. A changed source or catalog, invalid result, or unsafe cleanup/recovery
+prevents continuation; fixing the underlying system requires a fresh record session.
+Valid canonical failed or broken evidence is still retained when cleanup or recovery
+requires the coordinator to stop. Such an unsafe run never authorizes later suites. If
+its publication also fails, use publication-only retry after addressing the failure;
+do not resume test execution from that journal.
+For an already-finalized run from a parameterized attended procedure, or when only
+publication needs retrying after source advances, use
+`mise exec -- just test publish <run-id>`. This checks and publishes that exact
+local canonical result under the existing candidate/authoritative rules, without executing
+the suite again or resuming any campaign.
+
+Recording does not grant authority to run a suite. Linked-worktree agent
+execution accepts registered scoped verifiers and shared, non-mutating local suites.
+For offline validation, select the canonical `validation.ci` aggregate; individual
+validation commands do not all produce standalone canonical reports.
+Mutating or attended suites retain
+their existing operator authority, credentials, and exact confirmations. An authorized
+operator can select a standalone suite such as `test.automation-data-provisioning` or
+`test.automation-data-restore-drill` with `record`. Supply all existing private inputs
+through the established procedure. Never put those values in the journal or report.
+
+Routine development, rebases, `just ci`, scoped campaigns, and standalone verify commands
+remain unpublished. Diagnostics and intentional failing harness tests are not assurance
+campaign members. Do not rerun bootstrap or initialization merely to produce a report;
+record its relevant post-operation acceptance suite.
+
+### Infrequent assurance coverage
+
+| Work | Retained acceptance path |
+| --- | --- |
+| Cluster bootstrap or foundation setup | `verification.foundation`, `verification.flux`, or scoped verification |
+| Storage provisioning | `test.storage-provisioning` in integration |
+| Automation-data provisioning and rotation | Standalone `record test.automation-data-provisioning`; pair fresh backups before restore |
+| Application/database restore | Existing n8n, automation-data, and NocoDB restore drills in integration |
+| Persistence and recovery after disruption | Existing resilience campaign members |
+| Disposable host-local NocoDB integration | Standalone recorded evidence; excluded from live campaigns |
+| Attended electrical node loss | Standalone guarded procedure with a physical target; excluded from automatic campaigns |
+
+Automation-data provisioning intentionally remains outside integration, weekly, and full:
+it rotates the acceptance runtime credential. After that one-time acceptance, the operator
+must create both a new n8n dump and a new automation-data bundle before the restore drill.
+Use the private inputs and paired-backup procedure in
+[automation-data operations](automation-data-operations.md#5-validate-provisioning-and-rotation)
+and the [testing contract](../../tests/README.md). Recorded publication retains the
+provisioning evidence without changing that execution boundary.
 
 ## Run scoped verification
 
@@ -245,16 +330,18 @@ drain before loss. After all four loss signals are observed, it contains the off
 records ten minutes of autonomous recovery behavior, and uses the common lifecycle exit
 path while the returned Node remains cordoned. Run it only when every node is established.
 
-Publish a finalized standalone result separately only when retained evidence is wanted:
+Publish a finalized standalone result separately only when retained evidence is wanted.
+Outside a linked worktree, supply exact run-scoped confirmation:
 
 ```bash
 TEST_REPORT_PUBLISH_CONFIRM='publish:test-report:<run-id>' \
   mise exec -- just test publish <run-id>
 ```
 
-Standalone publication can retain a candidate or historical run according to the report
-publisher's rules. Campaign publication is stricter: it requires the frozen revision to
-remain authoritative current `main`.
+In a linked worktree, the same `test publish <run-id>` command uses the scoped publisher
+without manual confirmation. Standalone publication can retain a candidate or historical
+run according to the report publisher's rules. Campaign publication is stricter: it
+requires the frozen revision to remain authoritative current `main`.
 
 ## Understand results and campaign stops
 

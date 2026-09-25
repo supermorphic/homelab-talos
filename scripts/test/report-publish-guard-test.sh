@@ -11,14 +11,36 @@ run_id="20260727T120000Z-${sha:0:12}-operator-deadbeef"
 run_dir="$fixture/results/$run_id"
 mkdir -p "$run_dir/logs" "$run_dir/diagnostics"
 
+source scripts/test/lib/report-publication.sh
 confirmation_output="$fixture/confirmation.log"
 if TEST_RESULTS_ROOT="$fixture/results" \
+  TEST_REPORT_PUBLISH_CONFIRM="publish:test-report:$run_id" \
   "$repo_root/scripts/test/publish-report.sh" "$run_id" \
   >"$confirmation_output" 2>&1; then
-  echo 'Publisher accepted a missing run-scoped confirmation.' >&2
+  echo 'Publisher accepted an incomplete canonical run.' >&2
   exit 1
 fi
-rg -q 'Refusing to publish test evidence' "$confirmation_output"
+rg -q 'Run root does not match the canonical six-entry structure' "$confirmation_output"
+
+# The public publisher must derive scoped intent from its worktree, not an
+# environment variable that a caller can set. Outside a linked worktree the
+# exact run confirmation remains required.
+if TEST_REPORT_PUBLICATION_CONTEXT=recorded-acceptance \
+  require_report_publication_confirmation false "$run_id" \
+  >"$fixture/manual-missing.log" 2>&1; then
+  echo 'Operator publication accepted a forged scoped context.' >&2
+  exit 1
+fi
+rg -q 'Refusing to publish test evidence' "$fixture/manual-missing.log"
+if TEST_REPORT_PUBLISH_CONFIRM=wrong \
+  require_report_publication_confirmation false "$run_id" \
+  >"$fixture/manual-wrong.log" 2>&1; then
+  echo 'Operator publication accepted a wrong confirmation.' >&2
+  exit 1
+fi
+TEST_REPORT_PUBLISH_CONFIRM="publish:test-report:$run_id" \
+  require_report_publication_confirmation false "$run_id"
+require_report_publication_confirmation true "$run_id"
 
 write_result_case_junit \
   "$run_dir/junit.xml" validation.fixture fixture passed 1
@@ -178,4 +200,54 @@ fi
   cmp "$fixture/disruption-lease-before.json" "$disruption_lease"
 )
 
-echo 'Test-report confirmation and secret-scan guard passed.'
+# Publication selects only its dedicated context without changing the observer
+# default. This synthetic kubeconfig never contacts a cluster.
+cat >"$fixture/kubeconfig" <<'YAML'
+apiVersion: v1
+kind: Config
+clusters:
+  - name: homelab
+    cluster: {server: 'https://192.0.2.1:6443'}
+contexts:
+  - name: homelab-observer
+    context: {cluster: homelab, user: homelab-observer}
+  - name: homelab-report-publisher
+    context: {cluster: homelab, user: homelab-report-publisher}
+users:
+  - name: homelab-observer
+    user: {token: synthetic-observer}
+  - name: homelab-report-publisher
+    user: {token: synthetic-publisher}
+current-context: homelab-observer
+YAML
+source scripts/test/lib/report-publication.sh
+select_report_publication_context "$fixture/kubeconfig" true
+[[ "$report_publication_context" == homelab-report-publisher ]]
+[[ "$(publication_kubectl --kubeconfig "$fixture/kubeconfig" config view --minify \
+  --output 'jsonpath={.contexts[0].context.user}')" == homelab-report-publisher ]]
+[[ "$(kubectl --kubeconfig "$fixture/kubeconfig" config current-context)" == homelab-observer ]]
+yq -i '(.contexts[] | select(.name == "homelab-report-publisher") | .context.user) = "homelab-observer"' "$fixture/kubeconfig"
+if select_report_publication_context "$fixture/kubeconfig" true >"$fixture/mapping.log" 2>&1; then
+  echo 'Publication accepted a context mapped to a different identity.' >&2
+  exit 1
+fi
+rg -q 'must use the homelab-report-publisher identity' "$fixture/mapping.log"
+yq -i 'del(.contexts[] | select(.name == "homelab-report-publisher"))' "$fixture/kubeconfig"
+if select_report_publication_context "$fixture/kubeconfig" true >"$fixture/access.log" 2>&1; then
+  echo 'Publication fell back to observer when the publisher context was absent.' >&2
+  exit 1
+fi
+rg -q 'homelab-report-publisher' "$fixture/access.log"
+yq -i '
+  .contexts = [{"name": "fixture-operator", "context": {"cluster": "homelab", "user": "fixture-operator"}}] |
+  .users = [{"name": "fixture-operator", "user": {"token": "synthetic-operator"}}] |
+  ."current-context" = "fixture-operator"
+' "$fixture/kubeconfig"
+select_report_publication_context "$fixture/kubeconfig" false
+[[ "$report_publication_context" == fixture-operator ]]
+if select_report_publication_context "$fixture/kubeconfig" true >"$fixture/linked.log" 2>&1; then
+  echo 'A linked worktree accepted an operator context as a publication fallback.' >&2
+  exit 1
+fi
+
+echo 'Test-report intent, secret scan, and publication identity guards passed.'
