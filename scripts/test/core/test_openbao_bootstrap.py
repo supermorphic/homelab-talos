@@ -215,6 +215,22 @@ class GuardTest(unittest.TestCase):
             self.assertEqual(main(["operator", "initialize"]), 1)
         self.assertNotIn("synthetic-admin", output.getvalue())
 
+    def test_private_prompt_refuses_echo_fallback(self):
+        import getpass
+        import warnings
+
+        from scripts.openbao.operator import private_prompt
+
+        def fallback(*args, **kwargs):
+            warnings.warn("synthetic echo fallback", getpass.GetPassWarning, stacklevel=2)
+            return "synthetic-password"
+
+        with (
+            patch("scripts.openbao.operator.getpass.getpass", side_effect=fallback),
+            self.assertRaises(SafeError),
+        ):
+            private_prompt("synthetic prompt")
+
     def test_live_pod_comparison_accepts_generated_claim_but_rejects_changed_seal(self):
         expected = {
             "containers": [{"name": "openbao", "image": "pinned"}],
