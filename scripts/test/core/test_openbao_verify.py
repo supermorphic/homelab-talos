@@ -16,91 +16,14 @@ from datetime import datetime, timezone
 ROOT = Path(__file__).resolve().parents[3]
 DESIRED = ROOT / 'kubernetes/apps/security/openbao/config/desired.json'
 
-# Handwritten OpenBao 2.7 API shapes. These are intentionally independent of
-# desired.json so a source edit cannot silently rewrite the live oracle.
-AUTH_MOUNTS = {
-    'homelab-jwt/': {'type': 'jwt', 'description': 'Homelab machine JWT authentication',
-                     'config': {'default_lease_ttl': '10m', 'max_lease_ttl': '600s',
-                                'force_no_cache': False, 'token_type': 'default-service'},
-                     'local': False, 'seal_wrap': False},
-    'homelab-userpass/': {'type': 'userpass', 'description': 'Homelab operator login',
-                          'config': {'default_lease_ttl': '1h', 'max_lease_ttl': '3600s',
-                                     'force_no_cache': False, 'token_type': 'default-service'},
-                          'local': False, 'seal_wrap': False},
-    'token/': {'type': 'token'},
-}
-SECRET_MOUNTS = {
-    'kubernetes/': {'type': 'kubernetes', 'description': 'Bound Kubernetes TokenRequest issuance',
-                    'config': {'default_lease_ttl': '600s', 'max_lease_ttl': '10m',
-                               'force_no_cache': False}, 'local': False, 'seal_wrap': False},
-    'cubbyhole/': {'type': 'cubbyhole'}, 'identity/': {'type': 'identity'},
-    'sys/': {'type': 'system'},
-}
-
-
-def jwt_role(subject, audience, policy):
-    return {'role_type': 'jwt', 'bound_audiences': [audience], 'bound_subject': subject,
-            'user_claim': 'sub', 'token_policies': [policy],
-            'token_no_default_policy': True,
-            'token_ttl': '5m' if policy == 'openbao-config-reader' else '10m',
-            'token_max_ttl': 300 if policy == 'openbao-config-reader' else 600,
-            'token_type': 'service'}
-
-
-READER_CAPABILITIES = {
-    'sys/auth': 'read', 'sys/mounts': 'read',
-    'sys/storage/raft/configuration': 'read', 'sys/policies/acl': 'list',
-    'auth/homelab-jwt/config': 'read', 'auth/homelab-jwt/role': 'list',
-    'auth/homelab-userpass/users': 'list', 'kubernetes/config': 'read',
-    'kubernetes/roles': 'list', 'auth/token/revoke-self': 'update',
-}
-for policy_name in ('openbao-operator', 'openbao-backup', 'openbao-acceptance',
-                    'openbao-config-reader'):
-    READER_CAPABILITIES[f'sys/policies/acl/{policy_name}'] = 'read'
-for role_name in ('openbao-backup', 'openbao-acceptance', 'openbao-config-reader'):
-    READER_CAPABILITIES[f'auth/homelab-jwt/role/{role_name}'] = 'read'
-READER_CAPABILITIES['auth/homelab-userpass/users/openbao-operator'] = 'read'
-READER_CAPABILITIES['kubernetes/roles/openbao-acceptance'] = 'read'
-
-
-def policy(paths):
-    return {'policy': json.dumps({'path': {path: {'capabilities': capabilities}
-                                           for path, capabilities in paths.items()}})}
-
-
-LIVE_READS = {
-    'auth/homelab-jwt/config': {'bound_issuer': 'https://kubernetes.default.svc.cluster.local',
-                                 'default_role': '', 'provider_config': {'provider': 'kubernetes'}},
-    'auth/homelab-jwt/role/openbao-backup': jwt_role(
-        'system:serviceaccount:openbao:openbao-backup', 'openbao-kubernetes-broker',
-        'openbao-backup'),
-    'auth/homelab-jwt/role/openbao-acceptance': jwt_role(
-        'system:serviceaccount:openbao-acceptance:openbao-acceptance',
-        'openbao-kubernetes-broker', 'openbao-acceptance'),
-    'auth/homelab-jwt/role/openbao-config-reader': jwt_role(
-        'system:serviceaccount:openbao:openbao', 'openbao-config-verification',
-        'openbao-config-reader'),
-    'auth/homelab-userpass/users/openbao-operator': {
-        'policies': ['openbao-operator'], 'token_no_default_policy': True,
-        'token_ttl': '1h', 'token_max_ttl': 3600},
-    'sys/policies/acl/openbao-operator': policy({
-        '*': ['sudo', 'list', 'delete', 'update', 'read', 'create']}),
-    'sys/policies/acl/openbao-backup': policy({
-        'sys/storage/raft/snapshot': ['read'], 'auth/token/revoke-self': ['update']}),
-    'sys/policies/acl/openbao-acceptance': policy({
-        'kubernetes/creds/openbao-acceptance': ['update'],
-        'auth/token/revoke-self': ['update']}),
-    'sys/policies/acl/openbao-config-reader': policy({
-        path: [capability] for path, capability in READER_CAPABILITIES.items()}),
-    'kubernetes/config': {'kubernetes_host': 'https://kubernetes.default.svc:443',
-                          'disable_local_ca_jwt': False},
-    'kubernetes/roles/openbao-acceptance': {
-        'allowed_kubernetes_namespaces': ['openbao-acceptance'],
-        'allowed_kubernetes_namespace_selector': '',
-        'service_account_name': 'openbao-issued-reader', 'kubernetes_role_name': '',
-        'generated_role_rules': '', 'token_default_ttl': '10m', 'token_max_ttl': 600,
-        'token_default_audiences': ['https://kubernetes.default.svc.cluster.local']},
-}
+# Full literal pinned responses are shared by all configuration consumers.
+READ_RESPONSES = json.loads(
+    (Path(__file__).parent / 'fixtures/openbao-2.7-read-responses.json').read_text()
+)
+AUTH_MOUNTS = READ_RESPONSES['GET sys/auth']
+SECRET_MOUNTS = READ_RESPONSES['GET sys/mounts']
+LIVE_READS = {path.removeprefix('GET '): value for path, value in READ_RESPONSES.items()
+              if path not in {'GET sys/auth', 'GET sys/mounts'}}
 
 LIVE_INVENTORIES = {
     'auth-method': list(AUTH_MOUNTS), 'secret-mount': list(SECRET_MOUNTS),

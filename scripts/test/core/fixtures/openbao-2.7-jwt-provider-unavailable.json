@@ -1,0 +1,5 @@
+{
+  "errors": [
+    "1 error occurred:\n\t* error initializing \"kubernetes\" provider_config: error reading service account token file: open /var/run/secrets/kubernetes.io/serviceaccount/token: no such file or directory\n\n"
+  ]
+}

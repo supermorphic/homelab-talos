@@ -110,13 +110,13 @@ def _changes(document, states):
 
 def _write(spec, actual, client, token, password=None):
     payload = copy.deepcopy(spec.fields)
-    path = spec.path
+    path = spec.path.rstrip("/")
     if spec.kind == "policy":
         payload["policy"] = canonical_json(payload["policy"]).decode()
     if spec.kind == "userpass-user" and password is not None:
         payload["password"] = password
     if spec.kind in {"auth-method", "secret-mount"} and actual is not None:
-        path += "tune"
+        path += "/tune"
         payload = {**payload["config"], "description": payload["description"]}
     client.post(path, payload, token=token)
 
