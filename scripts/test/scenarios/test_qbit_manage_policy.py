@@ -428,11 +428,14 @@ class DownloadResilienceTests(unittest.TestCase):
     """The download step must trust fixture registration, not the add-response body."""
 
     class _FakeQbit:
-        def __init__(self, identity, *, add_response, register_after=0, complete=True):
+        def __init__(
+            self, identity, *, add_response, register_after=0, complete=True, fields=None
+        ):
             self.identity = identity
             self.add_response = add_response
             self.register_after = register_after
             self.complete = complete
+            self.fields = fields or {}
             self.info_calls = 0
             self.add_args = None
 
@@ -453,6 +456,7 @@ class DownloadResilienceTests(unittest.TestCase):
                     "amount_left": 0 if self.complete else 1,
                     "size": 4321,
                     "completion_on": 1700000000,
+                    **self.fields,
                 }
             ]
 
@@ -494,6 +498,95 @@ class DownloadResilienceTests(unittest.TestCase):
             scenario = self._scenario(directory, fake)
             with self.assertRaises(qbm.ExternalDependencyFailure):
                 scenario.download()
+
+    def test_completion_timeout_records_only_owned_numeric_fixture_progress(self):
+        with tempfile.TemporaryDirectory() as directory:
+            identity = qbm.RunIdentity(RUN_ID)
+            fake = self._FakeQbit(
+                identity,
+                add_response="Ok.",
+                complete=False,
+                fields={
+                    "progress": 0.25,
+                    "amount_left": 123,
+                    "dlspeed": 4096,
+                    "num_seeds": 2,
+                    "num_leechs": 4,
+                    "name": "SENSITIVE-NAME",
+                    "tracker": "SENSITIVE-TRACKER",
+                    "state": "SENSITIVE-STATE",
+                    "upspeed": "SENSITIVE-SPEED",
+                },
+            )
+            scenario = self._scenario(directory, fake)
+            with self.assertRaisesRegex(
+                qbm.ExternalDependencyFailure,
+                "Sintel did not complete through VPN egress within 20 minutes",
+            ):
+                scenario.download()
+            evidence_text = (Path(directory) / RUN_ID / "evidence.json").read_text(
+                encoding="utf-8"
+            )
+            download = json.loads(evidence_text)["phases"]["download"]
+            self.assertEqual(
+                download,
+                {
+                    "status": "broken",
+                    "timeoutSnapshot": {
+                        "progress": 0.25,
+                        "amountLeftBytes": 123,
+                        "downloadSpeedBytesPerSecond": 4096,
+                        "connectedSeeds": 2,
+                        "connectedPeers": 4,
+                    },
+                },
+            )
+            self.assertNotIn("SENSITIVE-", evidence_text)
+
+    def test_completion_timeout_does_not_record_unowned_fixture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            identity = qbm.RunIdentity(RUN_ID)
+            fake = self._FakeQbit(
+                identity,
+                add_response="Ok.",
+                complete=False,
+                fields={"category": "other", "progress": 0.8},
+            )
+            scenario = self._scenario(directory, fake)
+            with self.assertRaises(qbm.ExternalDependencyFailure):
+                scenario.download()
+            download = json.loads(
+                (Path(directory) / RUN_ID / "evidence.json").read_text(encoding="utf-8")
+            )["phases"]["download"]
+            self.assertEqual(download, {"status": "broken"})
+
+    def test_completion_timeout_omits_invalid_numeric_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            identity = qbm.RunIdentity(RUN_ID)
+            fake = self._FakeQbit(
+                identity,
+                add_response="Ok.",
+                complete=False,
+                fields={
+                    "progress": "SENSITIVE-PROGRESS",
+                    "amount_left": True,
+                    "dlspeed": -1,
+                    "num_seeds": 2**40,
+                    "num_leechs": 3,
+                },
+            )
+            scenario = self._scenario(directory, fake)
+            with self.assertRaises(qbm.ExternalDependencyFailure):
+                scenario.download()
+            evidence_text = (Path(directory) / RUN_ID / "evidence.json").read_text(
+                encoding="utf-8"
+            )
+            download = json.loads(evidence_text)["phases"]["download"]
+            self.assertEqual(
+                download,
+                {"status": "broken", "timeoutSnapshot": {"connectedPeers": 3}},
+            )
+            self.assertNotIn("SENSITIVE-", evidence_text)
 
 
 class ResultRecorderTests(unittest.TestCase):

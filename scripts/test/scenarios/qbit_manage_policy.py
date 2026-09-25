@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import os
 import re
 import signal
@@ -1101,10 +1102,12 @@ class Scenario:
             )
 
         observed: tuple[list[dict[str, Any]], list[dict[str, Any]]] = ([], [])
+        last_info: list[dict[str, Any]] = []
 
         def complete() -> bool:
-            nonlocal observed
+            nonlocal observed, last_info
             info = self.qbit.info(FIXTURE_HASH)
+            last_info = info
             if len(info) != 1:
                 return False
             torrent = info[0]
@@ -1126,6 +1129,35 @@ class Scenario:
             return True
 
         if not self.wait_for(20 * 60, 10, complete):
+            snapshot: dict[str, int | float] = {}
+            if len(last_info) == 1:
+                torrent = last_info[0]
+                if (
+                    torrent.get("hash") == FIXTURE_HASH
+                    and torrent.get("category") == self.identity.category
+                    and normalized_save_path(str(torrent.get("save_path", "")))
+                    == self.identity.download_root
+                ):
+                    progress = torrent.get("progress")
+                    if (
+                        type(progress) in (int, float)
+                        and math.isfinite(progress)
+                        and 0 <= progress <= 1
+                    ):
+                        snapshot["progress"] = progress
+                    for source, target, maximum in (
+                        ("amount_left", "amountLeftBytes", 2**64 - 1),
+                        ("dlspeed", "downloadSpeedBytesPerSecond", 2**64 - 1),
+                        ("num_seeds", "connectedSeeds", 2**31 - 1),
+                        ("num_leechs", "connectedPeers", 2**31 - 1),
+                    ):
+                        value = torrent.get(source)
+                        if type(value) is int and 0 <= value <= maximum:
+                            snapshot[target] = value
+            phase: dict[str, Any] = {"status": "broken"}
+            if snapshot:
+                phase["timeoutSnapshot"] = snapshot
+            self.recorder.phase("download", phase)
             raise ExternalDependencyFailure(
                 "Sintel did not complete through VPN egress within 20 minutes"
             )
