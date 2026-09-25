@@ -1036,7 +1036,8 @@ class CatalogValidator:
             "create leases.coordination.k8s.io",
             "update leases.coordination.k8s.io",
             "--subresource",
-            "--resource-name",
+            # kubectl auth can-i names a resource as TYPE/NAME.
+            'resource_arg="$resource/$resource_name"',
             "patch kustomizations.kustomize.toolkit.fluxcd.io",
             "bind clusterroles.rbac.authorization.k8s.io",
             "escalate clusterroles.rbac.authorization.k8s.io",

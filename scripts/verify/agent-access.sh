@@ -45,8 +45,8 @@ assert_can_i() {
   local namespace="${5:-}"
   local subresource="${6:-}"
   local resource_name="${7:-}"
-  local -a identity_args namespace_args resource_name_args
-  local action actual scope status
+  local -a identity_args namespace_args
+  local action actual scope status resource_arg
   if [[ "$credential_layout" == 'named-contexts' ]]; then
     identity_args=(--context "$context")
   else
@@ -55,7 +55,11 @@ assert_can_i() {
       "${service_account_groups[@]}"
     )
   fi
-  action="$resource"
+  resource_arg="$resource"
+  if [[ -n "$resource_name" ]]; then
+    resource_arg="$resource/$resource_name"
+  fi
+  action="$resource_arg"
   if [[ -n "$subresource" ]]; then
     action="$resource/$subresource"
   fi
@@ -65,17 +69,13 @@ assert_can_i() {
     namespace_args=(--namespace "$namespace")
     scope="namespace $namespace"
   fi
-  resource_name_args=()
-  if [[ -n "$resource_name" ]]; then
-    resource_name_args=(--resource-name "$resource_name")
-  fi
   set +e
   if [[ -n "$subresource" ]]; then
-    actual="$("${kc[@]}" "${identity_args[@]}" auth can-i "$verb" "$resource" \
-      --subresource "$subresource" "${namespace_args[@]}" "${resource_name_args[@]}")"
+    actual="$("${kc[@]}" "${identity_args[@]}" auth can-i "$verb" "$resource_arg" \
+      --subresource "$subresource" "${namespace_args[@]}")"
   else
-    actual="$("${kc[@]}" "${identity_args[@]}" auth can-i "$verb" "$resource" \
-      "${namespace_args[@]}" "${resource_name_args[@]}")"
+    actual="$("${kc[@]}" "${identity_args[@]}" auth can-i "$verb" "$resource_arg" \
+      "${namespace_args[@]}")"
   fi
   status="$?"
   set -e

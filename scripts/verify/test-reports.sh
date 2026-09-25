@@ -43,10 +43,11 @@ for kind in role rolebinding serviceaccount; do
 done
 for resource in \
   ciliumnetworkpolicy/test-reports \
-  servicemonitor/test-reports \
-  prometheusrule/test-reports; do
+  servicemonitor/test-reports; do
   kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get "$resource" >/dev/null
 done
+kubectl --kubeconfig "$kubeconfig" --namespace monitoring \
+  get prometheusrule/test-reports >/dev/null
 
 accepted=false
 resolved=false
