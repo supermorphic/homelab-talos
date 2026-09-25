@@ -200,7 +200,7 @@ class LiveCluster:
         return {"image": target, "revision": sts["status"]["updateRevision"], "snapshot": checksum}
 
 
-def execute(scope, mode):
+def execute(scope, mode, progress=None):
     bao = OperatorClient(scope.kubeconfig)
     try:
         cluster = LiveCluster(scope, bao, None)
@@ -241,11 +241,12 @@ def execute(scope, mode):
         if maintenance.identities(fresh) != maintenance.identities(initial):
             raise maintenance.MaintenanceError()
         if mode == "upgrade":
-            return maintenance.upgrade(cluster, cluster, time)
+            return maintenance.upgrade(cluster, cluster, time, progress=progress)
         standby = min(maintenance.NAMES - {initial["leader"]})
         results = [
             maintenance.replace_member(
-                initial["pods"][standby]["uid"], "standby", cluster, cluster, time
+                initial["pods"][standby]["uid"], "standby", cluster, cluster, time,
+                progress=progress,
             )
         ]
         fresh = cluster.snapshot()
@@ -253,7 +254,8 @@ def execute(scope, mode):
             raise maintenance.MaintenanceError()
         results.append(
             maintenance.replace_member(
-                initial["pods"][initial["leader"]]["uid"], "leader", cluster, cluster, time
+                initial["pods"][initial["leader"]]["uid"], "leader", cluster, cluster, time,
+                progress=progress,
             )
         )
         return {"status": "pass", "replacements": results}
@@ -266,10 +268,9 @@ def main(mode="ha"):
     scope = run_dir = None
     try:
         scope, run_dir = run_scope()
-        result.update(execute(scope, mode))
+        result.update(execute(scope, mode, progress=result))
     except Exception:  # noqa: BLE001 -- Discard credential-bearing adapter exception text.
         result["status"] = "fail"
-        result["recovery"] = "failed"
     finally:
         if scope:
             try:

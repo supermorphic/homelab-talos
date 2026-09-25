@@ -383,6 +383,23 @@ class RecoveryTests(unittest.TestCase):
     setUp = MaintenanceTests.setUp
     replace = MaintenanceTests.replace
 
+    def test_recovery_evidence_tracks_mutation_and_proved_recovery(self):
+        for phase in ("preflight", "ambiguous-eviction", "recovered"):
+            self.cluster = Cluster()
+            progress = {"recovery": "not-required"}
+            if phase == "preflight":
+                self.cluster.probe = lambda: False
+            if phase == "ambiguous-eviction":
+                self.cluster.evict = lambda *a: (_ for _ in ()).throw(RuntimeError("synthetic"))
+            try:
+                self.module.replace_member("pod-1", "standby", self.cluster, self.cluster,
+                                           self.clock, progress=progress)
+            except self.module.MaintenanceError:
+                pass
+            self.assertEqual(progress["recovery"], {
+                "preflight": "not-required", "ambiguous-eviction": "failed", "recovered": "passed",
+            }[phase])
+
     def test_replacement_waits_for_replicated_progress_and_measures_interruption(self):
         probes = iter([True, False, True])
         self.cluster.probe = lambda: next(probes)
@@ -432,6 +449,32 @@ class RecoveryTests(unittest.TestCase):
 
 
 class CommandTests(unittest.TestCase):
+    def test_retained_recovery_evidence_preserves_observed_mutation_progress(self):
+        import contextlib
+        import io
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from scripts.test.scenarios import openbao_ha
+
+        scope = type("Scope", (), {"cleanup": lambda self: None})()
+        for recovery in ("not-required", "passed", "failed"):
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)
+                (path / "diagnostics").mkdir()
+                def execute(scope, mode, progress):
+                    if recovery != "not-required":
+                        progress["recovery"] = recovery
+                    if recovery != "passed":
+                        raise RuntimeError("synthetic-failure")
+                    return {"status": "pass"}
+                with (patch.object(openbao_ha, "run_scope", return_value=(scope, path)),
+                      patch.object(openbao_ha, "execute", side_effect=execute),
+                      contextlib.redirect_stdout(io.StringIO())):
+                    openbao_ha.main()
+                self.assertEqual(json.loads((path / "recovery.json").read_text())["status"], recovery)
+
     def test_unknown_mode_refuses_before_reading_credentials(self):
         import os
         import subprocess

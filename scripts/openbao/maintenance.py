@@ -46,7 +46,8 @@ def identities(state):
     )
 
 
-def replace_member(expected_uid, expected_role, kube, bao, clock):
+def replace_member(expected_uid, expected_role, kube, bao, clock, *, progress=None):
+    progress = {} if progress is None else progress
     try:
         before = bao.snapshot()
         candidates = [n for n, p in before["pods"].items() if p["uid"] == expected_uid]
@@ -68,6 +69,8 @@ def replace_member(expected_uid, expected_role, kube, bao, clock):
         # The server enforces both UID and resourceVersion; the eviction API exercises the PDB.
         kube.check()
         start = clock.monotonic()
+        # Set before sending: a lost eviction response can still mean disruption.
+        progress["recovery"] = "failed"
         kube.evict(name, expected_uid, pod["resource_version"])
         deadline = start + 180
         outage_start = None
@@ -106,6 +109,7 @@ def replace_member(expected_uid, expected_role, kube, bao, clock):
                 and current["members"][name]["index"] >= baseline
                 and available
             ):
+                progress["recovery"] = "passed"
                 return {
                     "status": "pass",
                     "member": name,
@@ -128,8 +132,9 @@ def version(image):
     return tuple(map(int, match.groups()))
 
 
-def upgrade(kube, bao, clock):
+def upgrade(kube, bao, clock, *, progress=None):
     """The adapter proves a fresh retained snapshot and the deployed Git template."""
+    progress = {} if progress is None else progress
     try:
         plan = kube.upgrade_preconditions()
         initial = bao.snapshot()
@@ -153,7 +158,8 @@ def upgrade(kube, bao, clock):
             if current["leader"] != leader:
                 raise MaintenanceError()
             results.append(
-                replace_member(initial["pods"][name]["uid"], "standby", kube, bao, clock)
+                replace_member(initial["pods"][name]["uid"], "standby", kube, bao, clock,
+                               progress=progress)
             )
             current = bao.snapshot()
             if (
@@ -167,18 +173,21 @@ def upgrade(kube, bao, clock):
             raise MaintenanceError()
         kube.check()
         # Explicit step-down followed by proof that an upgraded voter owns leadership.
+        progress["recovery"] = "failed"
         bao.transfer(leader, upgraded)
         deadline = clock.monotonic() + 60
         while clock.monotonic() < deadline:
             current = bao.snapshot()
             if healthy(current) and current["leader"] in upgraded:
+                progress["recovery"] = "passed"
                 break
             clock.sleep(2)
         else:
             raise MaintenanceError()
         if kube.upgrade_preconditions() != plan:
             raise MaintenanceError()
-        results.append(replace_member(initial["pods"][leader]["uid"], "standby", kube, bao, clock))
+        results.append(replace_member(initial["pods"][leader]["uid"], "standby", kube, bao, clock,
+                                      progress=progress))
         final = bao.snapshot()
         if not healthy(final) or any(
             p["image"] != plan["image"] or p["revision"] != plan["revision"]
