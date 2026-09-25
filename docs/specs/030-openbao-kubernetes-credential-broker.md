@@ -4,8 +4,9 @@
 
 Design for [issue 449](https://github.com/supermorphic/homelab-talos/issues/449).
 The operator approved automatic unseal and three voting replicas, one per physical
-node, after reviewing the existing cluster. This written specification is proposed
-for review; implementation and live acceptance are not complete.
+node, after reviewing the existing cluster, and accepted this specification with
+refinements to the seal threat model and configuration-drift verification.
+Implementation and live acceptance are not complete.
 
 Deploy OpenBao inside the Talos cluster to issue short-lived credentials for
 pre-existing Kubernetes ServiceAccounts. Git and Flux own every ServiceAccount,
@@ -134,8 +135,53 @@ Raft state automatically. A new peer uses that same seal to join the established
 cluster. Only the first member is initialized; peers must never initialize
 independently.
 
-The accepted trust boundary is the existing SOPS/Kubernetes bootstrap root. The
-seal key is protected independently of the Raft snapshots. Recovery requires
+### Static-seal threat model and encryption at rest
+
+There are two distinct forms of the seal material:
+
+| Form | Protection and access |
+| --- | --- |
+| Git and off-cluster recovery artifacts | SOPS/age ciphertext, recoverable using the independently retained operator age identity. These artifacts do not contain a plaintext seal key. |
+| Live Kubernetes Secret and mounted seal file | Flux decrypts the Git artifact and submits the usable key to Kubernetes. Authorized Secret reads return the decrypted value; the OpenBao process consumes plaintext key bytes from its mounted file. SOPS does not keep this live value encrypted from Kubernetes administrators. |
+
+Cluster-admin compromise, compromise of an identity that can read the seal
+Secret, and control of the nodes or OpenBao process are **inside the accepted
+trust boundary**. Automatic unseal through a Kubernetes Secret does not provide
+an independent security boundary against those principals. Possession of the
+usable seal key and a corresponding Raft snapshot permits decryption of that
+snapshot. Keeping the encrypted recovery artifact off-cluster protects recovery
+availability; it does not change access to the live Secret. This is the
+operator-accepted tradeoff for automatic restart using the existing bootstrap
+root rather than an external KMS.
+
+The cluster's Secret encryption posture has separate layers:
+
+- The Talos source uses a SOPS-encrypted `secretboxencryptionsecret` in its
+  recovery bundle. The pinned Talos `v1.13.6` API-server template puts the
+  Secretbox provider first for Kubernetes `secrets` when this key is present,
+  with an identity provider last for reading legacy unencrypted records.
+- On 2026-09-25, read-only inspection confirmed that all three running API
+  servers pass `--encryption-provider-config` pointing to Talos's generated
+  configuration. This supports the source-defined Secretbox-at-rest posture;
+  it is not a raw-etcd audit of every existing Secret or proof that historical
+  records have been rewritten. Neither the live encryption key nor the contents
+  of the provider file were read for this review.
+- `mise exec -- just talos volume-status` confirmed LUKS2 on `STATE` and
+  `EPHEMERAL` on all three nodes. Source binds their keys to the TPM and Secure
+  Boot. This protects node storage at rest, including the system storage used
+  by etcd and node configuration. It does not restrict authorized API reads or
+  a compromised running control plane.
+- The dedicated Longhorn user volume is outside this LUKS2 boundary. OpenBao's
+  encrypted storage barrier protects its Raft data there; the seal key must not
+  be stored in its data or snapshot PVCs. Kubernetes Secret encryption is not
+  blanket encryption for Longhorn data or application backups.
+
+This issue preserves that existing posture and introduces no encryption-key
+rotation or etcd rewrite. The [Talos source](../../talos/talconfig.yaml),
+[machine patch](../../talos/patches/machine.yaml), and
+[platform design](010-talos-flux-platform.md) remain the local references.
+
+Protect the seal key independently of the Raft snapshots. Recovery requires
 both the matching seal key and a usable snapshot; recovery shares authorize
 recovery operations but cannot decrypt data without the seal key. Losing that
 key permanently can make every associated backup unusable.
@@ -223,7 +269,8 @@ with an existing authorized OpenBao identity.
 ## Authentication and declarative issuance
 
 Bootstrap enables only the authentication needed for operator access, backup,
-and the acceptance workload. Operator access uses a dedicated `userpass` login
+read-only configuration verification, and the acceptance workload. Operator
+access uses a dedicated `userpass` login
 with a repository-defined operational policy and short-lived session tokens.
 Its password belongs in the encrypted operator recovery bundle and the
 operator's password manager. The initial root token is not the normal login.
@@ -250,6 +297,85 @@ Do not add a permanent privileged configuration controller. API writes outside
 these source-owned procedures are recovery actions, not a second configuration
 source.
 
+### Read-only OpenBao configuration drift detection
+
+`mise exec -- just kube openbao-verify` must compare source-owned OpenBao
+configuration with live API responses in addition to checking Kubernetes and
+service health. A healthy endpoint or a stored source hash is not proof that
+live configuration still matches Git. Verification never applies a repair.
+
+Keep one explicit desired-state inventory containing the owned auth mounts,
+mount types/tuning, auth configuration, auth roles, ACL policies, operator policy
+assignment, secrets-engine configuration, and issuance roles. Read that inventory
+from the selected clean source revision. Record both desired and deployed
+revisions and reject a mismatched deployment phase; do not silently compare a
+candidate policy against an unrelated deployed revision.
+
+Bootstrap creates an `openbao-config-reader` ACL policy and an exact JWT role
+for verification. The role binds the OpenBao server ServiceAccount to a separate
+projected token audience, with a ten-minute JWT lifetime and short OpenBao
+session lifetime. It permits only the required metadata/configuration reads and
+lists, plus `update` on `auth/token/revoke-self` to end its own session. Disable
+implicit default-policy attachment and grant this cleanup permission explicitly.
+It grants no configuration writes, token issuance, user-password reads,
+snapshot access, general secret access, or administration of other tokens.
+
+Register the verifier at the existing `diagnostic` access tier. Through this
+named workflow only, it selects `homelab-diagnostic` and executes a fixed
+collection routine in the expected server container. That routine authenticates
+using the dedicated projected token and keeps the resulting OpenBao session
+inside the process. It does not read the seal file, Raft files, operator
+credentials, or Kubernetes Secret bodies. Tokens are never returned to the
+worktree or included in command arguments or artifacts. This adds no permanent
+reconciler or separate verifier workload, and does not implement local agent
+authentication or credential issuance from issue 450.
+
+The comparison must include:
+
+- presence, type, and source-owned tuning for each auth mount, including TTLs;
+- JWT provider configuration, issuer, bound audience/subject/claims, assigned
+  policies, session lifetime, and all other security-relevant role fields;
+- canonical ACL policy content and the operator's non-secret policy assignment;
+- secrets-engine connection settings and every issuance role's namespace,
+  ServiceAccount, audience, TTLs, and generation options;
+- missing objects and unexpected additions to the approved inventory, including
+  extra auth methods, policies, or roles. Built-in objects are explicit
+  exceptions rather than a blanket ignore rule.
+
+Use the actual OpenBao read/list APIs, such as `sys/auth`, `sys/policies/acl`,
+the configured JWT mount's config/role endpoints, and `kubernetes/roles`.
+Comparison covers the reader's own policy and auth role too. If those drift and
+prevent authentication or inspection, verification fails as inaccessible; it
+does not report no drift or fall back to a broader identity.
+
+The drift claim covers readable configuration and authorization controls.
+Credential values that the API does not return, such as an operator password,
+cannot be compared; verification must not claim otherwise.
+
+Normalize only documented differences: duration representations, set ordering,
+explicit version-specific defaults, and volatile server-generated metadata.
+Store repository-owned ACLs in the supported JSON policy syntax and compare
+parsed canonical JSON; alternate or malformed policy syntax is an explicit
+unverifiable difference, not an excuse to skip policy inspection. Unexpected
+security-relevant fields fail until their semantics are reviewed. Never ignore
+an extra capability or a widened namespace/subject constraint.
+
+Keep raw API responses in memory. Output only source-known object identifiers,
+field names, and `missing`, `changed`, `unexpected`, or `inaccessible` results.
+For unexpected live names, report the object class and count without echoing
+arbitrary server strings. Do not print policy bodies, raw diffs, provider
+credentials, JWTs, passwords, arbitrary error bodies, or live field values.
+Authentication failure, forbidden reads, incomplete lists, timeout, malformed
+responses, and source mismatch all prevent a passing result. Login and session
+cleanup are incidental authentication effects; no target configuration is changed.
+
+Offline tests deliberately alter permissions, bindings, audiences, TTLs, object
+inventory, and the reader's access in independent fixtures. They also prove
+equivalent ordering/defaults do not produce false drift and inject synthetic
+secret markers into responses to verify that neither success nor error output
+leaks them. Any live drift-injection test belongs in the isolated acceptance
+environment, never in the observational verifier.
+
 The acceptance boundary consists of:
 
 - a dedicated `openbao-acceptance` namespace;
@@ -268,7 +394,10 @@ ordinary Kubernetes discovery permissions are not an issuance grant. Disable
 chart resources that would add permissions beyond the explicit design.
 
 The test must prove actual API enforcement of the named token subresource;
-static inspection or `can-i` alone is insufficient. Check the returned token's
+Kubernetes supports `resourceNames` on this named `serviceaccounts/token`
+subresource. Preserve that boundary and the real negative TokenRequest tests;
+do not replace it with namespace-wide token creation. Static inspection or
+`can-i` alone is insufficient. Check the returned token's
 actual expiry, audience, and authenticated identity. Kubernetes determines the
 effective expiration. Reject excessive lifetime. An OpenBao lease revocation
 does not independently revoke an existing ServiceAccount JWT: expiration and
@@ -395,7 +524,7 @@ and register assurance in the [test catalog](../../tests/catalog.yaml).
 | Workflow | Authority and evidence |
 | --- | --- |
 | `just kube openbao-validate` | Offline chart render, schema, policy, source, and command-contract validation; no live credentials. |
-| `just kube openbao-verify` | Scoped observation of workload, placement, health, route, monitoring, and backup metadata; no deliberate target mutation. |
+| `just kube openbao-verify` | Scoped diagnostic observation of workload, placement, health, route, monitoring, backup metadata, and sanitized desired-versus-live OpenBao configuration drift; no deliberate target mutation. |
 | `just bootstrap openbao prepare` | Operator-owned deployment of the staged uninitialized servers. |
 | `just bootstrap openbao initialize` | Operator-owned initialization and configuration with independent recovery output. |
 | `just kube openbao-config-apply` | Operator-owned application of reviewed configuration and sanitized read-back. |
@@ -407,6 +536,8 @@ and register assurance in the [test catalog](../../tests/catalog.yaml).
 Offline tests use independent invariants and synthetic fixtures. Cover named
 TokenRequest RBAC, disabled chart permissions, three voters, placement/PDB/PVC
 retention, network isolation, TLS verification, and no plaintext secret outputs.
+Drift tests cover auth methods, ACL policies, role constraints, unexpected/missing
+objects, source identity, read failures, normalization, and redaction.
 Bootstrap tests exercise already-initialized, mixed, malformed, inaccessible,
 changed-target, lost-response, recovery-write failure, and partial-configuration
 states. None may trigger a second initialization request or data deletion.
@@ -432,6 +563,9 @@ Live acceptance must prove:
    into an isolated instance, which cannot issue production credentials.
 7. Certificate renewal, audit redaction, health-state distinctions, alerts, and
    measured resource use meet the design.
+8. `openbao-verify` reads actual OpenBao configuration and detects independently
+   introduced drift in an isolated test instance, with no configuration mutation
+   or credential disclosure during verification.
 
 Normal iteration stays local. Before opening/updating a PR, commit the candidate
 and run `mise exec -- just test ci-publish` from the clean feature worktree.
@@ -459,3 +593,6 @@ or issue closure. A design commit does not mean issue 449 is deployed or complet
 - [Health API](https://openbao.org/docs/api/system/health/)
 - [Telemetry](https://openbao.org/docs/configuration/telemetry/)
 - [Kubernetes upgrade procedure](https://openbao.org/docs/platform/k8s/helm/run/)
+- [Talos v1.13.6 Secret encryption provider construction](https://github.com/siderolabs/talos/blob/v1.13.6/internal/app/machined/pkg/controllers/k8s/internal/k8stemplates/apiserver.go)
+- [OpenBao auth-method read API](https://openbao.org/docs/api/system/auth/)
+- [OpenBao ACL-policy read API](https://openbao.org/docs/api/system/policies/)
