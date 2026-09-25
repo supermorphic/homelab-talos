@@ -15,6 +15,11 @@ verified against the registry's OCI index digest. The chart's default server ver
 2.6.3, so this package sets 2.7.0 explicitly.
 
 Run `mise exec -- just kube openbao-validate` for offline source and rendered-chart checks.
+The reviewed OpenBao mounts, auth roles, policies, and Kubernetes issuance role live in
+`config/desired.json` and `config/policies/`. The planned bootstrap and configuration-apply
+workflows will read them from clean source. They are not mounted into the server or reconciled
+by a privileged controller. Drift comparison covers readable live API fields against the
+same source inventory; an operator password is intentionally outside that comparison.
 The chart's default readiness probe requires an initialized, unsealed server. The release
 only skips the *initial install wait*; upgrades keep their normal readiness handling.
 The native disruption budget protects a two-voter quorum, and StatefulSet claim retention
