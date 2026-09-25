@@ -1,5 +1,6 @@
 """Attended issuance acceptance with bounded Pods and exact owned-resource cleanup."""
 
+import copy
 import hashlib
 import json
 import os
@@ -123,6 +124,79 @@ def pod_document(run_id, issuer):
     }
 
 
+def safe_probe_spec(expected, actual):
+    """Require the exact probe boundary after removing known Kubernetes defaults.
+
+    Subset matching is unsafe for credential-bearing Pods: extra containers,
+    projections, mounts, environment, or security fields must fail closed.
+    """
+    try:
+        observed = copy.deepcopy(actual)
+
+        def defaults(value, permitted):
+            for field, default in permitted.items():
+                if field in value and value[field] == default:
+                    del value[field]
+
+        defaults(
+            observed,
+            {
+                "dnsPolicy": "ClusterFirst",
+                "schedulerName": "default-scheduler",
+                "terminationGracePeriodSeconds": 30,
+                "priority": 0,
+                "preemptionPolicy": "PreemptLowerPriority",
+                "serviceAccount": expected["serviceAccountName"],
+                "hostNetwork": False,
+                "hostPID": False,
+                "hostIPC": False,
+                "shareProcessNamespace": False,
+                "hostUsers": True,
+                "setHostnameAsFQDN": False,
+                "initContainers": [],
+                "ephemeralContainers": [],
+            },
+        )
+        if "nodeName" in observed:
+            if not isinstance(observed["nodeName"], str) or not observed["nodeName"]:
+                return False
+            del observed["nodeName"]
+        if "tolerations" in observed:
+            allowed = [
+                {
+                    "key": "node.kubernetes.io/" + condition,
+                    "operator": "Exists",
+                    "effect": "NoExecute",
+                    "tolerationSeconds": 300,
+                }
+                for condition in ("not-ready", "unreachable")
+            ]
+            tolerations = observed.pop("tolerations")
+            if len(tolerations) > 2 or any(t not in allowed for t in tolerations):
+                return False
+        for container in observed["containers"]:
+            defaults(
+                container,
+                {
+                    "imagePullPolicy": "IfNotPresent",
+                    "terminationMessagePath": "/dev/termination-log",
+                    "terminationMessagePolicy": "File",
+                    "stdin": False,
+                    "stdinOnce": False,
+                    "tty": False,
+                },
+            )
+            defaults(container["securityContext"], {"privileged": False, "procMount": "Default"})
+            for mount in container["volumeMounts"]:
+                defaults(mount, {"mountPropagation": "None", "recursiveReadOnly": "Disabled"})
+        for volume in observed["volumes"]:
+            if "projected" in volume:
+                defaults(volume["projected"], {"defaultMode": 420})
+        return observed == expected
+    except (KeyError, TypeError, AttributeError):
+        return False
+
+
 class Scope:
     def __init__(self, kubeconfig, run_id):
         self.kubeconfig, self.run_id = kubeconfig, run_id
@@ -138,6 +212,9 @@ class Scope:
     def check(self):
         if os.environ.get("OPENBAO_LEASE_HOLDER"):
             guards.assert_mutation_allowed(self.kubeconfig)
+        run_dir = os.environ.get("HOMELAB_TEST_RUN_DIR", "")
+        if run_dir and (Path(run_dir) / "diagnostics/lease-renewal-failed").exists():
+            raise issuance.AcceptanceError()
         marker = os.environ.get("TEST_CAMPAIGN_LEASE_FAILURE_MARKER", "")
         if marker and Path(marker).exists():
             raise issuance.AcceptanceError()
@@ -168,6 +245,8 @@ class Scope:
             )
         )
         document["metadata"]["uid"] = actual["metadata"]["uid"]
+        if document["kind"] == "Pod" and not safe_probe_spec(document["spec"], actual.get("spec")):
+            raise issuance.AcceptanceError()
         self.ambiguous = False
         return document
 
@@ -177,7 +256,7 @@ class Scope:
             not actual
             or actual["metadata"].get("annotations", {}).get(OWNER) != self.run_id
             or actual["metadata"]["uid"] != document["metadata"].get("uid")
-            or not guards.contains_source(document.get("spec", {}), actual.get("spec", {}))
+            or not safe_probe_spec(document.get("spec", {}), actual.get("spec", {}))
         ):
             raise issuance.AcceptanceError()
         return actual

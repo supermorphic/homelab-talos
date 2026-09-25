@@ -65,8 +65,9 @@ def replace_member(expected_uid, expected_role, kube, bao, clock):
             raise MaintenanceError()
         pod = fresh["pods"][name]
         baseline = fresh["members"][fresh["leader"]]["index"]
-        start = clock.monotonic()
         # The server enforces both UID and resourceVersion; the eviction API exercises the PDB.
+        kube.check()
+        start = clock.monotonic()
         kube.evict(name, expected_uid, pod["resource_version"])
         deadline = start + 180
         outage_start = None
