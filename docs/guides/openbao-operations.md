@@ -83,7 +83,9 @@ Preparation uses the existing disruption Lease, temporarily resumes only the own
 prerequisite and server Flux units, and suspends those units again after reconciliation.
 It preserves the installed resources. The private route and acceptance units stay
 staged until durable activation through Git. Preparation verifies three uninitialized
-servers; it never calls the initialization API.
+servers and reports the observed cluster, namespace, workload, Pod, and claim
+identities for local review; it never calls the initialization API. Do not copy
+these live identifiers into public artifacts.
 
 ## Initialize exactly once
 
@@ -185,7 +187,10 @@ cleanup checks exact resource ownership and UID/resourceVersion preconditions.
 The acceptance workload authenticates to OpenBao, requests a ten-minute reader
 credential, checks its audience and effective expiry, asks Kubernetes for its
 actual authenticated identity, reads the synthetic canary, and proves a protected
-read is forbidden. It revokes the OpenBao session immediately after issuance,
+read is forbidden. Before revoking its OpenBao session, it also sends a bounded
+request for an unapproved issuance role and requires an ACL denial. Unexpected
+success or another response fails acceptance without retaining any returned token.
+It revokes the OpenBao session immediately after that check,
 while that session is still valid. The Kubernetes checks use the independently
 issued JWT. Expiry acceptance polls for authentication rejection with a bound
 that includes the API's 60-second leeway, 30 seconds of clock skew, and one

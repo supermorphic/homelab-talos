@@ -447,6 +447,11 @@ separate retained Longhorn backup PVC. Run it before the existing Longhorn
 off-cluster backup window. Retain seven successful snapshots, publish each
 atomically after checksum and archive validation, and never prune the last
 usable snapshot on a failed run.
+Label the backup claim for the existing Longhorn recurring-job group. Enable
+Longhorn's detached-volume recurring jobs so the off-cluster job can attach
+the claim after the short-lived snapshot Pod exits. This setting affects all
+selected detached volumes; validate the exact group, schedules, rendered
+setting, and completed off-cluster transfer during attended acceptance.
 
 The snapshot client identifies the active member through peer-specific health
 checks and addresses that member directly with verified TLS. It does not depend
@@ -486,6 +491,12 @@ Prove automatic unseal, the restored non-secret configuration/canary and cluster
 state, and a second scratch process restart. Prove that Kubernetes issuance
 cannot reach production from the restored copy. Clean up only run-owned resources;
 report cleanup failure separately. A checksum check alone is not restore evidence.
+The restored JWT provider cannot initialize its ordinary config read without a
+production ServiceAccount token. In scratch, require that exact provider-unavailable
+result, then compare its stored config through a loopback-only raw-storage endpoint
+using the retained operator login. Read only the source-owned JWT config entry;
+all other configuration uses ordinary API reads. Unexpected errors or stored fields
+fail the drill. Scratch still receives no production API token or egress.
 
 Extend the existing [platform recovery runbook](../runbooks/platform-disaster-recovery.md)
 and add an OpenBao-specific runbook during implementation. Coordinate the recovery
@@ -496,7 +507,8 @@ material and snapshot restoration, OpenBao verification, then credential consume
 ## Observability and upgrades
 
 Add a Homepage Platform tile, Gatus health evaluation that distinguishes
-unavailable/uninitialized/sealed states, a ServiceMonitor, and alerts for missing
+unavailable/uninitialized/sealed states, ServiceMonitors for OpenBao and the
+required Longhorn volume metrics, and alerts for missing
 voters, lost quorum, sealed members, snapshot/transfer freshness, storage pressure,
 and certificate expiration. Monitor each member as well as the client route.
 Retain upstream health semantics; do not mask sealed or uninitialized status as
