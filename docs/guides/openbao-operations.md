@@ -6,6 +6,38 @@ The package remains staged until its operator inputs and live acceptance are com
 See the [design](../specs/030-openbao-kubernetes-credential-broker.md) and
 [package README](../../kubernetes/apps/security/openbao/README.md).
 
+Offline validation is `mise exec -- just kube openbao-validate`. The catalog's
+`validation.openbao` also runs in core CI. `verification.openbao` is diagnostic
+observation, registered but excluded from verification campaigns while any of the
+six OpenBao Flux units remains suspended, the encrypted seal artifact is absent
+from the app Kustomization, or the Gatus endpoint is not enrolled. It reports
+staged absence as a failure,
+not deployment acceptance. The three mutating suites remain standalone and require
+intentional operator-run `test record` commands. No live bootstrap, issuance,
+failover, upgrade, snapshot transfer, or restore result
+is recorded by this source package.
+
+Git and Flux own the Kubernetes resources. The reviewed OpenBao API inventory is
+in `config/desired.json` and `config/policies/`; a clean deployed `main` revision
+is the input for attended `openbao-config-apply`. Flux does not write these API
+objects. The verifier reads actual OpenBao configuration with a short-lived
+`openbao-config-reader` JWT through the `homelab-diagnostic` Kubernetes context
+and compares it with that source. Failed reads and changed reader authority
+produce inaccessible or drift results, never a clean result. The operator password
+is private recovery material and has no readable drift comparison.
+
+The SOPS Git Secret and off-cluster recovery copy are encrypted. Flux decrypts the
+Git artifact into a live Kubernetes Secret; authorized Secret reads and the mounted
+seal file expose usable key bytes. The Talos source defines Secretbox encryption
+for Kubernetes Secrets, and read-only inspection found all three API servers using
+Talos's encryption-provider config. That evidence does not prove every historical
+etcd record was rewritten or that authorized live Secret reads are encrypted. The
+Talos `STATE` and `EPHEMERAL` volumes were observed as LUKS2; the separate
+Longhorn OpenBao data and backup volumes are outside that node-volume boundary.
+Keep the operator age identity, encrypted recovery artifacts, and password-manager
+copy of the non-root operator login off-cluster. Never depend on a credential
+issued by OpenBao to recover OpenBao.
+
 ## Create and retain seal material
 
 Select a new absolute recovery directory outside every repository worktree and test
@@ -216,3 +248,16 @@ through the existing comparator and must receive an actual 403 after reader deni
 The observational `openbao-verify` command performs none of these mutations.
 Offline fake API and local synthetic TLS tests verify these interfaces; they do
 not establish live OpenBao renewal/reload, cluster HA, or RBAC acceptance.
+
+## Activation and follow-up boundary
+
+After attended preparation and initialization, review and commit each durable
+Flux unsuspension, private route, backup and monitoring activation, acceptance
+resources, and the staged Gatus endpoint through Git. Enroll the verifier in both
+verification campaigns only when all six OpenBao Flux units are durably
+unsuspended, the encrypted seal artifact is included, and the Gatus endpoint is
+enrolled. Run the diagnostic verifier and the separately authorized issuance,
+HA, and isolated restore acceptance before calling deployment complete. A passing
+offline gate or staged verifier cannot close issue 449. Issue 450 owns real agent
+authentication profiles, CLI integration, and replacement of existing worktree
+credential installation; this package only proves the dedicated acceptance identity.

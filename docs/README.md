@@ -5,6 +5,7 @@
 - [Agent cluster access](guides/agent-cluster-access.md) — Install task-scoped read-only Kubernetes and Talos credentials in an agent worktree.
 - [Automation-data PostgreSQL operations](guides/automation-data-operations.md) — Activate and operate dynamic n8n domain provisioning, rotation, backups, and full-chain acceptance.
 - [NocoDB operations](guides/nocodb-operations.md) — Stage the private operator UI, bind its n8n workflows, adopt domains, rotate one source login, and run attended acceptance.
+- [OpenBao operations](guides/openbao-operations.md) — Create encrypted seal material, prepare and initialize three voters, apply reviewed configuration, and run attended acceptance.
 - [Media automation greenfield startup](guides/media-automation-setup.md) — Configure qBittorrent, the Servarr applications, Lidarr, and Seerr on new persistent volumes.
 - [n8n operations](guides/n8n-operations.md) — Create the encrypted recovery unit, activate the private platform and exact public webhook, verify it, and roll it back safely.
 - [GitHub main protection](guides/github-main-protection.md) — Inspect, verify, and recover the repository's protected-branch settings.
@@ -37,6 +38,7 @@
 - [Recover n8n](runbooks/n8n-recovery.md) — Choose pod, Longhorn, logical-restore, or full-reconstruction recovery while preserving the matching encrypted key.
 - [Recover automation-data PostgreSQL](runbooks/automation-data-recovery.md) — Recover the shared domain database platform and prove the restored n8n credential-to-role-verifier chain.
 - [Recover NocoDB](runbooks/nocodb-recovery.md) — Choose pod, metadata, source-operation, or isolated logical-bundle recovery while preserving the connection encryption key.
+- [Recover OpenBao](runbooks/openbao-recovery.md) — Rebuild platform prerequisites, retain matching seal material, and prove a selected snapshot in an isolated drill.
 - [Recover Plex remote playback with Relay](runbooks/plex-relay-fallback.md) — Diagnose Relay fallback when direct remote access is unavailable.
 - [Recover Plex and Plexamp Sonos playback](runbooks/plex-sonos-recovery.md) — Restore native Sonos library access or Plexamp player control.
 - [Respond to Plex network alerts](runbooks/plex-network-alerts.md) — Diagnose, contain, and recover Plex traffic, telemetry, and workload-policy alerts.
@@ -74,4 +76,4 @@
 - [027 — Deterministic CI Gates](specs/027-deterministic-ci-gates.md) — Defines Stage 2 category selection, evidence ownership, merge enforcement, and staged rollout.
 - [028 — NocoDB Operator UI](specs/028-nocodb-operator-ui.md) — Defines the staged private UI, separate read and operator surfaces, asynchronous source lifecycle, and metadata-only recovery.
 - [029 — Private Web Search and Extraction](specs/029-selfhost-web-research.md) — Defines native private search/extraction APIs, automatic platform authentication, response-size controls, and the required consumer follow-up.
-- [030 — OpenBao Kubernetes Credential Broker](specs/030-openbao-kubernetes-credential-broker.md) — Defines three Raft voters, SOPS-managed automatic unseal, restricted token issuance, configuration drift detection, guarded initialization, and isolated recovery.
+- [030 — OpenBao Kubernetes Credential Broker](specs/030-openbao-kubernetes-credential-broker.md) — Records the staged three-voter implementation, source-owned configuration, guarded initialization, and live acceptance still required.

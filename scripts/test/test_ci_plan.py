@@ -429,6 +429,44 @@ class OwnershipContractTests(unittest.TestCase):
                         f"input {path} selects {selected}, which omits required evidence",
                     )
 
+    def test_every_openbao_source_input_has_core_ownership(self):
+        fixture = yaml.safe_load(OWNERSHIP.read_text())
+        owned = set(fixture["contracts"]["openbao-source"]["changed_inputs"])
+        source = {
+            *(
+                path.relative_to(ROOT).as_posix()
+                for directory in (
+                    "kubernetes/apps/security/openbao",
+                    "scripts/openbao",
+                    "tests/fixtures/openbao",
+                )
+                for path in (ROOT / directory).rglob("*")
+                if path.is_file() and "__pycache__" not in path.parts
+            ),
+            *(
+                path.relative_to(ROOT).as_posix()
+                for directory in ("scripts/test/core", "scripts/test/scenarios")
+                for path in (ROOT / directory).glob("*openbao*")
+                if path.is_file()
+            ),
+            "scripts/operations/openbao-upgrade.sh",
+            "scripts/secrets/openbao.sh",
+            "scripts/validate/openbao.sh",
+            "scripts/verify/openbao.sh",
+            "kubernetes/apps/monitoring/gatus/app/openbao-activation.values.yaml",
+            "tests/prometheus/openbao_test.yaml",
+            "scripts/test/core/fixtures/openbao-2.7-jwt-config.json",
+        }
+        self.assertEqual(owned, source)
+        required = set(fixture["contracts"]["openbao-source"]["required_tests"])
+        self.assertIn("catalog:validation.openbao", required)
+        for path in source:
+            with self.subTest(path=path):
+                selected = classify([Change("M", None, path)], self.impact, full=False)
+                self.assertIn("core", selected)
+                selected_work = frozenset().union(*(self.group_work[group] for group in selected))
+                self.assertTrue(required.issubset(selected_work))
+
     def test_python_modules_have_exactly_one_group_owner(self):
         owners = {}
         for group, work in self.group_work.items():

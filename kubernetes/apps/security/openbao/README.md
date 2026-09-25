@@ -16,11 +16,23 @@ verified against the registry's OCI index digest. The chart's default server ver
 2.6.3, so this package sets 2.7.0 explicitly.
 
 Run `mise exec -- just kube openbao-validate` for offline source and rendered-chart checks.
+`validation.openbao` runs in both complete and core CI. The catalog registers
+`verification.openbao` with diagnostic access, but excludes it from verification
+campaigns while any of this package's six Flux Kustomizations is suspended, the
+encrypted seal artifact is absent from the app Kustomization, or the staged Gatus
+endpoint is not enrolled. Direct
+observation of an absent staged service is not active acceptance. The human-owned
+`test.openbao-issuance`, `test.openbao-ha`, and `test.openbao-restore-drill` suites
+remain standalone for intentional retained runs. No live result is claimed here.
 The reviewed OpenBao mounts, auth roles, policies, and Kubernetes issuance role live in
 `config/desired.json` and `config/policies/`. The bootstrap and configuration-apply
 workflows read them from clean published and deployed source. They are not mounted into the server or reconciled
 by a privileged controller. Drift comparison covers readable live API fields against the
 same source inventory; an operator password is intentionally outside that comparison.
+The verifier uses the `homelab-diagnostic` Kubernetes context for scoped Pod exec
+and a short-lived projected JWT to read OpenBao configuration. It reports
+inaccessible state or drift instead of assuming that Git was applied. Repairs use
+the attended, source-bound `openbao-config-apply` workflow.
 The chart's default readiness probe requires an initialized, unsealed server. The release
 only skips the *initial install wait*; upgrades keep their normal readiness handling.
 The native disruption budget protects a two-voter quorum, and StatefulSet claim retention

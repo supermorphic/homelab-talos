@@ -10,6 +10,34 @@ A snapshot needs the matching static seal key. Recovery shares cannot decrypt a
 snapshot without that key. Preserve each key generation while its backups remain
 retained. Never initialize production storage to make an existing backup readable.
 
+## Full reconstruction order
+
+1. Restore the operator workstation, age identity, Talos access and SOPS recovery
+   independently of OpenBao. Rebuild Talos/Kubernetes, Cilium, Flux, cert-manager,
+   and Longhorn through their platform runbooks before restoring this application.
+   This sequence belongs to the platform recovery plan in issue 294.
+2. Select a retained `raft.snap` with its sibling `metadata.json`. Verify its
+   checksum, OpenBao version, Raft index, seal key ID, and recovery generation.
+   Retrieve the matching encrypted seal key generation, recovery share, and
+   non-root operator login from independent private retention. A current key
+   cannot be substituted for an older snapshot's matching key. Keep old key
+   generations while their snapshots remain retained.
+3. Establish the reviewed OpenBao image, chart, TLS, storage, namespace and
+   network source in Git. Review the last isolated drill evidence for the
+   selected snapshot. The drill below requires healthy production peers, so a
+   new drill cannot prove peer isolation during a full production outage.
+   A passing earlier drill proves only its selected snapshot and isolated path.
+   Production PVC replacement, force restore, peer reconfiguration, and any
+   credential rotation require a separate attended plan and authorization.
+4. After that recovery plan, verify three healthy voters, trusted TLS, desired
+   configuration and actual restricted issuance. Resume consumers only after
+   those checks. Agent credential profiles remain the separate issue 450 scope.
+
+Raft replicas and Longhorn replicas provide availability, not historical recovery.
+The snapshot claim has no seal key, and the encrypted recovery bundle is not a
+snapshot. A cluster-only backup cannot reconstruct this broker without matching
+off-cluster recovery material.
+
 ## Attended isolated drill
 
 `mise exec -- just kube openbao-restore-drill` is an operator-owned, registered
