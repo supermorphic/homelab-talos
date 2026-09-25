@@ -134,6 +134,15 @@ adds `pods/exec` and `pods/portforward`. Approved verifiers select this context 
 when their designed oracle needs one of those operations. Outside those named verifier
 paths, the agent must not use those capabilities without specific operator authorization.
 
+`mise exec -- just kube openbao-verify` is a named diagnostic verifier. It selects
+`homelab-diagnostic`, checks the clean source and deployed revision, then uses a fixed
+server-container script to read OpenBao configuration with a short-lived projected JWT.
+The JWT and OpenBao session stay in the server process. The result contains only
+source-known names, field names, status classifications, and revision identifiers.
+`staged-absent` means the suspended package has not been activated; it does not pass
+configuration verification. Permission failure stops the verifier without a broader
+credential fallback.
+
 ## What an agent may do autonomously
 
 Within an approved task, an agent may:

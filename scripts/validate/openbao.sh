@@ -88,6 +88,15 @@ token_volume = next(v for v in pod["volumes"] if v["name"] == "kubernetes-api-to
 sources = token_volume["projected"]["sources"]
 assert any(s.get("serviceAccountToken", {}).get("expirationSeconds") == 600 for s in sources)
 assert any(s.get("configMap", {}).get("name") == "kube-root-ca.crt" for s in sources)
+verification = next(v for v in pod["volumes"] if v["name"] == "openbao-verify-token")
+assert verification["projected"]["sources"] == [{"serviceAccountToken": {
+    "path": "token", "audience": "openbao-config-verification", "expirationSeconds": 600}}]
+assert any(m["name"] == "openbao-verify-token" and
+           m["mountPath"] == "/openbao/verify-token" and m["readOnly"] is True
+           for m in container["volumeMounts"])
+reader_role = next(o for o in desired["objects"] if o.kind == "jwt-role" and
+                   o.name == "openbao-config-reader")
+assert reader_role.fields["bound_audiences"] == ["openbao-config-verification"]
 assert len([c for c in pod["containers"] if c["name"] == "openbao"]) == 1
 config = one(rendered, "ConfigMap", "openbao-config")["data"]["extraconfig-from-values.hcl"]
 for fragment in ['seal "static"', 'file:///openbao/seal/key', 'tls_auto_reload = true',

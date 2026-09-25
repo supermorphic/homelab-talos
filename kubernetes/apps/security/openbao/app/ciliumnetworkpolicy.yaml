@@ -4,6 +4,8 @@ metadata:
   name: openbao
   namespace: openbao
 spec:
+  # The named diagnostic verifier execs inside a checked server Pod and uses its
+  # loopback listener. It does not require node-wide ingress to the API port.
   endpointSelector:
     matchLabels:
       app.kubernetes.io/name: openbao
