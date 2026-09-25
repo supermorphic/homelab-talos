@@ -16,8 +16,8 @@ verified against the registry's OCI index digest. The chart's default server ver
 
 Run `mise exec -- just kube openbao-validate` for offline source and rendered-chart checks.
 The reviewed OpenBao mounts, auth roles, policies, and Kubernetes issuance role live in
-`config/desired.json` and `config/policies/`. The planned bootstrap and configuration-apply
-workflows will read them from clean source. They are not mounted into the server or reconciled
+`config/desired.json` and `config/policies/`. The bootstrap and configuration-apply
+workflows read them from clean published and deployed source. They are not mounted into the server or reconciled
 by a privileged controller. Drift comparison covers readable live API fields against the
 same source inventory; an operator password is intentionally outside that comparison.
 The chart's default readiness probe requires an initialized, unsealed server. The release
@@ -31,3 +31,7 @@ loopback-only port-forward to one named Pod; Kubernetes RBAC and the temporary t
 bound that access. Cilium's default local-host handling is expected to carry the
 kubelet-to-Pod segment. The guarded bootstrap must verify this path before initialization;
 no live tunnel behavior is claimed by this staged package.
+
+See the [operator operations guide](../../../../docs/guides/openbao-operations.md) for
+seal creation, separate prepare/initialize confirmations, encrypted recovery retention,
+and configuration repair. All live bootstrap steps remain operator-run.

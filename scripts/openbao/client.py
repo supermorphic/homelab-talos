@@ -1,5 +1,6 @@
 """Bounded, TLS verified OpenBao HTTP transport for guarded operator workflows."""
 
+import http.client
 import json
 import ssl
 import urllib.error
@@ -10,6 +11,10 @@ from .configuration import SafeError, strict_json
 
 
 class ReadFailure(SafeError):
+    pass
+
+
+class NotFound(ReadFailure):
     pass
 
 
@@ -82,6 +87,8 @@ class BaoClient:
                 data = response.read(self.max_bytes + 1)
                 if len(data) > self.max_bytes:
                     raise MalformedResponse('invalid-response')
+                if method == 'POST' and response.status == 204 and not data:
+                    return {}
                 try:
                     return strict_json(data, 'invalid-response')
                 except SafeError:
@@ -89,8 +96,10 @@ class BaoClient:
         except urllib.error.HTTPError as error:
             if method == 'POST':
                 raise AmbiguousWrite('ambiguous-write') from None
+            if error.code == 404:
+                raise NotFound('invalid-response') from None
             raise ReadFailure('read-denied' if error.code == 403 else 'invalid-response') from None
-        except (TimeoutError, OSError, urllib.error.URLError, ValueError, OverflowError):
+        except (TimeoutError, OSError, urllib.error.URLError, http.client.HTTPException, ValueError, OverflowError):
             if method == 'POST':
                 raise AmbiguousWrite('ambiguous-write') from None
             raise ReadFailure('timeout') from None

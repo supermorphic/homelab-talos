@@ -1151,3 +1151,7 @@ openbao-validate: require-bash
 # homelab-diagnostic collector. No configuration writes or acceptance tokens.
 openbao-verify: require-bash
     @scripts/verify/openbao.sh {{quote(kubeconfig)}}
+
+# Apply reviewed OpenBao configuration with exact source/target/plan confirmation.
+openbao-config-apply: require-bash
+    @uv run --locked python -m scripts.openbao.operator config-apply
