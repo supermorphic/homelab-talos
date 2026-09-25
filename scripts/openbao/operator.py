@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import warnings
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -348,6 +349,16 @@ def lease(kubeconfig):
                 raise SafeError("read-denied")
 
 
+def private_prompt(label):
+    # getpass must never fall back to an echoing stdin reader.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", getpass.GetPassWarning)
+        try:
+            return getpass.getpass(label)
+        except getpass.GetPassWarning:
+            raise SafeError("authentication-failed") from None
+
+
 def main(argv):
     client = None
     try:
@@ -363,7 +374,7 @@ def main(argv):
         client = OperatorClient(kubeconfig)
         inputs = {"client": client, "kubeconfig": kubeconfig, "journal": []}
         if phase == "config-apply":
-            token = getpass.getpass("Existing authorized OpenBao token: ")
+            token = private_prompt("Existing authorized OpenBao token: ")
             if not token:
                 raise SafeError("authentication-failed")
             client.wait_quorum(token)
@@ -386,7 +397,7 @@ def main(argv):
         ):
             _, current = apply.snapshot(apply.DESIRED, client)
             if current[("userpass-user", "openbao-operator")][0] is None:
-                password = getpass.getpass("Retained operator password for missing account: ")
+                password = private_prompt("Retained operator password for missing account: ")
                 if not password:
                     raise SafeError("authentication-failed")
                 inputs["operator_password"] = password
