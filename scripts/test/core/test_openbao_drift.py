@@ -14,6 +14,29 @@ MARKER = "CREDENTIAL_MARKER_9f8d"
 
 
 class DriftTest(unittest.TestCase):
+    def test_complete_pinned_jwt_response_accepts_only_benign_defaults(self):
+        actual = json.loads(
+            (Path(__file__).parent / "fixtures/openbao-2.7-jwt-config.json").read_text()
+        )["data"]
+        spec = next(s for s in load_desired(DESIRED) if s.kind == "jwt-config")
+        self.assertEqual(compare(spec, actual), [])
+        for field, value in {
+            "oidc_client_id": "unreviewed",
+            "oidc_response_mode": "form_post",
+            "oidc_response_types": ["id_token"],
+            "oidc_discovery_url": "https://unreviewed.example",
+            "oidc_discovery_ca_pem": "synthetic-ca",
+            "jwks_url": "https://unreviewed.example",
+            "jwks_ca_pem": "synthetic-ca",
+            "override_allowed_server_names": ["unreviewed.example"],
+            "jwt_validation_pubkeys": ["synthetic-key"],
+            "jwt_supported_algs": ["HS256"],
+            "status": "invalid",
+            "oidc_client_secret": "synthetic-private",
+        }.items():
+            with self.subTest(field=field):
+                self.assertTrue(compare(spec, dict(actual, **{field: value})))
+
     def test_changed_namespace_and_missing_role(self):
         role = ObjectSpec(
             "issuance-role",
@@ -298,7 +321,7 @@ class DriftTest(unittest.TestCase):
                 "provider_config": {"provider": "kubernetes"},
             },
         )
-        live = dict(spec.fields, oidc_discovery_ca_pem=[], jwt_validation_pubkeys=[])
+        live = dict(spec.fields, oidc_discovery_ca_pem="", jwt_validation_pubkeys=[])
         self.assertEqual(compare(spec, live), [])
         changed = dict(live, jwt_validation_pubkeys=[MARKER])
         self.assertEqual(

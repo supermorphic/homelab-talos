@@ -91,6 +91,55 @@ def contains_source(expected, actual):
     return expected == actual
 
 
+def require_deployed_revision(kubeconfig, revision):
+    source = kube(
+        kubeconfig, "-n", "flux-system", "get", "gitrepository", "flux-system", "-o", "json"
+    )
+    applied = kube(
+        kubeconfig, "-n", "flux-system", "get", "kustomization", "cluster-apps", "-o", "json"
+    )
+    if (
+        source.get("status", {}).get("artifact", {}).get("revision") != f"main@sha1:{revision}"
+        or applied.get("status", {}).get("lastAppliedRevision") != f"main@sha1:{revision}"
+    ):
+        raise SafeError("source-mismatch")
+
+
+def package_digest():
+    files = sorted(path for path in PACKAGE.rglob("*") if path.is_file())
+    return digest(
+        {str(p.relative_to(PACKAGE)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
+    )
+
+
+def preparation_unit(kubeconfig, approved, name):
+    """Refresh source and the exact suspended Flux unit immediately before resume."""
+    import yaml
+
+    if name not in {"openbao-prerequisites", "openbao"}:
+        raise SafeError("invalid-source")
+    revision = source_revision()
+    if revision != approved["source_revision"] or package_digest() != approved["package_digest"]:
+        raise SafeError("source-mismatch")
+    require_deployed_revision(kubeconfig, revision)
+    cluster = kube(kubeconfig, "get", "namespace", "kube-system", "-o", "json")
+    if cluster["metadata"]["uid"] != approved["cluster_uid"]:
+        raise SafeError("source-mismatch")
+    expected = next(
+        u
+        for u in yaml.safe_load_all((PACKAGE / "ks.yaml").read_bytes())
+        if u["metadata"]["name"] == name
+    )
+    actual = kube(kubeconfig, "-n", "flux-system", "get", "kustomization", name, "-o", "json")
+    if (
+        actual["metadata"]["uid"] != approved["flux_unit_uids"][name]
+        or expected["spec"].get("suspend") is not True
+        or not contains_source(expected["spec"], actual["spec"])
+    ):
+        raise SafeError("source-mismatch")
+    return actual
+
+
 def freeze_target(kubeconfig, phase) -> dict:
     """Read metadata/configuration only; never request a Kubernetes Secret value."""
     import yaml
@@ -104,21 +153,8 @@ def freeze_target(kubeconfig, phase) -> dict:
     revision = source_revision()
     recipient = os.environ.get("OPENBAO_RECOVERY_RECIPIENT", "")
     validate_recipient(recipient)
-    source = kube(
-        kubeconfig, "-n", "flux-system", "get", "gitrepository", "flux-system", "-o", "json"
-    )
-    applied = kube(
-        kubeconfig, "-n", "flux-system", "get", "kustomization", "cluster-apps", "-o", "json"
-    )
-    if (
-        source.get("status", {}).get("artifact", {}).get("revision") != f"main@sha1:{revision}"
-        or applied.get("status", {}).get("lastAppliedRevision") != f"main@sha1:{revision}"
-    ):
-        raise SafeError("source-mismatch")
-    files = sorted(path for path in PACKAGE.rglob("*") if path.is_file())
-    package_digest = digest(
-        {str(p.relative_to(PACKAGE)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
-    )
+    require_deployed_revision(kubeconfig, revision)
+    package_hash = package_digest()
     seal_path = PACKAGE / "app/openbao-seal.sops.yaml"
     try:
         seal = yaml.safe_load(seal_path.read_bytes())
@@ -151,7 +187,12 @@ def freeze_target(kubeconfig, phase) -> dict:
             raise SafeError("source-mismatch")
     target = {
         "source_revision": revision,
-        "package_digest": package_digest,
+        "package_digest": package_hash,
+        "flux_unit_uids": {
+            u["metadata"]["name"]: u["metadata"]["uid"]
+            for u in units
+            if u["metadata"]["name"] in {e["metadata"]["name"] for e in desired_units}
+        },
         "cluster_uid": cluster["metadata"]["uid"],
         "recipient": recipient,
         "seal_key_id": "openbao-static-seal-v1",

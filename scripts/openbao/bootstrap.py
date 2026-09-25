@@ -47,12 +47,15 @@ def run(
     secrets.preflight_recovery(recovery_directory, recipient)
     _uninitialized(client, absent_allowed=phase == "prepare")
     if phase == "prepare":
-        client.prepare()
+        client.prepare(target)
         return {"status": "prepared"}
     password = random.token_urlsafe(32)
     # The transport never retries POST. A malformed success is also ambiguous.
     journal.append("initialization-requested")
-    response = client.post("sys/init", {"recovery_shares": 1, "recovery_threshold": 1})
+    try:
+        response = client.post("sys/init", {"recovery_shares": 1, "recovery_threshold": 1})
+    except Exception:  # noqa: BLE001 -- Once sent, any unusable init result is ambiguous.
+        raise AmbiguousWrite("ambiguous-write") from None
     if (
         not isinstance(response, dict)
         or not isinstance(response.get("root_token"), str)
