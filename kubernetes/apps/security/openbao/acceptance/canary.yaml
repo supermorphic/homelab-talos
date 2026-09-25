@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openbao-canary
+  namespace: openbao-acceptance
+data:
+  marker: synthetic-openbao-reader-canary

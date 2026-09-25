@@ -1,0 +1,66 @@
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: openbao-prerequisites
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: cert-manager-config
+    - name: longhorn
+  interval: 1h
+  path: ./kubernetes/apps/security/openbao/namespace
+  prune: true
+  sourceRef: {kind: GitRepository, name: flux-system, namespace: flux-system}
+  suspend: true
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: openbao
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: openbao-prerequisites
+    - name: cilium
+  decryption:
+    provider: sops
+    secretRef: {name: sops-age}
+  interval: 1h
+  path: ./kubernetes/apps/security/openbao/app
+  prune: true
+  sourceRef: {kind: GitRepository, name: flux-system, namespace: flux-system}
+  suspend: true
+  wait: false
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: openbao-access
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: openbao
+    - name: internal-gateway
+  interval: 1h
+  path: ./kubernetes/apps/security/openbao/access
+  prune: true
+  sourceRef: {kind: GitRepository, name: flux-system, namespace: flux-system}
+  suspend: true
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: openbao-acceptance
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: openbao
+  interval: 1h
+  path: ./kubernetes/apps/security/openbao/acceptance
+  prune: true
+  sourceRef: {kind: GitRepository, name: flux-system, namespace: flux-system}
+  suspend: true
+  wait: true

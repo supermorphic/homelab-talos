@@ -5,3 +5,4 @@ resources:
   - ./alerts/ks.yaml
   - ./cert-manager/ks.yaml
   - ./trivy-operator/ks.yaml
+  - ./openbao/ks.yaml
