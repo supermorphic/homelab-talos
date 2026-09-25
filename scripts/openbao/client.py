@@ -72,8 +72,13 @@ class BaoClient:
                 if response.status < 200 or response.status >= 300:
                     raise ReadFailure('read-denied' if response.status == 403 else 'invalid-response')
                 length = response.headers.get('Content-Length')
-                if length is not None and int(length) > self.max_bytes:
-                    raise MalformedResponse('invalid-response')
+                if length is not None:
+                    try:
+                        parsed_length = int(length)
+                    except (TypeError, ValueError, OverflowError):
+                        raise MalformedResponse('invalid-response') from None
+                    if parsed_length < 0 or parsed_length > self.max_bytes:
+                        raise MalformedResponse('invalid-response')
                 data = response.read(self.max_bytes + 1)
                 if len(data) > self.max_bytes:
                     raise MalformedResponse('invalid-response')

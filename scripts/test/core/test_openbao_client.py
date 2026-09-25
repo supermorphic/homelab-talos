@@ -61,6 +61,13 @@ class ClientTest(unittest.TestCase):
                            Response(b'{', url=request.full_url))
         with self.assertRaises(MalformedResponse):
             client.read('sys/health')
+        malformed_length = Response(b'{}')
+        malformed_length.headers['Content-Length'] = 'synthetic-private-marker'
+        client = BaoClient('https://openbao.example', opener=lambda request, timeout:
+                           malformed_length)
+        with self.assertRaises(MalformedResponse) as caught:
+            client.read('sys/health')
+        self.assertNotIn('synthetic-private-marker', str(caught.exception))
         client = BaoClient('https://openbao.example', opener=lambda *_, **__: (_ for _ in ()).throw(
             urllib.error.HTTPError('https://openbao.example', 403, 'synthetic-private-marker', {}, None)))
         with self.assertRaises(ReadFailure) as caught:
