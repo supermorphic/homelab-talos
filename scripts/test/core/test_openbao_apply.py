@@ -1,4 +1,5 @@
 import copy
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -15,6 +16,11 @@ class StateClient:
     def __init__(self):
         self.document = load_document(DESIRED)
         self.state = {(s.kind, s.name): copy.deepcopy(s.fields) for s in self.document["objects"]}
+        # Complete pinned-2.7 pathConfigRead response, independently specified in a fixture.
+        self.jwt_readback = json.loads(
+            (Path(__file__).parent / "fixtures/openbao-2.7-jwt-config.json").read_text()
+        )["data"]
+        self.state[("jwt-config", "homelab-jwt")] = copy.deepcopy(self.jwt_readback)
         self.writes = []
         self.ignore_writes = False
         self.audit = {
@@ -52,6 +58,11 @@ class StateClient:
             for spec in self.document["objects"]:
                 if path == spec.path:
                     self.state[(spec.kind, spec.name)] = copy.deepcopy(payload)
+                    if spec.kind == "jwt-config":
+                        self.state[(spec.kind, spec.name)] = {
+                            **copy.deepcopy(self.jwt_readback),
+                            **payload,
+                        }
                     self.password_received = self.state[(spec.kind, spec.name)].pop(
                         "password", None
                     )

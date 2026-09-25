@@ -55,7 +55,7 @@ class BootstrapClient:
         if not self.joined:
             raise SafeError("timeout")
 
-    def prepare(self):
+    def prepare(self, approved):
         self.calls.append(("prepare", "owned-units"))
 
     def configure_audit(self, token):
@@ -103,6 +103,42 @@ class BootstrapTest(unittest.TestCase):
         self.assertEqual(self.client.calls.count(("POST", "sys/init")), 1)
         self.assertEqual(self.client.deleted_pvcs, [])
         self.assertEqual(self.client.initialized_peers, ["openbao-0"])
+
+    def test_unusable_init_http_responses_are_ambiguous_without_retry_or_storage_deletion(self):
+        import http.client
+
+        from scripts.openbao.client import BaoClient
+        from scripts.test.core.test_openbao_client import Response
+
+        class Truncated(Response):
+            def read(self, size=-1):
+                raise http.client.IncompleteRead(b"synthetic", 100)
+
+        for response in (
+            Response(b"{", url="https://openbao.example/v1/sys/init"),
+            Response(b"x" * 33, url="https://openbao.example/v1/sys/init"),
+            Truncated(url="https://openbao.example/v1/sys/init"),
+        ):
+            self.client.calls.clear()
+            self.client.states = [False, False, False]
+            self.client.initialized_peers.clear()
+
+            def opener(request, timeout, response=response):
+                self.client.calls.append(("POST", "sys/init"))
+                self.client.states[0] = True
+                self.client.initialized_peers.append("openbao-0")
+                return response
+
+            transport = BaoClient("https://openbao.example", max_bytes=32, opener=opener)
+            with (
+                patch.object(self.client, "post", side_effect=transport.post),
+                self.assertRaises(AmbiguousWrite) as caught,
+            ):
+                bootstrap.run("initialize", **self.inputs)
+            self.assertEqual(str(caught.exception), "ambiguous-write")
+            self.assertEqual(self.client.calls, [("POST", "sys/init")])
+            self.assertEqual(self.client.deleted_pvcs, [])
+            self.assertEqual(self.client.initialized_peers, ["openbao-0"])
 
     def test_initialized_mixed_malformed_and_inaccessible_refuse_all_writes(self):
         for states in (
@@ -183,6 +219,58 @@ class BootstrapTest(unittest.TestCase):
         self.assertEqual(self.client.calls, [("prepare", "owned-units")])
 
 
+class PinnedReadbackTest(unittest.TestCase):
+    def test_bootstrap_reaches_root_revocation_with_complete_jwt_readback(self):
+        from scripts.test.core.test_openbao_apply import StateClient
+
+        class Client(StateClient, BootstrapClient):
+            def __init__(self):
+                StateClient.__init__(self)
+                BootstrapClient.__init__(self)
+
+            def post(self, path, payload, token=None):
+                if path in {
+                    "sys/init",
+                    "auth/token/revoke-self",
+                    "auth/homelab-userpass/login/openbao-operator",
+                }:
+                    return BootstrapClient.post(self, path, payload, token)
+                return StateClient.post(self, path, payload, token)
+
+            def set_token(self, token):
+                pass
+
+        client = Client()
+        client.state[("issuance-role", "openbao-acceptance")]["token_max_ttl"] = 900
+        client.state[("jwt-config", "homelab-jwt")] = None
+        target = {
+            "source_revision": "a" * 40,
+            "package_digest": "b" * 64,
+            "recipient": "synthetic",
+        }
+        journal = []
+        with (
+            patch("scripts.openbao.guards.freeze_target", return_value=target),
+            patch("scripts.openbao.guards.assert_mutation_allowed"),
+            patch("scripts.openbao.secrets.preflight_recovery"),
+            patch("scripts.openbao.secrets.write_recovery"),
+        ):
+            result = bootstrap.run(
+                "initialize",
+                client=client,
+                kubeconfig=Path("/synthetic"),
+                recovery_directory=Path("/synthetic"),
+                recipient="synthetic",
+                journal=journal,
+                confirm=guards.confirmation("initialize", "a" * 40, guards.digest(target)),
+            )
+        self.assertEqual(result["status"], "pass")
+        self.assertIn("root-revoked", journal)
+        self.assertEqual(
+            client.state[("issuance-role", "openbao-acceptance")]["token_max_ttl"], 600
+        )
+
+
 class GuardTest(unittest.TestCase):
     def test_source_refuses_dirty_or_unpublished_candidate(self):
         with (
@@ -260,6 +348,79 @@ class GuardTest(unittest.TestCase):
         ):
             bootstrap.run("initialize", **fixture.inputs)
         install.assert_not_called()
+
+
+class PrepareRaceTest(unittest.TestCase):
+    def test_changed_source_or_unit_during_prerequisite_wait_blocks_server_resume(self):
+        import json
+
+        import yaml
+
+        from scripts.openbao.operator import OperatorClient
+
+        for changed in ("revision", "artifact", "path", "sourceRef", "uid"):
+            with self.subTest(changed=changed):
+                units = {
+                    u["metadata"]["name"]: u
+                    for u in yaml.safe_load_all((guards.PACKAGE / "ks.yaml").read_text())
+                }
+                for name, unit in units.items():
+                    unit["metadata"].update(uid="synthetic-" + name, resourceVersion="1")
+                approved = {
+                    "source_revision": "a" * 40,
+                    "package_digest": "b" * 64,
+                    "cluster_uid": "synthetic-cluster",
+                    "flux_unit_uids": {name: u["metadata"]["uid"] for name, u in units.items()},
+                }
+                live = {"revision": "a" * 40, "artifact": "a" * 40}
+                resumed = []
+
+                def kube(config, *args, live=live, units=units):
+                    if "gitrepository" in args:
+                        return {
+                            "status": {"artifact": {"revision": "main@sha1:" + live["artifact"]}}
+                        }
+                    if "cluster-apps" in args:
+                        return {"status": {"lastAppliedRevision": "main@sha1:" + live["artifact"]}}
+                    if "kube-system" in args:
+                        return {"metadata": {"uid": "synthetic-cluster"}}
+                    return copy.deepcopy(units[args[args.index("kustomization") + 1]])
+
+                def command(
+                    argv, live=live, units=units, changed=changed, resumed=resumed, **kwargs
+                ):
+                    if argv[0] == "git":
+                        if "status" in argv:
+                            return b""
+                        return (
+                            live["revision"] + (" refs/heads/main" if "ls-remote" in argv else "")
+                        ).encode()
+                    if argv[0] == "flux":
+                        if changed in {"revision", "artifact"}:
+                            live[changed] = "c" * 40
+                        elif changed == "uid":
+                            units["openbao"]["metadata"]["uid"] = "changed"
+                        else:
+                            units["openbao"]["spec"][changed] = "unrelated"
+                        return b""
+                    operations = json.loads(argv[argv.index("-p") + 1])
+                    if operations[-1]["value"] is False:
+                        resumed.append(argv[argv.index("kustomization") + 1])
+                    return b""
+
+                with (
+                    patch("scripts.openbao.guards.command", side_effect=command),
+                    patch("scripts.openbao.guards.kube", side_effect=kube),
+                    patch(
+                        "scripts.openbao.guards.package_digest", return_value="b" * 64, create=True
+                    ),
+                    patch("scripts.openbao.guards.assert_mutation_allowed"),
+                    patch("scripts.openbao.guards.freeze_target", return_value=approved),
+                    patch("scripts.openbao.bootstrap._uninitialized"),
+                    self.assertRaises(SafeError),
+                ):
+                    OperatorClient(Path("/synthetic")).prepare(approved)
+                self.assertEqual(resumed, ["openbao-prerequisites"])
 
 
 if __name__ == "__main__":

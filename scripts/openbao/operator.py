@@ -205,23 +205,12 @@ class OperatorClient:
             time.sleep(2)
         raise SafeError("timeout")
 
-    def prepare(self):
+    def prepare(self, approved):
         owned = []
         try:
             for name in ("openbao-prerequisites", "openbao"):
                 guards.assert_mutation_allowed(self.kubeconfig)
-                unit = guards.kube(
-                    self.kubeconfig,
-                    "-n",
-                    "flux-system",
-                    "get",
-                    "kustomization",
-                    name,
-                    "-o",
-                    "json",
-                )
-                if unit["spec"].get("suspend") is not True:
-                    raise SafeError("source-mismatch")
+                unit = guards.preparation_unit(self.kubeconfig, approved, name)
                 patch = [
                     {"op": "test", "path": "/metadata/uid", "value": unit["metadata"]["uid"]},
                     {

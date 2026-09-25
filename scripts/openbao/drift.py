@@ -55,6 +55,11 @@ FIELDS = {
         "default_role",
         "provider_config",
         "namespace_in_state",
+        "oidc_client_id",
+        "oidc_response_mode",
+        "oidc_response_types",
+        "override_allowed_server_names",
+        "status",
     },
     "jwt-role": {
         "role_type",
@@ -147,7 +152,22 @@ VOLATILE = {
     "policy": {"modified", "version"},
 }
 DEFAULTS = {
-    "jwt-config": {"oidc_discovery_ca_pem": [], "jwt_validation_pubkeys": []},
+    # Pinned 2.7 pathConfigRead/pathConfigWrite defaults. Non-default trust inputs
+    # remain differences; status is validated rather than treated as volatile.
+    "jwt-config": {
+        "oidc_discovery_url": "",
+        "oidc_discovery_ca_pem": "",
+        "oidc_client_id": "",
+        "oidc_response_mode": "",
+        "oidc_response_types": [],
+        "jwt_validation_pubkeys": [],
+        "jwt_supported_algs": [],
+        "jwks_url": "",
+        "jwks_ca_pem": "",
+        "override_allowed_server_names": [],
+        "namespace_in_state": True,
+        "status": "valid",
+    },
     "jwt-role": {
         "role_type": "jwt",
         "bound_claims_type": "string",
@@ -194,6 +214,8 @@ DEFAULTS = {
     },
 }
 SETS = {
+    "oidc_response_types",
+    "override_allowed_server_names",
     "bound_audiences",
     "token_policies",
     "policies",
@@ -235,6 +257,11 @@ BOOLEANS = {
     "cas_required",
 }
 STRINGS = {
+    "oidc_discovery_ca_pem",
+    "oidc_client_id",
+    "oidc_response_mode",
+    "jwks_ca_pem",
+    "status",
     "type",
     "description",
     "oidc_discovery_url",
@@ -348,10 +375,6 @@ def _normalized_value(key: str, value: object) -> object:
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             raise SafeError("invalid-response")
         return sorted(set(value))
-    if key == "oidc_discovery_ca_pem":
-        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-            raise SafeError("invalid-response")
-        return value
     if key == "config":
         if not isinstance(value, dict):
             raise SafeError("invalid-response")
