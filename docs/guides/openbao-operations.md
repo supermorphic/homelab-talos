@@ -120,3 +120,94 @@ configuration. Ordinary `openbao-verify` remains observational.
 These commands have offline synthetic tests. Live bootstrap, tunnel behavior, retention
 on operator storage, and root revocation require attended acceptance; source tests alone
 do not establish deployment success.
+
+## Issuance and HA acceptance
+
+These catalog tests are attended and use the explicitly selected
+`OPENBAO_OPERATOR_KUBECONFIG`. The catalog records human execution ownership and
+holds the existing disruption Lease. The source must be clean, published and
+deployed `main`. Activate the acceptance manifests through the reviewed deployment
+procedure first. No agent diagnostic credential is upgraded or adopted.
+
+```sh
+mise exec -- just test record test.openbao-issuance
+mise exec -- just test record test.openbao-ha
+```
+
+Set `TEST_KUBECONFIG` to the same explicit operator kubeconfig when invoking the
+record command. The convenience wrappers are `just kube openbao-issuance-test`
+and `just kube openbao-ha-test`. Each prompts for exact source/target/run
+confirmation; this is an execution-intent guard. Operator authority must already
+cover creating and cleaning up the bounded test resources and, for HA, evicting
+OpenBao members. HA also prompts privately for an authorized OpenBao token to
+read Raft state. Tokens never enter command arguments or retained results.
+
+Issuance creates bounded Pods for the exact issuer and acceptance ServiceAccounts.
+They mount only projected identity material, with no seal key or server storage.
+It makes actual positive and negative TokenRequest calls in the acceptance and
+synthetic wrong namespace, and tests empty RBAC/ServiceAccount creation and
+synthetic impersonation denial. A timeout, authentication failure, or missing
+object cannot stand in for a forbidden response. Unexpected success stops testing;
+cleanup checks exact resource ownership and UID/resourceVersion preconditions.
+
+The acceptance workload authenticates to OpenBao, requests a ten-minute reader
+credential, checks its audience and effective expiry, asks Kubernetes for its
+actual authenticated identity, reads the synthetic canary, and proves a protected
+read is forbidden. It waits through actual expiry plus at most 30 seconds of clock
+skew and requires Kubernetes authentication rejection. This takes approximately
+11 minutes. No OpenBao lease revocation is treated as Kubernetes JWT revocation.
+
+HA evicts one standby, waits for three healthy voters and replicated progress,
+then evicts the original leader. Every eviction uses the eviction API and Pod
+DisruptionBudget, fresh Pod/owner/leader/quorum observations, and atomic Pod UID
+and resourceVersion preconditions. Recovery has a three-minute polling deadline
+per replacement; bounded API calls already in flight can finish afterward, but
+cannot count as timely recovery. Issuance probes report sampled interruption and recovery duration;
+this is not a continuous availability measurement. A failure stops subsequent
+mutations and requires attended inspection. Physical power-loss testing remains
+in the separately authorized node-lifecycle workflow.
+
+## Upgrade after a Git image update
+
+Review upstream compatibility and the repository version constraints before
+publishing the desired image change. `OnDelete` leaves running members in place.
+Retain a verified snapshot from the currently running version using the existing
+backup procedure. Select its local encrypted archive with
+`OPENBAO_UPGRADE_SNAPSHOT`; its sibling `metadata.json` must match the archive,
+source seal/recovery generation, and running version, and be no older than one
+hour. Do not put credentials or decrypted snapshot contents in the repository.
+
+```sh
+mise exec -- just kube openbao-upgrade
+```
+
+The command checks the fresh snapshot again before each replacement and verifies
+that the deployed StatefulSet template matches the pending Git image and controller
+revision. It refuses image downgrades and major-version changes. Compatibility
+review remains required; numeric version ordering alone cannot establish it.
+It replaces and checks each standby, explicitly requests the old leader to step
+down, proves an upgraded voter acquired leadership, then replaces the old leader.
+The existing disruption Lease covers the whole sequence. There is no automatic
+image or storage rollback. A partial upgrade stops for attended recovery review.
+
+## Isolated renewal and drift interface
+
+`scripts/openbao/maintenance.py` exposes `isolated_renewal` and `isolated_drift`
+for an independently provisioned, attended three-voter acceptance environment.
+There is deliberately no production command route to these mutation interfaces.
+An adapter must bind every request and TLS connection to its recorded namespace
+UID, use a namespace named `openbao-isolated-*` owned by the exact run, and expose
+fresh namespace ownership and three-voter state on every guard. Provisioning this
+live isolated environment and granting its operator/reader authority are separate
+prerequisites; the snapshot restore scratch environment does not satisfy them.
+
+Renewal replaces only synthetic TLS material, checks the actual peer certificate
+through verified TLS sockets, and requires stable member identities and quorum
+through reload. The adapter must return the expected new certificate fingerprint
+and use its own isolated trust chain with hostname verification. Drift acceptance
+writes and restores a synthetic auth description, acceptance policy, issuance-role
+TTL, and reader policy. The isolated reader must observe each configuration change
+through the existing comparator and must receive an actual 403 after reader denial.
+The observational `openbao-verify` command performs none of these mutations.
+Offline fake API and local synthetic TLS tests verify these interfaces; they do
+not establish live OpenBao renewal/reload, cluster HA, or RBAC acceptance.

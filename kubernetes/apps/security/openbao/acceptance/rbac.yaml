@@ -62,3 +62,17 @@ subjects:
   - kind: ServiceAccount
     name: openbao-issued-reader
     namespace: openbao-acceptance
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openbao-acceptance
+  namespace: openbao-acceptance
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openbao-issued-reader
+  namespace: openbao-acceptance-wrong
+automountServiceAccountToken: false

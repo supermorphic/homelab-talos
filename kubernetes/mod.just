@@ -1160,3 +1160,17 @@ openbao-config-apply: require-bash
 openbao-restore-drill: require-bash
     @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}"
     @TEST_KUBECONFIG="$OPENBAO_OPERATOR_KUBECONFIG" scripts/test/run-catalog-suite.sh test.openbao-restore-drill -- uv run --locked python -m scripts.test.scenarios.openbao_restore
+
+# Attended real API issuance, denial, and actual expiration acceptance.
+openbao-issuance-test: require-bash
+    @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}"
+    @TEST_KUBECONFIG="$OPENBAO_OPERATOR_KUBECONFIG" scripts/test/run-catalog-suite.sh test.openbao-issuance -- uv run --locked python -m scripts.test.scenarios.openbao_issuance
+
+# Attended sequential follower and leader eviction under the catalog disruption Lease.
+openbao-ha-test: require-bash
+    @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}"
+    @TEST_KUBECONFIG="$OPENBAO_OPERATOR_KUBECONFIG" scripts/test/run-catalog-suite.sh test.openbao-ha -- uv run --locked python -m scripts.test.scenarios.openbao_ha
+
+# Attended standby-first replacement after a reviewed Git image update and fresh snapshot.
+openbao-upgrade: require-bash
+    @scripts/operations/openbao-upgrade.sh
