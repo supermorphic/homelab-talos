@@ -186,20 +186,12 @@ errors, or changed relevant source stop bootstrap. Documentation-only changes do
 invalidate evidence. The newest eligible restore must be newer than the newest eligible
 provisioning acceptance.
 
-After confirmation, bootstrap runs a fixed ephemeral PostgreSQL preflight Job with the
-existing backup Secret by reference. Its read-only transaction invokes
-`platform_operations.read_platform_revision()` and requires revision `026-nocodb-v2`
-plus a complete logical backup whose `completed_at` is at or after the revision's
-`installed_at`. It repeats this preflight after the parent reconcile and immediately
-before NocoDB resume. The Job does not expose a general SQL surface or retrieve Secret
-values, and bootstrap removes only the Job with its exact run marker.
-
-Preflight also compares the installed metadata and domain-validation function bodies
-with the reviewed SQL.
-If it differs, run the confirmed `automation-data-upgrade` command from deployed main,
-then obtain a new complete backup and affected provisioning/restore evidence before
-retrying bootstrap. The schema revision is `026-nocodb-v2`; revision alone does
-not prove the function correction is installed.
+After confirmation, bootstrap checks that the reviewed NocoDB platform extension
+is installed and that a complete logical backup was taken afterward. If it rejects
+the installed platform functions, run the guarded automation-data upgrade from
+deployed main, create and verify a fresh complete backup, and renew any affected
+provisioning or restore evidence before retrying bootstrap. Stop on a failed
+preflight; do not repair platform metadata manually.
 
 Bootstrap then reconciles the parent package,
 uses an ownership marker to resume NocoDB, creates or reconciles only the `nocodb`
@@ -336,11 +328,9 @@ NOCODB_SOURCE_SYNC_CONFIRM='sync:nocodb:<domain>' \
   mise exec -- just kube nocodb-source-sync <domain>
 ```
 
-NocoDB `2026.08.2` creates sources asynchronously. A successful create request returns a
-job ID, not a source. Sync stores that ID, polls the exact job every five seconds for at
-most ten minutes, discovers exactly one source only after the job reports `completed`,
-reads that source back, checks its schema and edit flags, performs a bounded data read,
-and validates PostgreSQL privileges before recording `ready`.
+Source creation can complete asynchronously. Wait for source sync to report `ready`.
+If it fails or remains pending, inspect the reported job or source state before
+retrying.
 
 Standard controlled-edit adoption has two phases:
 
@@ -370,10 +360,8 @@ before opening NocoDB. In the affected base:
 5. Run the same `nocodb-source-sync` command again. Require the same base, integration,
    source, credential generation, schema-read-only flag, and saved views.
 
-These labels and the asynchronous metadata-diff behavior are from pinned NocoDB
-`2026.08.2`. Disposable API integration proved one additive column with unchanged table,
-source, integration, credential, and saved-view identities. An operator must still
-perform the attended browser check before this UI procedure counts as live acceptance.
+Confirm these screen labels in the deployed NocoDB interface. The attended
+browser check is required before this procedure counts as live acceptance.
 
 ### 6. Rotate one source login
 

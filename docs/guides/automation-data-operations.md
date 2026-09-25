@@ -276,9 +276,9 @@ AUTOMATION_DATA_UPGRADE_CONFIRM='upgrade:automation-data:nocodb-v2' \
   mise exec -- just kube automation-data-upgrade
 ```
 
-Wait for the command to succeed. It upgrades the installed extension to
-`026-nocodb-v2`, preserves existing NocoDB source identities, and makes custom
-schema mappings available.
+Wait for the command to succeed. It upgrades the installed NocoDB platform
+extension, preserves existing source identities, and makes custom schema mappings
+available.
 
 After success, create and verify a fresh complete automation-data logical backup
 before continuing with NocoDB bootstrap or source changes. If the command reports
