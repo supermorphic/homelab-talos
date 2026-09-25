@@ -58,6 +58,10 @@ class OpenBaoManifestTests(unittest.TestCase):
         bad_pdb = copy.deepcopy(pdb)
         bad_pdb["spec"]["selector"]["matchLabels"].pop("component")
         self.assertIn("pdb-selector", validate_documents([sts, bad_pdb]))
+        bad_pdb = copy.deepcopy(pdb)
+        bad_pdb["spec"]["selector"]["matchExpressions"] = [
+            {"key": "component", "operator": "DoesNotExist"}]
+        self.assertIn("pdb-selector", validate_documents([sts, bad_pdb]))
         binding = {"kind": "ClusterRoleBinding", "roleRef": {"name": "system:auth-delegator"}}
         self.assertIn("auth-delegator-binding", validate_documents([sts, pdb, binding]))
 
