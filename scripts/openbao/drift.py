@@ -160,6 +160,13 @@ DEFAULTS = {
         "groups_claim": "",
         "token_bound_cidrs": [],
     },
+    "userpass-user": {
+        "token_period": 0,
+        "token_explicit_max_ttl": 0,
+        "token_num_uses": 0,
+        "token_type": "default",
+        "token_bound_cidrs": [],
+    },
     "policy": {"cas_required": False},
     "auth-method": {
         "description": "",
@@ -372,10 +379,36 @@ def _normalized_value(key: str, value: object) -> object:
     raise SafeError("invalid-response")
 
 
+def _apply_aliases(spec: ObjectSpec, data: dict) -> tuple[dict, dict[str, str], list[Difference]]:
+    mapped = dict(data)
+    origins = {}
+    conflicts = []
+    for alias, canonical in ALIASES.get(spec.kind, {}).items():
+        if alias not in mapped:
+            continue
+        if canonical in mapped:
+            try:
+                same = canonical_json(_normalized_value(alias, mapped[alias])) == canonical_json(
+                    _normalized_value(canonical, mapped[canonical])
+                )
+            except SafeError:
+                same = False
+            if not same:
+                conflicts.append(Difference(spec.kind, spec.name, alias, "changed"))
+        else:
+            mapped[canonical] = mapped[alias]
+            origins[canonical] = alias
+        del mapped[alias]
+    return mapped, origins, conflicts
+
+
 def normalize(spec: ObjectSpec, data: dict) -> dict:
     if not isinstance(data, dict) or spec.kind not in FIELDS:
         raise SafeError("invalid-response")
     if set(data) - FIELDS[spec.kind]:
+        raise SafeError("invalid-response")
+    data, _, conflicts = _apply_aliases(spec, data)
+    if conflicts:
         raise SafeError("invalid-response")
     normalized = {}
     for key, value in data.items():
@@ -399,27 +432,10 @@ def compare(spec: ObjectSpec, data: dict | None | SafeError) -> list[Difference]
         findings.append(Difference(spec.kind, spec.name, None, "unexpected"))
     if spec.kind == "policy" and "name" in data and data["name"] != spec.name:
         findings.append(Difference(spec.kind, spec.name, "name", "changed"))
-    aliases = ALIASES.get(spec.kind, {})
-    for alias, canonical in aliases.items():
-        if alias not in data or alias in spec.fields:
-            continue
-        wanted = spec.fields.get(canonical, DEFAULTS.get(spec.kind, {}).get(canonical, object()))
-        try:
-            actual = _normalized_value(alias, data[alias])
-            expected = _normalized_value(canonical, wanted)
-            if canonical_json(actual) != canonical_json(expected):
-                findings.append(
-                    Difference(
-                        spec.kind,
-                        spec.name,
-                        alias,
-                        "changed" if canonical in spec.fields else "unexpected",
-                    )
-                )
-        except SafeError:
-            findings.append(Difference(spec.kind, spec.name, alias, "inaccessible"))
+    data, origins, conflicts = _apply_aliases(spec, data)
+    findings.extend(conflicts)
     for key in sorted(
-        set(data) - set(aliases) - ({"name"} if spec.kind == "policy" else set())
+        set(data) - ({"name"} if spec.kind == "policy" else set())
         & FIELDS.get(spec.kind, set()) - set(spec.fields) - VOLATILE.get(spec.kind, set())
     ):
         default = DEFAULTS.get(spec.kind, {}).get(key, object())
@@ -441,9 +457,11 @@ def compare(spec: ObjectSpec, data: dict | None | SafeError) -> list[Difference]
             actual_value = _normalized_value(key, live)
             expected_value = _normalized_value(key, expected)
             if canonical_json(actual_value) != canonical_json(expected_value):
-                findings.append(Difference(spec.kind, spec.name, key, "changed"))
+                findings.append(Difference(spec.kind, spec.name, origins.get(key, key), "changed"))
         except SafeError:
-            findings.append(Difference(spec.kind, spec.name, key, "inaccessible"))
+            findings.append(
+                Difference(spec.kind, spec.name, origins.get(key, key), "inaccessible")
+            )
     return findings
 
 
