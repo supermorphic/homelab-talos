@@ -5,6 +5,13 @@ metadata:
   namespace: openbao
   annotations:
     external-dns.k8s.io/audience: internal
+    gethomepage.dev/enabled: "true"
+    gethomepage.dev/name: "OpenBao"
+    gethomepage.dev/description: "Kubernetes credential broker"
+    gethomepage.dev/group: "Platform"
+    gethomepage.dev/icon: "openbao.svg"
+    gethomepage.dev/href: "https://openbao.lab.supermorphic.com"
+    gethomepage.dev/pod-selector: "app.kubernetes.io/name=openbao"
 spec:
   hostnames: [openbao.lab.supermorphic.com]
   parentRefs:

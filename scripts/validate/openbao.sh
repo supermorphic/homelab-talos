@@ -5,7 +5,7 @@ base='kubernetes/apps/security/openbao'
 temp_dir="$(mktemp -d /tmp/homelab-talos-openbao-validate.XXXXXX)"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
-for part in namespace app access acceptance; do
+for part in namespace app access acceptance backup monitoring; do
   kustomize build "$base/$part" >"$temp_dir/$part.yaml"
 done
 kustomize build kubernetes/apps/security >"$temp_dir/security.yaml"
@@ -148,7 +148,29 @@ metrics = one(docs("access"), "Service", "openbao-monitoring")
 assert metrics["spec"]["ports"] == [{"name": "monitoring", "port": 8203,
                                      "targetPort": "monitoring", "protocol": "TCP"}]
 assert metrics["spec"]["selector"] == network["endpointSelector"]["matchLabels"]
+assert metrics["metadata"]["labels"] == {"app.kubernetes.io/name": "openbao-monitoring"}
+monitor = one(docs("monitoring"), "ServiceMonitor", "openbao")
+assert monitor["spec"]["selector"]["matchLabels"] == metrics["metadata"]["labels"]
+assert monitor["spec"]["endpoints"][0]["port"] == "monitoring"
+assert monitor["spec"]["endpoints"][0]["path"] == "/v1/sys/metrics"
+assert monitor["spec"]["endpoints"][0]["params"] == {"format": ["prometheus"]}
+assert monitor["spec"]["endpoints"][0]["scheme"] == "https"
+assert monitor["spec"]["endpoints"][0]["tlsConfig"] == {
+    "serverName": "openbao.lab.supermorphic.com"}
+assert one(docs("monitoring"), "PrometheusRule", "openbao")["spec"]["groups"]
+backup = one(docs("backup"), "CronJob", "openbao-backup")
+assert backup["spec"]["schedule"] == "0 1 * * *"
+assert one(docs("backup"), "ServiceAccount", "openbao-backup")["automountServiceAccountToken"] is False
+assert not any(item["kind"] in ("Role", "RoleBinding", "ClusterRole", "ClusterRoleBinding")
+               for item in docs("backup"))
 assert any(p.get("name") == "monitoring" and p.get("containerPort") == 8203
            for p in container["ports"])
 print("OpenBao source, exact TokenRequest role, and official chart render passed validation.")
 PY
+
+yq -o=yaml '.spec' "$base/monitoring/prometheusrule.yaml" >"$temp_dir/openbao-rules.yaml"
+cp tests/prometheus/openbao_test.yaml "$temp_dir/openbao_test.yaml"
+# The test fixture names openbao.yaml, so use that exact local basename.
+mv "$temp_dir/openbao-rules.yaml" "$temp_dir/openbao.yaml"
+promtool check rules "$temp_dir/openbao.yaml"
+promtool test rules "$temp_dir/openbao_test.yaml"

@@ -1,0 +1,72 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: openbao
+  namespace: openbao
+  labels:
+    app.kubernetes.io/name: openbao
+spec:
+  groups:
+    - name: openbao
+      rules:
+        - alert: OpenBaoMetricsMissing
+          expr: absent(vault_core_active{namespace="openbao"})
+          for: 10m
+          labels: {severity: critical}
+          annotations: {summary: OpenBao metrics are missing}
+        - alert: OpenBaoNoLeader
+          expr: sum(vault_core_active{namespace="openbao"}) != 1
+          for: 5m
+          labels: {severity: critical}
+          annotations: {summary: OpenBao has no unique active member}
+        - alert: OpenBaoSealed
+          expr: vault_core_unsealed{namespace="openbao"} == 0
+          for: 5m
+          labels: {severity: critical}
+          annotations: {summary: OpenBao member is sealed}
+        - alert: OpenBaoQuorumLost
+          expr: sum(vault_core_unsealed{namespace="openbao"}) < 2
+          for: 5m
+          labels: {severity: critical}
+          annotations: {summary: Fewer than two OpenBao members are unsealed}
+        - alert: OpenBaoVoterMissing
+          expr: sum(vault_core_unsealed{namespace="openbao"}) < 3
+          for: 15m
+          labels: {severity: warning}
+          annotations: {summary: OpenBao has fewer than three unsealed members}
+        - alert: OpenBaoLocalSnapshotStale
+          expr: >-
+            absent(kube_cronjob_status_last_successful_time{namespace="openbao",cronjob="openbao-backup"})
+            or (time() - max(kube_cronjob_status_last_successful_time{namespace="openbao",cronjob="openbao-backup"}) > 129600)
+          for: 10m
+          labels: {severity: critical}
+          annotations: {summary: OpenBao local Raft snapshot is older than 36 hours}
+        - alert: OpenBaoOffsiteTransferStale
+          expr: >-
+            absent(longhorn_volume_last_backup_at{pvc_namespace="openbao",pvc="openbao-backup"})
+            or (max(longhorn_volume_last_backup_at{pvc_namespace="openbao",pvc="openbao-backup"}) == 0)
+            or (time() - max(longhorn_volume_last_backup_at{pvc_namespace="openbao",pvc="openbao-backup"}) > 172800)
+          for: 10m
+          labels: {severity: critical}
+          annotations: {summary: OpenBao off-cluster Longhorn backup is older than 48 hours}
+        - alert: OpenBaoBackupStorageLow
+          expr: >-
+            max(longhorn_volume_actual_size_bytes{pvc_namespace="openbao",pvc="openbao-backup"})
+            / max(longhorn_volume_capacity_bytes{pvc_namespace="openbao",pvc="openbao-backup"}) > 0.85
+          for: 15m
+          labels: {severity: warning}
+          annotations: {summary: OpenBao backup claim exceeds 85 percent of capacity}
+        - alert: OpenBaoCertificateExpiring
+          expr: >-
+            certmanager_certificate_expiration_timestamp_seconds{namespace="openbao",name="openbao"}
+            - time() < 1209600
+          for: 1h
+          labels: {severity: warning}
+          annotations: {summary: OpenBao server certificate expires within 14 days}
+        - alert: OpenBaoAuditWriteFailure
+          expr: >-
+            sum(increase(vault_audit_log_request_failure{namespace="openbao"}[5m])) > 0
+            or sum(increase(vault_audit_log_response_failure{namespace="openbao"}[5m])) > 0
+          for: 1m
+          labels: {severity: critical}
+          annotations: {summary: OpenBao audit device write failed}
