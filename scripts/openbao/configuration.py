@@ -18,6 +18,7 @@ class SafeError(Exception):
         "source-mismatch",
         "timeout",
         "authentication-failed",
+        "ambiguous-write",
     }
 
     def __init__(self, code: str = "invalid-response"):

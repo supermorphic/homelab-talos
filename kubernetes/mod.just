@@ -1146,3 +1146,8 @@ openbao-render:
 # Check staged OpenBao source and independent rendered-manifest safety invariants.
 openbao-validate: require-bash
     @scripts/validate/openbao.sh
+
+# Compare clean deployed source with live OpenBao configuration through the fixed
+# homelab-diagnostic collector. No configuration writes or acceptance tokens.
+openbao-verify: require-bash
+    @scripts/verify/openbao.sh {{quote(kubeconfig)}}

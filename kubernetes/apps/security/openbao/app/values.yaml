@@ -64,10 +64,18 @@ server:
               name: kube-root-ca.crt
               items:
                 - {key: ca.crt, path: ca.crt}
+    - name: openbao-verify-token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: token
+              audience: openbao-config-verification
+              expirationSeconds: 600
   volumeMounts:
     - {name: openbao-tls, mountPath: /openbao/tls, readOnly: true}
     - {name: openbao-seal, mountPath: /openbao/seal, readOnly: true}
     - {name: kubernetes-api-token, mountPath: /var/run/secrets/kubernetes.io/serviceaccount, readOnly: true}
+    - {name: openbao-verify-token, mountPath: /openbao/verify-token, readOnly: true}
   ha:
     enabled: true
     replicas: 3
