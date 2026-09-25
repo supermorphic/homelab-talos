@@ -71,6 +71,11 @@ FIELDS = {
         "user_claim_json_pointer",
         "groups_claim",
         "claim_mappings",
+        "oauth2_metadata",
+        "callback_mode",
+        "poll_interval",
+        "token_policies_template_claims",
+        "oidc_disable_confirmation",
         "oidc_scopes",
         "allowed_redirect_uris",
         "verbose_oidc_logging",
@@ -85,6 +90,7 @@ FIELDS = {
         "token_bound_cidrs",
         "token_no_default_policy",
         "token_num_uses",
+        "token_strictly_bind_ip",
         "token_type",
         "policies",
         "ttl",
@@ -96,6 +102,7 @@ FIELDS = {
         "namespace",
     },
     "userpass-user": {
+        "token_strictly_bind_ip",
         "policies",
         "token_policies",
         "token_ttl",
@@ -110,7 +117,8 @@ FIELDS = {
         "max_ttl",
         "period",
     },
-    "policy": {"policy", "name", "modified", "version", "cas_required"},
+    "policy": {"policy", "name", "modified", "version", "cas_required",
+               "allow_slashes_in_identity_templates", "allow_wildcards_in_identity_templates"},
     "kubernetes-config": {
         "kubernetes_host",
         "kubernetes_ca_cert",
@@ -120,6 +128,9 @@ FIELDS = {
         "token_reviewer_jwt",
     },
     "issuance-role": {
+        "name",
+        "kubernetes_role_type",
+        "name_template",
         "allowed_kubernetes_namespaces",
         "allowed_kubernetes_namespace_selector",
         "service_account_name",
@@ -179,21 +190,36 @@ DEFAULTS = {
         "verbose_oidc_logging": False,
         "groups_claim": "",
         "token_bound_cidrs": [],
+        "token_strictly_bind_ip": False,
+        "bound_claims": {},
+        "claim_mappings": {},
+        "oauth2_metadata": [],
+        "callback_mode": "client",
+        "token_policies_template_claims": False,
+        "oidc_disable_confirmation": False,
+        "oidc_scopes": [],
+        "allowed_redirect_uris": [],
+        "clock_skew_leeway": 60,
+        "expiration_leeway": 150,
+        "not_before_leeway": 150,
+        "max_age": 0,
     },
     "userpass-user": {
+        "token_strictly_bind_ip": False,
         "token_period": 0,
         "token_explicit_max_ttl": 0,
         "token_num_uses": 0,
         "token_type": "default",
         "token_bound_cidrs": [],
     },
-    "policy": {"cas_required": False},
+    "policy": {"cas_required": False, "allow_slashes_in_identity_templates": False,
+               "allow_wildcards_in_identity_templates": False},
     "auth-method": {
         "description": "",
         "local": False,
         "seal_wrap": False,
         "external_entropy_access": False,
-        "options": None,
+        "options": {},
         "plugin_version": "",
     },
     "secret-mount": {
@@ -201,10 +227,12 @@ DEFAULTS = {
         "local": False,
         "seal_wrap": False,
         "external_entropy_access": False,
-        "options": None,
+        "options": {},
         "plugin_version": "",
     },
     "issuance-role": {
+        "kubernetes_role_type": "Role",
+        "name_template": "",
         "allowed_kubernetes_namespace_selector": "",
         "kubernetes_role_name": "",
         "generated_role_rules": "",
@@ -212,8 +240,10 @@ DEFAULTS = {
         "extra_annotations": {},
         "extra_labels": {},
     },
+    "kubernetes-config": {"kubernetes_ca_cert": ""},
 }
 SETS = {
+    "oauth2_metadata",
     "oidc_response_types",
     "override_allowed_server_names",
     "bound_audiences",
@@ -229,6 +259,7 @@ SETS = {
     "allowed_redirect_uris",
 }
 DURATIONS = {
+    "max_age",
     "token_ttl",
     "token_max_ttl",
     "token_default_ttl",
@@ -244,6 +275,11 @@ DURATIONS = {
     "max_lease_ttl",
 }
 BOOLEANS = {
+    "allow_slashes_in_identity_templates",
+    "allow_wildcards_in_identity_templates",
+    "token_strictly_bind_ip",
+    "token_policies_template_claims",
+    "oidc_disable_confirmation",
     "token_no_default_policy",
     "disable_local_ca_jwt",
     "disable_iss_validation",
@@ -257,6 +293,9 @@ BOOLEANS = {
     "cas_required",
 }
 STRINGS = {
+    "callback_mode",
+    "kubernetes_role_type",
+    "name_template",
     "oidc_discovery_ca_pem",
     "oidc_client_id",
     "oidc_response_mode",
@@ -356,7 +395,13 @@ def _normalized_value(key: str, value: object) -> object:
     if key == "policy":
         return _policy(value)
     if key in DURATIONS:
-        return _seconds(value)
+        seconds = _seconds(value)
+        # Pinned JWT roles store zero for omitted leeway and apply these defaults
+        # at validation time. Explicit non-default limits remain differences.
+        if seconds == 0:
+            return {"clock_skew_leeway": 60, "expiration_leeway": 150,
+                    "not_before_leeway": 150}.get(key, seconds)
+        return seconds
     if key in BOOLEANS:
         if type(value) is not bool:
             raise SafeError("invalid-response")
@@ -366,12 +411,15 @@ def _normalized_value(key: str, value: object) -> object:
             raise SafeError("invalid-response")
         return value
     if key in DICTS:
-        if key == "options" and value is None:
-            return None
+        if value is None and key in {"options", "bound_claims", "claim_mappings", "extra_annotations", "extra_labels"}:
+            return {}
         if not isinstance(value, dict):
             raise SafeError("invalid-response")
         return value
     if key in SETS:
+        # Go nil slices and allocated empty slices have the same API meaning.
+        if value is None:
+            return []
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             raise SafeError("invalid-response")
         return sorted(set(value))
@@ -453,12 +501,13 @@ def compare(spec: ObjectSpec, data: dict | None | SafeError) -> list[Difference]
     unknown = set(data) - FIELDS.get(spec.kind, set())
     if unknown:
         findings.append(Difference(spec.kind, spec.name, None, "unexpected"))
-    if spec.kind == "policy" and "name" in data and data["name"] != spec.name:
+    named_response = spec.kind in {"policy", "issuance-role"}
+    if named_response and "name" in data and data["name"] != spec.name:
         findings.append(Difference(spec.kind, spec.name, "name", "changed"))
     data, origins, conflicts = _apply_aliases(spec, data)
     findings.extend(conflicts)
     for key in sorted(
-        set(data) - ({"name"} if spec.kind == "policy" else set())
+        set(data) - ({"name"} if named_response else set())
         & FIELDS.get(spec.kind, set()) - set(spec.fields) - VOLATILE.get(spec.kind, set())
     ):
         default = DEFAULTS.get(spec.kind, {}).get(key, object())

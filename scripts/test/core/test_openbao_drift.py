@@ -14,6 +14,31 @@ MARKER = "CREDENTIAL_MARKER_9f8d"
 
 
 class DriftTest(unittest.TestCase):
+    def test_complete_pinned_responses_and_nondefault_controls(self):
+        fixtures = json.loads(
+            (Path(__file__).parent / "fixtures/openbao-2.7-read-responses.json").read_text()
+        )
+        for spec in load_desired(DESIRED):
+            if spec.kind in {"auth-method", "secret-mount"}:
+                actual = fixtures["GET sys/auth" if spec.kind == "auth-method" else
+                                  "GET sys/mounts"][spec.name]
+            else:
+                actual = fixtures["GET " + spec.path]
+            with self.subTest(kind=spec.kind, name=spec.name):
+                self.assertEqual(compare(spec, actual), [])
+            changes = {
+                "jwt-role": {"oauth2_metadata": ["access_token"], "callback_mode": "direct",
+                             "token_policies_template_claims": True,
+                             "oidc_disable_confirmation": True, "token_strictly_bind_ip": True,
+                             "bound_claims": {"unreviewed": "value"}, "poll_interval": 5},
+                "kubernetes-config": {"kubernetes_ca_cert": "synthetic-other-ca"},
+                "issuance-role": {"name": "other", "kubernetes_role_type": "ClusterRole",
+                                  "name_template": "other", "extra_labels": {"other": "value"}},
+            }.get(spec.kind, {})
+            for field, value in {**changes, "unreviewed_control": True}.items():
+                with self.subTest(kind=spec.kind, field=field):
+                    self.assertTrue(compare(spec, dict(actual, **{field: value})))
+
     def test_complete_pinned_jwt_response_accepts_only_benign_defaults(self):
         actual = json.loads(
             (Path(__file__).parent / "fixtures/openbao-2.7-jwt-config.json").read_text()

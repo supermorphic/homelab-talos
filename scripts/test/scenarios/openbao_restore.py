@@ -4,6 +4,7 @@ import base64
 import ipaddress
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -40,10 +41,14 @@ try:
     if len(data) > 1048576:
         raise ValueError()
     body = json.loads(data) if data and 200 <= response.status < 300 else {}
+    if (response.status == 500 and args["method"] == "GET"
+            and args["path"] == "auth/homelab-jwt/config"
+            and json.loads(data) == {"errors": [EXPECTED_PROVIDER_ERROR]}):
+        body = {"provider_unavailable": True}
     print(json.dumps({"status": response.status, "body": body}))
 except Exception:
     sys.exit(1)
-"""
+""".replace("EXPECTED_PROVIDER_ERROR", repr(restore.PROVIDER_UNAVAILABLE))
 
 PROBE = """
 import errno, json, socket, sys
@@ -136,6 +141,7 @@ class ScratchKube:
         self.extra.append(self.created[-1])
         self.seal = None
         config = """disable_mlock = true
+raw_storage_endpoint = true
 api_addr = "http://127.0.0.1:8200"
 cluster_addr = "https://127.0.0.1:8201"
 listener "tcp" {
@@ -540,6 +546,20 @@ class ScratchClient:
 
     def request(self, method, path):
         status, body = self.kube.http(method, path, token=self.token)
+        if method == "GET" and path == "auth/homelab-jwt/config":
+            # The restored Kubernetes provider cannot initialize without its
+            # production ServiceAccount files. Prove that exact failure, then
+            # inspect only its stored config with the retained operator policy.
+            if status != 500 or body != {"provider_unavailable": True}:
+                raise restore.RestoreError()
+            mount = self.request("GET", "sys/auth").get("homelab-jwt/", {})
+            uid = mount.get("uuid")
+            if (mount.get("type") != "jwt" or not isinstance(uid, str)
+                    or not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", uid)):
+                raise restore.RestoreError()
+            return restore.stored_jwt_configuration(
+                self.request("GET", f"sys/raw/auth/{uid}/config")
+            )
         if status == 404:
             return {"keys": []} if method == "LIST" else None
         if status != 200 or not isinstance(body.get("data"), dict):

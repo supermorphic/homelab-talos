@@ -138,6 +138,84 @@ class Client:
         self.secret = None
 
 
+class RestoredReadbackTests(unittest.TestCase):
+    def test_isolated_provider_uses_exact_stored_configuration_and_fails_closed(self):
+        from scripts.test.core.test_openbao_apply import StateClient
+        from scripts.test.scenarios import openbao_restore as scenario
+
+        fixtures = Path(__file__).parents[1] / "core/fixtures"
+        raw = json.loads((fixtures / "openbao-2.7-jwt-stored-config.json").read_text())
+        state = StateClient()
+        calls = []
+        response = [500, {"provider_unavailable": True}]
+        raw_response = [200, raw]
+
+        def http(method, path, **kwargs):
+            calls.append((method, path))
+            if path == "auth/homelab-jwt/config":
+                return response
+            if path == "sys/raw/auth/11111111-1111-4111-8111-111111111111/config":
+                return raw_response
+            if path == "sys/storage/raft/configuration":
+                return 200, {"data": {"config": {"servers": [
+                    {"node_id": "scratch", "voter": True, "leader": True}]}}}
+            return 200, {"data": state.request(method, path)}
+
+        cluster = type("Kube", (), {"http": staticmethod(http)})()
+        client = scenario.ScratchClient(cluster, "synthetic-password")
+        self.assertTrue(client.restored_configuration())
+        self.assertIn(("GET", "sys/raw/auth/11111111-1111-4111-8111-111111111111/config"), calls)
+        for status, body in ((403, {}), (404, {}), (500, {}), (200, {"data": {}})):
+            response[:] = [status, body]
+            with self.subTest(status=status), self.assertRaises(restore.RestoreError):
+                client.restored_configuration()
+        response[:] = [500, {"provider_unavailable": True}]
+        for mutation in ({"bound_issuer": "https://other.example"},
+                         {"oidc_client_secret": MARKER}, {"unreviewed": True}):
+            value = json.loads(raw["data"]["value"])
+            value.update(mutation)
+            raw_response[:] = [200, {"data": {"value": json.dumps(value)}}]
+            with self.subTest(mutation=list(mutation)):
+                try:
+                    passed = client.restored_configuration()
+                except (restore.RestoreError, scenario.guards.SafeError):
+                    passed = False
+                self.assertFalse(passed)
+        raw_response[:] = [403, {}]
+        with self.assertRaises(restore.RestoreError):
+            client.restored_configuration()
+        raw_response[:] = [200, raw]
+        for uid in (None, "", "../../other", ["one", "two"]):
+            state.state[("auth-method", "homelab-jwt/")]["uuid"] = uid
+            with self.subTest(uid=uid), self.assertRaises(restore.RestoreError):
+                client.restored_configuration()
+
+    def test_bridge_recognizes_only_literal_pinned_missing_provider_error(self):
+        from scripts.test.scenarios import openbao_restore as scenario
+
+        fixture = Path(__file__).parents[1] / "core/fixtures/openbao-2.7-jwt-provider-unavailable.json"
+        expected = json.loads(fixture.read_text())
+        for status, body, path, allowed in (
+            (500, expected, "auth/homelab-jwt/config", True),
+            (500, {"errors": [MARKER]}, "auth/homelab-jwt/config", False),
+            (403, expected, "auth/homelab-jwt/config", False),
+            (500, expected, "kubernetes/config", False),
+        ):
+            response = type("Response", (), {"status": status,
+                "read": lambda self, limit, body=body: json.dumps(body).encode()})()
+            connection = type("Connection", (), {"request": lambda *a: None,
+                "getresponse": lambda self: response})()
+            source = io.TextIOWrapper(io.BytesIO(
+                json.dumps({"method": "GET", "path": path}).encode() + b"\n"))
+            output = io.StringIO()
+            with (patch("sys.stdin", source), patch("sys.stdout", output),
+                  patch("http.client.HTTPConnection", return_value=connection)):
+                exec(scenario.BRIDGE, {})
+            self.assertEqual(json.loads(output.getvalue())["body"],
+                             {"provider_unavailable": True} if allowed else {})
+            self.assertNotIn(MARKER, output.getvalue())
+
+
 class RestoreTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

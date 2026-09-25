@@ -13,10 +13,18 @@ from pathlib import Path
 import yaml
 
 from .configuration import strict_json
+from .drift import FIELDS
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests/fixtures/openbao/restore"
 OWNER = "homelab.supermorphic.com/test-run"
+# Exact 2.7.0 provider initialization failure, classified in the scratch bridge.
+# Any other error is inaccessible state, never proof of restored configuration.
+PROVIDER_UNAVAILABLE = (
+    '1 error occurred:\n\t* error initializing "kubernetes" provider_config: '
+    'error reading service account token file: open '
+    '/var/run/secrets/kubernetes.io/serviceaccount/token: no such file or directory\n\n'
+)
 IMAGES = {
     "2.7.0": "quay.io/openbao/openbao:2.7.0@sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315"
 }
@@ -29,6 +37,19 @@ _spec.loader.exec_module(_snapshot)
 
 class RestoreError(Exception):
     """Fixed failure category; no supplied value is rendered."""
+
+
+def stored_jwt_configuration(response):
+    """Decode only the pinned JWT config storage entry, without starting a provider."""
+    if not isinstance(response, dict) or set(response) != {"value"}:
+        raise RestoreError()
+    value = strict_json(response["value"])
+    if (not isinstance(value, dict)
+            or set(value) != FIELDS["jwt-config"] - {"status"} | {"oidc_client_secret"}
+            or value["oidc_client_secret"] != ""):
+        raise RestoreError()
+    del value["oidc_client_secret"]
+    return value
 
 
 def namespace(run_id):

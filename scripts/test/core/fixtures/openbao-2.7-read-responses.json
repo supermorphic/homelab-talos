@@ -1,0 +1,281 @@
+{
+  "GET sys/auth": {
+    "homelab-jwt/": {
+      "accessor": "synthetic-accessor",
+      "config": {
+        "default_lease_ttl": 600,
+        "force_no_cache": false,
+        "max_lease_ttl": 600,
+        "token_type": "default-service"
+      },
+      "deprecation_status": "supported",
+      "description": "Homelab machine JWT authentication",
+      "external_entropy_access": false,
+      "local": false,
+      "options": {},
+      "plugin_version": "",
+      "running_plugin_version": "v2.7.0+builtin.bao",
+      "running_sha256": "",
+      "seal_wrap": false,
+      "type": "jwt",
+      "uuid": "11111111-1111-4111-8111-111111111111"
+    },
+    "homelab-userpass/": {
+      "accessor": "synthetic-accessor",
+      "config": {
+        "default_lease_ttl": 3600,
+        "force_no_cache": false,
+        "max_lease_ttl": 3600,
+        "token_type": "default-service"
+      },
+      "deprecation_status": "supported",
+      "description": "Homelab operator login",
+      "external_entropy_access": false,
+      "local": false,
+      "options": {},
+      "plugin_version": "",
+      "running_plugin_version": "v2.7.0+builtin.bao",
+      "running_sha256": "",
+      "seal_wrap": false,
+      "type": "userpass",
+      "uuid": "11111111-1111-4111-8111-111111111111"
+    },
+    "token/": {
+      "type": "token"
+    }
+  },
+  "GET sys/mounts": {
+    "kubernetes/": {
+      "accessor": "synthetic-accessor",
+      "config": {
+        "default_lease_ttl": 600,
+        "force_no_cache": false,
+        "max_lease_ttl": 600
+      },
+      "deprecation_status": "supported",
+      "description": "Bound Kubernetes TokenRequest issuance",
+      "external_entropy_access": false,
+      "local": false,
+      "options": {},
+      "plugin_version": "",
+      "running_plugin_version": "v2.7.0+builtin.bao",
+      "running_sha256": "",
+      "seal_wrap": false,
+      "type": "kubernetes",
+      "uuid": "11111111-1111-4111-8111-111111111111"
+    },
+    "cubbyhole/": {
+      "type": "cubbyhole"
+    },
+    "identity/": {
+      "type": "identity"
+    },
+    "sys/": {
+      "type": "system"
+    }
+  },
+  "GET auth/homelab-jwt/config": {
+    "oidc_discovery_url": "",
+    "oidc_discovery_ca_pem": "",
+    "oidc_client_id": "",
+    "oidc_response_mode": "",
+    "oidc_response_types": [],
+    "default_role": "",
+    "jwt_validation_pubkeys": [],
+    "jwt_supported_algs": [],
+    "jwks_url": "",
+    "jwks_ca_pem": "",
+    "bound_issuer": "https://kubernetes.default.svc.cluster.local",
+    "provider_config": {
+      "provider": "kubernetes"
+    },
+    "override_allowed_server_names": [],
+    "namespace_in_state": true,
+    "status": "valid"
+  },
+  "GET auth/homelab-jwt/role/openbao-backup": {
+    "allowed_redirect_uris": null,
+    "bound_audiences": [
+      "openbao-kubernetes-broker"
+    ],
+    "bound_claims": null,
+    "bound_claims_type": "string",
+    "bound_subject": "system:serviceaccount:openbao:openbao-backup",
+    "callback_mode": "client",
+    "claim_mappings": null,
+    "clock_skew_leeway": 0,
+    "expiration_leeway": 0,
+    "groups_claim": "",
+    "max_age": 0,
+    "not_before_leeway": 0,
+    "oauth2_metadata": null,
+    "oidc_disable_confirmation": false,
+    "oidc_scopes": null,
+    "role_type": "jwt",
+    "token_bound_cidrs": [],
+    "token_explicit_max_ttl": 0,
+    "token_max_ttl": 600,
+    "token_no_default_policy": true,
+    "token_num_uses": 0,
+    "token_period": 0,
+    "token_policies": [
+      "openbao-backup"
+    ],
+    "token_policies_template_claims": false,
+    "token_strictly_bind_ip": false,
+    "token_ttl": 600,
+    "token_type": "service",
+    "user_claim": "sub",
+    "user_claim_json_pointer": false,
+    "verbose_oidc_logging": false
+  },
+  "GET auth/homelab-jwt/role/openbao-acceptance": {
+    "allowed_redirect_uris": null,
+    "bound_audiences": [
+      "openbao-kubernetes-broker"
+    ],
+    "bound_claims": null,
+    "bound_claims_type": "string",
+    "bound_subject": "system:serviceaccount:openbao-acceptance:openbao-acceptance",
+    "callback_mode": "client",
+    "claim_mappings": null,
+    "clock_skew_leeway": 0,
+    "expiration_leeway": 0,
+    "groups_claim": "",
+    "max_age": 0,
+    "not_before_leeway": 0,
+    "oauth2_metadata": null,
+    "oidc_disable_confirmation": false,
+    "oidc_scopes": null,
+    "role_type": "jwt",
+    "token_bound_cidrs": [],
+    "token_explicit_max_ttl": 0,
+    "token_max_ttl": 600,
+    "token_no_default_policy": true,
+    "token_num_uses": 0,
+    "token_period": 0,
+    "token_policies": [
+      "openbao-acceptance"
+    ],
+    "token_policies_template_claims": false,
+    "token_strictly_bind_ip": false,
+    "token_ttl": 600,
+    "token_type": "service",
+    "user_claim": "sub",
+    "user_claim_json_pointer": false,
+    "verbose_oidc_logging": false
+  },
+  "GET auth/homelab-jwt/role/openbao-config-reader": {
+    "allowed_redirect_uris": null,
+    "bound_audiences": [
+      "openbao-config-verification"
+    ],
+    "bound_claims": null,
+    "bound_claims_type": "string",
+    "bound_subject": "system:serviceaccount:openbao:openbao",
+    "callback_mode": "client",
+    "claim_mappings": null,
+    "clock_skew_leeway": 0,
+    "expiration_leeway": 0,
+    "groups_claim": "",
+    "max_age": 0,
+    "not_before_leeway": 0,
+    "oauth2_metadata": null,
+    "oidc_disable_confirmation": false,
+    "oidc_scopes": null,
+    "role_type": "jwt",
+    "token_bound_cidrs": [],
+    "token_explicit_max_ttl": 0,
+    "token_max_ttl": 300,
+    "token_no_default_policy": true,
+    "token_num_uses": 0,
+    "token_period": 0,
+    "token_policies": [
+      "openbao-config-reader"
+    ],
+    "token_policies_template_claims": false,
+    "token_strictly_bind_ip": false,
+    "token_ttl": 300,
+    "token_type": "service",
+    "user_claim": "sub",
+    "user_claim_json_pointer": false,
+    "verbose_oidc_logging": false
+  },
+  "GET auth/homelab-userpass/users/openbao-operator": {
+    "policies": [
+      "openbao-operator"
+    ],
+    "token_bound_cidrs": [],
+    "token_explicit_max_ttl": 0,
+    "token_max_ttl": 3600,
+    "token_no_default_policy": true,
+    "token_num_uses": 0,
+    "token_period": 0,
+    "token_policies": [
+      "openbao-operator"
+    ],
+    "token_strictly_bind_ip": false,
+    "token_ttl": 3600,
+    "token_type": "default"
+  },
+  "GET sys/policies/acl/openbao-operator": {
+    "allow_slashes_in_identity_templates": false,
+    "allow_wildcards_in_identity_templates": false,
+    "cas_required": false,
+    "modified": "2026-01-01T00:00:00Z",
+    "name": "openbao-operator",
+    "policy": "{\"path\": {\"*\": {\"capabilities\": [\"create\", \"read\", \"update\", \"delete\", \"list\", \"sudo\"]}}}",
+    "version": 1
+  },
+  "GET sys/policies/acl/openbao-backup": {
+    "allow_slashes_in_identity_templates": false,
+    "allow_wildcards_in_identity_templates": false,
+    "cas_required": false,
+    "modified": "2026-01-01T00:00:00Z",
+    "name": "openbao-backup",
+    "policy": "{\"path\": {\"sys/storage/raft/snapshot\": {\"capabilities\": [\"read\"]}, \"auth/token/revoke-self\": {\"capabilities\": [\"update\"]}}}",
+    "version": 1
+  },
+  "GET sys/policies/acl/openbao-acceptance": {
+    "allow_slashes_in_identity_templates": false,
+    "allow_wildcards_in_identity_templates": false,
+    "cas_required": false,
+    "modified": "2026-01-01T00:00:00Z",
+    "name": "openbao-acceptance",
+    "policy": "{\"path\": {\"kubernetes/creds/openbao-acceptance\": {\"capabilities\": [\"update\"]}, \"auth/token/revoke-self\": {\"capabilities\": [\"update\"]}}}",
+    "version": 1
+  },
+  "GET sys/policies/acl/openbao-config-reader": {
+    "allow_slashes_in_identity_templates": false,
+    "allow_wildcards_in_identity_templates": false,
+    "cas_required": false,
+    "modified": "2026-01-01T00:00:00Z",
+    "name": "openbao-config-reader",
+    "policy": "{\"path\": {\"sys/auth\": {\"capabilities\": [\"read\"]}, \"sys/mounts\": {\"capabilities\": [\"read\"]}, \"sys/storage/raft/configuration\": {\"capabilities\": [\"read\"]}, \"sys/policies/acl\": {\"capabilities\": [\"list\"]}, \"sys/policies/acl/openbao-operator\": {\"capabilities\": [\"read\"]}, \"sys/policies/acl/openbao-backup\": {\"capabilities\": [\"read\"]}, \"sys/policies/acl/openbao-acceptance\": {\"capabilities\": [\"read\"]}, \"sys/policies/acl/openbao-config-reader\": {\"capabilities\": [\"read\"]}, \"auth/homelab-jwt/config\": {\"capabilities\": [\"read\"]}, \"auth/homelab-jwt/role\": {\"capabilities\": [\"list\"]}, \"auth/homelab-jwt/role/openbao-backup\": {\"capabilities\": [\"read\"]}, \"auth/homelab-jwt/role/openbao-acceptance\": {\"capabilities\": [\"read\"]}, \"auth/homelab-jwt/role/openbao-config-reader\": {\"capabilities\": [\"read\"]}, \"auth/homelab-userpass/users\": {\"capabilities\": [\"list\"]}, \"auth/homelab-userpass/users/openbao-operator\": {\"capabilities\": [\"read\"]}, \"kubernetes/config\": {\"capabilities\": [\"read\"]}, \"kubernetes/roles\": {\"capabilities\": [\"list\"]}, \"kubernetes/roles/openbao-acceptance\": {\"capabilities\": [\"read\"]}, \"auth/token/revoke-self\": {\"capabilities\": [\"update\"]}}}",
+    "version": 1
+  },
+  "GET kubernetes/config": {
+    "disable_local_ca_jwt": false,
+    "kubernetes_ca_cert": "",
+    "kubernetes_host": "https://kubernetes.default.svc:443"
+  },
+  "GET kubernetes/roles/openbao-acceptance": {
+    "allowed_kubernetes_namespace_selector": "",
+    "allowed_kubernetes_namespaces": [
+      "openbao-acceptance"
+    ],
+    "extra_annotations": null,
+    "extra_labels": null,
+    "generated_role_rules": "",
+    "kubernetes_role_name": "",
+    "kubernetes_role_type": "Role",
+    "name": "openbao-acceptance",
+    "name_template": "",
+    "service_account_name": "openbao-issued-reader",
+    "token_default_audiences": [
+      "https://kubernetes.default.svc.cluster.local"
+    ],
+    "token_default_ttl": 600,
+    "token_max_ttl": 600
+  }
+}

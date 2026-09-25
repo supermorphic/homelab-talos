@@ -15,7 +15,18 @@ class StateClient:
 
     def __init__(self):
         self.document = load_document(DESIRED)
-        self.state = {(s.kind, s.name): copy.deepcopy(s.fields) for s in self.document["objects"]}
+        self.responses = json.loads(
+            (Path(__file__).parent / "fixtures/openbao-2.7-read-responses.json").read_text()
+        )
+        self.readbacks = {}
+        for spec in self.document["objects"]:
+            if spec.kind in {"auth-method", "secret-mount"}:
+                endpoint = "sys/auth" if spec.kind == "auth-method" else "sys/mounts"
+                response = self.responses["GET " + endpoint][spec.name]
+            else:
+                response = self.responses["GET " + spec.path]
+            self.readbacks[(spec.kind, spec.name)] = response
+        self.state = copy.deepcopy(self.readbacks)
         # Complete pinned-2.7 pathConfigRead response, independently specified in a fixture.
         self.jwt_readback = json.loads(
             (Path(__file__).parent / "fixtures/openbao-2.7-jwt-config.json").read_text()
@@ -56,8 +67,10 @@ class StateClient:
         self.writes.append(path)
         if not self.ignore_writes:
             for spec in self.document["objects"]:
-                if path == spec.path:
-                    self.state[(spec.kind, spec.name)] = copy.deepcopy(payload)
+                if path == spec.path.rstrip("/"):
+                    self.state[(spec.kind, spec.name)] = {
+                        **copy.deepcopy(self.readbacks[(spec.kind, spec.name)]), **payload,
+                    }
                     if spec.kind == "jwt-config":
                         self.state[(spec.kind, spec.name)] = {
                             **copy.deepcopy(self.jwt_readback),
@@ -162,6 +175,17 @@ class ApplyTest(unittest.TestCase):
 
 
 class ApplyBoundaryTest(unittest.TestCase):
+    def test_mount_creation_uses_pinned_server_write_path(self):
+        from unittest.mock import Mock
+
+        client = Mock()
+        for spec in load_document(DESIRED)["objects"]:
+            if spec.kind in {"auth-method", "secret-mount"}:
+                apply._write(spec, None, client, "synthetic-token")
+                self.assertEqual(client.post.call_args.args[0], spec.path.rstrip("/"))
+                apply._write(spec, spec.fields, client, "synthetic-token")
+                self.assertEqual(client.post.call_args.args[0], spec.path + "tune")
+
     def test_source_endpoint_cannot_redirect_owned_write_to_arbitrary_api(self):
         import dataclasses
 
