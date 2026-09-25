@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+[[ -z "${TEST_CAMPAIGN_CONFIRM+x}" ]] || {
+  echo 'Campaign confirmation leaked into a child suite.' >&2
+  exit 2
+}
+
 [[ "$#" -eq 5 && "$1" == 'exec' && "$2" == '--' &&
   "$3" == 'just' && "$4" == 'fixture' ]] || {
   echo "Unexpected fake mise invocation: $*" >&2
