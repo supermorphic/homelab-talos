@@ -40,9 +40,6 @@ spec:
             app.kubernetes.io/name: prometheus
       toPorts:
         - ports: [{port: "8203", protocol: TCP}]
-    - fromEntities: [host, remote-node]
-      toPorts:
-        - ports: [{port: "8200", protocol: TCP}]
   egress:
     - toEndpoints:
         - matchLabels:

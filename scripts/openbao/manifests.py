@@ -27,6 +27,54 @@ def validate_issuance_role(role: dict) -> list[str]:
     return errors
 
 
+def validate_gateway_namespace(namespace: dict) -> list[str]:
+    if (namespace.get("kind") == "Namespace" and
+            _get(namespace, "metadata", "name") == "openbao" and
+            _get(namespace, "metadata", "labels", "gateway.supermorphic.com/access") == "internal"):
+        return []
+    return ["route-namespace"]
+
+
+def validate_network_policy(policy: dict) -> list[str]:
+    if any("fromEntities" in rule or "fromCIDR" in rule or "fromCIDRSet" in rule
+           for rule in _get(policy, "spec", "ingress") or []):
+        return ["broad-node-api-ingress"]
+    return []
+
+
+def validate_tokenrequest_binding(binding: dict) -> list[str]:
+    if (binding.get("kind") == "RoleBinding" and
+            _get(binding, "metadata", "namespace") == "openbao-acceptance" and
+            binding.get("roleRef") == {"apiGroup": "rbac.authorization.k8s.io",
+                                       "kind": "Role", "name": "openbao-tokenrequest"} and
+            binding.get("subjects") == [{"kind": "ServiceAccount", "name": "openbao",
+                                         "namespace": "openbao"}]):
+        return []
+    return ["tokenrequest-binding"]
+
+
+def validate_flux_units(documents: list[dict]) -> list[str]:
+    expected = {
+        "openbao-prerequisites": "namespace",
+        "openbao": "app",
+        "openbao-access": "access",
+        "openbao-acceptance": "acceptance",
+    }
+    units = [d for d in documents if d.get("kind") == "Kustomization" and
+             (str(_get(d, "metadata", "name") or "").startswith("openbao") or
+              str(_get(d, "spec", "path") or "").startswith(
+                  "./kubernetes/apps/security/openbao/"))]
+    if (len(units) == len(expected) and
+            {_get(d, "metadata", "name") for d in units} == set(expected) and
+            all(_get(d, "metadata", "namespace") == "flux-system" and
+                _get(d, "spec", "suspend") is True and
+                _get(d, "spec", "path") ==
+                "./kubernetes/apps/security/openbao/" + expected[_get(d, "metadata", "name")]
+                for d in units)):
+        return []
+    return ["flux-activation"]
+
+
 def validate_documents(documents: list[dict]) -> list[str]:
     errors = []
     statefulsets = [d for d in documents if d.get("kind") == "StatefulSet" and
@@ -55,6 +103,10 @@ def validate_documents(documents: list[dict]) -> list[str]:
             errors.append("unattended-upgrade")
     if len(budgets) != 1 or _get(budgets[0], "spec", "minAvailable") != 2:
         errors.append("pdb-quorum")
+    elif _get(budgets[0], "spec", "selector", "matchLabels") != {
+            "app.kubernetes.io/name": "openbao", "app.kubernetes.io/instance": "openbao",
+            "component": "server"}:
+        errors.append("pdb-selector")
     for document in documents:
         if document.get("kind") in ("Role", "ClusterRole", "RoleBinding", "ClusterRoleBinding") and \
                 _get(document, "metadata", "name") != "openbao-tokenrequest":
