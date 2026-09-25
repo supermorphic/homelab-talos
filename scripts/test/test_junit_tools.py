@@ -5,6 +5,8 @@ import contextlib
 import importlib.util
 import io
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -405,6 +407,40 @@ class JUnitToolsTests(unittest.TestCase):
             document = ET.parse(output).getroot()
             self.assertEqual(document.get("tests"), "2")
             self.assertEqual(document.get("skipped"), "1")
+
+    def test_unittest_cli_can_import_repository_modules(self) -> None:
+        repository = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "unittest.xml"
+            (root / "test_repository_import.py").write_text(
+                "import unittest\n"
+                "from scripts.openbao import drift\n"
+                "class Fixture(unittest.TestCase):\n"
+                "    def test_import(self): self.assertIn('jwt-role', drift.FIELDS)\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(repository / "scripts/test/junit_tools.py"),
+                    "unittest",
+                    "--output",
+                    str(output),
+                    "--suite",
+                    "repository-import",
+                    "--start-directory",
+                    str(root),
+                    "--pattern",
+                    "test_*.py",
+                ],
+                cwd=repository,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(ET.parse(output).getroot().get("tests"), "1")
 
 
 if __name__ == "__main__":
