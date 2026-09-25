@@ -800,6 +800,17 @@ class Teardown:
         if self.qbit is not None:
             if self.ledger.fixture_attempted:
                 info = self.attempt("query owned fixture", lambda: self.qbit.info(FIXTURE_HASH))
+                if info and self._fixture_is_owned(info) and info[0].get("force_start") is True:
+                    # Restore normal queue/share-limit behavior even if deletion fails.
+                    # Skip non-forced torrents: setForceStart(false) also starts them.
+                    self.attempt(
+                        "clear owned fixture force-start",
+                        lambda: self.qbit.set_force_start(FIXTURE_HASH, False),
+                    )
+                    info = self.attempt(
+                        "recheck fixture ownership before deletion",
+                        lambda: self.qbit.info(FIXTURE_HASH),
+                    )
                 if info:
                     if self._fixture_is_owned(info):
                         self.attempt(

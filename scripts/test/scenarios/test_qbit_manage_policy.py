@@ -633,6 +633,30 @@ class DownloadResilienceTests(unittest.TestCase):
                 scenario.download()
             self.assertEqual(fake.force_calls, [])
 
+    def test_download_timeout_clears_force_start_even_when_teardown_delete_fails(self):
+        class FailedDelete(self._FakeQbit):
+            def delete(self, info_hash):
+                self.deleted_hash = info_hash
+                raise RuntimeError("injected deletion failure")
+
+        with tempfile.TemporaryDirectory() as directory:
+            identity = qbm.RunIdentity(RUN_ID)
+            fake = FailedDelete(identity, add_response="Ok.", complete=False)
+            scenario = self._scenario(directory, fake)
+            scenario.filesystem = FakeFilesystem(FailureController(), identity)
+            with self.assertRaises(qbm.ExternalDependencyFailure):
+                scenario.download()
+            self.assertTrue(fake.force_start)
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertFalse(scenario.teardown())
+            self.assertFalse(fake.force_start)
+            self.assertEqual(fake.deleted_hash, qbm.FIXTURE_HASH)
+            self.assertEqual(fake.force_calls[-1], (qbm.FIXTURE_HASH, False))
+            recovery = json.loads(
+                (Path(directory) / RUN_ID / "recovery.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(recovery["status"], "failed")
+
     def test_download_cannot_pass_if_force_start_remains_enabled(self):
         class FailedReset(self._FakeQbit):
             def set_force_start(self, info_hash, enabled):
@@ -799,6 +823,7 @@ class FakeQbit:
         self.identity = identity
         self.fixture_present = True
         self.owned_fixture = owned_fixture
+        self.force_start = False
         self.category_present = True
         self.tags_present = set(identity.owned_tags)
 
@@ -813,8 +838,15 @@ class FakeQbit:
                 "save_path": (
                     self.identity.download_root if self.owned_fixture else "/data/downloads/movies"
                 ),
+                "force_start": self.force_start,
             }
         ]
+
+    def set_force_start(self, info_hash, enabled):
+        if info_hash != qbm.FIXTURE_HASH:
+            raise ValueError("unexpected torrent hash")
+        self.controller.call("qbit.set_force_start")
+        self.force_start = enabled
 
     def delete(self, _info_hash):
         self.controller.call("qbit.delete")
@@ -912,6 +944,7 @@ class TeardownTests(unittest.TestCase):
             controller = FailureController()
             teardown, qbit, filesystem, kube = self.make_teardown(directory, controller)
             self.assertTrue(teardown.run())
+            self.assertNotIn("qbit.set_force_start", controller.calls)
             self.assertFalse(qbit.fixture_present)
             self.assertFalse(qbit.category_present)
             self.assertFalse(qbit.tags_present)
@@ -940,8 +973,42 @@ class TeardownTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             controller = FailureController()
             teardown, qbit, _, _ = self.make_teardown(directory, controller, owned_fixture=False)
+            qbit.force_start = True
             with contextlib.redirect_stderr(io.StringIO()):
                 self.assertFalse(teardown.run())
+            self.assertTrue(qbit.fixture_present)
+            self.assertTrue(qbit.force_start)
+            self.assertNotIn("qbit.set_force_start", controller.calls)
+            self.assertNotIn("qbit.delete", controller.calls)
+
+    def test_force_start_reset_failure_does_not_prevent_deletion_or_later_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            controller = FailureController("qbit.set_force_start")
+            teardown, qbit, filesystem, kube = self.make_teardown(directory, controller)
+            qbit.force_start = True
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertFalse(teardown.run())
+            self.assertFalse(qbit.fixture_present)
+            self.assertFalse(filesystem.paths)
+            self.assertFalse(kube.resources)
+            recovery = json.loads((Path(directory) / "recovery.json").read_text(encoding="utf-8"))
+            self.assertEqual(recovery["status"], "failed")
+
+    def test_ownership_is_rechecked_after_force_start_reset_before_deletion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            controller = FailureController()
+            teardown, qbit, _, _ = self.make_teardown(directory, controller)
+            qbit.force_start = True
+            reset = qbit.set_force_start
+
+            def reset_then_change_ownership(info_hash, enabled):
+                reset(info_hash, enabled)
+                qbit.owned_fixture = False
+
+            qbit.set_force_start = reset_then_change_ownership
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertFalse(teardown.run())
+            self.assertFalse(qbit.force_start)
             self.assertTrue(qbit.fixture_present)
             self.assertNotIn("qbit.delete", controller.calls)
 
