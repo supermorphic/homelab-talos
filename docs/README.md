@@ -74,4 +74,4 @@
 - [027 — Deterministic CI Gates](specs/027-deterministic-ci-gates.md) — Defines Stage 2 category selection, evidence ownership, merge enforcement, and staged rollout.
 - [028 — NocoDB Operator UI](specs/028-nocodb-operator-ui.md) — Defines the staged private UI, separate read and operator surfaces, asynchronous source lifecycle, and metadata-only recovery.
 - [029 — Private Web Search and Extraction](specs/029-selfhost-web-research.md) — Defines native private search/extraction APIs, automatic platform authentication, response-size controls, and the required consumer follow-up.
-- [030 — OpenBao Kubernetes Credential Broker](specs/030-openbao-kubernetes-credential-broker.md) — Proposes three Raft voters, SOPS-managed automatic unseal, restricted token issuance, guarded initialization, and isolated recovery.
+- [030 — OpenBao Kubernetes Credential Broker](specs/030-openbao-kubernetes-credential-broker.md) — Defines three Raft voters, SOPS-managed automatic unseal, restricted token issuance, configuration drift detection, guarded initialization, and isolated recovery.
