@@ -20,13 +20,22 @@ snapshot = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(snapshot)
 NOW = datetime(2026, 9, 25, 1, 0, tzinfo=timezone.utc)
 MARKER = "synthetic-request-token-do-not-retain"
+# Literal SHA256SUMS bytes for OpenBao v2.7.0 archive.go hashList.Encode
+# (`fmt.Fprintf(w, "%x  %s\\n", ...)`), independently calculated for the
+# fixture's fixed meta.json and state.bin. The writer uses TWO spaces.
+UPSTREAM_SUMS = (
+    b"41480988ac6de456c7e9835b65d647a3f85f4ce9f5dbe706939850fcccb4b4ec  meta.json\n"
+    b"f84bc2bd3ba43768e429db5bc7615255cf7a4b9616b1f4fe3dc8f96e96099f61  state.bin\n"
+)
 
 
 def archive(index=42, state=b"synthetic raft state", corrupt=False, recorded_size=None,
-            sealed=True):
+            sealed=True, sums_override=None):
     meta = json.dumps({"Index": index, "Size": len(state) if recorded_size is None else recorded_size}).encode()
     sums = b"".join(hashlib.sha256(data).hexdigest().encode() + b"  " + name.encode() + b"\n"
                     for name, data in (("meta.json", meta), ("state.bin", state)))
+    if sums_override is not None:
+        sums = sums_override
     if corrupt:
         sums = sums.replace(sums[:1], b"0" if sums[:1] != b"0" else b"1", 1)
     output = io.BytesIO()
@@ -80,6 +89,21 @@ class SnapshotTests(unittest.TestCase):
 
     def test_accepts_upstream_archive_without_optional_sealed_hash(self):
         self.assertEqual(self.run_snapshot(Client(archive(sealed=False)))["raft_index"], 42)
+
+    def test_accepts_literal_pinned_upstream_checksum_format(self):
+        self.assertEqual(self.run_snapshot(Client(archive(sums_override=UPSTREAM_SUMS)))["raft_index"], 42)
+
+    def test_rejects_malformed_checksum_delimiters_and_members(self):
+        invalid = (
+            UPSTREAM_SUMS.replace(b"  meta.json", b" meta.json"),
+            UPSTREAM_SUMS.replace(b"  meta.json", b"   meta.json"),
+            UPSTREAM_SUMS + UPSTREAM_SUMS.splitlines(keepends=True)[0],
+            UPSTREAM_SUMS.replace(b"  state.bin", b"  other.bin"),
+        )
+        for sums in invalid:
+            with self.subTest(sums=sums), self.assertRaises(snapshot.SnapshotError):
+                self.run_snapshot(Client(archive(sums_override=sums)))
+            self.assertFalse((self.root / "latest").exists())
 
     def test_leader_switch_retries_only_once_with_new_leader(self):
         client = Client()
