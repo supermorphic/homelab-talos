@@ -75,14 +75,19 @@ done
 identities="$base/config/identities.yaml"
 [[ -f "$identities" ]] || { echo "Missing ntfy identity registry: $identities" >&2; exit 1; }
 [[ "$(yq -r '[.identities | keys | .[]] | sort | join(",")' "$identities")" == \
-  'alertmanager,automation,homepage,n8n,seerr,subscriber' ]] || {
-  echo 'Refusing: the registry must hold exactly subscriber/alertmanager/seerr/homepage/n8n/automation.' >&2
+  'alertmanager,automation,flux-alert-test,homepage,n8n,seerr,subscriber' ]] || {
+  echo 'Refusing: the registry must hold exactly subscriber/alertmanager/flux-alert-test/seerr/homepage/n8n/automation.' >&2
   exit 1
 }
 [[ "$(yq -r '.identities.subscriber.status + ":" + .identities.subscriber.credential + ":" + .identities.subscriber.consumer' "$identities")" == 'active:password:none' ]]
 [[ "$(yq -r '.identities.alertmanager.status + ":" + .identities.alertmanager.credential + ":" + .identities.alertmanager.consumer' "$identities")" == 'active:token:alertmanager-auth' ]]
 [[ "$(yq -r '.identities.seerr.status + ":" + .identities.seerr.credential + ":" + .identities.seerr.consumer' "$identities")" == 'active:token:seerr-api' ]]
 [[ "$(yq -r '.identities.homepage.status + ":" + .identities.homepage.credential + ":" + .identities.homepage.consumer' "$identities")" == 'active:token:homepage-secret' ]]
+[[ "$(yq -r '.identities."flux-alert-test".status + ":" + .identities."flux-alert-test".credential + ":" + .identities."flux-alert-test".consumer' "$identities")" == 'active:token:none' ]]
+[[ "$(yq -r '[.identities."flux-alert-test".access[] | .topic + ":" + .permission] | join(",")' "$identities")" == 'homelab:ro' ]] || {
+  echo 'Refusing: the Flux alert test identity must have only read-only homelab access.' >&2
+  exit 1
+}
 [[ "$(yq -r '.identities.n8n.status + ":" + .identities.n8n.credential + ":" + .identities.n8n.consumer' "$identities")" == 'active:token:n8n-api' ]]
 [[ "$(yq -r '.identities.n8n.access | map(.topic + ":" + .permission) | join(",")' "$identities")" == 'homelab:wo' ]] || {
   echo 'Refusing: the n8n identity must have only write-only homelab access.' >&2

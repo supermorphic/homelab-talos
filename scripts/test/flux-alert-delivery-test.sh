@@ -4,9 +4,15 @@ set -euo pipefail
 scenario='scripts/test/scenarios/flux-alert-delivery.sh'
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-flux-alert-delivery-test.XXXXXX")"
 trap 'rm -rf -- "$temp_dir"' EXIT
+mkdir -p .tmp
+token_file="$(mktemp "$PWD/.tmp/flux-alert-token-fixture.XXXXXX")"
+trap 'rm -rf -- "$temp_dir"; rm -f -- "$token_file"' EXIT
+printf '%s\n' 'tk_aaaaaaaaaaaaaaaaaaaaaaaaaaaa1' >"$token_file"
+chmod 600 "$token_file"
 kubeconfig="$temp_dir/kubeconfig"
 stub_bin="$temp_dir/bin"
 kubectl_marker="$temp_dir/kubectl-called"
+curl_marker="$temp_dir/curl-called"
 mkdir -p "$stub_bin"
 touch "$kubeconfig"
 
@@ -19,6 +25,7 @@ EOF
 chmod +x "$stub_bin/kubectl"
 cat >"$stub_bin/curl" <<'EOF'
 #!/usr/bin/env bash
+: >"$CURL_MARKER"
 exit 99
 EOF
 chmod +x "$stub_bin/curl"
@@ -61,18 +68,34 @@ expect_guard_rejection
 expect_guard_rejection 'test:flux-alert:wrong'
 
 set +e
+output="$(
+  PATH="$stub_bin:$PATH" KUBECTL_MARKER="$kubectl_marker" CURL_MARKER="$curl_marker" \
+    FLUX_ALERT_E2E_CONFIRM='test:flux-alert:firing-resolved' \
+    env -u NTFY_FLUX_ALERT_TOKEN_FILE "$scenario" "$kubeconfig" 2>&1
+)"
+missing_token_exit="$?"
+set -e
+[[ "$missing_token_exit" -ne 0 && ! -e "$kubectl_marker" && ! -e "$curl_marker" ]] || {
+  echo 'Missing ntfy token did not stop before network and Kubernetes access.' >&2
+  exit 1
+}
+rg -q 'NTFY_FLUX_ALERT_TOKEN_FILE must name' <<<"$output"
+
+set +e
 PATH="$stub_bin:$PATH" \
 KUBECTL_MARKER="$kubectl_marker" \
+CURL_MARKER="$curl_marker" \
 FLUX_ALERT_E2E_CONFIRM='test:flux-alert:firing-resolved' \
+NTFY_FLUX_ALERT_TOKEN_FILE="$token_file" \
   "$scenario" "$kubeconfig" >/dev/null 2>&1
 confirmed_exit="$?"
 set -e
-[[ "$confirmed_exit" -ne 0 && -e "$kubectl_marker" ]] || {
-  echo 'Exact confirmation did not pass control to the Kubernetes preflight.' >&2
+[[ "$confirmed_exit" -ne 0 && -e "$curl_marker" && ! -e "$kubectl_marker" ]] || {
+  echo 'Exact confirmation did not pass control to the ntfy credential preflight.' >&2
   exit 1
 }
 
-expect_aggregate_counter_evidence_is_inconclusive() {
+expect_ntfy_receipts() {
   local fixture="$temp_dir/aggregate-counter-fixture"
   local output exit_code
   mkdir -p "$fixture/bin" "$fixture/run"
@@ -111,6 +134,12 @@ esac
 EOF
   chmod +x "$fixture/bin/kubectl"
 
+  cat >"$fixture/bin/sleep" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$fixture/bin/sleep"
+
   cat >"$fixture/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -121,6 +150,28 @@ json_value() {
 
 url="${!#}"
 case "$url" in
+  */homelab/json\?poll=1\&since=*)
+    header_file='' response_file=''
+    while [[ "$#" -gt 0 ]]; do
+      case "$1" in
+        --dump-header) header_file="$2"; shift 2 ;;
+        --output) response_file="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    printf 'HTTP/2 200\r\n\r\n' >"$header_file"
+    : >"$response_file"
+    if [[ -e "$RUN_RESOURCE_CREATED" && "${NTFY_MESSAGE_MODE:-both}" != 'none' ]]; then
+      title="Flux Kustomization flux-system/$test_name is failing to reconcile"
+      [[ "${NTFY_MESSAGE_MODE:-both}" != 'wrong-title' ]] || title='Flux Kustomization flux-system/unrelated is failing to reconcile'
+      jq -nc --arg title "$title" \
+          '{event:"message",topic:"homelab",title:$title,time:now|floor}' >>"$response_file"
+    fi
+    if [[ -e "$DELETE_ATTEMPTED" && "${NTFY_MESSAGE_MODE:-both}" == 'both' ]]; then
+      jq -nc --arg title "Resolved: Flux Kustomization flux-system/$test_name is failing to reconcile" \
+          '{event:"message",topic:"homelab",title:$title,time:now|floor}' >>"$response_file"
+    fi
+    ;;
   */api/v2/status)
     FAKE_CONFIG=$'route:\n  routes:\n    - receiver: ntfy\nreceivers:\n  - name: ntfy\n    webhook_configs:\n      - url: http://example.invalid/hook' \
       yq --null-input --output-format json '{"config":{"original":strenv(FAKE_CONFIG)}}'
@@ -175,6 +226,8 @@ EOF
     ALERT_GROUP_CALLS="$fixture/alert-group-calls" \
     NOTIFICATION_TOTAL_CALLS="$fixture/notification-total-calls" \
     HOMELAB_TEST_RUN_DIR="$fixture/run" \
+    NTFY_FLUX_ALERT_TOKEN_FILE="$token_file" \
+    NTFY_MESSAGE_MODE=firing-only \
     FLUX_ALERT_E2E_CONFIRM='test:flux-alert:firing-resolved' \
       "$scenario" "$fixture/kubeconfig" 2>&1
   )"
@@ -182,11 +235,11 @@ EOF
   set -e
 
   [[ "$exit_code" -ne 0 ]] || {
-    echo 'Aggregate webhook counter increments incorrectly proved test-specific delivery.' >&2
+    echo 'Missing resolved ntfy receipt incorrectly passed delivery.' >&2
     exit 1
   }
   rg -q 'delivery evidence is inconclusive' <<<"$output" || {
-    echo 'Scenario did not report its aggregate-counter evidence limitation.' >&2
+    echo 'Scenario did not report the missing exact ntfy receipt.' >&2
     printf '%s\n' "$output" >&2
     exit 1
   }
@@ -214,6 +267,30 @@ EOF
   rm -f -- "$fixture/run-resource-created" "$fixture/delete-attempted" \
     "$fixture/alert-group-calls" "$fixture/notification-total-calls"
   : >"$fixture/kubectl.log"
+  output="$(
+    PATH="$fixture/bin:$PATH" \
+    KUBECTL_LOG="$fixture/kubectl.log" \
+    RUN_RESOURCE_CREATED="$fixture/run-resource-created" \
+    DELETE_ATTEMPTED="$fixture/delete-attempted" \
+    ALERT_GROUP_CALLS="$fixture/alert-group-calls" \
+    NOTIFICATION_TOTAL_CALLS="$fixture/notification-total-calls" \
+    HOMELAB_TEST_RUN_DIR="$fixture/run" \
+    NTFY_FLUX_ALERT_TOKEN_FILE="$token_file" \
+    FLUX_ALERT_E2E_CONFIRM='test:flux-alert:firing-resolved' \
+      "$scenario" "$fixture/kubeconfig" 2>&1
+  )" || {
+    echo 'Exact firing and resolved ntfy receipts did not pass.' >&2
+    printf '%s\n' "$output" >&2
+    exit 1
+  }
+  rg -q 'Flux alert delivery passed' <<<"$output" || {
+    echo 'Scenario did not report successful run-specific ntfy delivery.' >&2
+    exit 1
+  }
+
+  rm -f -- "$fixture/run-resource-created" "$fixture/delete-attempted" \
+    "$fixture/alert-group-calls" "$fixture/notification-total-calls"
+  : >"$fixture/kubectl.log"
   set +e
   output="$(
     PATH="$fixture/bin:$PATH" \
@@ -223,6 +300,35 @@ EOF
     ALERT_GROUP_CALLS="$fixture/alert-group-calls" \
     NOTIFICATION_TOTAL_CALLS="$fixture/notification-total-calls" \
     HOMELAB_TEST_RUN_DIR="$fixture/run" \
+    NTFY_FLUX_ALERT_TOKEN_FILE="$token_file" \
+    NTFY_MESSAGE_MODE=wrong-title \
+    FLUX_ALERT_E2E_CONFIRM='test:flux-alert:firing-resolved' \
+      "$scenario" "$fixture/kubeconfig" 2>&1
+  )"
+  exit_code="$?"
+  set -e
+  [[ "$exit_code" -ne 0 ]] || {
+    echo 'Unrelated ntfy title incorrectly proved test-specific delivery.' >&2
+    exit 1
+  }
+  rg -q 'no run-specific firing notification' <<<"$output" || {
+    echo 'Scenario did not reject an unrelated ntfy title.' >&2
+    exit 1
+  }
+
+  rm -f -- "$fixture/run-resource-created" "$fixture/delete-attempted" \
+    "$fixture/alert-group-calls" "$fixture/notification-total-calls"
+  : >"$fixture/kubectl.log"
+  set +e
+  output="$(
+    PATH="$fixture/bin:$PATH" \
+    KUBECTL_LOG="$fixture/kubectl.log" \
+    RUN_RESOURCE_CREATED="$fixture/run-resource-created" \
+    DELETE_ATTEMPTED="$fixture/delete-attempted" \
+    ALERT_GROUP_CALLS="$fixture/alert-group-calls" \
+    NOTIFICATION_TOTAL_CALLS="$fixture/notification-total-calls" \
+    HOMELAB_TEST_RUN_DIR="$fixture/run" \
+    NTFY_FLUX_ALERT_TOKEN_FILE="$token_file" \
     KEEP_RUN_RESOURCE=true \
     FLUX_ALERT_E2E_CONFIRM='test:flux-alert:firing-resolved' \
       "$scenario" "$fixture/kubeconfig" 2>&1
@@ -254,6 +360,7 @@ EOF
     ALERT_GROUP_CALLS="$fixture/alert-group-calls" \
     NOTIFICATION_TOTAL_CALLS="$fixture/notification-total-calls" \
     HOMELAB_TEST_RUN_DIR="$fixture/run" \
+    NTFY_FLUX_ALERT_TOKEN_FILE="$token_file" \
     POST_DELETE_GET_ERROR=true \
     FLUX_ALERT_E2E_CONFIRM='test:flux-alert:firing-resolved' \
       "$scenario" "$fixture/kubeconfig" 2>&1
@@ -274,7 +381,7 @@ EOF
   }
 }
 
-expect_aggregate_counter_evidence_is_inconclusive
+expect_ntfy_receipts
 
 rg -Fq 'source_name="${test_name}-source-does-not-exist"' "$scenario"
 rg -Fq 'get gitrepository "$source_name"' "$scenario"

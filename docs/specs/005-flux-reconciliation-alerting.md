@@ -95,11 +95,12 @@ The implemented confirmation-guarded firing-and-resolved scenario creates a run-
 Flux Kustomization with a deliberately missing source. It is designed to exercise the
 real path from Flux resource failure through `gotk_resource_info`, the production
 15-minute rule, Alertmanager, `alertmanager-ntfy`, and ntfy, then prove resolution after
-removing the failure. Aggregate webhook counters cannot attribute publication to the
-test alert, so the automated scenario reports delivery as inconclusive. Acceptance
-requires independent evidence for the matching firing and resolved messages alongside
-the lifecycle and cleanup checks. Human handset receipt is recorded separately from
-the automated result.
+removing the failure. The automated delivery oracle reads only the `homelab` ntfy cache
+with a dedicated read-only token. It requires the exact run-unique firing and resolved
+titles with message timestamps at or after the run start. Aggregate webhook counters
+remain supplementary health checks and cannot attribute publication to the test alert.
+Missing or truncated cached evidence fails the scenario. Human handset receipt is
+recorded separately from the automated result.
 
 ## Rejected alternatives
 
