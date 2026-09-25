@@ -17,7 +17,8 @@ mutation test. Live execution requires separate operator authorization. Run it
 from the operator-controlled primary checkout with explicitly selected credentials
 that can create and inspect the scratch namespace and its resources, execute the
 fixed helper routine, and delete the owned resources. It also needs read access to
-production API/peer endpoint metadata and cluster role bindings. The workflow does
+production API/peer endpoint metadata, cluster role bindings, and the scratch
+PV and named Longhorn volume metadata. The workflow does
 not select or elevate a worktree identity. The test coordinator needs its ordinary
 Lease and disruption-admission access through that same selected identity.
 The drill requires a healthy Kubernetes API and three Ready production OpenBao
@@ -98,10 +99,12 @@ retained operator credentials authorize subsequent reads.
 
 Cleanup checks all discoverable namespace resource kinds and stops on unrelated
 objects or changed ownership. It uses UID and resource-version preconditions for
-Pod and namespace deletion, then waits for namespace removal. A changed marker
-or failed deletion produces a separate failed cleanup result. Preserve the
-isolated namespace and use an attended, separately reviewed cleanup if that
-happens. Do not remove ownership guards or use an unscoped namespace deletion.
+Pod and namespace deletion, then waits up to 180 seconds for the namespace,
+recorded scratch PV and matching Longhorn volume to disappear. It retains and
+rechecks both storage UIDs and performs no direct PV or Longhorn deletion. A
+changed marker or failed deletion produces a separate failed cleanup result.
+Preserve any remaining scratch resources and use an attended, separately reviewed
+cleanup if that happens. Do not remove ownership guards or use an unscoped namespace deletion.
 Retained evidence contains fixed phases and outcomes, never credentials, snapshot
 contents or operator-local file paths.
 
