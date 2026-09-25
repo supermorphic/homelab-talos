@@ -69,14 +69,16 @@ for ((index = 0; index < ${#args[@]}; index++)); do
     --all-namespaces|-A)
       all_namespaces=true
       ;;
-    --resource-name)
-      resource_name="${args[$((index + 1))]}"
-      ;;
-    --resource-name=*)
-      resource_name="${args[$index]#--resource-name=}"
+    --resource-name|--resource-name=*)
+      echo 'kubectl auth can-i does not accept --resource-name' >&2
+      exit 64
       ;;
   esac
 done
+if [[ "$resource" == */* ]]; then
+  resource_name="${resource#*/}"
+  resource="${resource%%/*}"
+fi
 
 case "$resource" in
   nodes|persistentvolumes|customresourcedefinitions.apiextensions.k8s.io|apiservices.apiregistration.k8s.io|\
@@ -198,19 +200,19 @@ rg -q -- '--context homelab-observer auth can-i patch leases.coordination.k8s.io
   "$named_log"
 rg -q -- '--context homelab-observer auth can-i patch replicas.longhorn.io --namespace longhorn-system' \
   "$named_log"
-rg -q -- '--context homelab-report-publisher auth can-i get deployments.apps --namespace test-reports --resource-name test-reports' \
+rg -q -- '--context homelab-report-publisher auth can-i get deployments.apps/test-reports --namespace test-reports' \
   "$named_log"
-rg -q -- '--context homelab-report-publisher auth can-i watch deployments.apps --namespace test-reports --resource-name test-reports' \
+rg -q -- '--context homelab-report-publisher auth can-i watch deployments.apps/test-reports --namespace test-reports' \
   "$named_log"
-rg -q -- '--context homelab-report-publisher auth can-i list deployments.apps --namespace test-reports --resource-name test-reports' \
+rg -q -- '--context homelab-report-publisher auth can-i list deployments.apps/test-reports --namespace test-reports' \
   "$named_log"
 rg -q -- '--context homelab-report-publisher auth can-i create pods --subresource exec --namespace test-reports' \
   "$named_log"
-rg -q -- '--context homelab-report-publisher auth can-i get gitrepositories.source.toolkit.fluxcd.io --namespace flux-system --resource-name flux-system' \
+rg -q -- '--context homelab-report-publisher auth can-i get gitrepositories.source.toolkit.fluxcd.io/flux-system --namespace flux-system' \
   "$named_log"
-rg -q -- '--context homelab-report-publisher auth can-i update leases.coordination.k8s.io --namespace flux-system --resource-name homelab-test-report-publish-lock' \
+rg -q -- '--context homelab-report-publisher auth can-i update leases.coordination.k8s.io/homelab-test-report-publish-lock --namespace flux-system' \
   "$named_log"
-rg -q -- '--context homelab-report-publisher auth can-i create leases.coordination.k8s.io --namespace flux-system --resource-name homelab-test-report-publish-lock' \
+rg -q -- '--context homelab-report-publisher auth can-i create leases.coordination.k8s.io/homelab-test-report-publish-lock --namespace flux-system' \
   "$named_log"
 rg -q -- '--context homelab-report-publisher auth can-i create pods --subresource exec --namespace kube-system' \
   "$named_log"
@@ -220,9 +222,9 @@ rg -q -- '--context homelab-report-publisher auth can-i create pods --subresourc
   "$named_log"
 rg -q -- '--context homelab-report-publisher auth can-i list gitrepositories.source.toolkit.fluxcd.io --namespace flux-system' \
   "$named_log"
-rg -q -- '--context homelab-report-publisher auth can-i get gitrepositories.source.toolkit.fluxcd.io --namespace flux-system --resource-name another-source' \
+rg -q -- '--context homelab-report-publisher auth can-i get gitrepositories.source.toolkit.fluxcd.io/another-source --namespace flux-system' \
   "$named_log"
-rg -q -- '--context homelab-report-publisher auth can-i update leases.coordination.k8s.io --namespace flux-system --resource-name another-lock' \
+rg -q -- '--context homelab-report-publisher auth can-i update leases.coordination.k8s.io/another-lock --namespace flux-system' \
   "$named_log"
 rg -q -- '--context homelab-report-publisher auth can-i update leases.coordination.k8s.io --namespace flux-system ' \
   "$named_log"
@@ -244,7 +246,7 @@ for context in homelab-observer homelab-diagnostic; do
       "$admin_log"
   done
 done
-rg -q -- '--as=system:serviceaccount:kube-system:homelab-report-publisher .* auth can-i get gitrepositories.source.toolkit.fluxcd.io --namespace flux-system --resource-name flux-system' \
+rg -q -- '--as=system:serviceaccount:kube-system:homelab-report-publisher .* auth can-i get gitrepositories.source.toolkit.fluxcd.io/flux-system --namespace flux-system' \
   "$admin_log"
 
 if PATH="$fixture/bin:$PATH" FAKE_LAYOUT=partial FAKE_CALL_LOG="$fixture/partial.log" \
