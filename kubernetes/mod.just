@@ -1155,3 +1155,8 @@ openbao-verify: require-bash
 # Apply reviewed OpenBao configuration with exact source/target/plan confirmation.
 openbao-config-apply: require-bash
     @uv run --locked python -m scripts.openbao.operator config-apply
+
+# Attended isolated snapshot restore; explicit operator identity, exact per-run confirmation.
+openbao-restore-drill: require-bash
+    @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}"
+    @TEST_KUBECONFIG="$OPENBAO_OPERATOR_KUBECONFIG" scripts/test/run-catalog-suite.sh test.openbao-restore-drill -- uv run --locked python -m scripts.test.scenarios.openbao_restore

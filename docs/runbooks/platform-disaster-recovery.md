@@ -430,6 +430,16 @@ fresh post-recovery automation-data bundle before normal workflow traffic resume
 This recovery capability is not established until Issue 317 is deployed and that drill
 passes. Backup files by themselves are not full-chain recovery evidence.
 
+### OpenBao credential broker state
+
+After Kubernetes, Cilium, Flux and Longhorn are healthy, follow
+[Recover OpenBao](openbao-recovery.md). Recover the independently retained matching
+seal material and selected Raft snapshot, run the attended isolated restore drill,
+and verify OpenBao before resuming credential consumers. The drill uses fresh
+storage and cannot restore production state. Production claim replacement and
+Raft recovery require a separately reviewed operator plan. Keep SOPS/Talos and
+backup access independent of credentials issued by OpenBao.
+
 ## Verify the recovered platform
 
 Disaster recovery is complete only when every recovered dependency and required
