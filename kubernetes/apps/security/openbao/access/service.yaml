@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: openbao-monitoring
+  namespace: openbao
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: openbao
+    app.kubernetes.io/instance: openbao
+    component: server
+  ports:
+    - {name: monitoring, port: 8203, targetPort: monitoring, protocol: TCP}

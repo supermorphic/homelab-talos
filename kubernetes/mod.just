@@ -1136,3 +1136,13 @@ ntfy-consumer-sync consumer: require-bash
 
     just repo secrets
     exec scripts/secrets/ntfy-consumer-sync.sh '{{consumer}}'
+
+# Render the exact pinned official OpenBao chart and local values without cluster access.
+openbao-render:
+    @helm template openbao oci://ghcr.io/openbao/charts/openbao@sha256:98c8fc901e2579ac6da9a805537fcd7a19525ef8e563ae8737dc16fc8f641e3e \
+      --namespace openbao \
+      --values kubernetes/apps/security/openbao/app/values.yaml
+
+# Check staged OpenBao source and independent rendered-manifest safety invariants.
+openbao-validate: require-bash
+    @scripts/validate/openbao.sh
