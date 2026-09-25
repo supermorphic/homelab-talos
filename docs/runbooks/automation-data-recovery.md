@@ -107,9 +107,10 @@ checksum-valid bundle whose custom-format archives all pass `pg_restore --list`.
 
 The globals backup uses `pg_dumpall --globals-only` and MUST NOT use
 `--no-role-passwords`. It restores cluster-global roles, memberships, role password
-verifiers, tablespaces, and related global state. For a validated `026-nocodb-v1`
-capture, the backup adds the fixed `PUBLIC CONNECT` revocations for `postgres` and
-`template1` to `globals.sql`; a baseline `025` bundle does not. This is necessary because
+verifiers, tablespaces, and related global state. A bundle captured after the
+NocoDB platform extension is installed includes the required `PUBLIC CONNECT`
+revocations for `postgres` and `template1` in `globals.sql`; an earlier bundle does
+not. This is necessary because
 the globals-only dump and the special non-creating restore of `postgres` do not preserve
 those database ACLs. The globals file does not replace the individual database dumps.
 Each `pg_dump` restores database-local schema, object ownership, ACLs, grants, and data.

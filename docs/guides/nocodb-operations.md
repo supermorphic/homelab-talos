@@ -186,20 +186,12 @@ errors, or changed relevant source stop bootstrap. Documentation-only changes do
 invalidate evidence. The newest eligible restore must be newer than the newest eligible
 provisioning acceptance.
 
-After confirmation, bootstrap runs a fixed ephemeral PostgreSQL preflight Job with the
-existing backup Secret by reference. Its read-only transaction invokes
-`platform_operations.read_platform_revision()` and requires revision `026-nocodb-v1`
-plus a complete logical backup whose `completed_at` is at or after the revision's
-`installed_at`. It repeats this preflight after the parent reconcile and immediately
-before NocoDB resume. The Job does not expose a general SQL surface or retrieve Secret
-values, and bootstrap removes only the Job with its exact run marker.
-
-Preflight also compares the installed metadata and domain-validation function bodies
-with the reviewed SQL.
-If it differs, run the confirmed `automation-data-upgrade` command from deployed main,
-then obtain a new complete backup and affected provisioning/restore evidence before
-retrying bootstrap. The schema revision remains `026-nocodb-v1`; revision alone does
-not prove the function correction is installed.
+After confirmation, bootstrap checks that the reviewed NocoDB platform extension
+is installed and that a complete logical backup was taken afterward. If it rejects
+the installed platform functions, run the guarded automation-data upgrade from
+deployed main, create and verify a fresh complete backup, and renew any affected
+provisioning or restore evidence before retrying bootstrap. Stop on a failed
+preflight; do not repair platform metadata manually.
 
 Bootstrap then reconciles the parent package,
 uses an ownership marker to resume NocoDB, creates or reconciles only the `nocodb`
@@ -268,10 +260,38 @@ Keep execution order `v1` and all saved manual, successful, failed, and progress
 execution data disabled. Publish **NocoDB Source Provisioner** only after checking every
 binding. Do not add credential IDs or values to the Git template.
 
+### Configure a domain with custom NocoDB schemas
+
+Use this only when a ready domain needs a NocoDB-facing schema name other than
+the standard `read_model` or `operator`.
+
+1. Configure the permanent mapping:
+
+   ```bash
+   NOCODB_SOURCE_CONFIGURE_CONFIRM='configure:nocodb:<domain>:<reader>:<operator>' \
+     mise exec -- just kube nocodb-source-configure <domain> <reader> <operator>
+   ```
+
+   Use `-` for `<operator>` when no operator schema is required. A successful
+   response records the mapping and returns the generated reader role name and,
+   when applicable, the operator role name. The mapping cannot be changed for
+   this domain.
+
+2. Apply the domain's reviewed migration to grant those roles their intended access.
+3. Run the guarded source prepare and sync commands in steps 4 and 5 below.
+
+If configuration conflicts with an existing mapping or source, stop. If source
+preparation or sync reports a privilege mismatch, stop and fix the domain
+migration. Do not change grants manually to make provisioning pass.
+
+See [Spec 028](../specs/028-nocodb-operator-ui.md) for the role-isolation,
+privilege-validation, backup/restore, and mapping design.
+
 ### 4. Prepare domain access without NocoDB registration
 
 The domain must already be `ready` in automation-data and must have a reviewed
-`read_model` schema. A valid domain matches `^[a-z][a-z0-9_]{0,47}$`. Supply the existing
+`read_model` schema or its configured custom reader schema. A valid domain matches
+`^[a-z][a-z0-9_]{0,47}$`. Supply the existing
 private source-provisioning header through the environment or hidden interactive prompt:
 
 ```bash
@@ -297,7 +317,8 @@ call NocoDB, create a base, register a source, or make a role available for logi
 ### 5. Adopt one domain
 
 The domain must already be `ready` in automation-data and must have a reviewed
-`read_model` schema. A valid domain matches `^[a-z][a-z0-9_]{0,47}$`.
+`read_model` schema or its configured custom reader schema. A valid domain matches
+`^[a-z][a-z0-9_]{0,47}$`.
 
 Run the first source sync with the private provisioning header supplied through the
 environment or hidden interactive prompt:
@@ -307,13 +328,11 @@ NOCODB_SOURCE_SYNC_CONFIRM='sync:nocodb:<domain>' \
   mise exec -- just kube nocodb-source-sync <domain>
 ```
 
-NocoDB `2026.08.2` creates sources asynchronously. A successful create request returns a
-job ID, not a source. Sync stores that ID, polls the exact job every five seconds for at
-most ten minutes, discovers exactly one source only after the job reports `completed`,
-reads that source back, checks its schema and edit flags, performs a bounded data read,
-and validates PostgreSQL privileges before recording `ready`.
+Source creation can complete asynchronously. Wait for source sync to report `ready`.
+If it fails or remains pending, inspect the reported job or source state before
+retrying.
 
-Controlled-edit adoption has two phases:
+Standard controlled-edit adoption has two phases:
 
 1. A reviewed domain migration creates the `operator` schema and its intended tables.
    The first sync creates `<domain>_operator` as a `NOLOGIN` grant target. It creates the
@@ -341,10 +360,8 @@ before opening NocoDB. In the affected base:
 5. Run the same `nocodb-source-sync` command again. Require the same base, integration,
    source, credential generation, schema-read-only flag, and saved views.
 
-These labels and the asynchronous metadata-diff behavior are from pinned NocoDB
-`2026.08.2`. Disposable API integration proved one additive column with unchanged table,
-source, integration, credential, and saved-view identities. An operator must still
-perform the attended browser check before this UI procedure counts as live acceptance.
+Confirm these screen labels in the deployed NocoDB interface. The attended
+browser check is required before this procedure counts as live acceptance.
 
 ### 6. Rotate one source login
 

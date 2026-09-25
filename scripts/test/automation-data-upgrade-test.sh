@@ -286,14 +286,14 @@ case "$*" in
     if [[ "${UPGRADE_TEST_CASE:-}" == sql-unknown ]]; then
       printf '%s\n' 'UNSAFE_RAW_DIAGNOSTIC' 'ERROR: unknown_platform_revision'
     else
-      printf '%s\n' 'installed_revision=026-nocodb-v1' 'extension_contract_valid=true'
+      printf '%s\n' 'installed_revision=026-nocodb-v2' 'extension_contract_valid=true'
     fi
     ;;
   *'--namespace automation-data logs job/automation-data-nocodb-upgrade-'*' --container=upgrade')
     if [[ "${UPGRADE_TEST_CASE:-}" == sql-unknown ]]; then
       printf '%s\n' 'UNSAFE_RAW_DIAGNOSTIC' 'ERROR: unknown_platform_revision'
     else
-      printf '%s\n' 'installed_revision=026-nocodb-v1' 'extension_contract_valid=true'
+      printf '%s\n' 'installed_revision=026-nocodb-v2' 'extension_contract_valid=true'
     fi
     ;;
   *'--namespace automation-data get pods --selector='*'--output json')
@@ -333,7 +333,7 @@ EOF
 chmod 700 "$stub_bin/git" "$stub_bin/just" "$stub_bin/kubectl"
 
 run_case() {
-	local name="$1" confirmation="${2:-upgrade:automation-data:nocodb-v1}" output status
+	local name="$1" confirmation="${2:-upgrade:automation-data:nocodb-v2}" output status
 	rm -rf -- "$case_root"
 	mkdir -p "$case_root"
 	: >"$case_root/kubeconfig"
@@ -400,7 +400,7 @@ rg -Fxq delete-job "$UPGRADE_TEST_LOG" || fail 'valid upgrade did not delete its
 	  .valueFrom.secretKeyRef.name + "/" + .valueFrom.secretKeyRef.key] | join("|")' \
 	"$case_root/job.yaml")" == 'Job|true|upgrade|postgresql-credentials/backup-password' ]] ||
 	fail 'upgrade Job identity or Secret reference is wrong'
-rg -Fxq 'installed_revision=026-nocodb-v1' "$case_root/output" ||
+rg -Fxq 'installed_revision=026-nocodb-v2' "$case_root/output" ||
 	fail 'valid upgrade did not read back the fixed installed revision'
 ! rg -n 'password|SCRAM-SHA-256' "$case_root/output" >/dev/null ||
 	fail 'valid upgrade output exposed credential material'
@@ -694,7 +694,7 @@ fi
 [[ "$backup_waited_for_upgrade" == true ]] ||
 	fail 'backup capture did not wait for the fixed upgrade advisory lock'
 [[ "$(psql_query "$race_container" automation_data_control \
-	'SELECT platform_operations.read_platform_revision();')" == 026-nocodb-v1 ]] ||
+	'SELECT platform_operations.read_platform_revision();')" == 026-nocodb-v2 ]] ||
 	fail 'race fixture backup did not observe the committed upgraded revision'
 race_bundle="$(find "$integration_root/backups/race" -mindepth 1 -maxdepth 1 \
 	-type d -name 'automation-data-*' -print -quit)"
@@ -785,7 +785,7 @@ wait "$lock_pid"
 upgrade_output="$integration_root/upgrade-output"
 psql_file "$old_container" automation_data_control /candidate/upgrade-nocodb.sql \
 	>"$upgrade_output"
-rg -Fxq 'installed_revision=026-nocodb-v1' "$upgrade_output" ||
+rg -Fxq 'installed_revision=026-nocodb-v2' "$upgrade_output" ||
 	fail 'real upgrade did not read back its installed revision'
 rg -Fxq 'extension_contract_valid=true' "$upgrade_output" ||
 	fail 'real upgrade did not validate its extension contract'
@@ -812,7 +812,7 @@ cmp -s "$integration_root/backup-state-before" "$integration_root/backup-state-a
 	"SELECT NOT (\$\$$(<"$integration_root/backup-state-before")\$\$::jsonb ? 'platformRevision');")" == t ]] ||
 	fail 'baseline backup capture unexpectedly included a platform revision'
 [[ "$(psql_query "$old_container" automation_data_control \
-	"SELECT \$\$$(<"$integration_root/backup-state-after")\$\$::jsonb->>'platformRevision';")" == 026-nocodb-v1 ]] ||
+	"SELECT \$\$$(<"$integration_root/backup-state-after")\$\$::jsonb->>'platformRevision';")" == 026-nocodb-v2 ]] ||
 	fail 'upgraded backup capture did not include the installed revision'
 
 installed_at_before="$(psql_query "$old_container" automation_data_control \
@@ -824,7 +824,7 @@ installed_at_after="$(psql_query "$old_container" automation_data_control \
 	"SELECT installed_at::text FROM platform_operations.platform_schema_revision WHERE singleton;")"
 [[ "$installed_at_before" == "$installed_at_after" ]] ||
 	fail 'validated no-op rerun rewrote migration metadata'
-rg -Fxq 'installed_revision=026-nocodb-v1' "$rerun_output" ||
+rg -Fxq 'installed_revision=026-nocodb-v2' "$rerun_output" ||
 	fail 'no-op rerun did not validate the installed revision'
 
 expect_oracle_grant_failure() { # <mutation> <restoration> <description>
@@ -862,7 +862,7 @@ expect_oracle_grant_failure \
 	'REVOKE CONNECT ON DATABASE template1 FROM PUBLIC;' \
 	'template1 PUBLIC CONNECT grant'
 [[ "$(psql_query "$old_container" automation_data_control \
-	'SELECT platform_operations.read_platform_revision();')" == 026-nocodb-v1 ]] ||
+	'SELECT platform_operations.read_platform_revision();')" == 026-nocodb-v2 ]] ||
 	fail 'revision oracle did not recover after restoring exact grants'
 
 run_backup_in_container "$old_container" "$integration_root/backups/new" ||
@@ -898,7 +898,7 @@ psql_query "$old_container" automation_data_control "$extension_catalog_query" \
 fresh_container="$(new_container_name fresh)"
 start_database "$fresh_container" candidate
 [[ "$(psql_query "$fresh_container" automation_data_control \
-	'SELECT platform_operations.read_platform_revision();')" == 026-nocodb-v1 ]] ||
+	'SELECT platform_operations.read_platform_revision();')" == 026-nocodb-v2 ]] ||
 	fail 'fresh initialization did not install the fixed revision'
 [[ "$(psql_query "$fresh_container" automation_data_control \
 	"SELECT NOT has_database_privilege('automation_data_exporter', 'postgres', 'CONNECT') AND NOT has_database_privilege('automation_data_exporter', 'template1', 'CONNECT');")" == t ]] ||
@@ -1057,9 +1057,9 @@ fi
 ! find "$integration_root/backups/malformed-new" -type f -name COMPLETE -print -quit | rg -q . ||
 	fail 'malformed upgraded catalog published a complete backup'
 
-restore_bundle() { # <bundle> <expected-revision>
-	local bundle="$1" expected="$2" name restore_container globals_filtered
-	name="restore-${expected//[^a-z0-9]/-}"
+restore_bundle() { # <bundle> <expected-revision> [mapping]
+	local bundle="$1" expected="$2" variant="${3:-}" name restore_container globals_filtered
+	name="restore-${expected//[^a-z0-9]/-}${variant:+-$variant}"
 	restore_container="$(new_container_name "$name")"
 	start_database "$restore_container" empty
 	podman cp "$bundle" "$restore_container:/tmp/source-bundle"
@@ -1090,12 +1090,24 @@ restore_bundle() { # <bundle> <expected-revision>
 			'SELECT platform_operations.read_platform_revision();')" == "$expected" ]] ||
 			fail 'new bundle did not restore the installed revision'
 	fi
-	[[ "$(psql_query "$restore_container" upgrade_fixture \
-		"SELECT string_agg(id::text || ':' || value, ',' ORDER BY id) FROM app.records;")" == '1:preserved-value,2:second-value' ]] || fail "$expected bundle lost domain data"
+	if [[ "$variant" == mapping ]]; then
+		[[ "$(psql_query "$restore_container" automation_data_control "
+SELECT count(*) FROM platform_operations.managed_nocodb_schema_mappings
+WHERE domain = 'mapping_fixture' AND reader_schema = 'analysis_view'
+  AND operator_schema = 'decision_entry';")" == 1 ]] ||
+			fail 'v2 bundle lost the frozen custom schema mapping'
+		[[ "$(psql_query "$restore_container" automation_data_control "
+SELECT count(*) FROM pg_roles WHERE rolname IN
+  ('mapping_fixture_reader', 'mapping_fixture_operator') AND NOT rolcanlogin;")" == 2 ]] ||
+			fail 'v2 bundle lost the dedicated NOLOGIN role candidates'
+	else
+		[[ "$(psql_query "$restore_container" upgrade_fixture \
+			"SELECT string_agg(id::text || ':' || value, ',' ORDER BY id) FROM app.records;")" == '1:preserved-value,2:second-value' ]] || fail "$expected bundle lost domain data"
+	fi
 }
 
 restore_bundle "$old_bundle" 025-baseline
-restore_bundle "$new_bundle" 026-nocodb-v1
+restore_bundle "$new_bundle" 026-nocodb-v2
 
 # A never-ready registry row without a database is a retained provisioning outcome.
 # It must not prevent metadata initialization or erase the record.
@@ -1308,6 +1320,330 @@ fi
   fail 'restore did not diagnose every missing or null permission assertion'
 ! rg -q 'synthetic-private-value|credential' "$integration_root/permission-malformed.log" ||
   fail 'restore permission gate exposed an unrelated validator field'
+
+# An installed v1 catalog must upgrade in place to the v2 mapping contract.
+v1_container="$(new_container_name v1)"
+start_database "$v1_container" baseline
+v1_extension="$integration_root/private/nocodb-v1.sql"
+git show 2d2820f1299b68c6e54f7a6672c2f9c367bad281:kubernetes/apps/automation-data/postgresql/app/scripts/nocodb-extension.sql >"$v1_extension"
+chmod 600 "$v1_extension"
+podman cp "$v1_extension" "$v1_container:/tmp/nocodb-v1.sql"
+psql_file "$v1_container" automation_data_control /tmp/nocodb-v1.sql >/dev/null
+[[ "$(psql_query "$v1_container" automation_data_control \
+  'SELECT platform_operations.read_platform_revision();')" == 026-nocodb-v1 ]] ||
+	fail 'historical v1 fixture did not install'
+psql_file "$v1_container" automation_data_control /candidate/upgrade-nocodb.sql >/dev/null
+[[ "$(psql_query "$v1_container" automation_data_control \
+  'SELECT platform_operations.read_platform_revision();')" == 026-nocodb-v2 ]] ||
+	fail 'guarded upgrade did not advance installed v1 to v2'
+[[ "$(psql_query "$v1_container" automation_data_control \
+  "SELECT jsonb_typeof(platform_operations.capture_backup_state()->'nocodbSchemaMappings') = 'array';")" == t ]] ||
+	fail 'v1-to-v2 upgrade omitted the mapping backup state'
+
+mapping_container="$(new_container_name mapping)"
+start_database "$mapping_container" candidate
+psql_query "$mapping_container" automation_data_control "
+SELECT platform_operations.provision_domain(
+  'collision_fixture', repeat('m', 48), repeat('r', 48)
+);
+SELECT platform_operations.record_domain_credentials(
+  'collision_fixture', 'migrator-collision-fixture', 'runtime-collision-fixture',
+  clock_timestamp(), clock_timestamp()
+);
+CREATE ROLE collision_fixture_reader NOLOGIN NOINHERIT;
+" >/dev/null
+if psql_query "$mapping_container" automation_data_control "
+SELECT platform_operations.configure_nocodb_schema_mapping(
+  'collision_fixture', 'analysis_view', NULL
+);" >/dev/null 2>&1; then
+	fail 'custom mapping adopted an existing production role'
+fi
+[[ "$(psql_query "$mapping_container" automation_data_control "
+SELECT count(*) FROM platform_operations.managed_nocodb_schema_mappings
+WHERE domain = 'collision_fixture';")" == 0 ]] ||
+	fail 'role collision left a custom mapping reservation'
+
+# A custom mapping reserves new NOLOGIN roles before the domain creates any
+# reflected schema. Preparation may inspect grants but must leave the existing
+# app/read_model catalog unchanged.
+psql_query "$mapping_container" automation_data_control "
+SELECT platform_operations.provision_domain(
+  'mapping_fixture', repeat('m', 48), repeat('r', 48)
+);
+SELECT platform_operations.record_domain_credentials(
+  'mapping_fixture', 'migrator-mapping-fixture', 'runtime-mapping-fixture',
+  clock_timestamp(), clock_timestamp()
+);
+" >/dev/null
+psql_query "$mapping_container" mapping_fixture "
+SET ROLE mapping_fixture_owner;
+CREATE SCHEMA read_model AUTHORIZATION mapping_fixture_owner;
+CREATE VIEW read_model.legacy_view AS SELECT 1::bigint AS id;
+RESET ROLE;
+" >/dev/null
+frozen_catalog_before="$(psql_query "$mapping_container" mapping_fixture "
+SELECT md5(string_agg(catalog, E'\n' ORDER BY catalog)) FROM (
+  SELECT 'schema|' || nspname || '|' || COALESCE(nspacl::text, '') AS catalog
+  FROM pg_namespace WHERE nspname IN ('app', 'read_model')
+  UNION ALL
+  SELECT 'relation|' || n.nspname || '.' || c.relname || '|' ||
+    COALESCE(c.relacl::text, '') AS catalog
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname IN ('app', 'read_model')
+  UNION ALL
+  SELECT 'default|' || d.defaclrole::text || '|' || d.defaclnamespace::text ||
+    '|' || d.defaclobjtype::text || '|' || COALESCE(d.defaclacl::text, '') AS catalog
+  FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace
+  WHERE n.nspname IN ('app', 'read_model')
+  UNION ALL
+  SELECT 'database|' || datname || '|' || COALESCE(datacl::text, '') AS catalog
+  FROM pg_database WHERE datname = 'mapping_fixture'
+) AS entries;")"
+mapping_generation_before="$(psql_query "$mapping_container" automation_data_control "
+SELECT generation FROM platform_operations.platform_generation WHERE singleton;")"
+psql_query "$mapping_container" automation_data_control '
+GRANT CONNECT ON DATABASE postgres TO PUBLIC;
+' >/dev/null
+if psql_query "$mapping_container" automation_data_control "
+SELECT platform_operations.configure_nocodb_schema_mapping(
+  'mapping_fixture', 'analysis_view', 'decision_entry'
+);" >/dev/null 2>&1; then
+	fail 'custom mapping accepted inherited PUBLIC database CONNECT'
+fi
+[[ "$(psql_query "$mapping_container" automation_data_control "
+SELECT count(*) FROM platform_operations.managed_nocodb_schema_mappings
+WHERE domain = 'mapping_fixture';")" == 0 ]] ||
+	fail 'rejected PUBLIC CONNECT left a mapping reservation'
+[[ "$(psql_query "$mapping_container" automation_data_control "
+SELECT count(*) FROM pg_roles WHERE rolname IN
+  ('mapping_fixture_reader', 'mapping_fixture_operator');")" == 0 ]] ||
+	fail 'rejected PUBLIC CONNECT left candidate roles'
+[[ "$(psql_query "$mapping_container" automation_data_control "
+SELECT generation FROM platform_operations.platform_generation WHERE singleton;")" == "$mapping_generation_before" ]] ||
+	fail 'rejected PUBLIC CONNECT changed backup freshness generation'
+psql_query "$mapping_container" automation_data_control '
+REVOKE CONNECT ON DATABASE postgres FROM PUBLIC;
+' >/dev/null
+mapping_result="$(psql_query "$mapping_container" automation_data_control "
+SELECT platform_operations.configure_nocodb_schema_mapping(
+  'mapping_fixture', 'analysis_view', 'decision_entry'
+)::text;")"
+jq -e '. == {
+  domain:"mapping_fixture", readerSchema:"analysis_view",
+  operatorSchema:"decision_entry", readerRole:"mapping_fixture_reader",
+  operatorRole:"mapping_fixture_operator"
+}' <<<"$mapping_result" >/dev/null ||
+	fail 'custom mapping did not return the frozen schemas and dedicated roles'
+[[ "$(psql_query "$mapping_container" automation_data_control "
+SELECT generation FROM platform_operations.platform_generation WHERE singleton;")" == "$((mapping_generation_before + 1))" ]] ||
+	fail 'durable mapping reservation did not advance backup freshness generation'
+[[ "$(psql_query "$mapping_container" automation_data_control "
+SELECT bool_and(NOT rolcanlogin AND NOT rolinherit AND NOT rolsuper AND
+  NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls)
+FROM pg_roles WHERE rolname IN ('mapping_fixture_reader', 'mapping_fixture_operator');")" == t ]] ||
+	fail 'custom mapping did not prepare restricted NOLOGIN roles'
+[[ "$(psql_query "$mapping_container" automation_data_control "
+SELECT bool_and(NOT has_database_privilege('mapping_fixture_reader', datname, 'CONNECT') AND
+  NOT has_database_privilege('mapping_fixture_operator', datname, 'CONNECT'))
+FROM pg_database WHERE datallowconn;")" == t ]] ||
+	fail 'custom role candidates gained database CONNECT before the reviewed migration'
+[[ "$(psql_query "$mapping_container" mapping_fixture "
+SELECT md5(string_agg(catalog, E'\n' ORDER BY catalog)) FROM (
+  SELECT 'schema|' || nspname || '|' || COALESCE(nspacl::text, '') AS catalog
+  FROM pg_namespace WHERE nspname IN ('app', 'read_model')
+  UNION ALL
+  SELECT 'relation|' || n.nspname || '.' || c.relname || '|' ||
+    COALESCE(c.relacl::text, '') AS catalog
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname IN ('app', 'read_model')
+  UNION ALL
+  SELECT 'default|' || d.defaclrole::text || '|' || d.defaclnamespace::text ||
+    '|' || d.defaclobjtype::text || '|' || COALESCE(d.defaclacl::text, '') AS catalog
+  FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace
+  WHERE n.nspname IN ('app', 'read_model')
+  UNION ALL
+  SELECT 'database|' || datname || '|' || COALESCE(datacl::text, '') AS catalog
+  FROM pg_database WHERE datname = 'mapping_fixture'
+) AS entries;")" == "$frozen_catalog_before" ]] ||
+	fail 'custom mapping rewrote the frozen domain catalog'
+mapping_repeat="$(psql_query "$mapping_container" automation_data_control "
+SELECT platform_operations.configure_nocodb_schema_mapping(
+  'mapping_fixture', 'analysis_view', 'decision_entry'
+)::text;")"
+[[ "$mapping_repeat" == "$mapping_result" ]] ||
+	fail 'exact custom mapping retry changed its identity'
+[[ "$(psql_query "$mapping_container" automation_data_control "
+SELECT generation FROM platform_operations.platform_generation WHERE singleton;")" == "$((mapping_generation_before + 1))" ]] ||
+	fail 'exact mapping retry changed backup freshness generation'
+psql_query "$mapping_container" automation_data_control '
+GRANT mapping_fixture_runtime TO mapping_fixture_reader;
+' >/dev/null
+if psql_query "$mapping_container" automation_data_control "
+SELECT platform_operations.configure_nocodb_schema_mapping(
+  'mapping_fixture', 'analysis_view', 'decision_entry'
+);" >/dev/null 2>&1; then
+	fail 'custom reader was allowed to inherit or SET a parent role'
+fi
+psql_query "$mapping_container" automation_data_control '
+REVOKE mapping_fixture_runtime FROM mapping_fixture_reader;
+GRANT mapping_fixture_reader TO mapping_fixture_runtime;
+' >/dev/null
+if psql_query "$mapping_container" automation_data_control "
+SELECT platform_operations.configure_nocodb_schema_mapping(
+  'mapping_fixture', 'analysis_view', 'decision_entry'
+);" >/dev/null 2>&1; then
+	fail 'custom reader was reused as a parent role'
+fi
+psql_query "$mapping_container" automation_data_control '
+REVOKE mapping_fixture_reader FROM mapping_fixture_runtime;
+' >/dev/null
+if psql_query "$mapping_container" automation_data_control "
+SELECT platform_operations.configure_nocodb_schema_mapping(
+  'mapping_fixture', 'different_view', 'decision_entry'
+);" >/dev/null 2>&1; then
+	fail 'custom mapping accepted a schema change after reservation'
+fi
+psql_query "$mapping_container" mapping_fixture "
+SET ROLE mapping_fixture_owner;
+CREATE SCHEMA analysis_view AUTHORIZATION mapping_fixture_owner;
+CREATE SCHEMA decision_entry AUTHORIZATION mapping_fixture_owner;
+CREATE VIEW analysis_view.facts AS SELECT 1::bigint AS id;
+CREATE TABLE decision_entry.decisions (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  decision text NOT NULL,
+  protected_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+GRANT USAGE ON SCHEMA analysis_view TO mapping_fixture_reader;
+GRANT SELECT ON analysis_view.facts TO mapping_fixture_reader;
+RESET ROLE;
+" >/dev/null
+psql_query "$mapping_container" automation_data_control "
+GRANT CONNECT ON DATABASE mapping_fixture TO
+  mapping_fixture_reader, mapping_fixture_operator;
+" >/dev/null
+[[ "$(psql_query "$mapping_container" automation_data_control "
+SELECT bool_and(CASE WHEN datname = 'mapping_fixture'
+  THEN has_database_privilege('mapping_fixture_reader', datname, 'CONNECT') AND
+    has_database_privilege('mapping_fixture_operator', datname, 'CONNECT')
+  ELSE NOT has_database_privilege('mapping_fixture_reader', datname, 'CONNECT') AND
+    NOT has_database_privilege('mapping_fixture_operator', datname, 'CONNECT') END)
+FROM pg_database WHERE datallowconn;")" == t ]] ||
+	fail 'reviewed migration did not isolate custom CONNECT to one domain'
+frozen_schema_acl() {
+  psql_query "$mapping_container" mapping_fixture "
+SELECT md5(string_agg(catalog, E'\n' ORDER BY catalog)) FROM (
+  SELECT 'schema|' || nspname || '|' || COALESCE(nspacl::text, '') AS catalog
+  FROM pg_namespace WHERE nspname IN ('app', 'read_model')
+  UNION ALL
+  SELECT 'relation|' || n.nspname || '.' || c.relname || '|' ||
+    COALESCE(c.relacl::text, '') AS catalog
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname IN ('app', 'read_model')
+  UNION ALL
+  SELECT 'default|' || d.defaclrole::text || '|' || d.defaclnamespace::text ||
+    '|' || d.defaclobjtype::text || '|' || COALESCE(d.defaclacl::text, '') AS catalog
+  FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace
+  WHERE n.nspname IN ('app', 'read_model')
+) AS entries;"
+}
+frozen_schema_acl_before="$(frozen_schema_acl)"
+mapping_before_public_revoke="$(psql_query "$mapping_container" automation_data_control "
+SELECT platform_operations.prepare_nocodb_access('mapping_fixture')::text;")"
+jq -e '.readerSchema == "analysis_view" and
+  .operatorSchema == "decision_entry" and .readerEligible == false' \
+	<<<"$mapping_before_public_revoke" >/dev/null ||
+	fail 'custom preparation ignored PUBLIC access outside the selected schema'
+psql_query "$mapping_container" mapping_fixture "
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
+" >/dev/null
+mapping_reader_plan="$(psql_query "$mapping_container" automation_data_control "
+SELECT platform_operations.prepare_nocodb_access('mapping_fixture')::text;")"
+jq -e '.readerEligible == true and .operatorRequested == true and
+  .operatorEligible == false and .readerSchema == "analysis_view" and
+  .operatorSchema == "decision_entry"' <<<"$mapping_reader_plan" >/dev/null ||
+	fail 'custom reader grants did not become eligible without platform ACL writes'
+[[ "$(psql_query "$mapping_container" automation_data_control "
+SELECT platform_operations.configure_nocodb_schema_mapping(
+  'mapping_fixture', 'analysis_view', 'decision_entry'
+)::text;")" == "$mapping_result" ]] ||
+	fail 'exact mapping retry failed after the identity-free awaiting-grants phase'
+psql_query "$mapping_container" mapping_fixture "
+SET ROLE mapping_fixture_owner;
+GRANT USAGE ON SCHEMA decision_entry TO mapping_fixture_operator;
+GRANT SELECT ON decision_entry.decisions TO mapping_fixture_operator;
+GRANT INSERT (decision) ON decision_entry.decisions TO mapping_fixture_operator;
+GRANT USAGE ON SEQUENCE decision_entry.decisions_id_seq TO mapping_fixture_operator;
+RESET ROLE;
+" >/dev/null
+mapping_ready_plan="$(psql_query "$mapping_container" automation_data_control "
+SELECT platform_operations.prepare_nocodb_access('mapping_fixture')::text;")"
+jq -e '.readerEligible == true and .operatorEligible == true' \
+	<<<"$mapping_ready_plan" >/dev/null ||
+	fail 'custom operator column grant did not become eligible'
+[[ "$(frozen_schema_acl)" == "$frozen_schema_acl_before" ]] ||
+	fail 'custom preparation rewrote the frozen app/read_model catalog'
+mapping_backup_state="$(psql_query "$mapping_container" automation_data_control "
+SELECT platform_operations.capture_backup_state()::text;")"
+jq -e '.platformRevision == "026-nocodb-v2" and
+  ([.nocodbSchemaMappings[] | select(.domain == "mapping_fixture" and
+    .reader_schema == "analysis_view" and
+    .operator_schema == "decision_entry")] | length == 1)' \
+	<<<"$mapping_backup_state" >/dev/null ||
+	fail 'platform backup state omitted the frozen custom mapping'
+mkdir -p "$integration_root/backups/mapping" "$integration_root/backups/mapping-tampered"
+run_backup_in_container "$mapping_container" "$integration_root/backups/mapping" ||
+	fail 'v2 backup could not capture the custom mapping and role candidates'
+mapping_bundle="$(find "$integration_root/backups/mapping" -mindepth 1 -maxdepth 1 \
+	-type d -name 'automation-data-*' -print -quit)"
+[[ -n "$mapping_bundle" && -s "$mapping_bundle/COMPLETE" ]] ||
+	fail 'v2 mapping backup was not complete'
+restore_bundle "$mapping_bundle" 026-nocodb-v2 mapping
+
+# A v2 backup must reject a capture that drops the mapping registry key.
+# shellcheck disable=SC2016 # PostgreSQL dollar quoting must reach psql literally.
+psql_query "$mapping_container" automation_data_control '
+CREATE OR REPLACE FUNCTION platform_operations.capture_backup_state()
+RETURNS jsonb LANGUAGE sql SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $tampered$
+  SELECT jsonb_build_object(
+    '\''platformRevision'\'', (SELECT revision FROM platform_operations.platform_schema_revision WHERE singleton),
+    '\''generation'\'', (SELECT generation FROM platform_operations.platform_generation WHERE singleton),
+    '\''registry'\'', COALESCE((SELECT jsonb_agg(to_jsonb(managed)) FROM platform_operations.managed_domains AS managed), '\''[]'\''::jsonb),
+    '\''nocodbSources'\'', COALESCE((SELECT jsonb_agg(to_jsonb(source)) FROM platform_operations.managed_nocodb_sources AS source), '\''[]'\''::jsonb)
+  );
+$tampered$;
+' >/dev/null
+if run_backup_in_container "$mapping_container" "$integration_root/backups/mapping-tampered" \
+	>"$integration_root/private/mapping-tampered-backup.log" 2>&1; then
+	fail 'v2 backup accepted a capture without the mapping registry'
+fi
+! find "$integration_root/backups/mapping-tampered" -type f -name COMPLETE -print -quit | rg -q . ||
+	fail 'tampered v2 mapping capture published a complete backup'
+
+first_reader_begin="$(psql_query "$mapping_container" automation_data_control "
+SELECT platform_operations.begin_nocodb_source(
+  'mapping_fixture', 'reader', 'base-mapping', repeat('a', 48)
+)::text;")"
+jq -e '.state == "provisioning" and .credentialGeneration == 1' \
+	<<<"$first_reader_begin" >/dev/null ||
+	fail 'custom reader did not enter first provisioning generation'
+psql_query "$mapping_container" automation_data_control "
+SELECT platform_operations.record_nocodb_source_error(
+  'mapping_fixture', 'reader', 'sync', 'synthetic_failure'
+);" >/dev/null
+reader_error_plan="$(psql_query "$mapping_container" automation_data_control "
+SELECT platform_operations.prepare_nocodb_access('mapping_fixture')::text;")"
+jq -e '.readerEligible == true and .readerSchema == "analysis_view"' \
+	<<<"$reader_error_plan" >/dev/null ||
+	fail 'custom reader error with retained LOGIN could not prepare for retry'
+reader_retry="$(psql_query "$mapping_container" automation_data_control "
+SELECT platform_operations.begin_nocodb_source(
+  'mapping_fixture', 'reader', 'base-mapping', repeat('b', 48)
+)::text;")"
+jq -e '.state == "provisioning" and .credentialGeneration == 2 and
+  .baseId == "base-mapping"' <<<"$reader_retry" >/dev/null ||
+	fail 'custom reader error retry did not retain base identity and advance credentials'
 
 printf '%s\n' \
 	'role_oids_unchanged=true' \

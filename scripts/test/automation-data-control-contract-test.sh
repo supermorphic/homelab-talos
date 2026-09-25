@@ -167,11 +167,13 @@ mapfile -t declared_functions < <(
   sed -nE 's/^CREATE OR REPLACE FUNCTION (platform_operations\.[a-z_]+)\(.*/\1/p' \
     "$control_sql" | sort -u
 )
-rg -Fq 'CREATE TABLE platform_operations.managed_nocodb_sources' "$control_sql" ||
+rg -Fq 'CREATE TABLE IF NOT EXISTS platform_operations.managed_nocodb_sources' "$control_sql" ||
   fail 'NocoDB source registry is missing'
+rg -Fq 'CREATE TABLE IF NOT EXISTS platform_operations.managed_nocodb_schema_mappings' "$control_sql" ||
+  fail 'NocoDB schema mapping registry is missing'
 ! rg -Fq 'managed_nocodb_domains' "$control_sql" ||
   fail 'removed NocoDB domain registry remains present'
-expected_functions=$'platform_operations.begin_nocodb_source\nplatform_operations.capture_backup_state\nplatform_operations.prepare_nocodb_access\nplatform_operations.provision_domain\nplatform_operations.provision_nocodb_metadata\nplatform_operations.publish_backup\nplatform_operations.read_nocodb_source_state\nplatform_operations.read_platform_revision\nplatform_operations.reconcile_domain\nplatform_operations.record_domain_credentials\nplatform_operations.record_nocodb_integration\nplatform_operations.record_nocodb_source_error\nplatform_operations.record_nocodb_source_job\nplatform_operations.record_nocodb_source_ready\nplatform_operations.record_operation_error\nplatform_operations.rotate_domain_credential\nplatform_operations.rotate_nocodb_source_credential\nplatform_operations.validate_domain\nplatform_operations.validate_nocodb_access'
+expected_functions=$'platform_operations.begin_nocodb_source\nplatform_operations.capture_backup_state\nplatform_operations.configure_nocodb_schema_mapping\nplatform_operations.prepare_nocodb_access\nplatform_operations.provision_domain\nplatform_operations.provision_nocodb_metadata\nplatform_operations.publish_backup\nplatform_operations.read_nocodb_source_state\nplatform_operations.read_platform_revision\nplatform_operations.reconcile_domain\nplatform_operations.record_domain_credentials\nplatform_operations.record_nocodb_integration\nplatform_operations.record_nocodb_source_error\nplatform_operations.record_nocodb_source_job\nplatform_operations.record_nocodb_source_ready\nplatform_operations.record_operation_error\nplatform_operations.rotate_domain_credential\nplatform_operations.rotate_nocodb_source_credential\nplatform_operations.validate_domain\nplatform_operations.validate_nocodb_access'
 [[ "$(printf '%s\n' "${declared_functions[@]}")" == "$expected_functions" ]] || \
   fail 'platform control SQL exposes an unexpected function set'
 for state in awaiting_grants provisioning waiting_for_source ready rotating error; do
@@ -182,7 +184,8 @@ for schema in read_model operator; do
 done
 
 nocodb_functions=(
-  provision_nocodb_metadata prepare_nocodb_access read_nocodb_source_state begin_nocodb_source
+  provision_nocodb_metadata configure_nocodb_schema_mapping prepare_nocodb_access
+  read_nocodb_source_state begin_nocodb_source
   record_nocodb_integration record_nocodb_source_job record_nocodb_source_ready
   record_nocodb_source_error rotate_nocodb_source_credential validate_nocodb_access
 )
@@ -383,8 +386,8 @@ for validation_field in valid loginValid schemaPrivilegesValid objectPrivilegesV
   rg -Fq "'$validation_field'" <<<"$prelogin_authority_function" ||
     fail "NocoDB pre-login authority validator omits $validation_field"
 done
-[[ "$(rg -Fc 'platform_internal.validate_nocodb_access_authority(' <<<"$prepare_nocodb_access_function")" == 2 ]] ||
-  fail 'NocoDB prepare does not run one full pre-login authority gate per access role'
+[[ "$(rg -Fc 'platform_internal.validate_nocodb_access_authority(' <<<"$prepare_nocodb_access_function")" == 4 ]] ||
+  fail 'NocoDB prepare does not gate both access roles in both schema modes'
 rg -Fq 'has_table_privilege' <<<"$prelogin_authority_function" ||
   fail 'NocoDB authority validation does not use effective table privileges'
 rg -Fq 'has_sequence_privilege' <<<"$prelogin_authority_function" ||

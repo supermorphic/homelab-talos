@@ -76,7 +76,7 @@ case "$tool" in
         old)
           [[ "$command_text" == *"025-baseline"* ]] || exit 43
           ;;
-        new)
+        new | v1)
           [[ "$command_text" == *read_platform_revision* ]] || exit 48
           printf 'revision-oracle\n' >>"$FAKE_LOG"
           ;;
@@ -104,7 +104,8 @@ case "$tool" in
       encoded_state="$(printf '%s' "${STATE_SCHEMA:-new}:$generation:$state_marker" | base64 | tr -d '\n')"
       case "${STATE_SCHEMA:-new}" in
         old) captured_revision='025-baseline' ;;
-        new) captured_revision='026-nocodb-v1' ;;
+        new) captured_revision='026-nocodb-v2' ;;
+        v1) captured_revision='026-nocodb-v1' ;;
         *) captured_revision='invalid' ;;
       esac
       printf '%s|%s|%s|%s\n' "$generation" "$encoded_state" "$encoded_registry" "$captured_revision"
@@ -230,6 +231,10 @@ run_backup "$old_schema_case" '' '' old
 ! rg -Fq 'Fixed revision-026 maintenance database restrictions.' \
   "$old_schema_case/backups/automation-data-20260827T003000Z/globals.sql" ||
   fail 'recognized pre-extension backup changed maintenance database ACL semantics'
+v1_schema_case="$(new_case v1-schema)"
+run_backup "$v1_schema_case" '' '' v1
+[[ -s "$v1_schema_case/backups/automation-data-20260827T003000Z/COMPLETE" ]] ||
+  fail 'recognized v1 schema did not produce a complete backup during upgrade rollout'
 
 for invalid_schema in unknown partial; do
   invalid_case="$(new_case "$invalid_schema-schema")"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Apply the fixed 026 NocoDB extension to the accepted automation-data platform.
+# Apply the fixed NocoDB schema-mapping revision to the accepted automation-data platform.
 set -euo pipefail
 set +x
 
@@ -10,8 +10,8 @@ set +x
 
 kubeconfig="$1"
 expected_origin='https://github.com/supermorphic/homelab-talos.git'
-expected_confirmation='upgrade:automation-data:nocodb-v1'
-expected_revision='026-nocodb-v1'
+expected_confirmation='upgrade:automation-data:nocodb-v2'
+expected_revision='026-nocodb-v2'
 job_name=''
 namespace='automation-data'
 job_cleanup_pending=false

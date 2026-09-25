@@ -55,6 +55,10 @@ nocodb-source-sync domain: require-bash
 nocodb-source-prepare domain: require-bash
     @scripts/nocodb/source-operation.sh prepare {{quote(domain)}}
 
+# Freeze custom domain-owned schemas and prepare dedicated NOLOGIN role candidates.
+nocodb-source-configure domain reader_schema operator_schema="-": require-bash
+    @scripts/nocodb/source-operation.sh configure {{quote(domain)}} {{quote(reader_schema)}} {{quote(operator_schema)}}
+
 # Rotate exactly one NocoDB source credential through the fixed private webhook. Guard:
 # NOCODB_SOURCE_ROTATE_CONFIRM='rotate:nocodb:<domain>:<reader|operator>'.
 nocodb-source-rotate domain access_kind: require-bash

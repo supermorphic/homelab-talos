@@ -11,7 +11,7 @@ set +x
 kubeconfig="$1"
 namespace='automation-data'
 job_name=''
-expected_revision='026-nocodb-v1'
+expected_revision='026-nocodb-v2'
 temp_dir=''
 run_marker=''
 job_cleanup_pending=false
@@ -148,7 +148,7 @@ render_job() {
               "imagePullPolicy": "IfNotPresent",
               "command": ["/bin/sh", "-ceu"],
               "args": [
-                "result=\"$(psql --no-psqlrc --quiet --no-align --tuples-only --set=ON_ERROR_STOP=1 <<'\''SQL'\''\n\\getenv expected_metadata_body NOCODB_METADATA_BODY_MD5\n\\getenv expected_validator_body NOCODB_VALIDATOR_BODY_MD5\nBEGIN TRANSACTION READ ONLY;\nSELECT oracle.revision || '\''|'\'' ||\n  CASE WHEN backup.completed_at >= revision.installed_at THEN '\''true'\'' ELSE '\''false'\'' END\nFROM (SELECT platform_operations.read_platform_revision() AS revision) AS oracle\nJOIN platform_operations.platform_schema_revision AS revision\n  ON revision.singleton AND revision.revision = oracle.revision\nJOIN platform_operations.logical_backup_status AS backup ON backup.singleton\nWHERE (SELECT md5(prosrc) FROM pg_proc\n  WHERE oid = '\''platform_operations.provision_nocodb_metadata(text)'\''::regprocedure) = :'\''expected_metadata_body'\''\nAND (SELECT md5(string_agg(prosrc, '\'''\'' ORDER BY proname DESC)) FROM pg_proc\n  WHERE oid IN ('\''platform_internal.validate_role_behavior(text,text,text,text)'\''::regprocedure, '\''platform_operations.validate_domain(text)'\''::regprocedure)) = :'\''expected_validator_body'\'';\nCOMMIT;\nSQL\n)\"\nresult=\"$(printf '\''%s\\n'\'' \"$result\" | sed '\''/^$/d'\'')\"\n[ \"$result\" = '\''026-nocodb-v1|true'\'' ]\nprintf '\''%s\\n'\'' '\''installed_revision=026-nocodb-v1'\'' '\''post_upgrade_backup=true'\''"
+                "result=\"$(psql --no-psqlrc --quiet --no-align --tuples-only --set=ON_ERROR_STOP=1 <<'\''SQL'\''\n\\getenv expected_metadata_body NOCODB_METADATA_BODY_MD5\n\\getenv expected_validator_body NOCODB_VALIDATOR_BODY_MD5\nBEGIN TRANSACTION READ ONLY;\nSELECT oracle.revision || '\''|'\'' ||\n  CASE WHEN backup.completed_at >= revision.installed_at THEN '\''true'\'' ELSE '\''false'\'' END\nFROM (SELECT platform_operations.read_platform_revision() AS revision) AS oracle\nJOIN platform_operations.platform_schema_revision AS revision\n  ON revision.singleton AND revision.revision = oracle.revision\nJOIN platform_operations.logical_backup_status AS backup ON backup.singleton\nWHERE (SELECT md5(prosrc) FROM pg_proc\n  WHERE oid = '\''platform_operations.provision_nocodb_metadata(text)'\''::regprocedure) = :'\''expected_metadata_body'\''\nAND (SELECT md5(string_agg(prosrc, '\'''\'' ORDER BY proname DESC)) FROM pg_proc\n  WHERE oid IN ('\''platform_internal.validate_role_behavior(text,text,text,text)'\''::regprocedure, '\''platform_operations.validate_domain(text)'\''::regprocedure)) = :'\''expected_validator_body'\'';\nCOMMIT;\nSQL\n)\"\nresult=\"$(printf '\''%s\\n'\'' \"$result\" | sed '\''/^$/d'\'')\"\n[ \"$result\" = '\''026-nocodb-v2|true'\'' ]\nprintf '\''%s\\n'\'' '\''installed_revision=026-nocodb-v2'\'' '\''post_upgrade_backup=true'\''"
               ],
               "env": [
                 {"name": "NOCODB_METADATA_BODY_MD5", "value": strenv(METADATA_BODY_MD5)},
@@ -194,7 +194,7 @@ fi
 job_output="$temp_dir/job-output"
 kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" logs "job/$job_name" \
   --container=preflight >"$job_output"
-[[ "$(cat "$job_output")" == $'installed_revision=026-nocodb-v1\npost_upgrade_backup=true' ]] || {
+[[ "$(cat "$job_output")" == $'installed_revision=026-nocodb-v2\npost_upgrade_backup=true' ]] || {
   echo 'The NocoDB platform preflight did not prove the fixed revision and post-upgrade backup.' >&2
   exit 1
 }

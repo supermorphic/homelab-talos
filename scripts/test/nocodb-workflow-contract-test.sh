@@ -67,8 +67,8 @@ require(
 normalize = by_name.get("Normalize Source Request", {})
 normalize_code = normalize.get("parameters", {}).get("jsCode", "")
 require(normalize.get("type") == "n8n-nodes-base.code", "Normalize Source Request must be a Code node.")
-allowed_request_fields = {"domain", "operation", "accessKind"}
-allowed_operations = {"prepare", "sync", "rotate"}
+allowed_request_fields = {"domain", "operation", "accessKind", "readerSchema", "operatorSchema"}
+allowed_operations = {"configure", "prepare", "sync", "rotate"}
 allowed_access_kinds = {"reader", "operator"}
 for values, label in (
     (allowed_request_fields, "request field"),
@@ -82,6 +82,7 @@ require("Object.keys" in normalize_code and "allowedFields" in normalize_code, "
 require("requestedAccessKind" in normalize_code, "The source workflow must preserve the normalized rotation target separately.")
 
 approved_functions = {
+    "platform_operations.configure_nocodb_schema_mapping",
     "platform_operations.validate_domain",
     "platform_operations.prepare_nocodb_access",
     "platform_operations.read_nocodb_source_state",
@@ -317,8 +318,20 @@ require(
     "Every source workflow executable node must be reachable from the webhook.",
 )
 require(
-    successors("Require Ready Managed Domain") == ["Initial Prepare Requested", "Prepare Source Error Response"],
+    successors("Require Ready Managed Domain") == ["Configure Requested", "Prepare Source Error Response"],
     "The ready-domain gate must classify prepare before the privileged access function.",
+)
+require(
+    successors("Configure Requested") == ["Configure Schema Mapping", "Initial Prepare Requested"],
+    "Configuration must branch before ordinary access preparation.",
+)
+require(
+    successors("Configure Schema Mapping") == ["Prepare Mapping Response", "Prepare Source Error Response"],
+    "Configuration must return through its bounded response.",
+)
+require(
+    not any(by_name[name].get("type") in {"n8n-nodes-base.httpRequest", "n8n-nodes-base.crypto"} for name in reachable("Configure Schema Mapping")),
+    "Configuration must not create sources or generate passwords.",
 )
 initial_prepare_outputs = connections.get("Initial Prepare Requested", {}).get("main", [])
 require(
@@ -494,6 +507,7 @@ for (const body of [
   if (!rejected) throw new Error(`Normalize Source Request accepted malformed prepare request: ${JSON.stringify(body)}`);
 }
 const preparePlan = {
+  readerSchema: 'read_model', operatorSchema: 'operator',
   domain: 'domain_one', readerRole: 'domain_one_reader', readerEligible: true,
   operatorRequested: true, operatorRole: 'domain_one_operator', operatorEligible: false,
 };
@@ -681,7 +695,7 @@ for (const [kind, prepareNode, readNode, discoverNode, alias, schema, readonly] 
 ]) {
   const sourceId = `source-${kind.toLowerCase()}`;
   const lookup = {
-    [prepareNode]: { ...sourceContext, baseId: 'base-1' },
+    [prepareNode]: { ...sourceContext, baseId: 'base-1', schema },
     [readNode]: { result: { baseId: null } },
     [discoverNode]: { sourceId, selectedIntegrationId: 'integration-1' },
   };
@@ -991,7 +1005,7 @@ for (const fixture of [
       config: { searchPath: ['read_model'] }, is_data_readonly: true, is_schema_readonly: true,
     },
     lookup: {
-      'Start Reader': { ...sourceContext, baseId: 'base-1' },
+      'Start Reader': { ...sourceContext, baseId: 'base-1', schema: 'read_model' },
       'Read Reader State': { result: { sourceId: 'source-1', integrationId: 'integration-stale' } },
       'Discover Reader Source': { sourceId: 'source-1', selectedIntegrationId: 'integration-current' },
     },
@@ -1007,7 +1021,7 @@ for (const fixture of [
       config: { searchPath: ['operator'] }, is_data_readonly: false, is_schema_readonly: true,
     },
     lookup: {
-      'Prepare Operator': { ...sourceContext, baseId: 'base-1', accessKind: 'operator' },
+      'Prepare Operator': { ...sourceContext, baseId: 'base-1', accessKind: 'operator', schema: 'operator' },
       'Read Operator State': { result: { sourceId: 'source-operator', integrationId: 'integration-stale' } },
       'Discover Operator Source': { sourceId: 'source-operator', selectedIntegrationId: 'integration-current' },
     },
@@ -1049,7 +1063,7 @@ for (const fixture of [
     node: 'Validate Reader Source',
     source: { id: 'source-new-reader', base_id: 'base-1', fk_integration_id: 'integration-new', alias: 'Read Model', config: { searchPath: ['read_model'] }, is_data_readonly: true, is_schema_readonly: true },
     lookup: {
-      'Start Reader': { domain: 'domain_one', baseId: 'base-1' },
+      'Start Reader': { domain: 'domain_one', baseId: 'base-1', schema: 'read_model' },
       'Read Reader State': { result: null },
       'Discover Reader Source After Job': { sourceId: 'source-new-reader', selectedIntegrationId: 'integration-new', sourceCreateJobId: 'job-current-reader', jobState: 'completed' },
     },
@@ -1059,7 +1073,7 @@ for (const fixture of [
     node: 'Validate Operator Source',
     source: { id: 'source-new-operator', base_id: 'base-1', fk_integration_id: 'integration-new', alias: 'Operator', config: { searchPath: ['operator'] }, is_data_readonly: false, is_schema_readonly: true },
     lookup: {
-      'Prepare Operator': { domain: 'domain_one', baseId: 'base-1' },
+      'Prepare Operator': { domain: 'domain_one', baseId: 'base-1', schema: 'operator' },
       'Read Operator State': { result: null },
       'Discover Operator Source After Job': { sourceId: 'source-new-operator', selectedIntegrationId: 'integration-new', sourceCreateJobId: 'job-current-operator', jobState: 'completed' },
     },
