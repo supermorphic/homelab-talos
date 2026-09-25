@@ -159,6 +159,7 @@ class LiveCluster:
             "metadata": {"name": name, "namespace": "openbao"},
             "deleteOptions": {"preconditions": {"uid": uid, "resourceVersion": resource_version}},
         }
+        self.scope.check()
         self.scope.command(
             "create",
             "--raw",
@@ -177,6 +178,7 @@ class LiveCluster:
             or not allowed <= maintenance.NAMES - {old}
         ):
             raise maintenance.MaintenanceError()
+        self.scope.check()
         self.bao.peer(old).post("sys/step-down", {}, token=self.bao.token)
 
     def upgrade_preconditions(self):

@@ -153,9 +153,14 @@ cleanup checks exact resource ownership and UID/resourceVersion preconditions.
 The acceptance workload authenticates to OpenBao, requests a ten-minute reader
 credential, checks its audience and effective expiry, asks Kubernetes for its
 actual authenticated identity, reads the synthetic canary, and proves a protected
-read is forbidden. It waits through actual expiry plus at most 30 seconds of clock
-skew and requires Kubernetes authentication rejection. This takes approximately
-11 minutes. No OpenBao lease revocation is treated as Kubernetes JWT revocation.
+read is forbidden. It revokes the OpenBao session immediately after issuance,
+while that session is still valid. The Kubernetes checks use the independently
+issued JWT. Expiry acceptance polls for authentication rejection with a bound
+that includes the API's 60-second leeway, 30 seconds of clock skew, and one
+five-second poll. This takes approximately 11 to 12 minutes. The leeway comes from
+the pinned [Kubernetes claim validator](https://github.com/kubernetes/kubernetes/blob/v1.35.6/pkg/serviceaccount/claims.go)
+and its [JWT validation dependency](https://github.com/kubernetes/kubernetes/blob/v1.35.6/vendor/gopkg.in/go-jose/go-jose.v2/jwt/validation.go).
+No OpenBao lease revocation is treated as Kubernetes JWT revocation.
 
 HA evicts one standby, waits for three healthy voters and replicated progress,
 then evicts the original leader. Every eviction uses the eviction API and Pod

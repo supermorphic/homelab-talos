@@ -448,3 +448,104 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertEqual(result.stdout.strip(), '{"status": "refused"}')
         self.assertEqual(result.stderr, "")
+
+
+class AuthorityReviewTests(unittest.TestCase):
+    def test_lease_or_admission_loss_during_final_snapshot_blocks_eviction(self):
+        from scripts.openbao import maintenance
+
+        cluster, clock = Cluster(), Clock()
+        lost = [False]
+
+        def check():
+            if lost[0]:
+                raise maintenance.MaintenanceError()
+
+        def race(c):
+            if c.reads == 2:
+                lost[0] = True
+
+        cluster.check, cluster.race = check, race
+        with self.assertRaises(maintenance.MaintenanceError):
+            maintenance.replace_member("pod-1", "standby", cluster, cluster, clock)
+        self.assertFalse(
+            any(isinstance(event, tuple) and event[0] == "eviction" for event in cluster.events)
+        )
+
+    def test_transfer_rechecks_authority_after_its_final_snapshot(self):
+        from unittest.mock import Mock
+
+        from scripts.test.scenarios import openbao_ha as live
+
+        lost = [False]
+        scope, bao = Mock(), Mock()
+
+        def check():
+            if lost[0]:
+                raise live.maintenance.MaintenanceError()
+
+        scope.check.side_effect = check
+        cluster = live.LiveCluster(scope, bao, None)
+        cluster.check = check
+
+        def snapshot():
+            lost[0] = True
+            return state()
+
+        cluster.snapshot = snapshot
+        with self.assertRaises(live.maintenance.MaintenanceError):
+            cluster.transfer("openbao-0", {"openbao-1", "openbao-2"})
+        bao.peer.assert_not_called()
+
+    def test_eviction_adapter_rejects_lost_authority_at_http_boundary(self):
+        from unittest.mock import Mock
+
+        from scripts.test.scenarios import openbao_ha as live
+
+        scope = Mock()
+        scope.check.side_effect = live.maintenance.MaintenanceError()
+        cluster = live.LiveCluster(scope, None, None)
+        with self.assertRaises(live.maintenance.MaintenanceError):
+            cluster.evict("openbao-1", "synthetic-pod", "42")
+        scope.command.assert_not_called()
+
+
+class RenewalMarkerReviewTests(unittest.TestCase):
+    def test_owned_catalog_renewal_failure_during_snapshot_blocks_eviction(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from scripts.openbao import maintenance
+        from scripts.test.scenarios.openbao_issuance import Scope
+
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "diagnostics/lease-renewal-failed"
+            marker.parent.mkdir()
+            scope = Scope(Path("/synthetic/operator"), "synthetic-run")
+            cluster = Cluster()
+            cluster.check = scope.check
+
+            def race(current):
+                if current.reads == 2:
+                    marker.touch()
+
+            cluster.race = race
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "HOMELAB_TEST_RUN_DIR": directory,
+                        "HOMELAB_DISRUPTION_LEASE_HOLDER": "synthetic-run",
+                    },
+                    clear=True,
+                ),
+                patch("scripts.openbao.guards.command", return_value=b""),
+                self.assertRaises(maintenance.MaintenanceError),
+            ):
+                maintenance.replace_member("pod-1", "standby", cluster, cluster, Clock())
+            self.assertFalse(
+                any(
+                    isinstance(event, tuple) and event[0] == "eviction" for event in cluster.events
+                )
+            )

@@ -267,3 +267,202 @@ class OwnershipTests(unittest.TestCase):
         live.PodAPI(scope, pod).request("GET", "/synthetic", token="synthetic-bearer-marker")
         self.assertNotIn("synthetic-bearer-marker", repr(calls[0][0]))
         self.assertIn(b"synthetic-bearer-marker", calls[0][1]["input_bytes"])
+
+
+class ExpiryReviewTests(unittest.TestCase):
+    def test_accepts_rejection_after_api_leeway_and_bounded_clock_skew(self):
+        from scripts.openbao import issuance
+
+        for extra_seconds in (60, 90):
+            with self.subTest(extra_seconds=extra_seconds):
+                clock = Clock()
+                api = API(clock)
+                original = api.request
+                observed = []
+
+                def request(
+                    method,
+                    path,
+                    *,
+                    clock=clock,
+                    observed=observed,
+                    extra_seconds=extra_seconds,
+                    original=original,
+                    **kwargs,
+                ):
+                    if path.endswith("/configmaps/openbao-canary") and clock.now > 1600:
+                        observed.append(clock.now)
+                        return (
+                            (200, {"data": {"marker": "synthetic-openbao-reader-canary"}})
+                            if clock.now <= 1600 + extra_seconds
+                            else (401, {})
+                        )
+                    return original(method, path, **kwargs)
+
+                api.request = request
+                self.assertEqual(issuance.acceptance(api, api, clock)["status"], "pass")
+                self.assertTrue(any(value <= 1600 + extra_seconds for value in observed))
+                self.assertGreater(clock.now, 1600 + extra_seconds)
+                self.assertLessEqual(clock.now, 1700)
+
+    def test_session_is_revoked_once_before_its_own_ttl_expires(self):
+        from scripts.openbao import issuance
+
+        clock, revoked = Clock(), []
+        api = API(clock)
+
+        def revoke(session):
+            if clock.now >= 1600:
+                raise issuance.AcceptanceError()
+            revoked.append(clock.now)
+
+        api.revoke = revoke
+        result = issuance.acceptance(api, api, clock)
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(revoked, [1000])
+        self.assertGreater(clock.now, 1600)
+
+    def test_permanent_success_fails_within_expiry_leeway_skew_bound(self):
+        from scripts.openbao import issuance
+
+        clock = Clock()
+        api = API(clock)
+        api.expired_status = 200
+        with self.assertRaises(issuance.AcceptanceError):
+            issuance.acceptance(api, api, clock)
+        self.assertLessEqual(clock.now, 1700)
+
+
+class AdmissionReviewTests(unittest.TestCase):
+    def test_additive_admission_changes_cannot_extend_probe_authority(self):
+        import copy
+        from pathlib import Path
+
+        from scripts.test.scenarios import openbao_issuance as live
+
+        mutations = {
+            "secret-volume": lambda p: p["volumes"].append(
+                {"name": "seal", "secret": {"secretName": "openbao-seal"}}
+            ),
+            "host-volume": lambda p: p["volumes"].append(
+                {"name": "host", "hostPath": {"path": "/"}}
+            ),
+            "extra-mount": lambda p: p["containers"][0]["volumeMounts"].append(
+                {"name": "identity", "mountPath": "/another"}
+            ),
+            "sidecar": lambda p: p["containers"].append(
+                {"name": "extra", "image": "synthetic-sidecar"}
+            ),
+            "init": lambda p: p.update(
+                initContainers=[{"name": "extra", "image": "synthetic-init"}]
+            ),
+            "ephemeral": lambda p: p.update(
+                ephemeralContainers=[{"name": "extra", "image": "synthetic-debug"}]
+            ),
+            "host-network": lambda p: p.update(hostNetwork=True),
+            "host-pid": lambda p: p.update(hostPID=True),
+            "host-ipc": lambda p: p.update(hostIPC=True),
+            "shared-processes": lambda p: p.update(shareProcessNamespace=True),
+            "privileged": lambda p: p["containers"][0]["securityContext"].update(privileged=True),
+            "extra-capability": lambda p: p["containers"][0]["securityContext"][
+                "capabilities"
+            ].update(add=["SYS_ADMIN"]),
+            "secret-env": lambda p: p["containers"][0].update(
+                envFrom=[{"secretRef": {"name": "injected"}}]
+            ),
+            "token-projection": lambda p: p["volumes"][0]["projected"]["sources"].append(
+                {"serviceAccountToken": {"path": "other"}}
+            ),
+        }
+        for issuer in (True, False):
+            for name, mutate in mutations.items():
+                with self.subTest(issuer=issuer, mutation=name):
+                    scope = live.Scope(Path("/synthetic/operator"), "synthetic-run")
+                    pod = live.pod_document("synthetic-run", issuer)
+                    pod["metadata"]["uid"] = "synthetic-pod"
+                    actual = copy.deepcopy(pod)
+                    mutate(actual["spec"])
+                    scope.get = lambda _, actual=actual: actual
+                    with self.assertRaises(live.issuance.AcceptanceError):
+                        scope.assert_owned(pod)
+
+    def test_necessary_kubernetes_defaults_do_not_break_exact_probe_boundary(self):
+        import copy
+        from pathlib import Path
+
+        from scripts.test.scenarios import openbao_issuance as live
+
+        scope = live.Scope(Path("/synthetic/operator"), "synthetic-run")
+        pod = live.pod_document("synthetic-run", True)
+        pod["metadata"]["uid"] = "synthetic-pod"
+        actual = copy.deepcopy(pod)
+        actual["spec"].update(
+            nodeName="synthetic-node",
+            dnsPolicy="ClusterFirst",
+            schedulerName="default-scheduler",
+            terminationGracePeriodSeconds=30,
+            serviceAccount="openbao",
+            priority=0,
+            preemptionPolicy="PreemptLowerPriority",
+            tolerations=[
+                {
+                    "key": "node.kubernetes.io/not-ready",
+                    "operator": "Exists",
+                    "effect": "NoExecute",
+                    "tolerationSeconds": 300,
+                },
+                {
+                    "key": "node.kubernetes.io/unreachable",
+                    "operator": "Exists",
+                    "effect": "NoExecute",
+                    "tolerationSeconds": 300,
+                },
+            ],
+        )
+        actual["spec"]["volumes"][0]["projected"]["defaultMode"] = 420
+        actual["spec"]["containers"][0].update(
+            imagePullPolicy="IfNotPresent",
+            terminationMessagePath="/dev/termination-log",
+            terminationMessagePolicy="File",
+        )
+        scope.get = lambda _: actual
+        self.assertEqual(scope.assert_owned(pod)["metadata"]["uid"], "synthetic-pod")
+
+
+class RevokeAndCreationReviewTests(unittest.TestCase):
+    def test_ambiguous_early_revoke_fails_once_before_waiting(self):
+        from scripts.openbao import issuance
+
+        clock, attempts = Clock(), []
+        api = API(clock)
+
+        def revoke(session):
+            attempts.append(clock.now)
+            raise TimeoutError("synthetic-private-marker")
+
+        api.revoke = revoke
+        with self.assertRaises(issuance.AcceptanceError) as failure:
+            issuance.acceptance(api, api, clock)
+        self.assertEqual(attempts, [1000])
+        self.assertEqual(clock.now, 1000)
+        self.assertNotIn("synthetic-private-marker", str(failure.exception))
+
+    def test_unsafe_admission_is_rejected_at_creation_with_owned_cleanup_record(self):
+        import copy
+        from pathlib import Path
+
+        from scripts.test.scenarios import openbao_issuance as live
+
+        scope = live.Scope(Path("/synthetic/operator"), "synthetic-run")
+        requested = live.pod_document("synthetic-run", True)
+        admitted = copy.deepcopy(requested)
+        admitted["metadata"]["uid"] = "synthetic-pod"
+        admitted["spec"]["volumes"].append(
+            {"name": "extra", "secret": {"secretName": "synthetic"}}
+        )
+        scope.check = lambda: None
+        scope.get = lambda _: None
+        scope.command = lambda *args, **kwargs: json.dumps(admitted).encode()
+        with self.assertRaises(live.issuance.AcceptanceError):
+            scope.create(requested)
+        self.assertEqual(scope.objects[0]["metadata"]["uid"], "synthetic-pod")
