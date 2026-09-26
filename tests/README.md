@@ -239,9 +239,9 @@ and each suite's catalog access tier to select an approved workflow.
 - `mise exec -- just test probe vpn-leak`
 - `mise exec -- just test probe dns-isolation`
 - `mise exec -- just test integration media-hardlink` (run-owned mutation only: proves the media-data SMB
-  share preserves hardlinks across `/data/downloads` ↔ `/data/media` — the filesystem
-  contract every *arr "hardlink not copy" import depends on — using a throwaway test file,
-  no external download; cleans up after itself)
+  share preserves hardlinks across `/data/downloads` ↔ `/data/media` and checks both
+  concurrent-open orders between the qBittorrent and Plex containers. It uses one
+  throwaway file, no external download, and removes its test paths.)
 - `NTFY_PUBLISH_TEST_CONFIRM=test:ntfy:publish:media-critical-homelab mise exec -- just kube ntfy-publish-test`
   (runs the observational ntfy verifier first, then sends exactly three positive ACL test
   notifications to `media`, `critical`, and `homelab`; included in integration and weekly)

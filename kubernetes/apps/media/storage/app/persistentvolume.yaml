@@ -22,6 +22,8 @@ spec:
     # all see the same owner without a startup chown. noperm skips client-side
     # permission checks; mfsymlinks enables symlink support. Server inode numbers are
     # kept (no noserverino) so hardlink detection via link count works.
+    # nolease avoids SMB lease requests when qBittorrent and Plex open separate
+    # names for the same hardlinked file. It reduces client-side caching.
     - dir_mode=0775
     - file_mode=0664
     - uid=568
@@ -29,6 +31,7 @@ spec:
     - noperm
     - mfsymlinks
     - cache=strict
+    - nolease
   csi:
     driver: smb.csi.k8s.io
     readOnly: false

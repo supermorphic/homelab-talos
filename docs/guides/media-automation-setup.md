@@ -692,6 +692,43 @@ The Prowlarr Test proves API connectivity and that Prowlarr can synchronize the 
 application. It does not prove that every indexer can return a usable release for that
 application.
 
+## SMB lease option rollout and rollback
+
+The `media-data` PV requests `nolease` to test whether SMB leases cause Plex to fail
+when qBittorrent holds a hardlinked download open. The option disables lease/oplock
+requests and reduces client caching; see the [mount.cifs manual](https://www.man7.org/linux/man-pages/man8/mount.cifs.8.html).
+An updated PV does not change an SMB mount that a node already holds open. Plan one
+coordinated mount cycle for every node with a `media-data` consumer.
+
+1. Before deployment, record representative Plex Direct Play, seek, and transcode
+   behavior plus NAS read throughput for the same media. Run
+   `mise exec -- just test integration media-hardlink` against the old mount. A pass
+   is possible because the reported failure is intermittent; it does not disprove
+   the lease hypothesis. Preserve any failed test's cleanup result.
+2. Deploy the Git change and confirm the live `media-data` PV lists `nolease` while
+   retaining its other mount options. Before the mount cycle, identify every current
+   pod that uses the `media-data` claim, including temporary Jobs. Confirm that no
+   playback, transcode, import, or torrent write is active, then pause seeding and
+   prevent new media Jobs from starting.
+3. Coordinate stopping all `media-data` consumers on each affected node. Plex,
+   qBittorrent, qbit_manage, Sonarr, Radarr, and Lidarr are the regular consumers.
+   Confirm that each node releases its CSI SMB mount before the consumers start
+   again. If the mount remains, stop and investigate; do not force-unmount a live
+   filesystem. Recheck the consumer list immediately before the stop.
+4. After consumers return, inspect the active CIFS mount options on every node
+   that hosts a consumer. Require `nolease` on the actual mount, not only on the
+   PV object. Run the registered media-hardlink test again. Confirm active seeding
+   together with Plex movie and TV playback, seeking, transcoding, and representative
+   Sonarr/Radarr imports. Compare NAS throughput with the baseline and require an
+   acceptable result before closing the rollout.
+
+If concurrent opens still fail, playback regresses, or throughput is unacceptable,
+revert the `nolease` PV option and its source-validator expectation through Git.
+Repeat the coordinated mount cycle. Confirm the actual CIFS mount no longer has
+`nolease`, then repeat the hardlink, playback, import, and throughput checks. Retain
+failed test evidence for diagnosis. Do not change the live PV or mount outside Git as
+a rollback shortcut.
+
 ## Prove direct imports
 
 Before using real media, an operator may run the repository's synthetic filesystem gate:
@@ -702,9 +739,10 @@ mise exec -- just test integration media-hardlink
 
 **Operator acceptance gate** — this run creates and removes one run-owned test file. It
 proves that `/data/downloads` and `/data/media` on the `media-data` SMB share preserve a
-shared inode and link count across the two trees. It mutates only its temporary test
-paths. It does not prove that Sonarr, Radarr, or Lidarr is configured to import a real
-release correctly.
+shared inode and link count, then verifies that qBittorrent and Plex can open and read
+the two names concurrently in both orders. It mutates only its temporary test paths.
+It does not prove that Sonarr, Radarr, or Lidarr is configured to import a real release
+correctly.
 
 ### Sonarr acceptance
 

@@ -56,6 +56,11 @@ oci_tag="$(yq -r '.spec.ref.tag' "$oci")"
 [[ "$(yq -r '.spec.accessModes[]' "$pv" | sort -u)" == 'ReadWriteMany' ]]
 [[ "$(yq -r '.spec.csi.nodeStageSecretRef.name' "$pv")" == 'smb-credentials' ]]
 [[ "$(yq -r '.spec.csi.nodeStageSecretRef.namespace' "$pv")" == 'media' ]]
+expected_mount_options="$(printf '%s\n' dir_mode=0775 file_mode=0664 uid=568 gid=568 noperm mfsymlinks cache=strict nolease | sort)"
+[[ "$(yq -r '.spec.mountOptions[]' "$pv" | sort)" == "$expected_mount_options" ]] || {
+  echo 'media-data must keep its ownership, hardlink, cache, and nolease mount options.' >&2
+  exit 1
+}
 
 [[ "$(yq -r '.spec.accessModes[]' "$pvc" | sort -u)" == 'ReadWriteMany' ]]
 [[ "$(yq -r '.spec.volumeName' "$pvc")" == 'media-data' ]]
