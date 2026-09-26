@@ -7,18 +7,21 @@ test_root="$(mktemp -d "${TMPDIR:-/tmp}/homelab-media-hardlink-test.XXXXXX")"
 pass_dir="$test_root/pass"
 primary_failure_dir="$test_root/primary-failure"
 open_failure_dir="$test_root/open-failure"
+open_timeout_dir="$test_root/open-timeout"
 cleanup_failure_dir="$test_root/cleanup-failure"
-mkdir -p "$pass_dir" "$primary_failure_dir" "$open_failure_dir" "$cleanup_failure_dir"
+mkdir -p "$pass_dir" "$primary_failure_dir" "$open_failure_dir" "$open_timeout_dir" "$cleanup_failure_dir"
 cleanup() {
   rm -f \
     "$pass_dir/evidence.json" "$pass_dir/recovery.json" "$pass_dir/invocations.log" \
     "$primary_failure_dir/evidence.json" "$primary_failure_dir/recovery.json" \
     "$open_failure_dir/evidence.json" "$open_failure_dir/recovery.json" \
+    "$open_timeout_dir/evidence.json" "$open_timeout_dir/recovery.json" \
     "$cleanup_failure_dir/evidence.json" "$cleanup_failure_dir/recovery.json"
-  rm -f "$pass_dir"/*.holder.out "$pass_dir"/*.holder.err "$pass_dir"/*.fifo \
-    "$open_failure_dir"/*.holder.out "$open_failure_dir"/*.holder.err "$open_failure_dir"/*.fifo \
-    "$cleanup_failure_dir"/*.holder.out "$cleanup_failure_dir"/*.holder.err "$cleanup_failure_dir"/*.fifo
-  rmdir "$pass_dir" "$primary_failure_dir" "$open_failure_dir" "$cleanup_failure_dir" "$test_root"
+  rm -f "$pass_dir"/*.holder.out "$pass_dir"/*.holder.err "$pass_dir"/*.opener.out "$pass_dir"/*.opener.err "$pass_dir"/*.fifo \
+    "$open_failure_dir"/*.holder.out "$open_failure_dir"/*.holder.err "$open_failure_dir"/*.opener.out "$open_failure_dir"/*.opener.err "$open_failure_dir"/*.fifo \
+    "$open_timeout_dir"/*.holder.out "$open_timeout_dir"/*.holder.err "$open_timeout_dir"/*.opener.out "$open_timeout_dir"/*.opener.err "$open_timeout_dir"/*.fifo \
+    "$cleanup_failure_dir"/*.holder.out "$cleanup_failure_dir"/*.holder.err "$cleanup_failure_dir"/*.opener.out "$cleanup_failure_dir"/*.opener.err "$cleanup_failure_dir"/*.fifo
+  rmdir "$pass_dir" "$primary_failure_dir" "$open_failure_dir" "$open_timeout_dir" "$cleanup_failure_dir" "$test_root"
 }
 trap cleanup EXIT
 
@@ -46,6 +49,9 @@ kubectl() {
         IFS= read -r _
       elif [[ "$command" == *"OPEN_OK"* ]]; then
         [[ -z "${MOCK_LOG:-}" ]] || printf 'opener %s\n' "${command//$'\n'/ }" >>"$MOCK_LOG"
+        if [[ "${MOCK_OPEN_HANG:-}" == plex && "$command" == *plex-test-0* ]]; then
+          while :; do sleep 1; done
+        fi
         [[ "${MOCK_OPEN_FAIL:-}" != plex || "$command" != *plex-test-0* ]] || return 1
         printf 'OPEN_OK\n'
       else
@@ -85,6 +91,14 @@ if MOCK_OPEN_FAIL=plex HOMELAB_TEST_RUN_DIR="$open_failure_dir" \
 fi
 [[ ! -e "$open_failure_dir/evidence.json" ]]
 yq -e '.status == "passed"' "$open_failure_dir/recovery.json" >/dev/null
+
+if MOCK_OPEN_HANG=plex MEDIA_HARDLINK_EXEC_TIMEOUT_TICKS=3 HOMELAB_TEST_RUN_DIR="$open_timeout_dir" \
+  scripts/test/scenarios/media-hardlink.sh fake-kubeconfig >/dev/null 2>&1; then
+  echo 'A stalled Plex open must time out and fail the concurrent-open assertion.' >&2
+  exit 1
+fi
+[[ ! -e "$open_timeout_dir/evidence.json" ]]
+yq -e '.status == "passed"' "$open_timeout_dir/recovery.json" >/dev/null
 
 MOCK_CLEANUP_FAIL=true HOMELAB_TEST_RUN_DIR="$cleanup_failure_dir" \
   scripts/test/scenarios/media-hardlink.sh fake-kubeconfig >/dev/null

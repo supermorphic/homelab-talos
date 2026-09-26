@@ -709,15 +709,63 @@ coordinated mount cycle for every node with a `media-data` consumer.
    retaining its other mount options. Before the mount cycle, identify every current
    pod that uses the `media-data` claim, including temporary Jobs. Confirm that no
    playback, transcode, import, or torrent write is active, then pause seeding and
-   prevent new media Jobs from starting.
-3. Coordinate stopping all `media-data` consumers on each affected node. Plex,
-   qBittorrent, qbit_manage, Sonarr, Radarr, and Lidarr are the regular consumers.
-   Confirm that each node releases its CSI SMB mount before the consumers start
-   again. If the mount remains, stop and investigate; do not force-unmount a live
-   filesystem. Recheck the consumer list immediately before the stop.
-4. After consumers return, inspect the active CIFS mount options on every node
-   that hosts a consumer. Require `nolease` on the actual mount, not only on the
-   PV object. Run the registered media-hardlink test again. Confirm active seeding
+   prevent new media Jobs from starting. Use the operator's authorized cluster
+   context to enumerate pods and nodes; the six regular consumers are Plex,
+   qBittorrent, qbit_manage, Sonarr, Radarr, and Lidarr:
+
+   ```bash
+   mise exec -- kubectl -n media get pods -o json |
+     mise exec -- jq -r '.items[] | select(any(.spec.volumes[]?; .persistentVolumeClaim.claimName == "media-data")) | [.metadata.name, .spec.nodeName] | @tsv'
+   ```
+
+3. In an operator-run maintenance window, suspend the `flux-system` root
+   Kustomization, `cluster-apps` parent, `media` parent, six consumer
+   Kustomizations, and six HelmReleases so their
+   controllers cannot recreate scaled-down pods. Recheck that all are suspended,
+   recheck the consumer list and active Jobs, then scale the six Deployments to zero:
+
+   ```bash
+   mise exec -- flux suspend kustomization flux-system -n flux-system
+   mise exec -- flux suspend kustomization cluster-apps -n flux-system
+   mise exec -- flux suspend kustomization media plex qbittorrent qbit-manage sonarr radarr lidarr -n flux-system
+   mise exec -- flux suspend helmrelease plex qbittorrent qbit-manage sonarr radarr lidarr -n media
+   mise exec -- kubectl -n media scale deployment/plex deployment/qbittorrent deployment/qbit-manage deployment/sonarr deployment/radarr deployment/lidarr --replicas=0
+   ```
+
+   Wait until all six pods are gone. On every affected node, use `mise exec --
+   talosctl mounts -n <node>` and require the SMB CSI `globalmount` and its
+   `media-data` pod mounts to disappear. If any remains, find its consumer and
+   stop; do not force-unmount a live filesystem.
+4. Scale the same six Deployments back to their recorded replica counts (currently
+   one each):
+
+   ```bash
+   mise exec -- kubectl -n media scale deployment/plex deployment/qbittorrent deployment/qbit-manage deployment/sonarr deployment/radarr deployment/lidarr --replicas=1
+   ```
+
+   Inspect the new CIFS `globalmount` line in each node's `/proc/mounts`
+   with the operator's Talos read access and require `nolease` on the actual mount,
+   not only on the PV object. Resume the six HelmReleases, then the child
+   Kustomizations, `media`, `cluster-apps`, and `flux-system`, in that order. Restore all
+   suspensions even if a later acceptance check fails. Run this option check for
+   each affected node; it prints only the `nolease` result:
+
+   ```bash
+   mise exec -- talosctl read /proc/mounts -n <node> |
+     awk '$2 ~ /smb.csi.k8s.io/ && $2 ~ /globalmount/ { print index("," $4 ",", ",nolease,") ? "nolease=yes" : "nolease=no"; found=1 } END { if (!found) exit 1 }'
+   ```
+
+   Then restore reconciliation:
+
+   ```bash
+   mise exec -- flux resume helmrelease plex qbittorrent qbit-manage sonarr radarr lidarr -n media
+   mise exec -- flux resume kustomization plex qbittorrent qbit-manage sonarr radarr lidarr -n flux-system
+   mise exec -- flux resume kustomization media -n flux-system
+   mise exec -- flux resume kustomization cluster-apps -n flux-system
+   mise exec -- flux resume kustomization flux-system -n flux-system
+   ```
+
+5. Run the registered media-hardlink test again. Confirm active seeding
    together with Plex movie and TV playback, seeking, transcoding, and representative
    Sonarr/Radarr imports. Compare NAS throughput with the baseline and require an
    acceptable result before closing the rollout.

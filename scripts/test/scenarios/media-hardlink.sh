@@ -42,12 +42,32 @@ plex_pod="$(k get pod -l app.kubernetes.io/name=plex -o jsonpath='{.items[0].met
 }
 
 holder_pid=''
+opener_pid=''
+stop_exec() {
+  local pid="$1"
+  [[ -n "$pid" ]] || return 0
+  kill -TERM "$pid" 2>/dev/null || true
+  sleep 0.2
+  kill -KILL "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+wait_for_exec() {
+  local pid="$1" label="$2" ticks="$3" attempt
+  for ((attempt=0; attempt<ticks; attempt++)); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      wait "$pid"
+      return $?
+    fi
+    sleep 0.1
+  done
+  stop_exec "$pid"
+  echo "Timed out waiting for $label." >&2
+  return 124
+}
 cleanup() {
   local cleanup_ok=true
-  if [[ -n "$holder_pid" ]]; then
-    kill "$holder_pid" 2>/dev/null || true
-    wait "$holder_pid" 2>/dev/null || true
-  fi
+  stop_exec "$opener_pid"
+  stop_exec "$holder_pid"
   app_exec "$pod" "rm -rf '$src_dir' '$dst_dir'" >/dev/null 2>&1 || cleanup_ok=false
   if [[ "$cleanup_ok" == true ]]; then write_recovery 'passed' 'test hardlink pair removed from the share'
   else write_recovery 'failed' "could not remove test dirs $src_dir / $dst_dir — remove manually"; fi
@@ -83,10 +103,11 @@ concurrent_open() {
   local label="$1" holder_pod="$2" holder_path="$3" holder_mode="$4"
   local opener_pod="$5" opener_path="$6" opener_mode="$7"
   local fifo="$run_dir/${label}.fifo" holder_out="$run_dir/${label}.holder.out"
-  local holder_err="$run_dir/${label}.holder.err" opener_out ready=false attempt
+  local holder_err="$run_dir/${label}.holder.err" opener_out="$run_dir/${label}.opener.out"
+  local opener_err="$run_dir/${label}.opener.err" ready=false attempt
   mkfifo "$fifo"
   # shellcheck disable=SC2016 # The quoted script expands inside the container.
-  k exec -i "$holder_pod" -c app -- sh -c '
+  kubectl --kubeconfig "$kubeconfig" --namespace "$ns" exec -i "$holder_pod" -c app -- sh -c '
     if [ "$3" = rw ]; then exec 3<> "$1"; else exec 3< "$1"; fi || exit 1
     content="$(cat <&3)" || exit 1
     [ "$content" = "$2" ] || exit 1
@@ -95,38 +116,46 @@ concurrent_open() {
   ' sh "$holder_path" "$token" "$holder_mode" <"$fifo" >"$holder_out" 2>"$holder_err" &
   holder_pid=$!
   exec 9>"$fifo"
-  for ((attempt=0; attempt<200; attempt++)); do
+  for ((attempt=0; attempt<${MEDIA_HARDLINK_READY_TIMEOUT_TICKS:-200}; attempt++)); do
     if rg -qx 'READY' "$holder_out"; then ready=true; break; fi
     if ! kill -0 "$holder_pid" 2>/dev/null; then break; fi
     sleep 0.1
   done
   if [[ "$ready" != true ]]; then
-    printf '\n' >&9
+    printf '\n' >&9 || true
     exec 9>&-
-    wait "$holder_pid" 2>/dev/null || true
+    stop_exec "$holder_pid"
     holder_pid=''
     echo "CONCURRENT OPEN FAILED ($label): first consumer could not open and hold its path." >&2
     return 1
   fi
   # shellcheck disable=SC2016 # The quoted script expands inside the container.
-  opener_out="$(k exec "$opener_pod" -c app -- sh -c '
+  kubectl --kubeconfig "$kubeconfig" --namespace "$ns" exec "$opener_pod" -c app -- sh -c '
     if [ "$3" = rw ]; then exec 3<> "$1"; else exec 3< "$1"; fi || exit 1
     content="$(cat <&3)" || exit 1
     [ "$content" = "$2" ] || exit 1
     printf "OPEN_OK\n"
-  ' sh "$opener_path" "$token" "$opener_mode")" || {
-    printf '\n' >&9
+  ' sh "$opener_path" "$token" "$opener_mode" >"$opener_out" 2>"$opener_err" &
+  opener_pid=$!
+  if ! wait_for_exec "$opener_pid" "the second consumer to open its hardlink" "${MEDIA_HARDLINK_EXEC_TIMEOUT_TICKS:-300}"; then
+    opener_pid=''
+    printf '\n' >&9 || true
     exec 9>&-
-    wait "$holder_pid" 2>/dev/null || true
+    stop_exec "$holder_pid"
     holder_pid=''
     echo "CONCURRENT OPEN FAILED ($label): second consumer could not read its hardlink path." >&2
     return 1
-  }
-  printf '\n' >&9
+  fi
+  opener_pid=''
+  printf '\n' >&9 || true
   exec 9>&-
-  wait "$holder_pid" || { holder_pid=''; echo "CONCURRENT OPEN FAILED ($label): holder exited with an error." >&2; return 1; }
+  wait_for_exec "$holder_pid" "the first consumer to release its hardlink" "${MEDIA_HARDLINK_EXEC_TIMEOUT_TICKS:-300}" || {
+    holder_pid=''
+    echo "CONCURRENT OPEN FAILED ($label): holder exited with an error." >&2
+    return 1
+  }
   holder_pid=''
-  [[ "$opener_out" == 'OPEN_OK' ]] || { echo "CONCURRENT OPEN FAILED ($label): unexpected read result." >&2; return 1; }
+  [[ "$(cat "$opener_out")" == 'OPEN_OK' ]] || { echo "CONCURRENT OPEN FAILED ($label): unexpected read result." >&2; return 1; }
   rm -f "$fifo"
   echo "CONCURRENT OK ($label): both consumers read the same test content."
 }
