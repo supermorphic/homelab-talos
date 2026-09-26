@@ -692,90 +692,14 @@ The Prowlarr Test proves API connectivity and that Prowlarr can synchronize the 
 application. It does not prove that every indexer can return a usable release for that
 application.
 
-## SMB lease option rollout and rollback
+## SMB lease option
 
 The `media-data` PV requests `nolease` to test whether SMB leases cause Plex to fail
 when qBittorrent holds a hardlinked download open. The option disables lease/oplock
 requests and reduces client caching; see the [mount.cifs manual](https://www.man7.org/linux/man-pages/man8/mount.cifs.8.html).
-An updated PV does not change an SMB mount that a node already holds open. Plan one
-coordinated mount cycle for every node with a `media-data` consumer.
-
-1. Before deployment, record representative Plex Direct Play, seek, and transcode
-   behavior plus NAS read throughput for the same media. Run
-   `mise exec -- just test integration media-hardlink` against the old mount. A pass
-   is possible because the reported failure is intermittent; it does not disprove
-   the lease hypothesis. Preserve any failed test's cleanup result.
-2. Deploy the Git change and confirm the live `media-data` PV lists `nolease` while
-   retaining its other mount options. Before the mount cycle, identify every current
-   pod that uses the `media-data` claim, including temporary Jobs. Confirm that no
-   playback, transcode, import, or torrent write is active, then pause seeding and
-   prevent new media Jobs from starting. Use the operator's authorized cluster
-   context to enumerate pods and nodes; the six regular consumers are Plex,
-   qBittorrent, qbit_manage, Sonarr, Radarr, and Lidarr:
-
-   ```bash
-   mise exec -- kubectl -n media get pods -o json |
-     mise exec -- jq -r '.items[] | select(any(.spec.volumes[]?; .persistentVolumeClaim.claimName == "media-data")) | [.metadata.name, .spec.nodeName] | @tsv'
-   ```
-
-3. In an operator-run maintenance window, suspend the `flux-system` root
-   Kustomization, `cluster-apps` parent, `media` parent, six consumer
-   Kustomizations, and six HelmReleases so their
-   controllers cannot recreate scaled-down pods. Recheck that all are suspended,
-   recheck the consumer list and active Jobs, then scale the six Deployments to zero:
-
-   ```bash
-   mise exec -- flux suspend kustomization flux-system -n flux-system
-   mise exec -- flux suspend kustomization cluster-apps -n flux-system
-   mise exec -- flux suspend kustomization media plex qbittorrent qbit-manage sonarr radarr lidarr -n flux-system
-   mise exec -- flux suspend helmrelease plex qbittorrent qbit-manage sonarr radarr lidarr -n media
-   mise exec -- kubectl -n media scale deployment/plex deployment/qbittorrent deployment/qbit-manage deployment/sonarr deployment/radarr deployment/lidarr --replicas=0
-   ```
-
-   Wait until all six pods are gone. On every affected node, use `mise exec --
-   talosctl mounts -n <node>` and require the SMB CSI `globalmount` and its
-   `media-data` pod mounts to disappear. If any remains, find its consumer and
-   stop; do not force-unmount a live filesystem.
-4. Scale the same six Deployments back to their recorded replica counts (currently
-   one each):
-
-   ```bash
-   mise exec -- kubectl -n media scale deployment/plex deployment/qbittorrent deployment/qbit-manage deployment/sonarr deployment/radarr deployment/lidarr --replicas=1
-   ```
-
-   Inspect the new CIFS `globalmount` line in each node's `/proc/mounts`
-   with the operator's Talos read access and require `nolease` on the actual mount,
-   not only on the PV object. Resume the six HelmReleases, then the child
-   Kustomizations, `media`, `cluster-apps`, and `flux-system`, in that order. Restore all
-   suspensions even if a later acceptance check fails. Run this option check for
-   each affected node; it prints only the `nolease` result:
-
-   ```bash
-   mise exec -- talosctl read /proc/mounts -n <node> |
-     awk '$2 ~ /smb.csi.k8s.io/ && $2 ~ /globalmount/ { print index("," $4 ",", ",nolease,") ? "nolease=yes" : "nolease=no"; found=1 } END { if (!found) exit 1 }'
-   ```
-
-   Then restore reconciliation:
-
-   ```bash
-   mise exec -- flux resume helmrelease plex qbittorrent qbit-manage sonarr radarr lidarr -n media
-   mise exec -- flux resume kustomization plex qbittorrent qbit-manage sonarr radarr lidarr -n flux-system
-   mise exec -- flux resume kustomization media -n flux-system
-   mise exec -- flux resume kustomization cluster-apps -n flux-system
-   mise exec -- flux resume kustomization flux-system -n flux-system
-   ```
-
-5. Run the registered media-hardlink test again. Confirm active seeding
-   together with Plex movie and TV playback, seeking, transcoding, and representative
-   Sonarr/Radarr imports. Compare NAS throughput with the baseline and require an
-   acceptable result before closing the rollout.
-
-If concurrent opens still fail, playback regresses, or throughput is unacceptable,
-revert the `nolease` PV option and its source-validator expectation through Git.
-Repeat the coordinated mount cycle. Confirm the actual CIFS mount no longer has
-`nolease`, then repeat the hardlink, playback, import, and throughput checks. Retain
-failed test evidence for diagnosis. Do not change the live PV or mount outside Git as
-a rollback shortcut.
+Updating the PV does not change SMB mounts that nodes already hold open. Applying
+`nolease` requires one coordinated mount cycle on every node with a `media-data`
+consumer.
 
 ## Prove direct imports
 

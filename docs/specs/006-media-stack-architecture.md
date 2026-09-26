@@ -54,8 +54,8 @@ actual application containers. The original inode-only result did not test this 
 The live baseline and post-remount result remain unverified; the SMB protocol response
 was not captured. `nolease` removes client lease requests and related caching, so
 representative playback and NAS throughput must be checked during rollout. The
-[media setup guide](../guides/media-automation-setup.md#smb-lease-option-rollout-and-rollback)
-records the mount cycle and rollback.
+[media setup guide](../guides/media-automation-setup.md#smb-lease-option)
+summarizes the mount-cycle requirement.
 
 Plex mounts the same SMB share read-only at `/Volumes/Prometheus` because its migrated
 database retains those historical paths. It uses node-local `emptyDir` for transcode
