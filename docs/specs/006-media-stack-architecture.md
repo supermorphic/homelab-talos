@@ -46,6 +46,17 @@ to `/data/media/{tv,movies,music}`. Matching mount paths let the applications cr
 hardlinks rather than copies. Acceptance established shared inode identity and link
 count two across the two names.
 
+The media-data PV requests `nolease` in addition to its established mount options.
+The change is a candidate for intermittent Plex `Invalid argument` failures when
+qBittorrent keeps a download file open and Plex opens the hardlinked library name.
+The registered media-hardlink test now checks both concurrent-open orders using the
+actual application containers. The original inode-only result did not test this case.
+The live baseline and post-remount result remain unverified; the SMB protocol response
+was not captured. `nolease` removes client lease requests and related caching, so
+representative playback and NAS throughput must be checked during rollout. The
+[media setup guide](../guides/media-automation-setup.md#smb-lease-option)
+summarizes the mount-cycle requirement.
+
 Plex mounts the same SMB share read-only at `/Volumes/Prometheus` because its migrated
 database retains those historical paths. It uses node-local `emptyDir` for transcode
 scratch. qbit_manage sees only the downloads subtree, so cleanup authority cannot write

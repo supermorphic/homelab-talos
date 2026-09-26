@@ -692,6 +692,15 @@ The Prowlarr Test proves API connectivity and that Prowlarr can synchronize the 
 application. It does not prove that every indexer can return a usable release for that
 application.
 
+## SMB lease option
+
+The `media-data` PV requests `nolease` to test whether SMB leases cause Plex to fail
+when qBittorrent holds a hardlinked download open. The option disables lease/oplock
+requests and reduces client caching; see the [mount.cifs manual](https://www.man7.org/linux/man-pages/man8/mount.cifs.8.html).
+Updating the PV does not change SMB mounts that nodes already hold open. Applying
+`nolease` requires one coordinated mount cycle on every node with a `media-data`
+consumer.
+
 ## Prove direct imports
 
 Before using real media, an operator may run the repository's synthetic filesystem gate:
@@ -702,9 +711,10 @@ mise exec -- just test integration media-hardlink
 
 **Operator acceptance gate** — this run creates and removes one run-owned test file. It
 proves that `/data/downloads` and `/data/media` on the `media-data` SMB share preserve a
-shared inode and link count across the two trees. It mutates only its temporary test
-paths. It does not prove that Sonarr, Radarr, or Lidarr is configured to import a real
-release correctly.
+shared inode and link count, then verifies that qBittorrent and Plex can open and read
+the two names concurrently in both orders. It mutates only its temporary test paths.
+It does not prove that Sonarr, Radarr, or Lidarr is configured to import a real release
+correctly.
 
 ### Sonarr acceptance
 
