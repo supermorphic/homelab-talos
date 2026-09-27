@@ -7,7 +7,7 @@ See the [design](../specs/030-openbao-kubernetes-credential-broker.md) and
 [package README](../../kubernetes/apps/security/openbao/README.md).
 
 Offline validation is `mise exec -- just kube openbao-validate`. The catalog's
-`validation.openbao` also runs in core CI. `verification.openbao` is diagnostic
+`validation.openbao` also runs in core CI. `verification.openbao` is observer-tier
 observation, registered but excluded from verification campaigns while any of the
 six OpenBao Flux units remains suspended, the encrypted seal artifact is absent
 from the app Kustomization, or the Gatus endpoint is not enrolled. It reports
@@ -20,9 +20,9 @@ is recorded by this source package.
 Git and Flux own the Kubernetes resources. The reviewed OpenBao API inventory is
 in `config/desired.json` and `config/policies/`; a clean deployed `main` revision
 is the input for attended `openbao-config-apply`. Flux does not write these API
-objects. The verifier reads actual OpenBao configuration with a short-lived
-`openbao-config-reader` JWT through the `homelab-diagnostic` Kubernetes context
-and compares it with that source. Failed reads and changed reader authority
+objects. The separate reader compares actual OpenBao configuration with that source
+using a short-lived `openbao-config-reader` JWT. The local observer verifier consumes
+only its sanitized, fresh, source-bound Prometheus observations. Failed reads and changed reader authority
 produce inaccessible or drift results, never a clean result. The operator password
 is private recovery material and has no readable drift comparison.
 
@@ -278,7 +278,7 @@ Flux unsuspension, private route, backup and monitoring activation, acceptance
 resources, and the staged Gatus endpoint through Git. Enroll the verifier in both
 verification campaigns only when all six OpenBao Flux units are durably
 unsuspended, the encrypted seal artifact is included, and the Gatus endpoint is
-enrolled. Run the diagnostic verifier and the separately authorized issuance,
+enrolled. Run the observer verifier and the separately authorized issuance,
 HA, and isolated restore acceptance before calling deployment complete. A passing
 offline gate or staged verifier cannot close issue 449. Issue 450 owns real agent
 authentication profiles, CLI integration, and replacement of existing worktree
