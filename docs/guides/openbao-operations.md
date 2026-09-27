@@ -174,8 +174,8 @@ holds the existing disruption Lease. The source must be clean, published and
 deployed `main`. Activate the acceptance manifests through the reviewed deployment
 procedure first. No agent diagnostic credential is upgraded or adopted.
 For issuance acceptance, also set `OPENBAO_DIAGNOSTIC_KUBECONFIG` to an absolute path
-containing the actual scoped `homelab-diagnostic` context. The test checks its identity
-and requires API Forbidden responses for both exec transports before creating any
+containing the actual scoped `homelab-diagnostic` context. The test checks its identity and matches the live `kube-system` namespace UID
+through both credentials, then requires API Forbidden responses for both exec transports before creating any
 acceptance resources. A 404, protocol error, or an impersonated operator context is not
 proof of the intended boundary. Run this only after the narrowed diagnostic grants
 have reconciled. Live denial and reader/backup acceptance remain activation gates.

@@ -254,7 +254,10 @@ class ConfigurationReader:
             raw = response.read(1_048_577)
             if response.status not in (200, 204) or len(raw) > 1_048_576:
                 raise SafeError("read-denied")
-            return strict_json(raw, "invalid-response") if raw else {}
+            value = strict_json(raw, "invalid-response") if raw else {}
+            if not isinstance(value, dict):
+                raise SafeError("invalid-response")
+            return value
         except (OSError, http.client.HTTPException):
             raise SafeError("timeout") from None
         finally:
@@ -301,7 +304,7 @@ class ConfigurationReader:
         if not self.token or not self.peer:
             raise SafeError("authentication-failed")
         result = self.exchange(self.peer, method, path)
-        if not isinstance(result.get("data"), dict):
+        if not isinstance(result, dict) or not isinstance(result.get("data"), dict):
             raise SafeError("invalid-response")
         return result["data"]
 
@@ -317,8 +320,10 @@ def collect(desired, jwt_path, reader_factory=ConfigurationReader):
     reader = reader_factory(desired, jwt_path)
     try:
         health = reader.login()
-        return compare_configuration(desired, reader), health
-    except (SafeError, OSError, KeyError, TypeError, ValueError, IndexError):
+        result = compare_configuration(desired, reader)
+        checked_differences(result["differences"], desired)
+        return result, health
+    except (SafeError, OSError, KeyError, TypeError, ValueError, IndexError, AttributeError):
         return {"status": "inaccessible", "differences": []}, "inaccessible"
     finally:
         try:

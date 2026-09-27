@@ -74,6 +74,11 @@ contracts:
       - catalog:validation.gatus
   openbao-source:
     changed_inputs:
+      - kubernetes/apps/security/openbao/config/kustomization.yaml
+      - kubernetes/apps/security/openbao/monitoring/reader.yaml
+      - scripts/openbao/exporter.py
+      - scripts/openbao/kustomization.yaml
+      - scripts/test/core/test_openbao_exporter.py
       - kubernetes/apps/monitoring/gatus/app/kustomization.yaml
       - kubernetes/apps/monitoring/gatus/app/openbao-activation.values.yaml
       - kubernetes/apps/monitoring/gatus/app/values.yaml
@@ -169,6 +174,7 @@ contracts:
       - python:scripts/test/core/test_openbao_secrets.py
       - python:scripts/test/core/test_openbao_snapshot.py
       - python:scripts/test/core/test_openbao_verify.py
+      - python:scripts/test/core/test_openbao_exporter.py
       - python:scripts/test/scenarios/test_openbao_ha.py
       - python:scripts/test/scenarios/test_openbao_issuance.py
       - python:scripts/test/scenarios/test_openbao_restore.py

@@ -233,3 +233,27 @@ class CollectionTest(unittest.TestCase):
                 reader.exchange(PEERS[0], "GET", "sys/leader")
             self.assertNotIn("private-marker", str(caught.exception))
             connection.close.assert_called_once()
+
+class MalformedRecoveryTest(unittest.TestCase):
+    def test_malformed_envelope_fails_closed_and_next_collection_recovers(self):
+        from scripts.openbao.exporter import ConfigurationReader, collect
+        from scripts.test.core.test_openbao_verify import FakeReader
+        class TransientReader(ConfigurationReader):
+            broken = True
+            def login(self):
+                self.token = 'synthetic'; self.peer = 'openbao-0.openbao-internal.openbao.svc'
+                return 'ready'
+            def exchange(self, peer, method, path, payload=None):
+                if self.broken:
+                    self.broken = False
+                    return []
+                return {'data': FakeReader().request(method, path)}
+            def close(self):
+                self.token = None
+        reader = TransientReader(DESIRED, Path('unused'))
+        failed, health = collect(DESIRED, Path('unused'), lambda *_: reader)
+        self.assertEqual(failed['status'], 'inaccessible')
+        self.assertEqual(health, 'inaccessible')
+        recovered, health = collect(DESIRED, Path('unused'), lambda *_: reader)
+        self.assertEqual(recovered['status'], 'pass')
+        self.assertEqual(health, 'ready')

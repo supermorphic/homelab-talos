@@ -429,7 +429,7 @@ def run_scope():
     return Scope(Path(selected), run_dir.name), run_dir
 
 
-def diagnostic_boundary(kubeconfig):
+def diagnostic_boundary(kubeconfig, namespace_uid):
     """Real negative API requests with the agent credential, never impersonation.
 
     POST lacks an upgrade connection and cannot run a command if RBAC is too broad;
@@ -454,6 +454,11 @@ def diagnostic_boundary(kubeconfig):
         raise issuance.AcceptanceError()
     users = json.loads(layout.stdout)['users']
     if len(users) != 1 or set(users[0]['user']) not in ({'token'}, {'tokenFile'}):
+        raise issuance.AcceptanceError()
+    target = subprocess.run([*base, 'get', 'namespace', 'kube-system', '-o', 'json'],
+                            capture_output=True, text=True, timeout=15, check=False)
+    if (not isinstance(namespace_uid, str) or not namespace_uid or target.returncode != 0
+            or json.loads(target.stdout)['metadata']['uid'] != namespace_uid):
         raise issuance.AcceptanceError()
     path = '/api/v1/namespaces/openbao/pods/openbao-0/exec?container=openbao&command=true&stdout=true'
     for command, verb in [('create', 'create'), ('get', 'get')]:
@@ -485,7 +490,8 @@ def main():
             raise issuance.AcceptanceError()
         install_interrupt_handlers()
         diagnostic_path = Path(os.environ.get('OPENBAO_DIAGNOSTIC_KUBECONFIG', ''))
-        result['diagnostic_exec_denied'] = diagnostic_boundary(diagnostic_path)
+        cluster = scope.get({'kind': 'Namespace', 'metadata': {'name': 'kube-system'}})
+        result['diagnostic_exec_denied'] = diagnostic_boundary(diagnostic_path, cluster['metadata']['uid'])
         issuer, workload = provision(scope)
         suffix = hashlib.sha256(scope.run_id.encode()).hexdigest()[:16]
         # Predeclare exact empty objects for cleanup even after an ambiguous API response.
