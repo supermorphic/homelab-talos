@@ -4,3 +4,6 @@ resources:
   - ./servicemonitor.yaml
   - ./longhorn-servicemonitor.yaml
   - ./prometheusrule.yaml
+  - ./reader.yaml
+  - ../config
+  - ../../../../../scripts/openbao

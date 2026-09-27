@@ -519,7 +519,7 @@ suites:
     runner: {command: "mise exec -- just kube cilium-verify", implementation: scripts/verify/cilium.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.openbao, source: verification, framework: bash, suite: platform, tier: verification, target: openbao, scenario: null, scope: system, intent: acceptance, mutates_cluster: false, execution_owner: human}
-    access: {tier: diagnostic}
+    access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube openbao-verify", implementation: scripts/verify/openbao.sh}
     native_results: {strategy: wrapper-junit}

@@ -1,17 +1,24 @@
-import json
 import copy
+import json
+import sys
+import tempfile
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.openbao.configuration import SafeError, load_document
+from scripts.openbao.exporter import health_quorum
+from scripts.openbao.reader import (
+    ObserverReader,
+    _run,
+    backup_fresh,
+    monitoring_ready,
+    placement_ready,
+    route_ready,
+    source_phase,
+)
 from scripts.openbao.verify import run
-from scripts.openbao.reader import (DiagnosticReader, source_phase, _run, route_ready,
-                                    backup_fresh, placement_ready, health_quorum,
-                                    monitoring_ready)
-from unittest.mock import patch
-import tempfile
-import sys
-from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parents[3]
 DESIRED = ROOT / 'kubernetes/apps/security/openbao/config/desired.json'
@@ -75,7 +82,7 @@ class VerifyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             kubeconfig = Path(directory) / 'config'
             kubeconfig.write_text('synthetic')
-            reader = DiagnosticReader(kubeconfig, 'a' * 40)
+            reader = ObserverReader(kubeconfig, 'a' * 40)
             ready = {'conditions': [{'type': 'Ready', 'status': 'True'}]}
             pods = [{'metadata': {'name': f'openbao-{i}', 'namespace': 'openbao',
                                   'uid': f'pod-{i}', 'ownerReferences': [
@@ -114,35 +121,27 @@ class VerifyTest(unittest.TestCase):
                                    {'type': 'ResolvedRefs', 'status': 'True'}]}]}},
                 ('openbao', 'cronjob', 'openbao-backup'): {
                     'spec': {'suspend': False}, 'status': {'lastSuccessfulTime':
-                        datetime.now(timezone.utc).isoformat()}},
+                        datetime.now(UTC).isoformat()}},
                 ('openbao', 'service', 'openbao-monitoring'): service,
                 ('openbao', 'servicemonitor', 'openbao'): monitor,
                 ('openbao', 'prometheusrule', 'openbao'): rules,
             }
             for name in ('openbao-prerequisites', 'openbao', 'openbao-access',
-                         'openbao-acceptance'):
+                         'openbao-acceptance', 'openbao-backup', 'openbao-monitoring'):
                 objects[('flux-system', 'kustomization', name)] = {
                     'spec': {'suspend': False},
                     'status': {**ready, 'lastAppliedRevision': 'main@sha1:' + 'a' * 40}}
-            statuses = {f'openbao-{i}': {'initialized': True, 'sealed': False,
-                        'storage_type': 'raft', 'ha_enabled': True,
-                        'cluster_id': 'synthetic-cluster', **({'is_self': True} if i == 1 else {})}
-                        for i in range(3)}
-            raft = {'config': {'servers': [{'node_id': f'openbao-{i}',
-                    'voter': True, 'leader': i == 1} for i in range(3)]}}
             with (patch('scripts.openbao.reader.source_phase', return_value='active'),
                   patch('scripts.openbao.reader.source_image', return_value='synthetic-image'),
                   patch('scripts.openbao.reader._json', return_value={'items': pods}),
                   patch.object(reader, '_get', side_effect=lambda ns, kind, name:
                                objects[(ns, kind, name)]),
-                  patch.object(reader, '_status', side_effect=lambda name: statuses[name]),
-                  patch.object(reader, 'request', return_value=raft) as raft_read):
+                  patch.object(reader, 'configuration_observation', return_value={'health': 'ready'}) as observation):
                 observed = reader.preflight()
                 self.assertEqual(observed['health'], 'ready')
                 self.assertEqual(observed['placement'], 'ready')
                 self.assertEqual(observed['monitoring'], 'ready')
-                raft_read.assert_called_once_with('GET', 'sys/storage/raft/configuration')
-                statuses['openbao-2']['sealed'] = True
+                observation.return_value = {'health': 'inaccessible'}
                 observed = reader.preflight()
                 self.assertEqual(observed['health'], 'inaccessible')
                 pods[2]['spec']['nodeName'] = 'node-1'
@@ -212,10 +211,10 @@ class VerifyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             kubeconfig = Path(directory) / 'config'
             kubeconfig.write_text('synthetic')
-            reader = DiagnosticReader(kubeconfig, 'a' * 40)
-            with patch.object(reader, '_get', return_value={'status': ['synthetic-private-marker']}):
-                with self.assertRaises(SafeError) as caught:
-                    reader.preflight()
+            reader = ObserverReader(kubeconfig, 'a' * 40)
+            with (patch.object(reader, '_get', return_value={'status': ['synthetic-private-marker']}),
+                  self.assertRaises(SafeError) as caught):
+                reader.preflight()
             self.assertEqual(str(caught.exception), 'invalid-response')
             self.assertNotIn('synthetic-private-marker', str(caught.exception))
 
@@ -230,9 +229,8 @@ class VerifyTest(unittest.TestCase):
         self.assertFalse(backup_fresh({'spec': {'suspend': False}, 'status': {}}))
 
     def test_collector_bounds_stdout_before_parsing(self):
-        with patch('scripts.openbao.reader.MAX_OUTPUT', 16):
-            with self.assertRaises(SafeError):
-                _run([sys.executable, '-c', 'print("x" * 32)'])
+        with patch('scripts.openbao.reader.MAX_OUTPUT', 16), self.assertRaises(SafeError):
+            _run([sys.executable, '-c', 'print("x" * 32)'])
 
     def test_source_phase_rejects_mixed_activation(self):
         source = ROOT / 'kubernetes/apps/security/openbao/ks.yaml'
@@ -242,31 +240,6 @@ class VerifyTest(unittest.TestCase):
             altered.write_text(source.read_text().replace('suspend: true', 'suspend: false', 1))
             with self.assertRaises(SafeError):
                 source_phase(altered)
-
-    def test_reader_rejects_unlisted_query_and_pod_replacement(self):
-        with tempfile.TemporaryDirectory() as directory:
-            kubeconfig = Path(directory) / 'config'
-            kubeconfig.write_text('synthetic')
-            reader = DiagnosticReader(kubeconfig, 'a' * 40)
-            with self.assertRaises(SafeError):
-                reader.request('POST', 'sys/auth')
-            with self.assertRaises(SafeError):
-                reader.request('GET', 'sys/raw')
-            reader._pod_name = 'openbao-0'
-            reader._pod_uid = 'expected-uid'
-            reader._statefulset_uid = 'expected-owner'
-            reader._pod_uids = {'openbao-0': 'expected-uid'}
-            reader._pod_nodes = {'openbao-0': 'node-0'}
-            reader._expected_image = 'synthetic-image'
-            changed = {'metadata': {'uid': 'replacement-uid', 'ownerReferences': [
-                {'uid': 'expected-owner'}]}, 'spec': {'serviceAccountName': 'openbao',
-                'containers': [{'name': 'openbao'}]}, 'status': {'conditions': [
-                {'type': 'Ready', 'status': 'True'}]}}
-            with patch.object(reader, '_get', return_value=changed):
-                with self.assertRaises(SafeError) as caught:
-                    reader.request('GET', 'kubernetes/config')
-            self.assertEqual(str(caught.exception), 'source-mismatch')
-            self.assertEqual(reader.configuration_requests, [])
 
     def test_complete_inventory_and_all_reads_are_observational(self):
         reader = FakeReader()
@@ -340,7 +313,7 @@ class VerifyTest(unittest.TestCase):
         role = next(obj for obj in load_document(DESIRED)['objects']
                     if obj.kind == 'jwt-role' and obj.name == 'openbao-config-reader')
         self.assertEqual(role.fields['bound_audiences'], ['openbao-config-verification'])
-        values = (ROOT / 'kubernetes/apps/security/openbao/app/values.yaml').read_text()
+        values = (ROOT / 'kubernetes/apps/security/openbao/monitoring/reader.yaml').read_text()
         self.assertIn('audience: openbao-config-verification', values)
 
 

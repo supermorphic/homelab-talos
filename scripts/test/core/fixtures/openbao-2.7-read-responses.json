@@ -172,7 +172,7 @@
     ],
     "bound_claims": null,
     "bound_claims_type": "string",
-    "bound_subject": "system:serviceaccount:openbao:openbao",
+    "bound_subject": "system:serviceaccount:openbao:openbao-config-reader",
     "callback_mode": "client",
     "claim_mappings": null,
     "clock_skew_leeway": 0,

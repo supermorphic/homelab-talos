@@ -80,6 +80,21 @@ class PinnedServerContract(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(login["auth"]["policies"], ["openbao-operator"])
             operator = login["auth"]["client_token"]
+            status, session = request("POST", "auth/token/create",
+                                      {"policies": ["openbao-config-reader"], "no_default_policy": True,
+                                       "ttl": "5m"}, token=operator)
+            self.assertEqual(status, 200)
+            reader_token = session["auth"]["client_token"]
+            self.assertEqual(request("GET", "sys/policies/acl/openbao-backup", token=reader_token)[0], 200)
+            self.assertEqual(request("LIST", "sys/policies/acl", token=reader_token)[0], 200)
+            for method, path, body in [
+                ("POST", "kubernetes/creds/openbao-acceptance", {}),
+                ("POST", "auth/homelab-jwt/config", {}),
+                ("POST", "sys/policies/acl/openbao-backup", {"policy": ""}),
+                ("GET", raw_path, None),
+            ]:
+                self.assertEqual(request(method, path, body, token=reader_token)[0], 403)
+            self.assertEqual(request("POST", "auth/token/revoke-self", {}, token=reader_token)[0], 204)
             self.assertEqual(request("POST", "auth/token/revoke-self", {})[0], 204)
             self.assertEqual(request("GET", raw_path)[0], 403)
             raw_status, raw_body = request("GET", raw_path, token=operator)

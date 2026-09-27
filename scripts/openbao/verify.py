@@ -1,10 +1,10 @@
 """Observational comparison of source-owned OpenBao configuration."""
 
-from pathlib import Path
 import json
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 from .configuration import SafeError, load_document
 from .drift import compare, compare_inventory, sanitize
@@ -38,7 +38,6 @@ def run(desired_path: Path, reader) -> dict:
 
 
 def _compare_live(desired_path: Path, reader) -> dict:
-    document = load_document(desired_path)
     state = reader.preflight()
     if (not isinstance(state, dict) or state.get('source_revision') != state.get('deployed_revision')
             or not isinstance(state.get('source_revision'), str)
@@ -53,6 +52,19 @@ def _compare_live(desired_path: Path, reader) -> dict:
     observation_keys = ('kubernetes', 'placement', 'route', 'health', 'backup', 'monitoring')
     if any(state.get(key) not in {'ready', 'inaccessible'} for key in observation_keys):
         raise SafeError('invalid-response')
+    result = compare_configuration(desired_path, reader)
+    result['source_revision'] = state['source_revision']
+    result['deployed_revision'] = state['deployed_revision']
+    result['phase'] = phase
+    result['observations'] = {key: state[key] for key in observation_keys}
+    if result['status'] == 'pass' and any(value != 'ready' for value in result['observations'].values()):
+        result['status'] = 'inaccessible'
+    return result
+
+
+def compare_configuration(desired_path: Path, reader) -> dict:
+    """Compare only OpenBao APIs; transport and Kubernetes checks are separate."""
+    document = load_document(desired_path)
     differences = []
     snapshots = {}
     for kind, endpoint in INVENTORY_ENDPOINTS.items():
@@ -76,12 +88,6 @@ def _compare_live(desired_path: Path, reader) -> dict:
         differences.extend(compare(spec, response))
     result = sanitize(differences, source=desired_path)
     result['status'] = 'inaccessible' if inaccessible else 'drift' if differences else 'pass'
-    result['source_revision'] = state['source_revision']
-    result['deployed_revision'] = state['deployed_revision']
-    result['phase'] = phase
-    result['observations'] = {key: state[key] for key in observation_keys}
-    if result['status'] == 'pass' and any(value != 'ready' for value in result['observations'].values()):
-        result['status'] = 'inaccessible'
     return result
 
 
@@ -90,7 +96,6 @@ def main(argv: list[str]) -> int:
         print(json.dumps({'status': 'inaccessible', 'classification': 'invalid-source'}))
         return 2
     root = Path(__file__).resolve().parents[2]
-    desired = root / 'kubernetes/apps/security/openbao/config/desired.json'
     try:
         status = subprocess.run(['git', 'status', '--porcelain'], cwd=root,
                                 capture_output=True, text=True, timeout=5, check=True)
@@ -98,8 +103,20 @@ def main(argv: list[str]) -> int:
                                   capture_output=True, text=True, timeout=5, check=True).stdout.strip()
         if status.stdout or len(revision) != 40:
             raise SafeError('source-mismatch')
-        from .reader import DiagnosticReader
-        result = run(desired, DiagnosticReader(Path(argv[1]), revision))
+        from .reader import ObserverReader
+        reader = ObserverReader(Path(argv[1]), revision)
+        state = reader.preflight()
+        if state['source_revision'] != state['deployed_revision']:
+            raise SafeError('source-mismatch')
+        if state['phase'] == 'staged-absent':
+            result = {'status': 'staged-absent', **state}
+        else:
+            result = reader.configuration_observation()
+            result.update(source_revision=revision, deployed_revision=state['deployed_revision'],
+                          phase='active', observations={key: state[key] for key in
+                          ('kubernetes', 'placement', 'route', 'health', 'backup', 'monitoring')})
+            if any(value != 'ready' for value in result['observations'].values()):
+                result['status'] = 'inaccessible'
         print(json.dumps(result, sort_keys=True))
         return 0 if result['status'] == 'pass' else 1
     except (SafeError, OSError, subprocess.SubprocessError, AttributeError, TypeError,

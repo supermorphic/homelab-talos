@@ -27,7 +27,7 @@ class OpenBaoCatalogTests(unittest.TestCase):
             "scripts/validate/openbao.sh",
         )
         verifier = suites["verification.openbao"]
-        self.assertEqual(verifier["access"]["tier"], "diagnostic")
+        self.assertEqual(verifier["access"]["tier"], "observer")
         self.assertFalse(verifier["metadata"]["mutates_cluster"])
         self.assertIn("verification.openbao", catalog_validator.campaign_exclusions())
         for campaign in ("verification", "scoped-verification"):
