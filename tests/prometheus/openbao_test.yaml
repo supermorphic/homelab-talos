@@ -152,6 +152,35 @@ tests:
         exp_alerts:
           - exp_labels: {severity: warning, namespace: openbao, service: openbao-config-reader, kind: summary}
             exp_annotations: {summary: OpenBao configuration observation is missing or unusable}
+  - name: fresh configuration drift alerts after two minutes
+    interval: 1m
+    input_series:
+      - series: 'openbao_configuration_observation{namespace="openbao",service="openbao-config-reader",kind="summary",state="drift",health="ready"}'
+        values: '0+60x5'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: OpenBaoConfigurationDrift
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: OpenBaoConfigurationDrift
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: openbao, service: openbao-config-reader, kind: summary, state: drift, health: ready}
+            exp_annotations: {summary: OpenBao configuration differs from deployed desired source}
+      - eval_time: 3m
+        alertname: OpenBaoConfigurationObservationUnavailable
+        exp_alerts: []
+  - name: fresh matching configuration stays quiet
+    interval: 1m
+    input_series:
+      - series: 'openbao_configuration_observation{namespace="openbao",service="openbao-config-reader",kind="summary",state="pass",health="ready"}'
+        values: '0+60x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: OpenBaoConfigurationDrift
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: OpenBaoConfigurationObservationUnavailable
+        exp_alerts: []
   - name: old success stays stale despite fresh scrapes
     interval: 1m
     input_series:
