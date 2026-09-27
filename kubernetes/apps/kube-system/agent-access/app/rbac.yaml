@@ -142,20 +142,128 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: homelab-diagnostic-extra
+  name: homelab-diagnostic-exec
 rules:
   - apiGroups: [""]
-    resources: ["pods/exec", "pods/portforward"]
+    resources: ["pods/exec"]
     verbs: ["create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: RoleBinding
 metadata:
-  name: homelab-diagnostic-extra
+  name: homelab-diagnostic-exec
+  namespace: kube-system
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: homelab-diagnostic-extra
+  name: homelab-diagnostic-exec
+subjects:
+  - kind: ServiceAccount
+    name: homelab-diagnostic
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-diagnostic-exec
+  namespace: media
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-diagnostic-exec
+subjects:
+  - kind: ServiceAccount
+    name: homelab-diagnostic
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-diagnostic-exec
+  namespace: homepage
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-diagnostic-exec
+subjects:
+  - kind: ServiceAccount
+    name: homelab-diagnostic
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-diagnostic-exec
+  namespace: ntfy
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-diagnostic-exec
+subjects:
+  - kind: ServiceAccount
+    name: homelab-diagnostic
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-diagnostic-exec
+  namespace: automation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-diagnostic-exec
+subjects:
+  - kind: ServiceAccount
+    name: homelab-diagnostic
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: homelab-diagnostic-portforward
+rules:
+  - apiGroups: [""]
+    resources: ["pods/portforward"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-diagnostic-portforward
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-diagnostic-portforward
+subjects:
+  - kind: ServiceAccount
+    name: homelab-diagnostic
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-diagnostic-portforward
+  namespace: media
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-diagnostic-portforward
+subjects:
+  - kind: ServiceAccount
+    name: homelab-diagnostic
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-diagnostic-portforward
+  namespace: monitoring
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-diagnostic-portforward
 subjects:
   - kind: ServiceAccount
     name: homelab-diagnostic

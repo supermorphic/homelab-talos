@@ -215,7 +215,21 @@ assert_can_i "$observer" no patch deployments.apps kube-system
 assert_can_i "$observer" no delete deployments.apps kube-system
 assert_can_i "$observer" no delete pods kube-system
 
-# Diagnostic adds only exec and port-forward.
+# Diagnostic interactive access follows the reviewed current caller inventory.
+for ns in kube-system media homepage ntfy automation; do
+  assert_can_i "$diagnostic" yes create pods "$ns" exec
+done
+for ns in kube-system media monitoring; do
+  assert_can_i "$diagnostic" yes create pods "$ns" portforward
+done
+for ns in openbao flux-system automation-data longhorn-system; do
+  assert_can_i "$diagnostic" no create pods "$ns" exec
+  assert_can_i "$diagnostic" no create pods "$ns" portforward
+done
+assert_can_i "$diagnostic" no create pods monitoring exec
+for ns in homepage ntfy automation; do
+  assert_can_i "$diagnostic" no create pods "$ns" portforward
+done
 assert_can_i "$diagnostic" yes create pods kube-system exec
 assert_can_i "$diagnostic" yes create pods kube-system portforward
 assert_can_i "$diagnostic" no get secrets kube-system
