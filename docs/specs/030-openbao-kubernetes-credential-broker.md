@@ -314,24 +314,39 @@ from the selected clean source revision. Record both desired and deployed
 revisions and reject a mismatched deployment phase; do not silently compare a
 candidate policy against an unrelated deployed revision.
 
-Bootstrap creates an `openbao-config-reader` ACL policy and an exact JWT role
-for verification. The role binds the OpenBao server ServiceAccount to a separate
-projected token audience, with a ten-minute JWT lifetime and short OpenBao
-session lifetime. It permits only the required metadata/configuration reads and
-lists, plus `update` on `auth/token/revoke-self` to end its own session. Disable
-implicit default-policy attachment and grant this cleanup permission explicitly.
-It grants no configuration writes, token issuance, user-password reads,
-snapshot access, general secret access, or administration of other tokens.
+Bootstrap creates an `openbao-config-reader` ACL policy and exact JWT role bound
+to `system:serviceaccount:openbao:openbao-config-reader` and the dedicated
+`openbao-config-verification` audience. Its projected JWT lasts ten minutes;
+OpenBao sessions last at most five minutes and are revoked after collection.
+The policy permits source-owned configuration reads/lists and session self-revocation.
+It grants no configuration writes, issuance, snapshot access, or secret access.
 
-Register the verifier at the existing `diagnostic` access tier. Through this
-named workflow only, it selects `homelab-diagnostic` and executes a fixed
-collection routine in the expected server container. That routine authenticates
-using the dedicated projected token and keeps the resulting OpenBao session
-inside the process. It does not read the seal file, Raft files, operator
-credentials, or Kubernetes Secret bodies. Tokens are never returned to the
-worktree or included in command arguments or artifacts. This adds no permanent
-reconciler or separate verifier workload, and does not implement local agent
-authentication or credential issuance from issue 450.
+A single separate reader Deployment performs the existing desired-versus-live
+comparison every minute. It has no Kubernetes API grants, default API token, server
+filesystem, seal mount, or issuer identity. It uses verified TLS directly to the
+three fixed peers and exposes only fixed, sanitized Prometheus observations.
+Desired configuration, policies, and reader modules are mounted from hashed
+ConfigMaps; changes replace the reader. The server has no verification-token mount.
+This is an observer, not a configuration reconciler or issue 450 workstation broker.
+
+The local `openbao-verify` uses `homelab-observer`. It checks Kubernetes readiness,
+placement, routes, backup metadata, monitoring, and all six deployed Flux revisions.
+It reads configuration and quorum observations through the existing Prometheus route.
+Evidence binds the exact desired/policy/reader bytes by SHA-256, plus the independently
+checked clean source and deployed revisions. Scrape timestamps must be within two
+minutes and collection timestamps within five minutes, with neither in the future.
+A complete single scrape must contain exactly one summary and its declared,
+source-whitelisted differences. Missing, duplicate, stale, inaccessible, malformed,
+or mismatched observations fail verification. Scraping an old success does not
+refresh its collection time. Reader failure alerts but never seals servers, stops
+issuance, or performs configuration repair.
+
+Diagnostic exec and port-forward permissions use separate namespace-scoped bindings
+derived from existing callers, with no OpenBao grant. This restriction addresses
+direct interactive access; it does not claim host-level isolation from the retained
+privileged diagnostic workflows. Agent policy continues to limit those workflows.
+Attended acceptance requires real Forbidden responses to both POST and GET exec
+requests using the actual diagnostic credential, without impersonation.
 
 The comparison must include:
 
@@ -425,7 +440,7 @@ renewal/reload without losing quorum.
 Cilium policy permits only:
 
 - API access from the private Gateway, explicitly labeled backup/acceptance jobs,
-  health monitoring, and the bounded bootstrap/diagnostic path;
+  health monitoring, and the bounded operator bootstrap path;
 - server-to-server API/join and cluster traffic between the three OpenBao pods;
 - server egress to cluster DNS and the Kubernetes API;
 - backup access to OpenBao and its mounted backup claim;
@@ -537,7 +552,7 @@ Implement commands using the [repository command lifecycle](../reference/reposit
 and register assurance in the [test catalog](../../tests/catalog.yaml).
 
 The implemented catalog uses `validation.openbao` in core CI and registers
-`verification.openbao` as diagnostic-tier observation. The verifier is excluded
+`verification.openbao` as observer-tier observation. The verifier is excluded
 from verification and scoped-verification campaigns while any OpenBao Flux unit
 is suspended, the encrypted seal artifact is absent from the app Kustomization,
 or the Gatus endpoint is not enrolled. It fails on staged absence, incomplete
@@ -566,7 +581,7 @@ until authorized live tests record them.
 | Workflow | Authority and evidence |
 | --- | --- |
 | `just kube openbao-validate` | Offline chart render, schema, policy, source, and command-contract validation; no live credentials. |
-| `just kube openbao-verify` | Scoped diagnostic observation of workload, placement, health, route, monitoring, backup metadata, and sanitized desired-versus-live OpenBao configuration drift; no deliberate target mutation. |
+| `just kube openbao-verify` | Scoped observer observation of workload, placement, health, route, monitoring, backup metadata, and sanitized desired-versus-live OpenBao configuration drift; no deliberate target mutation. |
 | `just bootstrap openbao prepare` | Operator-owned deployment of the staged uninitialized servers. |
 | `just bootstrap openbao initialize` | Operator-owned initialization and configuration with independent recovery output. |
 | `just kube openbao-config-apply` | Operator-owned application of reviewed configuration and sanitized read-back. |

@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -428,6 +429,47 @@ def run_scope():
     return Scope(Path(selected), run_dir.name), run_dir
 
 
+def diagnostic_boundary(kubeconfig):
+    """Real negative API requests with the agent credential, never impersonation.
+
+    POST lacks an upgrade connection and cannot run a command if RBAC is too broad;
+    only an authorization Forbidden response passes, never a protocol/404 failure.
+    GET covers the other exec transport independently.
+    """
+    if not kubeconfig.is_absolute() or not kubeconfig.is_file():
+        raise issuance.AcceptanceError()
+    identity = 'system:serviceaccount:kube-system:homelab-diagnostic'
+    base = ['kubectl', '--kubeconfig', str(kubeconfig), '--context', 'homelab-diagnostic',
+            '--request-timeout=10s']
+    observed = subprocess.run([*base, 'auth', 'whoami', '-o', 'json'],
+                              capture_output=True, text=True, timeout=15, check=False)
+    if (observed.returncode != 0 or
+            json.loads(observed.stdout)['status']['userInfo']['username'] != identity):
+        raise issuance.AcceptanceError()
+    # Default config view redacts credential values. Reject impersonation, plugins,
+    # and administrator certificate layouts even when the context has the right name.
+    layout = subprocess.run([*base, 'config', 'view', '--minify', '-o', 'json'],
+                            capture_output=True, text=True, timeout=15, check=False)
+    if layout.returncode != 0:
+        raise issuance.AcceptanceError()
+    users = json.loads(layout.stdout)['users']
+    if len(users) != 1 or set(users[0]['user']) not in ({'token'}, {'tokenFile'}):
+        raise issuance.AcceptanceError()
+    path = '/api/v1/namespaces/openbao/pods/openbao-0/exec?container=openbao&command=true&stdout=true'
+    for command, verb in [('create', 'create'), ('get', 'get')]:
+        args = [*base, command, '--raw', path]
+        if command == 'create': args += ['-f', '-']
+        response = subprocess.run(args, input='', capture_output=True, text=True,
+                                  timeout=15, check=False)
+        error = response.stderr
+        if (response.returncode == 0 or 'Error from server (Forbidden)' not in error
+                or f'User "{identity}"' not in error or
+                f'cannot {verb} resource "pods/exec"' not in error or
+                'in namespace "openbao"' not in error):
+            raise issuance.AcceptanceError()
+    return True
+
+
 def main():
     result = {"status": "fail", "cleanup": "not-required"}
     scope = run_dir = None
@@ -442,6 +484,8 @@ def main():
         if supplied != required:
             raise issuance.AcceptanceError()
         install_interrupt_handlers()
+        diagnostic_path = Path(os.environ.get('OPENBAO_DIAGNOSTIC_KUBECONFIG', ''))
+        result['diagnostic_exec_denied'] = diagnostic_boundary(diagnostic_path)
         issuer, workload = provision(scope)
         suffix = hashlib.sha256(scope.run_id.encode()).hexdigest()[:16]
         # Predeclare exact empty objects for cleanup even after an ambiguous API response.

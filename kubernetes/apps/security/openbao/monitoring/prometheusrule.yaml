@@ -70,3 +70,17 @@ spec:
           for: 1m
           labels: {severity: critical}
           annotations: {summary: OpenBao audit device write failed}
+        - alert: OpenBaoConfigurationObservationUnavailable
+          expr: >-
+            absent(openbao_configuration_observation{namespace="openbao",service="openbao-config-reader",kind="summary"})
+            or (time() - openbao_configuration_observation{namespace="openbao",service="openbao-config-reader",kind="summary"} > 300)
+            or (openbao_configuration_observation{namespace="openbao",service="openbao-config-reader",kind="summary",state="inaccessible"} > 0)
+            or (openbao_configuration_observation{namespace="openbao",service="openbao-config-reader",kind="summary",health="inaccessible"} > 0)
+          for: 2m
+          labels: {severity: warning}
+          annotations: {summary: OpenBao configuration observation is missing or unusable}
+        - alert: OpenBaoConfigurationDrift
+          expr: openbao_configuration_observation{namespace="openbao",service="openbao-config-reader",kind="summary",state="drift"} > 0
+          for: 2m
+          labels: {severity: warning}
+          annotations: {summary: OpenBao configuration differs from deployed desired source}

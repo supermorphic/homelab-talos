@@ -98,7 +98,21 @@ Deployments. An operation is denied when no applicable RBAC rule grants it.
 The observer and diagnostic identities inherit the built-in `view` role and the explicit
 read permissions listed in the reference section below. Neither identity can read
 Kubernetes Secret bodies or use ordinary mutation verbs. The diagnostic identity adds
-only `create` on the `pods/exec` and `pods/portforward` subresources.
+only namespace-scoped `create` on the `pods/exec` and `pods/portforward` subresources.
+The current caller inventory is:
+
+| Namespace | Exec callers | Port-forward callers |
+| --- | --- | --- |
+| `kube-system` | Cilium status | Hubble diagnostics |
+| `media` | Plex, Tautulli | FlareSolverr |
+| `homepage` | Homepage and ntfy credential checks | None |
+| `ntfy` | ntfy ACL and credential checks | None |
+| `automation` | Web research n8n contract | None |
+| `monitoring` | None | Loki and Prometheus verification |
+
+New namespaces receive no interactive grant automatically. OpenBao receives neither
+grant. These namespace restrictions do not establish host-level isolation from
+retained privileged diagnostic workflows; the named-workflow policy still applies.
 
 RBAC is a hard technical boundary, but it is not the complete authority model. A
 credential can have a capability that repository policy permits only through a narrower
@@ -134,14 +148,13 @@ adds `pods/exec` and `pods/portforward`. Approved verifiers select this context 
 when their designed oracle needs one of those operations. Outside those named verifier
 paths, the agent must not use those capabilities without specific operator authorization.
 
-`mise exec -- just kube openbao-verify` is a named diagnostic verifier. It selects
-`homelab-diagnostic`, checks the clean source and deployed revision, then uses a fixed
-server-container script to read OpenBao configuration with a short-lived projected JWT.
-The JWT and OpenBao session stay in the server process. The result contains only
-source-known names, field names, status classifications, and revision identifiers.
-`staged-absent` means the suspended package has not been activated; it does not pass
-configuration verification. Permission failure stops the verifier without a broader
-credential fallback.
+`mise exec -- just kube openbao-verify` uses `homelab-observer` for Kubernetes reads
+and the existing Prometheus route for sanitized configuration observations. A separate
+reader authenticates to OpenBao using its own audience-bound projected JWT and read-only
+policy. No OpenBao credentials or server exec access are given to the worktree.
+It checks clean/deployed revisions, exact desired/reader content digest, fresh collection
+and scrape times, and complete results. Missing or stale evidence fails verification.
+`staged-absent` describes the suspended package; it is not active acceptance.
 
 ## What an agent may do autonomously
 

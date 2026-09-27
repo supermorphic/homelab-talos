@@ -155,6 +155,17 @@ These commands have offline synthetic tests. Live bootstrap, tunnel behavior, re
 on operator storage, and root revocation require attended acceptance; source tests alone
 do not establish deployment success.
 
+## Ongoing autonomous verification
+
+Run `mise exec -- just kube openbao-verify` using the normal scoped worktree credentials.
+The observer verifies Kubernetes state and reads sanitized configuration observations
+from Prometheus. The separate reader owns its short-lived OpenBao session; neither
+server exec nor a workstation OpenBao credential is required. Collection failures,
+drift, stale results, or source mismatches fail verification and never apply repairs.
+The reader refreshes every minute; allow reconciliation and one fresh scrape after a
+configuration change. Initialization, configuration apply, disruption, restore, and
+upgrades remain attended operator workflows.
+
 ## Issuance and HA acceptance
 
 These catalog tests are attended and use the explicitly selected
@@ -162,6 +173,12 @@ These catalog tests are attended and use the explicitly selected
 holds the existing disruption Lease. The source must be clean, published and
 deployed `main`. Activate the acceptance manifests through the reviewed deployment
 procedure first. No agent diagnostic credential is upgraded or adopted.
+For issuance acceptance, also set `OPENBAO_DIAGNOSTIC_KUBECONFIG` to an absolute path
+containing the actual scoped `homelab-diagnostic` context. The test checks its identity
+and requires API Forbidden responses for both exec transports before creating any
+acceptance resources. A 404, protocol error, or an impersonated operator context is not
+proof of the intended boundary. Run this only after the narrowed diagnostic grants
+have reconciled. Live denial and reader/backup acceptance remain activation gates.
 
 ```sh
 mise exec -- just test record test.openbao-issuance

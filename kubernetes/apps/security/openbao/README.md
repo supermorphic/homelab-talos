@@ -17,7 +17,7 @@ verified against the registry's OCI index digest. The chart's default server ver
 
 Run `mise exec -- just kube openbao-validate` for offline source and rendered-chart checks.
 `validation.openbao` runs in both complete and core CI. The catalog registers
-`verification.openbao` with diagnostic access, but excludes it from verification
+`verification.openbao` with observer access, but excludes it from verification
 campaigns while any of this package's six Flux Kustomizations is suspended, the
 encrypted seal artifact is absent from the app Kustomization, or the staged Gatus
 endpoint is not enrolled. Direct
@@ -29,9 +29,15 @@ The reviewed OpenBao mounts, auth roles, policies, and Kubernetes issuance role 
 workflows read them from clean published and deployed source. They are not mounted into the server or reconciled
 by a privileged controller. Drift comparison covers readable live API fields against the
 same source inventory; an operator password is intentionally outside that comparison.
-The verifier uses the `homelab-diagnostic` Kubernetes context for scoped Pod exec
-and a short-lived projected JWT to read OpenBao configuration. It reports
-inaccessible state or drift instead of assuming that Git was applied. Repairs use
+The verifier uses `homelab-observer` for Kubernetes state and reads sanitized reader
+observations through Prometheus. A single separate `openbao-config-reader` Deployment
+uses its own projected audience-bound JWT and read-only OpenBao policy. It has no
+Kubernetes API grants, server filesystem, seal, or issuer-token access. Hashed ConfigMaps
+mount the shared comparison implementation and desired configuration; changed inputs
+replace the reader. Evidence includes actual collection time and a digest of desired,
+policy, and reader bytes. The observer independently checks clean/deployed revisions,
+rejects incomplete or duplicate evidence, and requires a scrape within two minutes and
+collection within five minutes. Failures alert without affecting issuance. Repairs use
 the attended, source-bound `openbao-config-apply` workflow.
 The chart's default readiness probe requires an initialized, unsealed server. The release
 only skips the *initial install wait*; upgrades keep their normal readiness handling.
