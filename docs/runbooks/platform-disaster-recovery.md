@@ -447,13 +447,20 @@ source credentials without that key.
 
 ### OpenBao credential broker state
 
-After Kubernetes, Cilium, Flux and Longhorn are healthy, follow
-[Recover OpenBao](openbao-recovery.md). Recover the independently retained matching
-seal material and selected Raft snapshot, run the attended isolated restore drill,
-and verify OpenBao before resuming credential consumers. The drill uses fresh
-storage and cannot restore production state. Production claim replacement and
-Raft recovery require a separately reviewed operator plan. Keep SOPS/Talos and
-backup access independent of credentials issued by OpenBao.
+Recover OpenBao only after Talos/Kubernetes, Cilium, Flux/SOPS, and Longhorn are
+healthy. Keep the SOPS age identity, OpenBao recovery and operator material, and
+backup access independently available. Their retrieval must never depend on a
+credential issued by OpenBao.
+
+Select a Raft snapshot and its **matching static seal-key generation**. Recovery
+shares and operator credentials cannot substitute for that seal key. Preserve each
+seal-key generation while its snapshots remain retained. Follow the guarded
+[restore assurance workflow](../guides/openbao-operations.md#isolated-restore-assurance),
+then verify OpenBao and restricted issuance before resuming credential consumers.
+
+Production PVC or Raft replacement and force restore require a separately reviewed,
+explicitly operator-authorized recovery plan. The isolated drill proves backup
+recoverability without changing production state.
 
 ## Verify the recovered platform
 

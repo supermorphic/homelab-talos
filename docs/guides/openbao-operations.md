@@ -226,6 +226,39 @@ this is not a continuous availability measurement. A failure stops subsequent
 mutations and requires attended inspection. Physical power-loss testing remains
 in the separately authorized node-lifecycle workflow.
 
+## Isolated restore assurance
+
+Run the guarded restore drill after a material snapshot, seal-generation, or recovery
+workflow change and before accepting a selected backup as recoverable. It requires a
+healthy Kubernetes API and three Ready production OpenBao peers for its isolation
+checks. A production outage needs a separately reviewed recovery plan; this drill
+cannot provide the same proof during that outage.
+
+Choose the retained `raft.snap` and sibling `metadata.json` in an operator-private
+location outside the repository. Use the independent recovery record to match its seal
+key ID and recovery generation to the retained static seal material. Have the retained
+non-root OpenBao operator credential and an explicitly authorized operator kubeconfig
+available.
+Recovery shares or operator credentials cannot replace a missing matching seal key.
+
+From the clean, deployed `main` checkout, set only the non-secret selectors and run
+the canonical guarded test:
+
+```bash
+export OPENBAO_OPERATOR_KUBECONFIG='/absolute/private/operator-kubeconfig'
+export OPENBAO_RESTORE_SNAPSHOT='/absolute/private/snapshot/raft.snap'
+export OPENBAO_RESTORE_SEAL_ID='<seal-id-from-recovery-record>'
+export OPENBAO_RESTORE_GENERATION='<generation-from-recovery-record>'
+mise exec -- just test record test.openbao-restore-drill
+```
+
+Review the exact confirmation shown by the workflow. Supply matching seal material
+and the operator password only through its private prompts. Keep those values out of
+arguments, environment variables, logs, and evidence. Require both the restore and
+cleanup results to pass. The isolated drill proves backup recoverability for the
+selected snapshot; it does not replace production storage or restore production Raft.
+Production recovery requires a separate, explicitly operator-authorized plan.
+
 ## Upgrade after a Git image update
 
 Review upstream compatibility and the repository version constraints before

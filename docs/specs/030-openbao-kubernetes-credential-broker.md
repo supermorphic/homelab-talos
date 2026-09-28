@@ -513,11 +513,11 @@ using the retained operator login. Read only the source-owned JWT config entry;
 all other configuration uses ordinary API reads. Unexpected errors or stored fields
 fail the drill. Scratch still receives no production API token or egress.
 
-Extend the existing [platform recovery runbook](../runbooks/platform-disaster-recovery.md)
-and add an OpenBao-specific runbook during implementation. Coordinate the recovery
-dependency chain with [issue 294](https://github.com/supermorphic/homelab-talos/issues/294):
-operator SOPS/Talos recovery, Kubernetes/Flux/network/storage restoration, seal
-material and snapshot restoration, OpenBao verification, then credential consumers.
+The [platform recovery section](../runbooks/platform-disaster-recovery.md#openbao-credential-broker-state)
+owns the dependency order and break-glass boundary. The
+[operations guide](../guides/openbao-operations.md#isolated-restore-assurance) owns
+operator inputs and the guarded command. Restore mechanics and exact acceptance
+assertions remain in source and tests.
 
 ## Observability and upgrades
 

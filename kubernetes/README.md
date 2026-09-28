@@ -136,7 +136,7 @@ official Helm chart is pinned to `0.29.6`; the server image is pinned to OpenBao
 source-bound command and compared with actual readable API state by the diagnostic
 verifier. See the [package README](../kubernetes/apps/security/openbao/README.md),
 [operations guide](../docs/guides/openbao-operations.md), and
-[recovery runbook](../docs/runbooks/openbao-recovery.md).
+[platform recovery boundary](../docs/runbooks/platform-disaster-recovery.md#openbao-credential-broker-state).
 
 For an established cluster, `just cluster verify` composes the authoritative Node, etcd,
 Talos, Cilium, Longhorn, and foundation checks. It intentionally excludes arbitrary
