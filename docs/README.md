@@ -35,7 +35,6 @@
 
 ## Runbooks
 
-- [Recover NocoDB](runbooks/nocodb-recovery.md) — Choose pod, metadata, source-operation, or isolated logical-bundle recovery while preserving the connection encryption key.
 - [Recover OpenBao](runbooks/openbao-recovery.md) — Rebuild platform prerequisites, retain matching seal material, and prove a selected snapshot in an isolated drill.
 - [Recover Plex remote playback with Relay](runbooks/plex-relay-fallback.md) — Diagnose Relay fallback when direct remote access is unavailable.
 - [Recover Plex and Plexamp Sonos playback](runbooks/plex-sonos-recovery.md) — Restore native Sonos library access or Plexamp player control.

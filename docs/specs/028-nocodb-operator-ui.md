@@ -13,8 +13,9 @@ and business contracts defined by each domain.
 
 This specification defines architecture, lifecycle invariants, and required evidence.
 The [operations guide](../guides/nocodb-operations.md) owns executable procedures and
-credential binding. The [recovery runbook](../runbooks/nocodb-recovery.md) owns recovery
-execution. Tests, reports, issues, and Git history retain implementation evidence.
+credential binding. The [platform recovery runbook](../runbooks/platform-disaster-recovery.md#nocodb-metadata-recovery)
+identifies recovery roots and the lost-key boundary. Guarded scripts and tests own
+restore execution; reports, issues, and Git history retain implementation evidence.
 
 ## Existing platform context
 
@@ -618,8 +619,8 @@ unrelated repository changes do not alone invalidate accepted dependency evidenc
   bounded retry; ambiguous state never permits duplicate creation or destructive cleanup.
 - Ready source credentials change only through targeted rotation or attended repair.
 - Metadata loss requires a complete compatible logical restore and the retained encryption
-  key. Loss of that key requires operator-led recovery or explicit source credential repair;
-  it cannot be repaired from metadata alone.
+  key. Loss of the matching key stops ordinary recovery and requires a separately reviewed
+  recovery design; metadata alone cannot repair encrypted source credentials.
 - PostgreSQL grants and source identity must be revalidated after recovery. Saved UI state
   does not establish continuing authorization.
 - Domain/storage owners recover external files independently of NocoDB metadata recovery.
@@ -676,14 +677,15 @@ new affected evidence. A native attachment proposal must resolve storage ownersh
 authority, portability, and recovery before becoming supported.
 
 Keep this specification aligned with accepted architectural changes. Procedures belong
-in guides/runbooks and executable details in implementation and tests.
+in the operations guide and platform runbook; executable details belong in implementation
+and tests.
 
 ## References
 
 - [Automation-data PostgreSQL specification](026-automation-data-postgresql-platform.md)
 - [Repository command lifecycle](021-repository-command-lifecycle.md)
 - [NocoDB operations](../guides/nocodb-operations.md)
-- [NocoDB recovery](../runbooks/nocodb-recovery.md)
+- [Platform disaster recovery](../runbooks/platform-disaster-recovery.md#nocodb-metadata-recovery)
 - [NocoDB Kubernetes installation](https://nocodb.com/docs/self-hosting/installation/kubernetes)
 - [NocoDB environment variables](https://nocodb.com/docs/self-hosting/environment-variables)
 - [NocoDB backup guidance](https://nocodb.com/docs/self-hosting/maintenance/backups)

@@ -434,6 +434,17 @@ Do not attempt to reconstruct generated domain plaintext passwords.
 Production claim replacement or other destructive recovery requires explicit
 operator authorization.
 
+### NocoDB metadata recovery
+
+NocoDB is an optional layer. Recover it only after automation-data PostgreSQL is
+healthy. Keep the SOPS age identity, the exact retained `NC_CONNECTION_ENCRYPT_KEY`,
+and complete automation-data logical backups available as recovery roots. NocoDB
+application-local storage is disposable; PostgreSQL holds its durable metadata.
+
+If the matching connection-encryption key is lost, stop ordinary recovery and prepare
+a separately reviewed recovery design. A restored database cannot decrypt its saved
+source credentials without that key.
+
 ### OpenBao credential broker state
 
 After Kubernetes, Cilium, Flux and Longhorn are healthy, follow

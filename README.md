@@ -16,9 +16,9 @@ exact public webhook, controlled assurance, rollback, and recovery choice. The
 [platform disaster recovery runbook](docs/runbooks/platform-disaster-recovery.md#n8n--automation-data-recovery)
 identifies the shared recovery roots and storage boundary.
 The [NocoDB operations guide](docs/guides/nocodb-operations.md) covers the staged private
-operator UI, domain source adoption, targeted rotation, and attended acceptance. Use the
-[NocoDB recovery runbook](docs/runbooks/nocodb-recovery.md) for pod, metadata,
-source-operation, or isolated logical-bundle recovery.
+operator UI, domain source adoption, targeted rotation, failure decisions, and attended
+acceptance. The [platform disaster recovery runbook](docs/runbooks/platform-disaster-recovery.md#nocodb-metadata-recovery)
+identifies NocoDB recovery roots and the lost-key boundary.
 
 ## Development workflow
 
