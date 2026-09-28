@@ -54,8 +54,8 @@ changes open to unnecessary specifications, implementation contexts, and review 
 The distinction is design uncertainty and operational risk, not the number of changed
 lines. A small credential-boundary change still needs architectural design discipline.
 
-The installed Superpowers bounded-design and inline-execution workflows provide the
-underlying process. Repository policy selects short in-context design for bounded work
+The supported agent framework provides the underlying design and execution workflows.
+Repository policy selects short in-context design for bounded work
 and native execution by default, including architectural work. It does not copy skill
 checklists or introduce another execution framework. Delegation earns its additional
 context through an identified isolation, specialization, review, or parallelism benefit.
