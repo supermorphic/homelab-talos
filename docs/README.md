@@ -35,7 +35,6 @@
 
 ## Runbooks
 
-- [Recover Plex remote playback with Relay](runbooks/plex-relay-fallback.md) — Diagnose Relay fallback when direct remote access is unavailable.
 - [Recover Plex and Plexamp Sonos playback](runbooks/plex-sonos-recovery.md) — Restore native Sonos library access or Plexamp player control.
 - [Respond to Plex network alerts](runbooks/plex-network-alerts.md) — Diagnose, contain, and recover Plex traffic, telemetry, and workload-policy alerts.
 - [Recover a qbit_manage mistaken clean](runbooks/qbit-manage-mistaken-clean.md) — Contain qbit_manage and restore one mistaken cleanup safely.
