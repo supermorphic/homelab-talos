@@ -25,6 +25,10 @@ deployment_count="$(yq ea -r 'select(.kind == "Deployment") | .metadata.name' "$
 [[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "nocodb") | .spec.template.spec.containers[] | select(.name == "nocodb") | .image' "$helm_render")" == \
   'docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9' ]] ||
   fail 'the NocoDB image digest is not selected'
+[[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "nocodb") |
+  [.spec.template.spec.containers[] | select(.name == "nocodb") | .env[]? |
+    select(.name == "NC_DISABLE_SINGLE_SESSION_ENFORCEMENT" and .value == "true")] | length' "$helm_render")" == '1' ]] ||
+  fail 'the NocoDB Deployment must disable single-session enforcement'
 [[ "$(yq ea -r 'select(.kind == "Service" and .metadata.name == "nocodb") | [.spec.type, (.spec.ports | length), .spec.ports[0].port, (.spec.ports[0].protocol // "TCP")] | join(",")' "$helm_render")" == 'ClusterIP,1,8080,TCP' ]] ||
   fail 'the rendered NocoDB Service must expose only ClusterIP TCP/8080'
 [[ "$(yq ea -r 'select(.kind == "Service" and .metadata.name == "nocodb") | .spec.ports[0].targetPort' "$helm_render")" == 'http' ]] ||
@@ -147,7 +151,7 @@ values='kubernetes/apps/automation-data/nocodb/app/values.yaml'
   fail 'the NocoDB database, auth, persistence, service, or URL values are incorrect'
 [[ "$(yq -r '[.nocodb.disableMux, .nocodb.disableTelemetry] | join(",")' "$values")" == 'true,true' ]] ||
   fail 'the NocoDB privacy values are incorrect'
-[[ "$(yq -r '[.nocodb.extraEnvVars[] | [.name, (.value // .valueFrom.secretKeyRef.name), (.valueFrom.secretKeyRef.key // "")] | join("/")] | sort | join(",")' "$values")" == 'NC_ADMIN_EMAIL/nocodb-credentials/NC_ADMIN_EMAIL,NC_ADMIN_PASSWORD/nocodb-credentials/NC_ADMIN_PASSWORD,NC_ALLOW_LOCAL_EXTERNAL_DBS/true/,NC_DISABLE_SUPPORT_CHAT/true/' ]] ||
+[[ "$(yq -r '[.nocodb.extraEnvVars[] | [.name, (.value // .valueFrom.secretKeyRef.name), (.valueFrom.secretKeyRef.key // "")] | join("/")] | sort | join(",")' "$values")" == 'NC_ADMIN_EMAIL/nocodb-credentials/NC_ADMIN_EMAIL,NC_ADMIN_PASSWORD/nocodb-credentials/NC_ADMIN_PASSWORD,NC_ALLOW_LOCAL_EXTERNAL_DBS/true/,NC_DISABLE_SINGLE_SESSION_ENFORCEMENT/true/,NC_DISABLE_SUPPORT_CHAT/true/' ]] ||
   fail 'the NocoDB explicit environment contract is incorrect'
 ! rg -q 'envFrom|NC_INVITE_ONLY_SIGNUP|NC_REDIS_URL' "$values" ||
   fail 'NocoDB values must not bulk-load credentials or configure unsupported settings'
