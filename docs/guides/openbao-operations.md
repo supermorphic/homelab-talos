@@ -1,318 +1,200 @@
-# OpenBao operator operations
+# OpenBao operations
 
-OpenBao bootstrap and configuration changes are attended operator workflows. Run them
-through the pinned toolchain from a clean checkout of published, deployed `main`.
-The package remains staged until its operator inputs and live acceptance are complete.
-See the [design](../specs/030-openbao-kubernetes-credential-broker.md) and
-[package README](../../kubernetes/apps/security/openbao/README.md).
+## Mental model and operator actions
 
-Offline validation is `mise exec -- just kube openbao-validate`. The catalog's
-`validation.openbao` also runs in core CI. `verification.openbao` is observer-tier
-observation, registered but excluded from verification campaigns while any of the
-six OpenBao Flux units remains suspended, the encrypted seal artifact is absent
-from the app Kustomization, or the Gatus endpoint is not enrolled. It reports
-staged absence as a failure,
-not deployment acceptance. The three mutating suites remain standalone and require
-intentional operator-run `test record` commands. No live bootstrap, issuance,
-failover, upgrade, snapshot transfer, or restore result
-is recorded by this source package.
+The staged OpenBao package defines three Raft voters and short-lived Kubernetes
+credential issuance. Git and Flux own its Kubernetes resources. Reviewed
+authentication, policy, and issuance configuration is applied through an attended
+command. No privileged controller repairs it automatically. Use a clean checkout of
+published, deployed `main`
+for operator workflows.
 
-Git and Flux own the Kubernetes resources. The reviewed OpenBao API inventory is
-in `config/desired.json` and `config/policies/`; a clean deployed `main` revision
-is the input for attended `openbao-config-apply`. Flux does not write these API
-objects. The separate reader compares actual OpenBao configuration with that source
-using a short-lived `openbao-config-reader` JWT. The local observer verifier consumes
-only its sanitized, fresh, source-bound Prometheus observations. Failed reads and changed reader authority
-produce inaccessible or drift results, never a clean result. The operator password
-is private recovery material and has no readable drift comparison.
+| Situation | Operator action |
+| --- | --- |
+| First deployment | Create and retain seal material, prepare the staged servers, initialize once, complete acceptance, then activate through Git. |
+| Reviewed OpenBao configuration change or drift | Merge the desired configuration, run the guarded apply command, and verify again. |
+| Routine health and configuration check | Run `mise exec -- just kube openbao-verify` with normal scoped observer credentials. |
+| Image upgrade | Retain a current recoverable snapshot, publish the reviewed image, then run the attended upgrade. |
+| Production recovery | Follow the [platform disaster-recovery boundary](../runbooks/platform-disaster-recovery.md#openbao-credential-broker-state); production Raft or PVC replacement needs explicit operator authorization. |
 
-The SOPS Git Secret and off-cluster recovery copy are encrypted. Flux decrypts the
-Git artifact into a live Kubernetes Secret; authorized Secret reads and the mounted
-seal file expose usable key bytes. The Talos source defines Secretbox encryption
-for Kubernetes Secrets, and read-only inspection found all three API servers using
-Talos's encryption-provider config. That evidence does not prove every historical
-etcd record was rewritten or that authorized live Secret reads are encrypted. The
-Talos `STATE` and `EPHEMERAL` volumes were observed as LUKS2; the separate
-Longhorn OpenBao data and backup volumes are outside that node-volume boundary.
-Keep the operator age identity, encrypted recovery artifacts, and password-manager
-copy of the non-root operator login off-cluster. Never depend on a credential
-issued by OpenBao to recover OpenBao.
+Offline source validation is `mise exec -- just kube openbao-validate`. It does not
+establish live deployment or recovery success.
 
-## Create and retain seal material
+## Recovery material to retain
 
-Select a new absolute recovery directory outside every repository worktree and test
-output directory. It must already exist, belong to the operator, and have mode `0700`.
-Use a resolved path without symlink components. Retain its contents independently of
-the cluster. Use a different empty directory for initialization recovery.
+Retain these outside this cluster, with access that does not depend on a credential
+issued by OpenBao:
 
-Load the operator age identity by the existing repository procedure. Set
-`OPENBAO_RECOVERY_DIRECTORY` and confirm
+- the operator's SOPS age identity and the encrypted Git/off-cluster static seal
+  artifact, including older seal generations while their backups are retained;
+- the encrypted `openbao-recovery.age` bundle and a private, usable copy of the
+  non-root operator login and recovery material;
+- off-cluster backup access and each selected Raft snapshot with its recovery record;
+- the **matching static seal-key generation** for every retained snapshot that may
+  need restoration.
+
+A recovery share or operator password cannot replace a missing matching seal key.
+The live Kubernetes Secret contains usable seal bytes; restrict administrative Secret
+access. Keep recovery material and credentials out of repository files, command
+arguments, logs, and retained test evidence.
+
+## First deployment
+
+### 1. Create seal material
+
+Choose an existing operator-owned `0700` recovery directory outside worktrees and test
+output. Load the operator age identity through the repository's normal private
+procedure. Set `OPENBAO_RECOVERY_DIRECTORY` and
 `OPENBAO_SECRETS_CONFIRM=write:openbao:openbao-seal:sops`, then run:
 
 ```sh
 mise exec -- just repo openbao-secrets
 ```
 
-This command invokes `just repo secrets` to validate the selected identity. It generates
-32 random seal bytes in memory, encrypts the Kubernetes Secret with SOPS, and retains
-an age-encrypted recovery copy before installing the Secret. It refuses any existing
-seal artifact. It never regenerates or rotates a seal key as a repair action.
+The command creates the encrypted Git Secret and an independent encrypted recovery
+copy. Add `./openbao-seal.sops.yaml` to the OpenBao app Kustomization and publish the
+encrypted artifact through review. Never regenerate a seal key to repair an existing
+installation. Use a different empty recovery directory for initialization.
 
-Add `./openbao-seal.sops.yaml` to the app's `kustomization.yaml`, review the encrypted
-artifact, and publish it through the normal pull request workflow. Do not decrypt or
-paste its value into the shell. Preserve the encrypted recovery copy if installation
-or publication fails. Existing ciphertext needs attended inspection, not regeneration.
-The operator age private key must remain available independently of this cluster.
+### 2. Prepare the staged servers
 
-## Prepare the staged servers
-
-Explicitly select the operator kubeconfig using `OPENBAO_OPERATOR_KUBECONFIG` with an
-absolute path. Ambient `KUBECONFIG` and task diagnostic credentials are not adopted.
-Set `OPENBAO_RECOVERY_RECIPIENT` to the public recipient in the encrypted seal artifact.
-Set `OPENBAO_RECOVERY_DIRECTORY` to the separate initialization recovery directory.
-
-Run without confirmation to observe the target and obtain the required token:
+Set `OPENBAO_OPERATOR_KUBECONFIG` to the absolute path of the operator kubeconfig,
+`OPENBAO_RECOVERY_RECIPIENT` to the public recipient in the seal artifact, and
+`OPENBAO_RECOVERY_DIRECTORY` to the initialization recovery directory. Run:
 
 ```sh
 mise exec -- just bootstrap openbao prepare
 ```
 
-Review and set `OPENBAO_BOOTSTRAP_CONFIRM` to the reported value:
-`prepare:openbao:<main-sha>:<package-digest>`. Run the same command again.
-Preparation uses the existing disruption Lease, temporarily resumes only the owned
-prerequisite and server Flux units, and suspends those units again after reconciliation.
-It preserves the installed resources. The private route and acceptance units stay
-staged until durable activation through Git. Preparation verifies three uninitialized
-servers and reports the observed cluster, namespace, workload, Pod, and claim
-identities for local review; it never calls the initialization API. Do not copy
-these live identifiers into public artifacts.
+Review the reported target and confirmation, set `OPENBAO_BOOTSTRAP_CONFIRM` to its
+reported `prepare:openbao:<main-sha>:<package-digest>` value, and rerun the command.
+Preparation checks the staged three-server target without initializing it. The
+operator kubeconfig is selected explicitly; ambient or agent diagnostic credentials
+are not adopted.
 
-## Initialize exactly once
+### 3. Initialize exactly once
 
 Run `mise exec -- just bootstrap openbao initialize` without confirmation. Review the
-reported token and set `OPENBAO_BOOTSTRAP_CONFIRM` to
-`initialize:openbao:<main-sha>:<target-digest>`, then repeat the command.
-The target digest binds cluster, namespace, workload, Pod and claim identities,
-configuration, seal key ID, source and public recovery recipient. Any target change
-requires new observation and confirmation.
+reported target, set `OPENBAO_BOOTSTRAP_CONFIRM` to its reported
+`initialize:openbao:<main-sha>:<target-digest>` value, and rerun it. Initialization
+is a one-time action. A lost response or timeout is ambiguous; preserve the servers
+and claims and investigate before any further action. Never retry initialization as a
+repair step.
 
-The workflow verifies TLS through loopback-only tunnels to named Pods. It checks all
-three initialization states again, sends one initialization request to `openbao-0`,
-and immediately retains `openbao-recovery.age` with exclusive creation and durable
-flush. That encrypted bundle contains the recovery share, initial root token, and
-the new operator password. No plaintext intermediary or credential output is written.
+### 4. Retain credentials
 
-After the three voters join, the workflow installs reviewed authentication, policies
-and issuance roles, plus the fixed hashed audit device. It independently reads back
-configuration. It verifies a separate `openbao-operator` login before revoking the
-initial root token and proving that token is rejected. It revokes its temporary
-operator session before success. Import the operator password into the operator's
-password manager using an attended, private recovery process.
+Confirm that `openbao-recovery.age` was retained independently. Privately import the
+non-root operator login and recovery material into the operator's recovery system.
+The bootstrap verifies the operator login and revokes the initial root token before
+reporting success. Do not depend on that root token for routine administration.
 
-Do not activate the remaining Flux units until acceptance succeeds. Commit durable
-suspension changes and associated monitoring/backup activation through Git.
+### 5. Run attended acceptance
 
-## Partial success and recovery
+Use the explicit operator kubeconfig for `OPENBAO_OPERATOR_KUBECONFIG` and
+`TEST_KUBECONFIG`. First use reviewed Git changes to activate the server, acceptance,
+and backup units needed to produce a snapshot and run these tests; keep the remaining
+integrations staged. Each registered test asks for its own exact execution confirmation
+and requires operator authority.
 
-A timeout or lost initialization response is ambiguous. Stop, preserve all Pods and
-claims, and inspect through the attended recovery procedure. There is no initialization
-retry, peer fallback, uninstall, rollback, or PVC deletion. Every rerun refuses any
-initialized member, including after a later configuration failure.
+| Acceptance | Command and additional input | Passing result establishes |
+| --- | --- | --- |
+| Issuance | `mise exec -- just test record test.openbao-issuance`; also supply `OPENBAO_DIAGNOSTIC_KUBECONFIG` for the actual scoped diagnostic identity. | Restricted issuance and access-denial behavior work with the intended identities. This is attended and creates temporary test resources. |
+| HA | `mise exec -- just test record test.openbao-ha`; provide an authorized OpenBao token at its private prompt. | Voters recover and issuance continues through attended, disruptive member replacement. |
+| Restore | `mise exec -- just test record test.openbao-restore-drill`; provide the selected snapshot, matching recovery record and seal material, and operator password as below. | The selected backup restores in isolation and passes recovery checks. It does not perform production recovery. |
 
-If encrypted retention fails after initialization, do not retry initialization. Preserve
-any ciphertext already installed; a directory flush failure can leave a valid file with
-uncertain durability. If peer joining, configuration, login or root revocation fails,
-retain the encrypted bundle and use its operator or recovery material for attended
-repair. A failed root revocation is an incomplete result. The workflow never reports
-successful bootstrap in that state.
+### Isolated restore assurance
 
-## Apply reviewed configuration
-
-Merge reviewed changes to `config/desired.json` and its policy files, let the Flux source
-reach that revision, and use the same explicit kubeconfig and public recipient:
+Run the restore drill after a material snapshot, seal-generation, or recovery-workflow
+change, and before accepting a selected backup as recoverable. Production OpenBao must
+be healthy for the isolation checks. Select `raft.snap` with
+its sibling `metadata.json` in operator-private storage. Match the recovery record's
+seal ID and generation to retained seal material. From clean deployed `main`, set the
+non-secret selectors and run:
 
 ```sh
-mise exec -- just kube openbao-config-apply
-```
-
-Enter an existing authorized OpenBao token at the hidden terminal prompt. The command
-reports a sanitized exact change plan and
-`config-apply:openbao:<main-sha>:<target-and-plan-digest>`. Set `OPENBAO_CONFIG_CONFIRM`
-to that value and rerun. Changed source, target or live configuration invalidates it.
-The command refuses unowned objects, unexpected fields, backend type replacement and
-implicit creation of a missing operator password. For a missing operator account, the
-confirmed invocation requires the password already retained in the encrypted recovery
-bundle at a hidden terminal prompt. It does not generate a new password or change an
-existing one. It never deletes objects. After
-writes, it reads actual API state with the shared configuration comparator.
-
-Audit is a fixed Git-owned `homelab/` file device targeting stdout, with `log_raw=false`
-and `hmac_accessor=true`. Its sanitized read-back is verified separately from the
-configuration inventory. Container log retention remains owned by the cluster logging
-configuration. Ordinary `openbao-verify` remains observational.
-
-These commands have offline synthetic tests. Live bootstrap, tunnel behavior, retention
-on operator storage, and root revocation require attended acceptance; source tests alone
-do not establish deployment success.
-
-## Ongoing autonomous verification
-
-Run `mise exec -- just kube openbao-verify` using the normal scoped worktree credentials.
-The observer verifies Kubernetes state and reads sanitized configuration observations
-from Prometheus. The separate reader owns its short-lived OpenBao session; neither
-server exec nor a workstation OpenBao credential is required. Collection failures,
-drift, stale results, or source mismatches fail verification and never apply repairs.
-The reader refreshes every minute; allow reconciliation and one fresh scrape after a
-configuration change. Initialization, configuration apply, disruption, restore, and
-upgrades remain attended operator workflows.
-
-## Issuance and HA acceptance
-
-These catalog tests are attended and use the explicitly selected
-`OPENBAO_OPERATOR_KUBECONFIG`. The catalog records human execution ownership and
-holds the existing disruption Lease. The source must be clean, published and
-deployed `main`. Activate the acceptance manifests through the reviewed deployment
-procedure first. No agent diagnostic credential is upgraded or adopted.
-For issuance acceptance, also set `OPENBAO_DIAGNOSTIC_KUBECONFIG` to an absolute path
-containing the actual scoped `homelab-diagnostic` context. The test checks its identity and matches the live `kube-system` namespace UID
-through both credentials, then requires API Forbidden responses for both exec transports before creating any
-acceptance resources. A 404, protocol error, or an impersonated operator context is not
-proof of the intended boundary. Run this only after the narrowed diagnostic grants
-have reconciled. Live denial and reader/backup acceptance remain activation gates.
-
-```sh
-mise exec -- just test record test.openbao-issuance
-mise exec -- just test record test.openbao-ha
-```
-
-Set `TEST_KUBECONFIG` to the same explicit operator kubeconfig when invoking the
-record command. The convenience wrappers are `just kube openbao-issuance-test`
-and `just kube openbao-ha-test`. Each prompts for exact source/target/run
-confirmation; this is an execution-intent guard. Operator authority must already
-cover creating and cleaning up the bounded test resources and, for HA, evicting
-OpenBao members. HA also prompts privately for an authorized OpenBao token to
-read Raft state. Tokens never enter command arguments or retained results.
-
-Issuance creates bounded Pods for the exact issuer and acceptance ServiceAccounts.
-They mount only projected identity material, with no seal key or server storage.
-It makes actual positive and negative TokenRequest calls in the acceptance and
-synthetic wrong namespace, and tests empty RBAC/ServiceAccount creation and
-synthetic impersonation denial. A timeout, authentication failure, or missing
-object cannot stand in for a forbidden response. Unexpected success stops testing;
-cleanup checks exact resource ownership and UID/resourceVersion preconditions.
-
-The acceptance workload authenticates to OpenBao, requests a ten-minute reader
-credential, checks its audience and effective expiry, asks Kubernetes for its
-actual authenticated identity, reads the synthetic canary, and proves a protected
-read is forbidden. Before revoking its OpenBao session, it also sends a bounded
-request for an unapproved issuance role and requires an ACL denial. Unexpected
-success or another response fails acceptance without retaining any returned token.
-It revokes the OpenBao session immediately after that check,
-while that session is still valid. The Kubernetes checks use the independently
-issued JWT. Expiry acceptance polls for authentication rejection with a bound
-that includes the API's 60-second leeway, 30 seconds of clock skew, and one
-five-second poll. This takes approximately 11 to 12 minutes. The leeway comes from
-the pinned [Kubernetes claim validator](https://github.com/kubernetes/kubernetes/blob/v1.35.6/pkg/serviceaccount/claims.go)
-and its [JWT validation dependency](https://github.com/kubernetes/kubernetes/blob/v1.35.6/vendor/gopkg.in/go-jose/go-jose.v2/jwt/validation.go).
-No OpenBao lease revocation is treated as Kubernetes JWT revocation.
-
-HA evicts one standby, waits for three healthy voters and replicated progress,
-then evicts the original leader. Every eviction uses the eviction API and Pod
-DisruptionBudget, fresh Pod/owner/leader/quorum observations, and atomic Pod UID
-and resourceVersion preconditions. Recovery has a three-minute polling deadline
-per replacement; bounded API calls already in flight can finish afterward, but
-cannot count as timely recovery. Issuance probes report sampled interruption and recovery duration;
-this is not a continuous availability measurement. A failure stops subsequent
-mutations and requires attended inspection. Physical power-loss testing remains
-in the separately authorized node-lifecycle workflow.
-
-## Isolated restore assurance
-
-Run the guarded restore drill after a material snapshot, seal-generation, or recovery
-workflow change and before accepting a selected backup as recoverable. It requires a
-healthy Kubernetes API and three Ready production OpenBao peers for its isolation
-checks. A production outage needs a separately reviewed recovery plan; this drill
-cannot provide the same proof during that outage.
-
-Choose the retained `raft.snap` and sibling `metadata.json` in an operator-private
-location outside the repository. Use the independent recovery record to match its seal
-key ID and recovery generation to the retained static seal material. Have the retained
-non-root OpenBao operator credential and an explicitly authorized operator kubeconfig
-available.
-Recovery shares or operator credentials cannot replace a missing matching seal key.
-
-From the clean, deployed `main` checkout, set only the non-secret selectors and run
-the canonical guarded test:
-
-```bash
 export OPENBAO_OPERATOR_KUBECONFIG='/absolute/private/operator-kubeconfig'
+export TEST_KUBECONFIG="$OPENBAO_OPERATOR_KUBECONFIG"
 export OPENBAO_RESTORE_SNAPSHOT='/absolute/private/snapshot/raft.snap'
 export OPENBAO_RESTORE_SEAL_ID='<seal-id-from-recovery-record>'
 export OPENBAO_RESTORE_GENERATION='<generation-from-recovery-record>'
 mise exec -- just test record test.openbao-restore-drill
 ```
 
-Review the exact confirmation shown by the workflow. Supply matching seal material
-and the operator password only through its private prompts. Keep those values out of
-arguments, environment variables, logs, and evidence. Require both the restore and
-cleanup results to pass. The isolated drill proves backup recoverability for the
-selected snapshot; it does not replace production storage or restore production Raft.
-Production recovery requires a separate, explicitly operator-authorized plan.
+Review the exact confirmation shown by the command. Supply matching seal material and
+the operator password only through its private prompts. Require both restore and
+cleanup to pass. The drill uses isolated scratch resources; a production outage or
+production storage replacement needs a separate recovery plan.
 
-## Upgrade after a Git image update
+### 6. Activate through Git
 
-Review upstream compatibility and the repository version constraints before
-publishing the desired image change. `OnDelete` leaves running members in place.
-Retain a verified snapshot from the currently running version using the existing
-backup procedure. Select its local encrypted archive with
-`OPENBAO_UPGRADE_SNAPSHOT`; its sibling `metadata.json` must match the archive,
-source seal/recovery generation, and running version, and be no older than one
-hour. Do not put credentials or decrypted snapshot contents in the repository.
+After acceptance, review and merge the remaining Flux unsuspension, private route,
+backup, monitoring, and Gatus enrollment changes. Run the observer verifier after
+reconciliation. Do not call Issue 449 complete on offline validation or a staged
+verifier alone.
+
+## Apply configuration changes
+
+Merge reviewed changes to the desired configuration and policy files. After the
+published source reaches Flux, select the explicit operator kubeconfig, then run:
+
+```sh
+mise exec -- just kube openbao-config-apply
+```
+
+Enter an existing authorized OpenBao token at the private prompt. Review the sanitized
+change plan and reported `config-apply:openbao:<main-sha>:<target-and-plan-digest>`
+confirmation; set `OPENBAO_CONFIG_CONFIRM` to that value and rerun. A changed source or
+live target requires a new review. The command applies reviewed owned objects and
+reads back the result. Run `openbao-verify` after the reader has produced a fresh
+observation. If apply or read-back fails, stop and inspect; do not patch live state by
+hand.
+
+## Normal verification
+
+Run `mise exec -- just kube openbao-verify` with the normal task-scoped observer
+credential. It checks live Kubernetes state and fresh, sanitized OpenBao configuration
+observations against the deployed source revision. Missing, stale, inaccessible, or
+drifted observations fail verification. The check makes no configuration changes.
+Investigate a failure and use the attended apply workflow for reviewed repairs.
+
+## Upgrade
+
+Review upstream compatibility and repository version constraints. Retain a verified
+snapshot from the running version before publishing the reviewed Git image update.
+Select its encrypted archive with `OPENBAO_UPGRADE_SNAPSHOT`; its recovery record must
+match the running version and seal generation and be no older than one hour. Select the
+explicit operator kubeconfig, then run:
 
 ```sh
 mise exec -- just kube openbao-upgrade
 ```
 
-The command checks the fresh snapshot again before each replacement and verifies
-that the deployed StatefulSet template matches the pending Git image and controller
-revision. It refuses image downgrades and major-version changes. Compatibility
-review remains required; numeric version ordering alone cannot establish it.
-It replaces and checks each standby, explicitly requests the old leader to step
-down, proves an upgraded voter acquired leadership, then replaces the old leader.
-The existing disruption Lease covers the whole sequence. There is no automatic
-image or storage rollback. A partial upgrade stops for attended recovery review.
+The command prompts privately for an authorized OpenBao token and exact confirmation.
+It replaces standbys before the leader and checks recovery between replacements. This
+is attended and disruptive. If it stops partway through, preserve the snapshot and
+cluster state for recovery review; do not improvise a rollback.
 
-## Isolated renewal and drift interface
+## Failure and stop boundaries
 
-`scripts/openbao/maintenance.py` exposes `isolated_renewal` and `isolated_drift`
-for an independently provisioned, attended three-voter acceptance environment.
-There is deliberately no production command route to these mutation interfaces.
-An adapter must bind every request and TLS connection to its recorded namespace
-UID, use a namespace named `openbao-isolated-*` owned by the exact run, and expose
-fresh namespace ownership and three-voter state on every guard. Provisioning this
-live isolated environment and granting its operator/reader authority are separate
-prerequisites; the snapshot restore scratch environment does not satisfy them.
+- Stop if seal material, the matching generation, backup access, or operator recovery
+  material is missing. Do not substitute an OpenBao-issued credential for a recovery
+  root.
+- Treat an ambiguous initialization result as initialized until inspected. Do not
+  retry, uninstall, delete claims, or regenerate the seal key.
+- Do not activate or call recovery complete while issuance, HA, restore, cleanup, or
+  observer verification is failing.
+- A restore drill proves only its selected isolated backup. Production PVC/Raft
+  replacement or force restore requires explicit operator authorization.
 
-Renewal replaces only synthetic TLS material, checks the actual peer certificate
-through verified TLS sockets, and requires stable member identities and quorum
-through reload. The adapter must return the expected new certificate fingerprint
-and use its own isolated trust chain with hostname verification. Drift acceptance
-writes and restores a synthetic auth description, acceptance policy, issuance-role
-TTL, and reader policy. The isolated reader must observe each configuration change
-through the existing comparator and must receive an actual 403 after reader denial.
-The observational `openbao-verify` command performs none of these mutations.
-Offline fake API and local synthetic TLS tests verify these interfaces; they do
-not establish live OpenBao renewal/reload, cluster HA, or RBAC acceptance.
+## Implementation references
 
-## Activation and follow-up boundary
-
-After attended preparation and initialization, review and commit each durable
-Flux unsuspension, private route, backup and monitoring activation, acceptance
-resources, and the staged Gatus endpoint through Git. Enroll the verifier in both
-verification campaigns only when all six OpenBao Flux units are durably
-unsuspended, the encrypted seal artifact is included, and the Gatus endpoint is
-enrolled. Run the observer verifier and the separately authorized issuance,
-HA, and isolated restore acceptance before calling deployment complete. A passing
-offline gate or staged verifier cannot close issue 449. Issue 450 owns real agent
-authentication profiles, CLI integration, and replacement of existing worktree
-credential installation; this package only proves the dedicated acceptance identity.
+- [Spec 030](../specs/030-openbao-kubernetes-credential-broker.md) owns design,
+  security, recovery, and detailed acceptance contracts.
+- The [OpenBao package README](../../kubernetes/apps/security/openbao/README.md)
+  summarizes the staged source and Flux units.
+- [Desired API configuration](../../kubernetes/apps/security/openbao/config/desired.json)
+  and its policy files supply reviewed changes. The
+  [operator workflow](../../scripts/openbao/operator.py),
+  [upgrade script](../../scripts/operations/openbao-upgrade.sh), and
+  [acceptance scenarios](../../scripts/test/scenarios/openbao_issuance.py) own guarded
+  execution and detailed assertions.
