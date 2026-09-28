@@ -1,0 +1,23 @@
+apiVersion: v1
+data:
+    key: ENC[AES256_GCM,data:atANZKEcG+xAa8RmWmfkMhZru8EGRzt5YzOfTGANsp/OvHRWZHPecowUEYk=,iv:tHyCY5URrfj/jSyio1t2Foz9ajN5RuM34FpAU3FOxo8=,tag:BxKSMqybNfbtL/ZVd86eeg==,type:str]
+kind: Secret
+metadata:
+    name: openbao-seal
+    namespace: openbao
+type: Opaque
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBScW5OZk45bVZGemNIY2JN
+            bTF6VmtVVXhSeWF1MEdQRDh2RGhoRDhZTVQwCmVvcDBRZ25Pc0ZrVnloczVJRW1i
+            YkpHSnBGTk9hRmxhQkNEbkN5azBLYlEKLS0tIFlwMFpOY0t1T255SGUxUm9XbDNs
+            ZXdKdDdqWnVsMEJydlJkTEJnUzRua1EKGUAHEtl4Uhi4rtlnq+EJdDw50iVjCPFE
+            XHiRMDraofGcGxx0NxRQENZz11NNtywV7gzOMBtNeVxscJTtg0b/ZA==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age1da2cywfkg9hp6v39jvj9qcmqz4n8w3gm6nqj5vygu7e0zzgnp5psne9wlx
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-09-28T15:22:22Z"
+    mac: ENC[AES256_GCM,data:41r3P4w0hy7I6ybgvjiHT+Ut7h7DP8/kXsuq5EgR1bSBUEcpwYJt4MoTNoPYam3MA7FwHz3yJ7YTKU3wodnRiq6p8SScuv9fSOtJPbjOMdQycih8jufEGVUC1BXlnBP5C+9uHyXqC2TUh3xbzMABEepXI2R0gblj+LFaMYdc91E=,iv:auD2G7yU+GiN9FgL9clkHAuqHGf0xSrZgNFvhoqEwuA=,tag:Uym4PGkhzvqaNZTfVq3T/A==,type:str]
+    version: 3.13.2
