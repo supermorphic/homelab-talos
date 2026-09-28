@@ -47,7 +47,7 @@ The Stage 2 runtime selector has four execution groups: always-running `core`, p
 The provider workflow plans affected groups for pull requests and exports that plan
 to the job matrix. `core` always runs. Manual dispatch requests all four groups.
 The required `merge-gate` reconciles their separate results; the duplicate full `ci`
-job has been removed. The local publication gate uses the same plan and groups.
+job has been removed. The optional local publication command uses the same plan and groups.
 
 | File | Responsibility |
 | --- | --- |

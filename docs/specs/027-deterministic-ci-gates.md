@@ -271,6 +271,53 @@ path avoids a second classification system. Current contributor procedure is in 
 [repository and worktree guide](../guides/repository-worktree-setup.md#prepare-validate-and-publish-a-change);
 the executable contract is in [the test framework README](../../tests/README.md#optional-local-publication-validation).
 
+### Local and hosted execution decision (issue 461)
+
+[Issue 461](https://github.com/supermorphic/homelab-talos/issues/461) reassessed whether
+local publication should be required before every PR update. The selected model is
+focused local checks and commit-time hooks before push, with fresh hosted `merge-gate`
+as the authoritative merge evidence. Local `ci-publish` remains available to reproduce
+hosted selection and failures or to validate CI changes when useful. This policy was
+already introduced in [PR 463](https://github.com/supermorphic/homelab-talos/pull/463).
+
+On 2026-09-28, four recent successful four-group PR runs
+([469](https://github.com/supermorphic/homelab-talos/actions/runs/36459264466),
+[466](https://github.com/supermorphic/homelab-talos/actions/runs/36456146034),
+[470](https://github.com/supermorphic/homelab-talos/actions/runs/36462000300), and
+[471](https://github.com/supermorphic/homelab-talos/actions/runs/36462329861)) had a
+median 288 seconds from workflow creation to completion (range 242–308) and a median
+757 seconds of summed job time (range 680–793). Three successful core-only runs
+([463](https://github.com/supermorphic/homelab-talos/actions/runs/36449194507),
+[464](https://github.com/supermorphic/homelab-talos/actions/runs/36443604893), and
+[465](https://github.com/supermorphic/homelab-talos/actions/runs/36447595868)) had a
+median 220 seconds of workflow time (range 187–229). The samples span changing
+revisions and runner conditions; they are observations, not a controlled latency target.
+
+One local `ci-publish-full` run on the same source tree as PR 471 took 753.85 seconds
+on a pinned, cached toolchain. All four groups passed (153, 118, 262, and 208 seconds
+respectively). `origin/main` advanced before the final freshness check, so the command
+correctly produced no passing publication receipt. The local and hosted runs used
+different commits, bases, and machines; their timing comparison estimates the cost of
+duplicate work rather than proving equal performance. If local publication had been
+mandatory for this update, its 12m34s wall time would have preceded hosted validation,
+putting about 17m14s of measured validation on the serial path before any rebase. The
+base advance would have required a rebase and another local cycle.
+
+The alternatives have these operational tradeoffs:
+
+| Model | Feedback, duplication, and merge path |
+| --- | --- |
+| Mandatory local plus hosted | Finds full-suite failures before push and permits local diagnosis during a GitHub Actions outage, but repeats selected groups before every PR update. A base advance can invalidate the entire local cycle; hosted validation is still required. |
+| Focused local plus hosted (selected) | Focused checks and hooks catch known failures before push. GitHub plans and runs the exact candidate and required base; an Actions outage blocks merge. The local reproduction commands remain available without adding a second required cycle. |
+| Mandatory local only for selected shared changes | Reduces routine duplication but adds a second risk classification and still repeats full validation for selected changes. It does not improve the required hosted gate or remove rebase races. |
+
+No fourth execution model has a measured advantage that justifies added machinery.
+
+The required GitHub Actions `merge-gate` and strict up-to-date protection remain in
+force. Each edited or rebased candidate needs fresh hosted evidence; a stale or passing
+local result cannot authorize merge. No CI workflow or branch-protection change is
+needed for this decision.
+
 ### Evidence requirements
 
 Measure validation separately from queue/start, checkout, tool setup, report finalization,
