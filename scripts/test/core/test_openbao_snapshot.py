@@ -297,7 +297,8 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(AUDIT["options"]["log_raw"], "false")
         self.assertEqual(AUDIT["options"]["hmac_accessor"], "true")
         ks = list(yaml.safe_load_all((self.base / "ks.yaml").read_text()))
-        self.assertTrue(all(item["spec"]["suspend"] for item in ks))
+        self.assertEqual({item["metadata"]["name"] for item in ks if not item["spec"]["suspend"]},
+                         {"openbao-prerequisites", "openbao"})
         backup = next(item for item in ks if item["metadata"]["name"] == "openbao-backup")
         self.assertTrue(backup["spec"]["prune"])
         self.assertEqual(self.doc("backup/pvc.yaml")["metadata"]["annotations"],

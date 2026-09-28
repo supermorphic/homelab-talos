@@ -6,9 +6,11 @@ Design for [issue 449](https://github.com/supermorphic/homelab-talos/issues/449)
 The operator approved automatic unseal and three voting replicas, one per physical
 node, after reviewing the existing cluster, and accepted this specification with
 refinements to the seal threat model and configuration-drift verification.
-The source implementation is staged on a feature branch. All six OpenBao Flux
-Kustomizations remain suspended. Operator seal creation, live initialization,
-activation and live acceptance are not complete. A passing local or CI gate is
+The source implementation is merged. Seal material and the initialization recovery
+bundle are retained by the operator; three servers are initialized and Ready.
+The prerequisite and server Flux units reconcile through Git. Access, acceptance,
+backup, and monitoring remain suspended while configuration and bootstrap completion
+are attended. Integration activation and live acceptance are not complete. A passing local or CI gate is
 candidate source evidence only; issue 449 remains open until deployed acceptance.
 
 Deploy OpenBao inside the Talos cluster to issue short-lived credentials for
@@ -464,6 +466,12 @@ Cilium policy permits only:
 - server egress to cluster DNS and the Kubernetes API;
 - backup access to OpenBao and its mounted backup claim;
 - Prometheus access to a separate internal metrics listener.
+
+The Kubernetes Service exposes TCP 443, but the Talos API server endpoints use TCP
+6443. Cilium evaluates the connection after Service translation; server egress is
+restricted to the `kube-apiserver` entity on TCP 6443. Guarded operator preflight
+requires the live policy to match Git and the discovered backend port to match this
+rule before accepting credentials or issuing configuration writes.
 
 The separate listener permits unauthenticated metrics/health for observation;
 all administrative endpoints still require OpenBao authentication. Its network

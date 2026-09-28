@@ -12,6 +12,30 @@ from scripts.openbao.manifests import (
 
 
 class OpenBaoManifestTests(unittest.TestCase):
+    def test_api_egress_matches_translated_backend_and_stays_narrow(self):
+        policy = {"spec": {"egress": [{"toEntities": ["kube-apiserver"],
+                  "toPorts": [{"ports": [{"port": "6443", "protocol": "TCP"}]}]}]}}
+        self.assertEqual(validate_network_policy(policy), [])
+        for rule in (
+            {"toEntities": ["kube-apiserver"], "toPorts": [{"ports": [{"port": "443", "protocol": "TCP"}]}]},
+            {"toEntities": ["kube-apiserver"]},
+            {"toEntities": ["cluster"]},
+        ):
+            with self.subTest(rule=rule):
+                self.assertIn("api-backend-egress", validate_network_policy({"spec": {"egress": [rule]}}))
+
+    def test_flux_accepts_only_server_stage_as_partial_activation(self):
+        import yaml
+
+        units = list(yaml.safe_load_all(pathlib.Path("kubernetes/apps/security/openbao/ks.yaml").read_text()))
+        for unit in units:
+            unit["spec"]["suspend"] = unit["metadata"]["name"] not in {"openbao-prerequisites", "openbao"}
+        self.assertEqual(validate_flux_units(units), [])
+        for name in ("openbao-prerequisites", "openbao"):
+            broken = copy.deepcopy(units)
+            next(u for u in broken if u["metadata"]["name"] == name)["spec"]["suspend"] = True
+            self.assertIn("flux-activation", validate_flux_units(broken))
+
     def test_token_request_role_is_exact(self):
         role = {"kind": "Role", "metadata": {"namespace": "openbao-acceptance"},
                 "rules": [{"apiGroups": [""], "resources": ["serviceaccounts/token"],
@@ -78,7 +102,9 @@ class OpenBaoManifestTests(unittest.TestCase):
             {"fromEndpoints": [{"matchLabels": {
                 "k8s:io.kubernetes.pod.namespace": "envoy-gateway-system",
                 "gateway.envoyproxy.io/owning-gateway-name": "internal"}}],
-             "toPorts": [{"ports": [{"port": "8200", "protocol": "TCP"}]}]}]}}
+             "toPorts": [{"ports": [{"port": "8200", "protocol": "TCP"}]}]}],
+            "egress": [{"toEntities": ["kube-apiserver"],
+                        "toPorts": [{"ports": [{"port": "6443", "protocol": "TCP"}]}]}]}}
         self.assertEqual(validate_network_policy(policy), [])
         policy["spec"]["ingress"].append({"fromEntities": ["host", "remote-node"],
             "toPorts": [{"ports": [{"port": "8200", "protocol": "TCP"}]}]})
