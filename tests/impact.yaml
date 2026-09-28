@@ -190,6 +190,7 @@ core_paths:
   - scripts/node/**
   - scripts/openbao/**
   - scripts/operations/openbao-upgrade.sh
+  - scripts/operations/qbit-manage-contain.sh
   - scripts/repository/**
   - scripts/secrets/**
   - scripts/talos/**
@@ -217,6 +218,7 @@ core_paths:
   - scripts/test/plex-verify-test.sh
   - scripts/test/portainer-rbac-verify-test.sh
   - scripts/test/qbit-manage-policy-validator-test.sh
+  - scripts/test/qbit-manage-contain-test.sh
   - scripts/test/qbit-manage-secret-rollout-test.sh
   - scripts/test/run-sonobuoy.sh
   - scripts/test/run-sonobuoy-test.sh
