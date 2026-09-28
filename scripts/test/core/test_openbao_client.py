@@ -1,7 +1,10 @@
 import io
+import json
 import ssl
 import unittest
 import urllib.error
+from contextlib import nullcontext, redirect_stdout
+from unittest.mock import patch
 
 from scripts.openbao.client import AmbiguousWrite, BaoClient, MalformedResponse, ReadFailure
 
@@ -131,6 +134,78 @@ class ClientTest(unittest.TestCase):
         with self.assertRaises(AmbiguousWrite):
             client.post("sys/init", {"secret_shares": 1}, token="synthetic-token")
         self.assertEqual(len(calls), 1)
+
+    def test_http_write_failure_retains_only_status_code(self):
+        for status in (400, 403, 500):
+            with self.subTest(status=status):
+                client = BaoClient(
+                    "https://openbao.example",
+                    opener=lambda *_, status=status, **__: (_ for _ in ()).throw(
+                        urllib.error.HTTPError(
+                            "https://openbao.example/v1/auth/homelab-jwt/config",
+                            status,
+                            "synthetic-private-marker",
+                            {},
+                            None,
+                        )
+                    ),
+                )
+                with self.assertRaises(AmbiguousWrite) as caught:
+                    client.post("auth/homelab-jwt/config", {"provider_config": {"provider": "kubernetes"}})
+                self.assertEqual(caught.exception.http_status, status)
+                self.assertEqual(str(caught.exception), "ambiguous-write")
+                self.assertNotIn("synthetic-private-marker", str(caught.exception))
+
+    def test_returned_http_write_failure_retains_only_status_code(self):
+        for status in (307, 400, 500):
+            with self.subTest(status=status):
+                client = BaoClient(
+                    "https://openbao.example",
+                    opener=lambda request, timeout, status=status: Response(
+                        b"synthetic-private-marker", status=status, url=request.full_url
+                    ),
+                )
+                with self.assertRaises(AmbiguousWrite) as caught:
+                    client.post("auth/homelab-jwt/config", {"provider_config": {"provider": "kubernetes"}})
+                self.assertEqual(caught.exception.http_status, status)
+                self.assertEqual(str(caught.exception), "ambiguous-write")
+                self.assertNotIn("synthetic-private-marker", str(caught.exception))
+
+    def test_operator_cli_reports_write_status_without_private_material(self):
+        from scripts.openbao.operator import main
+
+        failure = AmbiguousWrite("ambiguous-write")
+        failure.http_status = 400
+        output = io.StringIO()
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "OPENBAO_OPERATOR_KUBECONFIG": "/synthetic/kubeconfig",
+                    "OPENBAO_CONFIG_CONFIRM": "synthetic-confirm",
+                },
+                clear=True,
+            ),
+            patch("scripts.openbao.operator.Path.is_file", return_value=True),
+            patch("scripts.openbao.operator.guards.freeze_target"),
+            patch("scripts.openbao.operator.OperatorClient"),
+            patch("scripts.openbao.operator.private_prompt", return_value="synthetic-secret-token"),
+            patch(
+                "scripts.openbao.operator.apply.run",
+                side_effect=[
+                    {"confirmation": "synthetic-confirm", "changes": []},
+                    failure,
+                ],
+            ),
+            patch("scripts.openbao.operator.lease", return_value=nullcontext()),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(main(["operator", "config-apply"]), 1)
+        self.assertEqual(
+            json.loads(output.getvalue()),
+            {"status": "incomplete", "classification": "ambiguous-write", "http_status": 400},
+        )
+        self.assertNotIn("synthetic-secret-token", output.getvalue())
 
     def test_slow_initialization_response_is_retainable_without_extending_other_writes(self):
         calls = []
