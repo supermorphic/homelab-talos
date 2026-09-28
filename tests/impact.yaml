@@ -125,7 +125,6 @@ conditional_paths:
     - .sops.yaml
     - docs/README.md
     - docs/guides/n8n-operations.md
-    - docs/runbooks/n8n-recovery.md
     - docs/guides/automation-data-operations.md
     - docs/runbooks/platform-disaster-recovery.md
     - kubernetes/apps/automation/**

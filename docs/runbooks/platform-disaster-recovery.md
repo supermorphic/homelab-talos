@@ -421,6 +421,10 @@ Human-held recovery roots:
 - off-cluster backup access
 - `N8N_ENCRYPTION_KEY`
 
+The PostgreSQL logical backup and its matching, stable `N8N_ENCRYPTION_KEY` are one
+recovery unit. The `n8n-data` claim holds filesystem and binary state that the logical
+PostgreSQL dump does not cover; recover it from its storage backup when that state is lost.
+
 Use the repository's guarded automation-data restore workflow. Recovery must prove
 that the restored n8n runtime credential authenticates against the restored
 automation-data PostgreSQL role verifier.

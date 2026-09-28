@@ -25,6 +25,22 @@ Use this guide according to the operation you need:
 | n8n upgrade, PostgreSQL change, or recovery change | Run [activation, upgrade, and recovery-change acceptance](#activation-upgrade-and-recovery-change-acceptance). Before an n8n upgrade, also follow the backup and migration requirements in [day-2 operation and controlled assurance](#day-2-operation-and-controlled-assurance). |
 | Withdraw public exposure | Follow [public exposure rollback](#public-exposure-rollback). Do not use workload suspension as a substitute for route pruning. |
 
+### Choose a recovery path
+
+- If the claims are healthy and only a pod is unready, let its controller reschedule it;
+  verify n8n after it returns.
+- If a claim or Longhorn volume is unavailable, preserve its state and follow the
+  [platform storage recovery boundary](../runbooks/platform-disaster-recovery.md#recover-longhorn-and-application-state).
+- If PostgreSQL data is logically damaged, preserve the current state and use the
+  [guarded restore and acceptance command](#activation-upgrade-and-recovery-change-acceptance).
+  Production-state replacement requires explicit operator authorization.
+
+The [platform recovery section](../runbooks/platform-disaster-recovery.md#n8n--automation-data-recovery)
+identifies the recovery roots and the separate `n8n-data` storage boundary. If a fault
+could expose incomplete or incorrect public responses, follow
+[public exposure rollback](#public-exposure-rollback) before recovery and its re-enable
+procedure after acceptance.
+
 The normal day-2 health check is read-only. Run it from a worktree with a current
 `.kube/config`:
 
@@ -904,9 +920,8 @@ not as routine health checks:
 )
 ```
 
-The persistence scenario recreates only the n8n and PostgreSQL pods and uses one exact
-run-owned sentinel. The restore drill uses a temporary database and cluster-internal
-resources. A cleanup or recovery failure makes either test fail.
+The persistence scenario checks pod recovery. The restore drill checks recovery from a
+retained logical backup. A cleanup or recovery failure makes either test fail.
 
 Before an n8n upgrade, require a recent checksum-valid logical dump, review upstream
 database migration notes, and complete the temporary restore drill. Do not assume that
@@ -970,5 +985,5 @@ the child Kustomization before pruning is observed, and do not delete the retain
 or recovery material.
 
 Do not delete the n8n, PostgreSQL, or backup claims during rollback. Keep the encrypted
-recovery unit and logical dumps. Use the [n8n recovery runbook](../runbooks/n8n-recovery.md)
+recovery unit and logical dumps. Use [Choose a recovery path](#choose-a-recovery-path)
 for data or database faults.

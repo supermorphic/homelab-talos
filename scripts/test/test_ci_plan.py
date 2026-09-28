@@ -289,7 +289,6 @@ class ClassificationTests(unittest.TestCase):
             ".sops.yaml": ("core", "observability", "automation"),
             "docs/README.md": ("core", "automation"),
             "docs/guides/n8n-operations.md": ("core", "automation"),
-            "docs/runbooks/n8n-recovery.md": ("core", "automation"),
             "docs/guides/automation-data-operations.md": ("core", "automation"),
             "docs/runbooks/platform-disaster-recovery.md": ("core", "automation"),
         }
