@@ -46,6 +46,30 @@ public content, repository invariants, design lifecycle, validation, and complet
 test contract covers stable structure without freezing an exact rule count or exact
 prose.
 
+## Proportional planning and execution
+
+Issue [462](https://github.com/supermorphic/homelab-talos/issues/462) made proportionality
+explicit after model-selection and delegation limits alone left small, understood
+changes open to unnecessary specifications, implementation contexts, and review stages.
+The distinction is design uncertainty and operational risk, not the number of changed
+lines. A small credential-boundary change still needs architectural design discipline.
+
+The supported agent framework provides the underlying design and execution workflows.
+Repository policy selects short in-context design followed by direct implementation for
+bounded work. When an implementation plan exists, native/inline execution is the default.
+It does not copy skill checklists or introduce another execution framework. Delegation
+earns its additional context through a concrete benefit in isolation, specialization,
+per-task independent review, or safe parallelism.
+New abstractions and persistent process machinery likewise need a concrete benefit.
+
+Durable specifications preserve useful design knowledge; they are not a receipt for
+every edit. This update extends the existing policy design record instead of assigning
+a new design identifier. Transient plans help when sequencing matters. Exploratory work
+ends with conclusions and evidence; production implementation is a new task to classify
+before implementation, not a separate authorization event.
+These choices affect process overhead only: existing worktree, authority, credential,
+validation, and merge protections continue to apply.
+
 ## Effect-based authority
 
 Authority is based on what an operation can do, not which command spells it.
