@@ -238,24 +238,12 @@ protection change; never bypass validation or leave a nonexistent required check
 
 ### Local publication validation
 
-`mise exec -- just test ci-publish` validates a clean, committed feature-branch candidate
-against freshly fetched `origin/main`. The base must be an ancestor of the candidate.
-The command reuses the planner, sequential grouped execution, and canonical reconciliation;
-it creates no second classification system. Full escalation uses `ci-publish-full`.
-Ordinary documentation uses core unless a declared consumer requires more validation.
-
-Every invocation produces fresh evidence in a separate ignored directory. Candidate
-checks reject staged, unstaged, and untracked changes; branch/head checks repeat during
-execution and before success. The worktree must remain untouched during validation.
-A final remote refresh must still match the planned base. Failed fetch, changed candidate,
-new main, failed execution, or failed reconciliation cannot produce a passing publication
-receipt. Inherited test catalog/runner overrides cannot reduce publication validation.
-
-The receipt binds branch, head, base, plan identity, and groups. It is an audit result,
-not a reusable pass cache. Later edits/rebases require a new invocation. Existing
-pre-push remote checks still apply because main can advance after command completion.
-AGENTS.md adopts this command in the same implementation; full `just ci` remains the
-offline fallback. The publication wrapper's Git refresh requires network access.
+The optional local `ci-publish` command reuses the hosted planner, grouped execution,
+and canonical reconciliation. Its receipt binds the clean candidate and freshly fetched
+base, so an edited branch or newer main needs fresh validation. This shared selection
+path avoids a second classification system. Current contributor procedure is in the
+[repository and worktree guide](../guides/repository-worktree-setup.md#prepare-validate-and-publish-a-change);
+the executable contract is in [the test framework README](../../tests/README.md#optional-local-publication-validation).
 
 ### Evidence requirements
 
@@ -290,8 +278,8 @@ categories. No runtime number overrides correctness or justifies unnecessary mac
 
 Stage 2 implementation and rollout are complete. Pull requests plan affected groups, while
 manual dispatch requests full validation. The matrix consumes the validated plan's
-groups; the duplicate provider `ci` job is removed. Local publication uses the same
-planner and grouped execution, with clean-candidate and fresh-base checks in root policy.
+groups; the duplicate provider `ci` job is removed. The optional local publication
+wrapper uses the same planner and grouped execution and checks the candidate and base.
 
 Split-all provider execution established equivalent full and grouped evidence on the
 same candidate tree. On the merged workflow, cancellation of the group jobs caused
@@ -304,7 +292,6 @@ omitted unrelated groups, and passed required reconciliation. The local publicat
 command also passed end to end on the same candidate as full local CI, with identical
 test identities and outcomes, including final candidate and remote-base checks.
 
-Root policy adopts the local command; no separate operator adoption step is required.
 Long-term skip-frequency, runtime variance, capacity, and serialized merge-drain
 measurements remain normal operational observations, not unfinished rollout prerequisites.
 

@@ -13,7 +13,7 @@ pull request
   ↓
 branch is current with main
   ↓
-ci succeeds for that candidate
+merge-gate succeeds for that candidate
   ↓
 GitHub performs the allowed pull-request merge
   ↓
@@ -73,12 +73,12 @@ Two GitHub configuration layers work together:
   merge commits and rebase merge.
 - The **`Protect main` ruleset** controls how `main` may be updated. It requires a pull
   request, limits that pull request to squash merge, requires the current candidate to
-  pass `ci`, and protects the branch history.
+  pass `merge-gate`, and protects the branch history.
 
 Both layers must allow squash and reject the other merge methods. A mismatch can either
 offer a merge method that policy does not allow or block every valid merge method.
 
-`.github/workflows/ci.yml` publishes the `ci` check. A workflow cannot create repository
+`.github/workflows/ci.yml` publishes the `merge-gate` check. A workflow cannot create repository
 rulesets or change repository merge settings, so the live GitHub repository must also
 have:
 
@@ -88,7 +88,7 @@ have:
 - required pull request: zero approvals and squash as its only merge method;
 - stale-review dismissal, Code Owner review, last-push approval, conversation resolution,
   and required reviewers: off or empty;
-- required status check: `ci` from GitHub Actions, with the branch required to be up
+- required status check: `merge-gate` from GitHub Actions, with the branch required to be up
   to date;
 - linear history required; and
 - deletion and force pushes blocked.
@@ -96,7 +96,7 @@ have:
 The tracked implementation is
 [`scripts/repository/github_protection.py`](../../scripts/repository/github_protection.py).
 It dynamically obtains the GitHub Actions integration ID from a recent successful
-`ci` check rather than retaining `15368` as a global constant.
+`merge-gate` check rather than retaining `15368` as a global constant.
 
 ## Where to inspect it in GitHub
 
@@ -110,8 +110,8 @@ Use these GitHub pages for a visual inspection:
 3. **Settings → Branches → Branch protection rules** should have no legacy branch
    protection rule targeting `main`. GitHub layers legacy branch protection with
    rulesets, so an old rule could add requirements not represented by `Protect main`.
-4. **Actions → CI** shows workflow runs that produce the required `ci` check.
-5. A pull request targeting `main` shows the effective merge gate: `ci` must pass,
+4. **Actions → CI** shows workflow runs that produce the required `merge-gate` check.
+5. A pull request targeting `main` shows the effective merge gate: `merge-gate` must pass,
    the branch must be current, and squash must be the only offered merge method.
 
 On **Settings → Rules → Rulesets → Protect main**, confirm that the enforcement
@@ -153,7 +153,7 @@ repository's merge gate.
 
 Under **Require status checks to pass before merging**, verify:
 
-- required check: `ci`;
+- required check: `merge-gate`;
 - expected source: GitHub Actions;
 - require branches to be up to date before merging: on; and
 - do not require status checks on creation: off.
@@ -171,7 +171,7 @@ mise exec -- just repo github-protection-check
 
 The command reads repository merge settings, finds the repository-owned `Protect main`
 ruleset, reads its complete definition, and resolves the expected GitHub Actions source
-from a recent successful `ci` run. It also asks GitHub for every active ruleset rule that
+from a recent successful `merge-gate` run. It also asks GitHub for every active ruleset rule that
 applies to `main`, including rules inherited from an organization, and verifies that each
 one comes from the expected `Protect main` ruleset.
 
@@ -191,7 +191,7 @@ Repository: supermorphic/homelab-talos
 GitHub Actions source: integration 15368 from successful commit <sha>
 Ruleset: Protect main (ID <current-id>)
 GitHub protection check: PASS
-main accepts squash-merged pull requests only after strict GitHub Actions ci.
+main accepts squash-merged pull requests only after strict GitHub Actions merge-gate.
 ```
 
 A pass means that the repository merge methods, the complete managed ruleset, and all
@@ -255,10 +255,10 @@ it does not authorize merging a pull request or any other repository mutation.
 Use a normal implementation pull request rather than probing the production branch
 with a direct push:
 
-1. Confirm the pull request starts `ci` and cannot merge while it is pending or
+1. Confirm the pull request starts `merge-gate` and cannot merge while it is pending or
    failing.
 2. Push a real follow-up commit to the feature branch. That commit creates a new
-   candidate revision. Confirm it starts a new `ci` run and that a successful check on
+   candidate revision. Confirm it starts a new `merge-gate` run and that a successful check on
    the older revision does not authorize the newer revision.
 3. Confirm GitHub requires the branch to be current with `main` and offers only
    squash merge.

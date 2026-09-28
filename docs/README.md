@@ -10,7 +10,7 @@
 - [n8n operations](guides/n8n-operations.md) — Create the encrypted recovery unit, activate the private platform and exact public webhook, verify it, and roll it back safely.
 - [GitHub main protection](guides/github-main-protection.md) — Inspect, verify, and recover the repository's protected-branch settings.
 - [ntfy operations](guides/ntfy-operations.md) — Configure ntfy credentials, producers, consumers, rotation, and troubleshooting.
-- [Repository and worktree setup](guides/repository-worktree-setup.md) — Prepare the operator-controlled primary checkout and isolated task worktrees.
+- [Repository and worktree workflow](guides/repository-worktree-setup.md) — Prepare checkouts and task worktrees, then validate and submit a change.
 - [Maintain the Pi-hole integration](guides/pihole-externaldns-operations.md) — Reinstall, rotate, validate, and recover ExternalDNS access to Pi-hole.
 - [Plex remote-access operations](guides/plex-remote-access-operations.md) — Establish, validate, change, or remove the production Plex Internet path.
 - [Plex remote-access detection test](guides/plex-remote-access-detection-test.md) — Deliberately generate bounded half-open traffic to prove the security-alert pipeline.

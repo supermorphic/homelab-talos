@@ -61,9 +61,9 @@ mise exec -- just kube homepage-validate
 mise exec -- just kube gatus-validate
 ```
 
-Before publication, run the clean-candidate `mise exec -- just test ci-publish`
-gate required by repository policy. Local rendering does not prove runtime DNS,
-certificate trust, or HTTP reachability from Talos.
+Then follow the [contributor workflow](../../../../docs/guides/repository-worktree-setup.md#prepare-validate-and-publish-a-change)
+to submit the change. Local rendering does not prove runtime DNS, certificate trust,
+or HTTP reachability from Talos.
 
 After the Caddy endpoint is deployed and Flux has reconciled this change,
 verify both Platform results from Gatus and the static Homepage card. Use the

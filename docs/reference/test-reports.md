@@ -80,21 +80,14 @@ run whose Git SHA equals both current `origin/main` and the Flux artifact revisi
 authoritative; candidates never drive Homepage data, stable latest links, or
 last-run metrics.
 
-For initiative completion and infrequent assurance, use
-`mise exec -- just test record <suite-id|scoped-verification>`. In a linked worktree,
-this uses the existing verifier identities to execute approved scoped checks, then selects
-`homelab-report-publisher` only for publication. Agents need no operator confirmation for
-that publication. The observer remains the kubeconfig's default context. Publisher access
-is restricted to the report namespace, named Flux source reads, and get/update on the
-Git-created publication Lease. It grants no authority to execute mutating suites.
-`mise exec -- just test publish <run-id>` deliberately retains an existing finalized
-canonical run without rerunning its suite. In a linked worktree it uses the scoped
-publisher; outside that context it requires exact run-scoped manual confirmation.
+In linked worktrees, publication uses the separate `homelab-report-publisher` identity.
+Its access is restricted to the report namespace, named Flux source reads, and get/update
+on the Git-created publication Lease. Suite execution keeps its own identity.
 
-For routine multi-suite publication, use the catalog-backed campaigns documented in
-[`docs/guides/test-campaign-operations.md`](../guides/test-campaign-operations.md). Operator-published campaign mode requires exact
-current-main authority and therefore never uploads candidate children. Standalone
-`just test publish` retains historical and candidate evidence under the same guards.
+Use the [test campaign guide](../guides/test-campaign-operations.md) for recording,
+standalone publication, and campaign procedures, under the authority defined in
+[`AGENTS.md`](../../AGENTS.md). Published campaign mode requires current deployed main;
+standalone publication also retains historical and candidate evidence.
 
 Republishing the same run ID and digest is a no-op. Reusing a run ID with different
 content is rejected. Normal retention keeps reports that are both among the newest 200

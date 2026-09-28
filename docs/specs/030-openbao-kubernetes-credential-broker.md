@@ -630,8 +630,8 @@ Live acceptance must prove:
    introduced drift in an isolated test instance, with no configuration mutation
    or credential disclosure during verification.
 
-Normal iteration stays local. Before opening/updating a PR, commit the candidate
-and run `mise exec -- just test ci-publish` from the clean feature worktree.
+Normal iteration stays local. Before opening or updating a PR, follow the
+[contributor workflow](../guides/repository-worktree-setup.md#prepare-validate-and-publish-a-change).
 Intentional live acceptance uses `mise exec -- just test record <suite-id>`;
 publication does not grant permission for a suite's mutation. Retained evidence
 contains only sanitized assertions and measurements. No live acceptance is claimed

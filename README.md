@@ -20,99 +20,23 @@ operator UI, domain source adoption, targeted rotation, failure decisions, and a
 acceptance. The [platform disaster recovery runbook](docs/runbooks/platform-disaster-recovery.md#nocodb-metadata-recovery)
 identifies NocoDB recovery roots and the lost-key boundary.
 
-## Development workflow
+## Contributing and validation
 
-`main` is the Flux **production deployment boundary** — Flux reconciles it onto the
-live cluster — so every change enters through a protected pull request:
+`main` is the Flux production deployment boundary. Changes enter through protected
+pull requests. Follow the [repository and worktree guide](docs/guides/repository-worktree-setup.md#prepare-validate-and-publish-a-change)
+for preparation, focused checks, rebases, and PR updates. [`AGENTS.md`](AGENTS.md)
+defines repository policy and authority boundaries.
 
-```bash
-mise exec -- just repo hooks     # once per clone; installs the commit-time hooks
-git fetch origin
-git switch -c feat/<short-description> origin/main
-# ... make changes ...
-git add -A
-git commit -m "..."             # staged-file hooks provide fast feedback
-git fetch origin
-git rebase origin/main           # when main advanced and the branch is clean
-mise exec -- just ci             # required before opening or updating a PR
-git push -u origin HEAD
-mise exec -- gh pr create
-```
+GitHub plans affected, cluster-independent validation groups for each pull request.
+The required `merge-gate` reconciles their results for the current candidate and base.
+Local `mise exec -- just ci` runs the complete offline suite when useful; it is
+optional for routine PRs. See [test framework details](tests/README.md#deterministic-ci-groups-and-ownership-checks)
+and the [GitHub protection guide](docs/guides/github-main-protection.md).
 
-Commit-time pre-commit hooks are the only automatic local gate and inspect staged
-files, so install them with `mise exec -- just repo hooks` in every fresh clone —
-an uninstalled hook suite silently removes that gate. `mise exec -- just repo lint`
-runs the same hook suite repository-wide. The hook recipe installs into Git's shared
-common directory and configures `core.hooksPath` to use it. One installation covers the
-clone and its linked worktrees; rerunning the recipe from either location is safe.
-Run `mise exec -- just ci`, the single canonical full validation command, before
-opening or updating a pull request and again after a required rebase. The required
-GitHub Actions `ci` check is the authoritative merge gate for every pull request
-targeting `main`. It needs network egress for public Helm
-charts but **no kubeconfig, SOPS age key, cluster access, or repository secrets**.
-
-The active `Protect main` ruleset requires the branch to be current, the GitHub
-Actions `ci` check to pass, and squash as the only merge method. Actions validates
-GitHub's merge candidate; with the strict up-to-date rule, the later squash commit
-has different commit identity but the equivalent source tree. The operator reviews
-and merges, then Flux reconciles the resulting `main`. See the
-[GitHub protection guide](docs/guides/github-main-protection.md) for the applied settings, GitHub
-inspection locations, complete verification, and guarded recovery.
-
-### Test cadence and campaigns
-
-Use this cadence so "full test suite" has one unambiguous meaning:
-
-| Cadence | Run | Purpose |
-| --- | --- | --- |
-| Every PR | `mise exec -- just ci` | Required cluster-independent source gate; GitHub runs this automatically |
-| Nightly | `standard` campaign | Validation, smoke, E2E, and quick conformance, with every canonical child uploaded to Allure |
-| Weekly | `weekly` campaign | Nightly coverage plus verification, integration, probes, and disruptive resilience |
-| Full | `full` campaign | Every implemented assurance suite, including certified conformance; run monthly and around major platform upgrades |
-
-Preview the desired campaign from clean, deployed `origin/main`:
-
-```bash
-mise exec -- just test campaign-plan standard
-mise exec -- just test campaign-plan weekly
-mise exec -- just test campaign-plan full
-```
-
-Then run the exact confirmation command printed by its plan:
-
-```bash
-TEST_CAMPAIGN_CONFIRM='<standard token printed by campaign-plan>' \
-  mise exec -- just test campaign standard
-TEST_CAMPAIGN_CONFIRM='<weekly token printed by campaign-plan>' \
-  mise exec -- just test campaign weekly
-TEST_CAMPAIGN_CONFIRM='<full token printed by campaign-plan>' \
-  mise exec -- just test campaign full
-```
-
-Every published campaign token binds the campaign, source revision, and plan digest.
-Campaigns capture and publish every child run automatically. See the
-[test campaign guide](docs/guides/test-campaign-operations.md) for focused campaigns,
-failure behavior, resume, and exact membership.
-
-n8n assurance remains in the existing tier campaigns; it does not add a dedicated
-campaign:
-
-- `verification.n8n` -> `verification`, `scoped-verification`, `weekly`, `full`
-- `chainsaw.smoke.platform.n8n` -> smoke coverage, `standard`, `weekly`, `full`
-- `test.n8n-restore-drill` -> `integration`, `weekly`, `full`
-- `test.n8n-persistence` -> `resilience`, `weekly`, `full`
-
-Before an operator starts a `weekly` or `full` campaign, they must silently prompt for
-and export `N8N_CANARY_TOKEN`; unset it after the campaign completes. The token value must
-not appear in the catalog or campaign plan.
-
-### Agent workflow
-
-Agents use the development workflow above. Repository authority, credential, live-action,
-publication, and merge boundaries are defined only in [`AGENTS.md`](AGENTS.md);
-[`CLAUDE.md`](CLAUDE.md) is a thin adapter. The
-[agent cluster-access guide](docs/guides/agent-cluster-access.md) describes the current
-task-scoped credential procedure.
+For live assurance, use the [test campaign guide](docs/guides/test-campaign-operations.md)
+for cadence, recorded acceptance, publication, and campaign procedures. The
+[agent cluster-access guide](docs/guides/agent-cluster-access.md) covers task-scoped
+credentials.
 
 ## Physical KVM Note
 
@@ -204,154 +128,13 @@ The namespace commands are also the built-in command index:
 | `just node` | List established-node lifecycle workflows |
 | `just cluster` | List established-cluster observation workflows |
 | `just kube` | List Kubernetes rendering, validation, and live-status workflows |
+| `just test` | List test, campaign, and report workflows |
 
-All currently defined recipes are listed below. Recipes marked internal are
-normally invoked as dependencies of the operator-facing workflow, but remain
-available for focused developer validation.
-
-| Recipe | Purpose | Requires from operator | Availability |
-|---|---|---|---|
-| `just repo tools` | Install locked tools and print versions | — | Available |
-| `just repo versions` | Print the active tool versions | — | Available |
-| `just repo secrets` | Confirm the loaded age identity matches this repository | `SOPS_AGE_KEY`[`_FILE`] | Available |
-| `just repo pihole-status` | Verify Pi-hole HTTPS, tracked CA, and application-session write policy | `p1` SSH access | Read-only |
-| `just repo pihole-ca-refresh` | Guard and refresh only the tracked public Pi-hole CA after reinstall or rotation | `p1` SSH access; `PIHOLE_CA_REFRESH_CONFIRM` | Mutating tracked public trust source after confirmation |
-| `just repo foundation-provider-secrets` | Validate foundation provider credentials and write encrypted Secret manifests plus the ExternalDNS rollout stamp | `SOPS_AGE_KEY`[`_FILE`]; `CLOUDFLARE_API_TOKEN`; `PIHOLE_PASSWORD`; `FOUNDATION_PROVIDER_SECRETS_CONFIRM` | Temporary external DNS mutation and tracked source mutation after confirmation |
-| `just repo validate` | Check policy, Talos sources, and tracked content for secrets | — | Available |
-| `just repo validate-files` | Check ignore boundaries and SOPS policy | — | Available; internal validation |
-| `just repo secret-scan` | Run the repository secret scans directly | — | Available |
-| `just talos generate` | Render and validate machine configs with Talhelper | `SOPS_AGE_KEY`[`_FILE`] | Available |
-| `just talos validate` | Strictly validate rendered Talos configs and current source policy | — | Available |
-| `just talos source-validate` | Validate trackable Talhelper inputs without decrypting identity | — | Available; internal validation |
-| `just talos apply <node>` | Guard, dry-run, and install one node's machine config from maintenance mode (wipes and reboots) | `TALOS_APPLY_CONFIRM` | Destructive after confirmation |
-| `just talos apply-live <node>` | Guard, preview by dry-run, apply a no-reboot change to a running node, and require a second dry-run with no remaining diff (never wipes) | `TALOS_APPLY_LIVE_CONFIRM` | Day-2; mutating after confirmation |
-| `just talos volume-status` | Report and verify the longhorn user volume (size, mount, filesystem) and STATE/EPHEMERAL encryption are healthy on every node | — | Day-2; read-only |
-| `just talos kubeconfig` | From the main clone, atomically refresh the ignored admin kubeconfig; from a worktree, mint scoped Kubernetes and Talos credentials from the main-clone admin credentials | — | Location-aware credential installation |
-| `just node resize-longhorn <node>` | Shrink/recreate the longhorn volume to the configured maxSize (release → wipe → reprovision, two reboots) under the shared disruption Lease | `TALOS_RESIZE_LONGHORN_CONFIRM` | Day-2; destructive after confirmation |
-| `just bootstrap preflight` | Verify all three installed NUCs and refuse if etcd is initialized | — | Cluster bootstrap; read-only |
-| `just bootstrap talos` | Guard and bootstrap etcd exactly once on nuc1 | `TALOS_BOOTSTRAP_CONFIRM` | Cluster bootstrap; destructive after confirmation |
-| `just cluster status [node]` | Print read-only etcd membership, service, discovery, and recent logs; optionally select one node | — | Diagnostic |
-| `just bootstrap retry-join <node>` | Guard and reboot a failed nuc2/nuc3 etcd join, then require healthy three-member convergence without re-bootstrap | `TALOS_ETCD_RETRY_CONFIRM` | Recovery; mutating after confirmation |
-| `just cluster verify` | Verify the established core platform: Nodes, etcd, Talos, Cilium, Longhorn, and foundation dependencies | — | Operator-only and read-only |
-| `just node maintenance-check <node>` | Report whether the established cluster can safely disrupt one node | — | Operator-only and read-only |
-| `just node maintenance-enter <node>` | Cordon and drain one node, evacuate Longhorn replicas, and shut it down for physical work | `NODE_MAINTENANCE_CONFIRM` | Operator-only; disruptive after confirmation |
-| `just node maintenance-exit <node>` | Restore lifecycle-owned Longhorn state, accept recovery while cordoned, then uncordon | `NODE_LIFECYCLE_CONFIRM` | Operator-only; mutating after confirmation |
-| `just kube cilium-render` | Render the pinned Cilium OCI chart to standard output | — | Read-only |
-| `just kube cilium-validate` | Validate Cilium sources, values, and the Helm render | — | Read-only |
-| `just kube n8n-validate` | Validate n8n, PostgreSQL, backup, route, monitoring, and operations source contracts | — | Cluster-independent and read-only |
-| `just bootstrap n8n` | Reconcile the staged private n8n platform and create its first validated logical backup while the public route stays suspended | `.kube/config`; `N8N_BOOTSTRAP_CONFIRM=bootstrap:n8n` | Operator-only; mutating with run-owned Job cleanup and rollback re-suspension |
-| `just kube n8n-verify` | Observe current n8n and PostgreSQL readiness, exact routes, monitoring, backup freshness, and the Gatus canary series | `.kube/config` | Operator-only and read-only |
-| `just kube n8n-restore-drill` | Restore the newest valid dump into a temporary database and prove retained-key credential decryption | `.kube/config`; `N8N_RESTORE_DRILL_CONFIRM=restore:n8n-postgresql:temporary` | Operator-only; temporary state-changing drill |
-| `just repo nocodb-secrets` | Write or update the encrypted NocoDB runtime Secret while retaining the connection encryption key | `SOPS_AGE_KEY`[`_FILE`]; six `NOCODB_*` inputs for initial creation; an update also requires `NOCODB_CONNECTION_ENCRYPT_KEY_RECOVERY` equal to the decrypted retained key; `NOCODB_SECRETS_CONFIRM=write:automation-data:nocodb:sops` | Operator-only tracked ciphertext write |
-| `just kube nocodb-validate` | Validate the staged NocoDB chart, manifests, roles, workflows, monitoring, and lifecycle source contracts | — | Cluster-independent and read-only |
-| `just bootstrap nocodb` | Guardedly activate NocoDB, initialize metadata and application settings, and bind one broad API token directly to n8n | `.kube/config`; `N8N_API_KEY`; `NOCODB_BOOTSTRAP_CONFIRM=bootstrap:nocodb` | Operator-only; mutating with owned suspension rollback |
-| `just kube nocodb-source-prepare <domain>` | Create and validate restricted access roles without registering a NocoDB base or source | Private source header; `NOCODB_SOURCE_PREPARE_CONFIRM=prepare:nocodb:<domain>` | Operator-only; state-changing role preparation |
-| `just kube nocodb-source-sync <domain>` | Reconcile eligible reader and operator sources through the fixed private n8n workflow | Private source header; `NOCODB_SOURCE_SYNC_CONFIRM=sync:nocodb:<domain>` | Operator-only; state-changing source lifecycle |
-| `just kube nocodb-source-rotate <domain> <kind>` | Rotate only one selected PostgreSQL reader or operator login and matching NocoDB integration | Private source header; `NOCODB_SOURCE_ROTATE_CONFIRM=rotate:nocodb:<domain>:<kind>` | Operator-only credential administration |
-| `just kube nocodb-verify` | Observe NocoDB workload, route, policy, monitoring, and logical-backup freshness without reading application state | `.kube/config` | Operator-only and read-only |
-| `just kube nocodb-access-test` | Prove synthetic reader/operator access, denials, idempotence, targeted rotation, and the persistent record/reference canary | `.kube/config`; three private webhook URLs and tokens; `NOCODB_ACCESS_TEST_CONFIRM=test:nocodb:access` | Operator-only; bounded state-changing test |
-| `just kube nocodb-restore-drill` | Restore one complete logical bundle into isolated PostgreSQL with fresh NocoDB scratch and prove metadata, source, view, credential, decision, and artifact-reference recovery | `.kube/config`; `NOCODB_RESTORE_CONFIRM=restore:nocodb:metadata` | Operator-only; temporary state-changing drill |
-| `just test smoke platform n8n` | Assert stable n8n resources without DNS, credentials, mutation, or pod exec | `.kube/config` | Operator-only and read-only |
-| `just test resilience n8n-persistence` | Recreate only the n8n and PostgreSQL pods while proving claim, sentinel, canary, and backup recovery | `.kube/config`; `N8N_CANARY_TOKEN`; `CLUSTER_CHAOS_CONFIRM=chaos:n8n-persistence` | Operator-only and disruptive |
-| `just kube cilium-status` | Print Helm, node, pod, and Cilium status | — | Read-only |
-| `just kube cilium-diagnostics` | Print Talos diagnostics from all cluster nodes | — | Read-only |
-| `just kube cilium-postflight` | Verify test cleanup, Talos diagnostics, and etcd health | — | Read-only |
-| `just kube cilium-verify` | Verify live Cilium, node, Hubble, Talos, and etcd state | `.kube/config` | Operator-only and read-only |
-| `just kube cilium-connectivity-test` | Run Cilium's functional IPv4 connectivity suite and remove its temporary workloads | `.kube/config`; `CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity` | Operator-only and state-changing |
-| `just bootstrap cilium` | Guard and install or reconcile Cilium `1.19.6` | `CILIUM_BOOTSTRAP_CONFIRM` | Mutating after confirmation |
-| `just kube flux-validate` | Validate Flux sources, SOPS canary, dependencies, and Cilium adoption guards | — | Read-only |
-| `just kube flux-preflight` | Verify published Git, Cilium/Talos/etcd health, and Kubernetes compatibility | — | Read-only |
-| `just bootstrap flux` | Bootstrap Flux `2.9.2` and a read-only GitHub SSH deploy key | `GITHUB_TOKEN`; `FLUX_BOOTSTRAP_CONFIRM` | Mutating after confirmation |
-| `just bootstrap flux-sops` | Create or verify the matching in-cluster SOPS identity | `SOPS_AGE_KEY`[`_FILE`]; `FLUX_SOPS_CONFIRM` | Mutating after confirmation |
-| `just bootstrap flux-ssh-known-hosts` | Preserve the deploy key and repair GitHub port-443 host trust | `FLUX_SSH_KNOWN_HOSTS_CONFIRM` | Recovery; mutating after confirmation |
-| `just bootstrap flux-adopt-cilium` | Adopt Cilium with guarded workload health and stage the permanent unsuspend; a failed adoption restores source and live suspension | `FLUX_CILIUM_ADOPTION_CONFIRM` | Mutating after confirmation |
-| `just kube flux-status` | Print Flux controllers and reconciliation state | — | Read-only |
-| `just kube flux-verify` | Verify Flux source auth, SOPS, canary, Cilium, Talos, and etcd | — | Read-only |
-| `just kube flux-canary-test` | Prove Flux recreates the guarded noncritical canary Secret | `FLUX_CANARY_CONFIRM` | State-changing after confirmation |
-| `just kube foundation-validate` | Validate foundation sources, encrypted providers, dependency policy, and pinned chart renders | — | Read-only |
-| `just kube foundation-status` | Print certificate, MetalLB, Gateway, ExternalDNS, and echo state | — | Read-only |
-| `just bootstrap foundation` | Reconcile the nine staged foundation units in guarded dependency order | `SOPS_AGE_KEY`[`_FILE`]; `FOUNDATION_NETWORK_CONFIRM`; `FOUNDATION_BOOTSTRAP_CONFIRM` | Mutating after confirmation |
-| `just kube foundation-verify` | Verify DNS, trusted HTTPS, echo, Cilium, Talos, and etcd acceptance | — | Read-only |
-| `just node reboot <node>` | Cordon, gracefully drain, reboot one established node without routine replica evacuation, accept recovery, then uncordon | `NODE_REBOOT_CONFIRM` | Operator-only; disruptive after confirmation |
-| `just test resilience node-abrupt-loss <node>` | Observe an unprepared electrical node loss, then contain and recover the node | `CLUSTER_CHAOS_CONFIRM`; `NODE_ABRUPT_LOSS_CONFIRM` | Operator-only; attended standalone resilience test |
-| `just kube flux-restart` | Restart the flux-system controllers and prove reconciliation resumes | `FLUX_RESTART_CONFIRM` | Mutating after confirmation |
-| `just repo storage-secrets` | Validate the UNAS CIFS credentials and write only the encrypted Longhorn backup Secret | `SOPS_AGE_KEY`[`_FILE`]; `CIFS_USERNAME`; `CIFS_PASSWORD`; `STORAGE_SECRETS_CONFIRM` | Mutating tracked ciphertext after confirmation |
-| `just kube storage-validate` | Validate the Longhorn source, encrypted CIFS Secret, backup-target CR, dependencies, and pinned chart render | — | Read-only |
-| `just bootstrap storage` | Reconcile the staged Longhorn Kustomizations in dependency order and run the acceptance gate | `STORAGE_BOOTSTRAP_CONFIRM` | Mutating after confirmation |
-| `just kube storage-verify` | Verify Longhorn health, node disks, default StorageClass, backup target, and recurring jobs | `.kube/config` | Operator-only and read-only |
-| `just kube storage-provisioning-test` | Create a run-scoped Longhorn PVC and prove two-node replica placement before cleanup | `.kube/config`; `STORAGE_PROVISIONING_CONFIRM=test:storage-provisioning` | Operator-only and state-changing |
-| `just repo homepage-tautulli-secrets` | Write only the encrypted Tautulli API key used by the Homepage widget | `SOPS_AGE_KEY`[`_FILE`]; `TAUTULLI_API_KEY`; `HOMEPAGE_TAUTULLI_SECRETS_CONFIRM=write:monitoring:homepage-tautulli:sops` | Tautulli activation; operator-only tracked ciphertext write |
-| `just kube tautulli-validate` | Validate suspended/active Tautulli source, storage, probes, route, integrations, and pinned render | — | Cluster-independent; included in `just ci` |
-| `just kube alerts-validate <domain>` | Validate one domain alerts application's placement and wiring, then run promtool syntax/unit tests | — | Cluster-independent; included in `just ci` |
-| `just kube alerts-coverage-validate` | Require every alert name in the tree to be asserted in a promtool fixture | — | Cluster-independent; included in `just ci` |
-| `just kube grafana-admin-reset` | Reset Grafana's database administrator password to the current Secret value and verify API authentication | `.kube/config`; `GRAFANA_ADMIN_RESET_CONFIRM=reset:monitoring:grafana:admin-password` | Operator-only administrative recovery; mutates after confirmation |
-| `just bootstrap media-app tautulli` | Guardedly resume staged Tautulli and run liveness acceptance | `MEDIA_APP_BOOTSTRAP_CONFIRM=bootstrap:media-app:tautulli` | Operator-only; mutating after confirmation |
-| `just kube tautulli-verify` | Verify live Tautulli resources, route, DNS, exact health status, Gatus series, and loaded rules | `.kube/config` | Operator-only and read-only |
-| `just repo portainer-secrets` | Write only the encrypted initial Portainer administrator Secret | `SOPS_AGE_KEY`[`_FILE`]; `PORTAINER_ADMIN_PASSWORD`; `PORTAINER_SECRETS_CONFIRM` | Mutating tracked ciphertext after confirmation |
-| `just repo homepage-portainer-secrets` | Write the encrypted Portainer API key used by Homepage and stamp its rollout revision | `SOPS_AGE_KEY`[`_FILE`]; `PORTAINER_API_KEY`; `HOMEPAGE_PORTAINER_SECRETS_CONFIRM` | Operator-held secret workflow; mutates tracked ciphertext and the Homepage Deployment after confirmation |
-| `just kube portainer-validate` | Validate the staged Portainer source, chart render, route, storage, isolation, and RBAC | — | Read-only and included in `just ci` |
-| `just kube portainer-policy-validate` | Enforce the Portainer read-only RBAC policy with Conftest | — | Read-only and included in `just ci` |
-| `just bootstrap portainer` | Guardedly resume the staged Portainer Kustomization and run live acceptance | `PORTAINER_BOOTSTRAP_CONFIRM` | Mutating after confirmation |
-| `just kube portainer-verify` | Verify live Portainer, internal HTTPS, storage, policy, and effective authorization | Worktree-local scoped credentials | Approved read-oriented scoped verification |
-| `just kube portainer-persistence-test` | Recreate the Portainer pod and prove the original PVC and UI recover | `PORTAINER_PERSISTENCE_CONFIRM` | Operator-only and disruptive after confirmation |
-| `just test smoke platform portainer` | Run read-only Portainer deployed-state assertions | `.kube/config` | Operator-only |
-| `just ci` | Run the cluster-independent, secret-free validation gate and write one canonical fail-fast JUnit/JSON result | — | Manual local check + authoritative GitHub PR gate; Actions retains the artifact for 90 days |
-| `just test validate` | Validate the suite catalog and canonical artifact contract; lint Chainsaw configuration/tests, enforce read-only smoke policy, parse test YAML, and check test scripts | — | Cluster-independent; included in `just ci` |
-| `just test catalog-validate` | Validate suite metadata, implementations, dispatch uniqueness, and mutation guards | — | Cluster-independent; included in `just test validate` |
-| `just test result-validate <run-id>` | Validate one finalized canonical run, including JUnit/summary consistency, evidence size/path safety, and its complete evidence index | `.test-results/<run-id>` | Cluster-independent; coordinated runners invoke it automatically |
-| `just test report <run-id>` | Validate a canonical run and generate its static Allure Awesome report | `.test-results/<run-id>` | Writes `.test-reports/<run-id>/awesome/` |
-| `just test report-latest` | Generate the report with the latest finalized `summary.json` end time | `.test-results/` | Does not use filesystem modification time |
-| `just test report-open <run-id>` | Generate, serve, and open one Allure report locally | `.test-results/<run-id>`; interactive browser | Runs until interrupted with Ctrl+C |
-| `just test campaign-plan <name>` | Preview explicit campaign membership, source authority, mutation scope, and the exact plan-bound confirmation | Clean deployed `origin/main`; `.kube/config` | Operator-only and read-only |
-| `just test campaign <name>` | Run an ordered catalog campaign and automatically publish every canonical child report | Exact `TEST_CAMPAIGN_CONFIRM` printed by the plan; `.kube/config` | Operator-only; may be disruptive according to campaign |
-| `just test campaign-resume <campaign-run-id>` | Retry failed publication and continue unstarted campaign members without rerunning completed suites | `TEST_CAMPAIGN_CONFIRM=resume-publish:<campaign-run-id>` | Only publication-failed campaigns are resumable |
-| `just kube test-reports-validate` | Validate the suspended persistent Caddy report host, RWO/Recreate storage, isolation, metrics, and atomic installer | — | Cluster-independent; included in `just ci` |
-| `just bootstrap test-reports` | Guardedly resume the staged report host and run live acceptance | `TEST_REPORTS_BOOTSTRAP_CONFIRM=bootstrap:test-reports` | Operator-only; mutating after confirmation |
-| `just test publish <run-id>` | Secret-scan and publish one canonical run plus static Allure report to the retained in-cluster archive | `.kube/config`; `TEST_REPORT_PUBLISH_CONFIRM=publish:test-report:<run-id>` | Operator-only; no upload API |
-| `just kube test-reports-verify` | Verify the live report host, PVC, no-RBAC runtime, internal HTTPS, policy, monitoring resources, and catalog | `.kube/config` | Operator-only and read-only |
-| `just test smoke cluster` | Run the read-only Flux readiness proof and write evidence under `.test-results/` | `.kube/config` | Operator-only; never in `just ci` |
-| `just test smoke cluster diagnostics-self-test` | Deliberately fail a read-only assertion to prove catch/fallback diagnostics and failure preservation | `.kube/config` | Operator-only; expected failure |
-| `just test diagnostics cluster` | Collect allowlisted Flux, Pod, and Event diagnostics without Secret bodies | `.kube/config` | Operator-only; read-only |
-| `just test integration media-hardlink` | Run the focused media-data hardlink filesystem integration under the renewable cluster-wide test Lease | `.kube/config` | Operator-only; run-owned files only |
-| `just test e2e <target>` | Run an allowlisted state-changing functional scenario under the renewable cluster-wide test Lease | `.kube/config` | Fails closed until a target is registered |
-| `just test resilience <target>` | Run an allowlisted disruptive recovery scenario under confirmation and the renewable cluster-wide test Lease | `.kube/config`; `CLUSTER_CHAOS_CONFIRM=chaos:<target>` | Fails closed until a target is registered |
-| `just repo hooks` | Install the git pre-commit hooks (idempotent) | — | Available |
-| `just repo lint` | Run all pre-commit hooks against the tree | — | Available |
-| `just repo links-validate` | Reject broken relative Markdown links, absolute/file Markdown targets, and missing bare repository documentation paths | — | Cluster-independent; included in `just ci` |
-| `just kube kubeconform` | Validate the built app manifests against Kubernetes + CRD schemas | — | Available; read-only, fetches schemas over HTTPS |
-| `just kube foundation-ca-expiry` | Warn if the committed Pi-hole CA is within 30 days of expiry | — | Operational; time-based, kept out of `just ci` |
-| `just kube metrics-server-validate` | Validate the metrics-server source, insecure-TLS flag, and pinned render | — | Available; read-only |
-| `just bootstrap metrics-server` | Reconcile the staged metrics-server and verify (`kubectl top`, HPA, Homepage widget) | `METRICS_SERVER_BOOTSTRAP_CONFIRM` | Mutating after confirmation |
-| `just kube metrics-server-verify` | Verify metrics-server: APIService Available and `kubectl top nodes` returns data | — | Read-only |
-| `just repo ntfy-identity <action> <identity>` | Registry-backed ntfy credential lifecycle (`ensure`/`reconcile`/`rotate`/`finalize`) over the canonical Secret; companions `just repo ntfy-subscriber-password` and `just kube ntfy-consumer-sync seerr` — see [the ntfy guide](docs/guides/ntfy-operations.md) | `SOPS_AGE_KEY`[`_FILE`]; `NTFY_IDENTITY_CONFIRM` | Mutating tracked ciphertext after confirmation |
-| `just kube ntfy-verify` | Observe live ntfy readiness, health, authentication, and least-privilege ACL boundaries | Worktree-local diagnostic credentials | Approved scoped verification; always observational and sends no notification |
-| `just kube ntfy-publish-test` | Run the observational ntfy preflight, then send one positive ACL test message to `media`, `critical`, and `homelab` | `.kube/config`; `NTFY_PUBLISH_TEST_CONFIRM=test:ntfy:publish:media-critical-homelab` | Operator-only; sends exactly three real notifications after confirmation |
-
-The **Requires from operator** column lists inputs the recipe reads from your
-environment and refuses to run without. `SOPS_AGE_KEY`[`_FILE`] means either the
-key value or a path to it. `*_CONFIRM` values are the exact confirmation strings
-each guarded recipe prints when refused. Secrets and confirmations are never
-stored in `.mise.toml`; recipes fail fast when they are absent.
-
-New cluster mutations are added only with their validation, guard, and
-documentation boundary. Do not replace a missing workflow with an ad hoc apply.
-
-### Confirmation safety model
-
-A `*_CONFIRM` value is a deliberate second operator act, not a credential or a
-replacement for preflight checks. Require one when a recipe crosses a meaningful
-shared or durable boundary: live rollouts or deletion, disruption or destruction,
-tracked secret/trust writes, shared-state tests, report publication, or exceptional
-cleanup. Read-only checks, planning, validation, and run-owned local output do not
-require one.
-
-Tokens bind the authorized action to its target; higher-risk operations also bind
-fresh context such as a run ID, node/IP, disk serial, source commit, or campaign
-digest. This prevents accidental invocation and reuse against a different target.
-The test catalog permits either an `exact` token or a narrowly scoped `command`
-guard with bounded ownership and cleanup, but never `none` for a mutating test.
-Campaign confirmation delegates only the frozen, source-reviewed child sequence;
-standalone and target-specific guards remain intact.
+Run `mise exec -- just <namespace>` for the current recipes and their descriptions.
+Use the source-adjacent README and [operating guides](docs/README.md#guides) for inputs,
+confirmations, and procedure details. [`AGENTS.md`](AGENTS.md) defines execution authority;
+the [command lifecycle reference](docs/reference/repository-command-lifecycle.md)
+explains command effects and confirmation behavior.
 
 ## Operational notes
 
@@ -503,23 +286,6 @@ mise exec -- just repo secrets
 [SOPS guide](docs/guides/sops-secret-operations.md) for secret-handling procedures and the
 [platform disaster-recovery runbook](docs/runbooks/platform-disaster-recovery.md) for
 restoring access after workstation or cluster loss.
-
-## Normal Change Workflow
-
-1. Read the source-adjacent README and current documentation for the subsystem.
-2. Run `just repo tools` after pulling a change to `.mise.toml` or `mise.lock`.
-3. Load the SOPS identity only when the change requires encrypted material.
-4. Edit declarative source files, never generated output.
-5. Run the subsystem's generation or validation recipe when it is available.
-6. Inspect `git status` and confirm no generated config, decrypted secret,
-   kubeconfig, talosconfig, or private key is trackable.
-7. Run `mise exec -- just ci` before opening or updating a pull request. After a
-   required rebase, rerun affected validation, including `mise exec -- just ci`.
-8. Commit on the feature branch, push it, and open a pull request. GitHub's required
-   `ci` check supplies the authoritative full validation result.
-
-Do not bypass a disabled recipe with a raw cluster-changing command. Enable and
-test the guarded recipe in the subsystem that owns that operation.
 
 ## Updating Tool Versions
 
