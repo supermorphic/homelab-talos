@@ -110,10 +110,9 @@ and audit logging. Then run `finalize`.
 ### 5. Run attended acceptance
 
 Use the explicit operator kubeconfig for `OPENBAO_OPERATOR_KUBECONFIG` and
-`TEST_KUBECONFIG`. First use reviewed Git changes to activate the server, acceptance,
-and backup units needed to produce a snapshot and run these tests; keep the remaining
-integrations staged. Each registered test asks for its own exact execution confirmation
-and requires operator authority.
+`TEST_KUBECONFIG`. The server, acceptance, and backup units must be reconciled before
+these tests; keep private access and monitoring staged. Each registered test asks for
+its own exact execution confirmation and requires operator authority.
 
 | Acceptance | Command and additional input | Passing result establishes |
 | --- | --- | --- |
@@ -146,8 +145,8 @@ production storage replacement needs a separate recovery plan.
 
 ### 6. Activate through Git
 
-After acceptance, review and merge the remaining Flux unsuspension, private route,
-backup, monitoring, and Gatus enrollment changes. Run the observer verifier after
+After acceptance, review and merge the private route, monitoring, and Gatus enrollment
+changes. Run the observer verifier after
 reconciliation. Activation is complete only when acceptance and live verification pass.
 
 ## Apply configuration changes

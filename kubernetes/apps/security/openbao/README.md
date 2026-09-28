@@ -1,11 +1,11 @@
 # OpenBao staged package
 
-This package stages an OpenBao credential broker with three Raft voters. The prerequisite
-and server Flux units reconcile through Git; access, acceptance, backup, and monitoring
-remain suspended pending bootstrap completion and attended acceptance. The guarded bootstrap workflow prepares the namespace
-Certificate and server after the operator supplies the encrypted `openbao-seal` Secret
-and independent recovery destination. Activate the private route, backup,
-monitoring, and acceptance resources in Git after bootstrap succeeds.
+This package deploys an OpenBao credential broker with three Raft voters. The prerequisite,
+server, acceptance, and backup Flux units reconcile through Git. Private access and
+monitoring remain suspended pending attended acceptance. The guarded bootstrap workflow
+prepares the namespace Certificate and server after the operator supplies the encrypted
+`openbao-seal` Secret and independent recovery destination. Activate the private route
+and monitoring in Git after acceptance succeeds.
 The expected Secret key is `key`, containing exactly 32 random bytes. No Secret value is
 stored in this package.
 

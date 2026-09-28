@@ -67,6 +67,9 @@ def validate_flux_units(documents: list[dict]) -> list[str]:
         "openbao-backup": "backup",
         "openbao-monitoring": "monitoring",
     }
+    server = {"openbao-prerequisites", "openbao"}
+    assurance = server | {"openbao-acceptance", "openbao-backup"}
+    allowed = (set(), server, assurance, set(expected))
     units = [d for d in documents if d.get("kind") == "Kustomization" and
              (str(_get(d, "metadata", "name") or "").startswith("openbao") or
               str(_get(d, "spec", "path") or "").startswith(
@@ -75,7 +78,7 @@ def validate_flux_units(documents: list[dict]) -> list[str]:
             {_get(d, "metadata", "name") for d in units} == set(expected) and
             all(type(_get(d, "spec", "suspend")) is bool for d in units) and
             { _get(d, "metadata", "name") for d in units if _get(d, "spec", "suspend") is False }
-            in (set(), {"openbao-prerequisites", "openbao"}) and
+            in allowed and
             all(_get(d, "metadata", "namespace") == "flux-system" and
                 _get(d, "spec", "path") ==
                 "./kubernetes/apps/security/openbao/" + expected[_get(d, "metadata", "name")]
