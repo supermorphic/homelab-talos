@@ -291,7 +291,6 @@ class ClassificationTests(unittest.TestCase):
             "docs/guides/n8n-operations.md": ("core", "automation"),
             "docs/runbooks/n8n-recovery.md": ("core", "automation"),
             "docs/guides/automation-data-operations.md": ("core", "automation"),
-            "docs/runbooks/automation-data-recovery.md": ("core", "automation"),
             "docs/runbooks/platform-disaster-recovery.md": ("core", "automation"),
         }
         for path, expected in cases.items():

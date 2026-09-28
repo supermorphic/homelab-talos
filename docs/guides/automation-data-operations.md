@@ -15,7 +15,7 @@ records the acceptance evidence.
 Use [Routine operation](#routine-operation) for the active platform. The original
 first-deployment procedure is retained under [Staged activation](#staged-activation).
 For recovery, use
-[Recover automation-data PostgreSQL](../runbooks/automation-data-recovery.md).
+[n8n / automation-data recovery](../runbooks/platform-disaster-recovery.md#n8n--automation-data-recovery).
 
 ## Before you start
 
@@ -49,7 +49,8 @@ chain without revealing a domain password.
 
 These steps record the original rollout from suspended source. Current Git keeps the
 platform active, and `bootstrap automation-data` deliberately refuses that state. Do not
-repeat bootstrap for routine operation or recovery; use the linked recovery runbook.
+repeat bootstrap for routine operation or recovery; use the guarded restore workflow
+described in [Recovery](../runbooks/platform-disaster-recovery.md#n8n--automation-data-recovery).
 
 ### 1. Create the encrypted platform Secret
 
@@ -378,5 +379,5 @@ it resumed that Kustomization. Persistent source changes still go through Git.
 
 After domains exist, preserve both PVCs and backup copies. Do not delete claims or
 recreate PostgreSQL as a rollback. Withdraw the failing workflow, keep PostgreSQL
-private, and use [Recover automation-data PostgreSQL](../runbooks/automation-data-recovery.md)
-to choose the least destructive recovery path.
+private, and follow the operator boundary in
+[n8n / automation-data recovery](../runbooks/platform-disaster-recovery.md#n8n--automation-data-recovery).

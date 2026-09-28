@@ -411,24 +411,24 @@ Use [Media automation setup](../guides/media-automation-setup.md) as a greenfiel
 only when no trusted configuration backup exists. Do not replace a recoverable stateful
 application with empty first-run state merely because greenfield setup is documented.
 
-### n8n and automation-data state
+### n8n / automation-data recovery
 
-Recover n8n and the automation-data PostgreSQL platform as one credential recovery unit.
-The n8n database contains encrypted client credentials. The automation-data globals dump
-contains the matching PostgreSQL role password verifiers, and each database dump contains
-its local schema, ownership, ACLs, grants, and data. The operator-held
-`N8N_ENCRYPTION_KEY`, SOPS age private key, and off-cluster backup access are required
-recovery roots.
+Recover n8n and automation-data as one credential recovery unit.
 
-Follow [Recover n8n](n8n-recovery.md) and
-[Recover automation-data PostgreSQL](automation-data-recovery.md). Keep both restored
-services private. Restore n8n with its retained encryption key, restore automation-data
-globals before all captured databases, then run the attended full-chain drill. Require a
-restored n8n runtime credential to authenticate against the restored role verifier and a
-fresh post-recovery automation-data bundle before normal workflow traffic resumes.
+Human-held recovery roots:
 
-This recovery capability is not established until Issue 317 is deployed and that drill
-passes. Backup files by themselves are not full-chain recovery evidence.
+- SOPS age identity
+- off-cluster backup access
+- `N8N_ENCRYPTION_KEY`
+
+Use the repository's guarded automation-data restore workflow. Recovery must prove
+that the restored n8n runtime credential authenticates against the restored
+automation-data PostgreSQL role verifier.
+
+Do not attempt to reconstruct generated domain plaintext passwords.
+
+Production claim replacement or other destructive recovery requires explicit
+operator authorization.
 
 ### OpenBao credential broker state
 

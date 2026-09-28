@@ -559,9 +559,10 @@ responsibilities.
 
 ## Recovery
 
-The recovery runbook distinguishes routine pod rescheduling, Longhorn volume recovery,
-logical bundle restore, and full cluster reconstruction. Logical restoration uses an
-isolated destination first and never overwrites the running service as its first step.
+The [platform recovery section](../runbooks/platform-disaster-recovery.md#n8n--automation-data-recovery)
+identifies the shared recovery roots and guarded restore boundary. Logical restoration
+uses an isolated destination first and never overwrites the running service as its first
+step.
 
 The attended full-chain restore drill:
 
@@ -603,8 +604,8 @@ complete chain.
 The default selects the newest valid bundle and n8n dump independently. Both must contain
 the same credential version. An operator can instead select a known matching retained
 pair; an invalid explicit selection must fail rather than silently restore another pair.
-The [recovery runbook](../runbooks/automation-data-recovery.md) describes selection and
-diagnosis of unavailable backup artifacts.
+The guarded restore workflow diagnoses unavailable artifacts without substituting another
+pair.
 
 The globals dump contains password verifiers and remains sensitive even though it does
 not contain plaintext passwords. Repository files, CI output, test evidence, logs, and
@@ -683,10 +684,10 @@ monitoring grant to the initialized database and created the first logical bundl
 [Staged activation](../guides/automation-data-operations.md#staged-activation) records the
 original command sequence; the bootstrap guard now refuses the active source state.
 Recovery of the active platform follows the
-[recovery runbook](../runbooks/automation-data-recovery.md). Private credential handling
-and privileged live tests remain operator actions; scoped observation uses the assigned
-worktree credentials. The dated results below distinguish acceptance from source-only
-validation.
+[platform recovery boundary](../runbooks/platform-disaster-recovery.md#n8n--automation-data-recovery).
+Private credential handling and privileged live tests remain operator actions; scoped
+observation uses the assigned worktree credentials. The dated results below distinguish
+acceptance from source-only validation.
 
 ## Validation strategy
 
@@ -806,9 +807,10 @@ PostgreSQL health and capacity coverage.
 Credential or workflow changes require new compatible n8n and automation-data backups
 before recovery acceptance. Reusing the production canary during isolated recovery proves
 the credential ciphertext and PostgreSQL password verifier as one recoverable contract.
-The [operations guide](../guides/automation-data-operations.md) and
-[recovery runbook](../runbooks/automation-data-recovery.md) retain procedures and test
-mechanics outside this durable design record.
+The [operations guide](../guides/automation-data-operations.md) retains the guarded drill
+command, and the [platform recovery section](../runbooks/platform-disaster-recovery.md#n8n--automation-data-recovery)
+retains the recovery roots and authorization boundary. The workflow implementation
+defines the test mechanics.
 
 The optional NocoDB extension in specification 028 is separate from that accepted
 platform baseline. Its repository implementation does not establish live NocoDB

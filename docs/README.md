@@ -36,7 +36,6 @@
 ## Runbooks
 
 - [Recover n8n](runbooks/n8n-recovery.md) — Choose pod, Longhorn, logical-restore, or full-reconstruction recovery while preserving the matching encrypted key.
-- [Recover automation-data PostgreSQL](runbooks/automation-data-recovery.md) — Recover the shared domain database platform and prove the restored n8n credential-to-role-verifier chain.
 - [Recover NocoDB](runbooks/nocodb-recovery.md) — Choose pod, metadata, source-operation, or isolated logical-bundle recovery while preserving the connection encryption key.
 - [Recover OpenBao](runbooks/openbao-recovery.md) — Rebuild platform prerequisites, retain matching seal material, and prove a selected snapshot in an isolated drill.
 - [Recover Plex remote playback with Relay](runbooks/plex-relay-fallback.md) — Diagnose Relay fallback when direct remote access is unavailable.

@@ -10,7 +10,7 @@ fail() {
 }
 
 operations_guide='docs/guides/automation-data-operations.md'
-recovery_runbook='docs/runbooks/automation-data-recovery.md'
+recovery_runbook='docs/runbooks/platform-disaster-recovery.md'
 for required_document in "$operations_guide" "$recovery_runbook"; do
   [[ -f "$required_document" ]] || fail "required operations document is missing: $required_document"
 done
