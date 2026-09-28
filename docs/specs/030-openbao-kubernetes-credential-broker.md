@@ -112,6 +112,12 @@ identities; it never initializes OpenBao. The separate `initialize` phase can th
 bind confirmation to the actual claims and server identities. Durable activation
 is subsequently committed to Git.
 
+Preparation allows five minutes per Flux reconciliation for first-time TLS issuance.
+Live StatefulSet comparison treats an omitted `hostNetwork` field as Kubernetes'
+default `false`; enabled host networking and missing unrelated source fields still
+fail comparison. When preparation exhausts its observation wait, it reports the last
+sanitized check failure so configuration mismatches remain distinguishable from timeouts.
+
 OpenBao cannot become Ready before initialization. Configure Helm installation
 not to wait for workload readiness during this initial transaction; do not change
 the readiness probe to classify sealed or uninitialized instances as healthy.

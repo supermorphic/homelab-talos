@@ -1,4 +1,5 @@
 import copy
+import subprocess
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -222,13 +223,28 @@ class BootstrapTest(unittest.TestCase):
 
     def test_prepare_returns_only_local_nonsecret_observed_target_summary(self):
         self.inputs["confirm"] = guards.confirmation("prepare", "a" * 40, "b" * 64)
-        observed = {**self.target, "namespace_uid": "actually-prepared-namespace",
-                    "password": "synthetic-private", "recovery_directory": "/private/path"}
+        observed = {
+            **self.target,
+            "namespace_uid": "actually-prepared-namespace",
+            "password": "synthetic-private",
+            "recovery_directory": "/private/path",
+        }
         self.client.prepare = lambda target: observed
         result = bootstrap.run("prepare", **self.inputs)
-        self.assertEqual(result["target"], {key: observed[key] for key in (
-            "source_revision", "cluster_uid", "namespace_uid", "statefulset_uid",
-            "pod_uids", "pvc_uids")})
+        self.assertEqual(
+            result["target"],
+            {
+                key: observed[key]
+                for key in (
+                    "source_revision",
+                    "cluster_uid",
+                    "namespace_uid",
+                    "statefulset_uid",
+                    "pod_uids",
+                    "pvc_uids",
+                )
+            },
+        )
         self.assertNotIn("synthetic-private", str(result))
         self.assertNotIn("/private/path", str(result))
 
@@ -286,6 +302,48 @@ class PinnedReadbackTest(unittest.TestCase):
 
 
 class GuardTest(unittest.TestCase):
+    def test_statefulset_accepts_omitted_false_host_network_without_changing_input(self):
+        expected = {"template": {"spec": {"hostNetwork": False, "serviceAccountName": "openbao"}}}
+        actual = {"template": {"spec": {"serviceAccountName": "openbao"}}}
+        before = copy.deepcopy(actual)
+        self.assertTrue(guards.contains_statefulset_source(expected, actual))
+        self.assertEqual(actual, before)
+
+    def test_statefulset_default_does_not_accept_host_network_or_other_missing_fields(self):
+        for expected, actual in (
+            ({"hostNetwork": False}, {"hostNetwork": True}),
+            ({"hostNetwork": True}, {}),
+            ({"hostNetwork": False, "automountServiceAccountToken": False}, {}),
+        ):
+            with self.subTest(expected=expected, actual=actual):
+                self.assertFalse(
+                    guards.contains_statefulset_source(
+                        {"template": {"spec": expected}}, {"template": {"spec": actual}}
+                    )
+                )
+        self.assertFalse(guards.contains_statefulset_source({"template": {"spec": {}}}, {}))
+
+    def test_command_timeout_is_sanitized_and_classified_as_timeout(self):
+        errors = (
+            subprocess.TimeoutExpired(
+                ["synthetic"], 60, output=b"private-output", stderr=b"private-error"
+            ),
+            subprocess.CalledProcessError(
+                1,
+                ["flux"],
+                output=b"private-output",
+                stderr=b"private-error: context deadline exceeded",
+            ),
+        )
+        for error in errors:
+            with (
+                self.subTest(error=type(error).__name__),
+                patch("scripts.openbao.guards.subprocess.run", side_effect=error),
+            ):
+                with self.assertRaises(SafeError) as caught:
+                    guards.command(["synthetic"])
+                self.assertEqual(str(caught.exception), "timeout")
+
     def test_source_refuses_dirty_or_unpublished_candidate(self):
         with (
             patch("scripts.openbao.guards.command", return_value=b" M synthetic"),
@@ -365,6 +423,65 @@ class GuardTest(unittest.TestCase):
 
 
 class PrepareRaceTest(unittest.TestCase):
+    def test_preparation_allows_first_certificate_issuance_and_resuspends_units(self):
+        from scripts.openbao.operator import OperatorClient
+
+        resumed = []
+        suspended = []
+        observed = {"statefulset_uid": "synthetic-server"}
+
+        def run(argv, **kwargs):
+            import json
+
+            if argv[0] == "flux":
+                deadline = next(a.split("=", 1)[1] for a in argv if a.startswith("--timeout="))
+                seconds = float(deadline[:-1]) * (60 if deadline.endswith("m") else 1)
+                # An ordinary first DNS-01 issuance can take 80 seconds.
+                if kwargs["timeout"] <= 80:
+                    raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+                if seconds <= 80:
+                    raise subprocess.CalledProcessError(1, argv)
+            else:
+                operation = json.loads(argv[argv.index("-p") + 1])[-1]
+                destination = suspended if operation["value"] else resumed
+                destination.append(argv[argv.index("kustomization") + 1])
+            return subprocess.CompletedProcess(argv, 0, stdout=b"")
+
+        with (
+            patch("scripts.openbao.guards.subprocess.run", side_effect=run),
+            patch("scripts.openbao.guards.assert_mutation_allowed"),
+            patch(
+                "scripts.openbao.guards.preparation_unit",
+                return_value={"metadata": {"uid": "synthetic-unit", "resourceVersion": "1"}},
+            ),
+            patch("scripts.openbao.guards.freeze_target", return_value=observed),
+            patch("scripts.openbao.bootstrap._uninitialized"),
+        ):
+            result = OperatorClient(Path("/synthetic")).prepare({})
+        self.assertEqual(result, {"statefulset_uid": "synthetic-server"})
+        self.assertEqual(resumed, ["openbao-prerequisites", "openbao"])
+        self.assertEqual(suspended, ["openbao", "openbao-prerequisites"])
+
+    def test_preparation_preserves_last_failed_check_instead_of_masking_it(self):
+        from scripts.openbao.operator import OperatorClient
+
+        with (
+            patch("scripts.openbao.guards.command", return_value=b""),
+            patch("scripts.openbao.guards.assert_mutation_allowed"),
+            patch(
+                "scripts.openbao.guards.preparation_unit",
+                return_value={"metadata": {"uid": "synthetic-unit", "resourceVersion": "1"}},
+            ),
+            patch(
+                "scripts.openbao.guards.freeze_target", side_effect=SafeError("source-mismatch")
+            ),
+            patch("scripts.openbao.operator.time.monotonic", side_effect=[0, 1, 181]),
+            patch("scripts.openbao.operator.time.sleep"),
+            self.assertRaises(SafeError) as caught,
+        ):
+            OperatorClient(Path("/synthetic")).prepare({})
+        self.assertEqual(str(caught.exception), "source-mismatch")
+
     def test_changed_source_or_unit_during_prerequisite_wait_blocks_server_resume(self):
         import json
 

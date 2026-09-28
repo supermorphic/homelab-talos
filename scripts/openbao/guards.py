@@ -1,5 +1,6 @@
 """Non-secret source and target identity checks for attended OpenBao mutations."""
 
+import copy
 import hashlib
 import os
 import re
@@ -26,11 +27,18 @@ def confirmation(phase: str, source_sha: str, target_digest: str) -> str:
     return f"{phase}:openbao:{source_sha}:{target_digest}"
 
 
-def command(argv, *, input_bytes=None):
+def command(argv, *, input_bytes=None, timeout=60):
     try:
         return subprocess.run(
-            argv, cwd=ROOT, input=input_bytes, capture_output=True, check=True, timeout=60
+            argv, cwd=ROOT, input=input_bytes, capture_output=True, check=True, timeout=timeout
         ).stdout
+    except subprocess.TimeoutExpired:
+        raise SafeError("timeout") from None
+    except subprocess.CalledProcessError as error:
+        # Classify the CLI deadline without exposing command output or credentials.
+        if b"context deadline exceeded" in (error.stderr or b""):
+            raise SafeError("timeout") from None
+        raise SafeError("read-denied") from None
     except (OSError, subprocess.SubprocessError):
         raise SafeError("read-denied") from None
 
@@ -89,6 +97,16 @@ def contains_source(expected, actual):
             contains_source(a, b) for a, b in zip(expected, actual)
         )
     return expected == actual
+
+
+def contains_statefulset_source(expected, actual):
+    """The API omits the PodSpec hostNetwork field when its value is false."""
+    defaulted = copy.deepcopy(actual)
+    try:
+        defaulted["template"]["spec"].setdefault("hostNetwork", False)
+    except (KeyError, TypeError, AttributeError):
+        return False
+    return contains_source(expected, defaulted)
 
 
 def require_deployed_revision(kubeconfig, revision):
@@ -241,7 +259,7 @@ def freeze_target(kubeconfig, phase) -> dict:
         for d in rendered
         if d and d.get("kind") == "ConfigMap" and d["metadata"]["name"] == "openbao-config"
     )
-    if not contains_source(expected_sts["spec"], sts["spec"]):
+    if not contains_statefulset_source(expected_sts["spec"], sts["spec"]):
         raise SafeError("source-mismatch")
     config = kube(kubeconfig, "-n", "openbao", "get", "configmap", "openbao-config", "-o", "json")
     if config["data"] != expected_config["data"]:
