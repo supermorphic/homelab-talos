@@ -147,13 +147,14 @@ solely to satisfy these style rules.
     lifecycle. Use explicit brainstorming/design, a durable specification when the design
     has lasting value, an implementation plan, and an independent final review.
   - **Exploratory/spike work:** investigate a bounded question, retain only useful
-    conclusions and evidence, and obtain separate authorization before production
-    implementation.
-- Default to native execution in one implementation context, including for architectural
-  work. Use subagent-driven execution only for an identified benefit in context isolation,
-  specialization, independent review, or safe parallelism.
-- State a concrete reason before adding an abstraction, registry, report mechanism,
-  persistent test layer, or subagent stage. Process proportionality does not reduce
+    conclusions and evidence, and treat production implementation as a new task that
+    must be classified before implementation.
+- Execute bounded changes directly in the current implementation context. When an
+  implementation plan exists, prefer native/inline execution in one implementation
+  context. Use subagent-driven execution only when context isolation, specialization,
+  per-task independent review, or safe parallelism provides a concrete benefit.
+- Add an abstraction, registry, report mechanism, persistent test layer, or subagent
+  stage only when it provides a concrete benefit. Process proportionality does not reduce
   worktree, authority, credential, testing, or merge protections.
 - Use an economical model appropriate for each subagent role. Do not inherit the
   coordinator's high-capability model by default when a lower-cost model can

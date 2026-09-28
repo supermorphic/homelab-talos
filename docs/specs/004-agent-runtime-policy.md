@@ -55,16 +55,18 @@ The distinction is design uncertainty and operational risk, not the number of ch
 lines. A small credential-boundary change still needs architectural design discipline.
 
 The supported agent framework provides the underlying design and execution workflows.
-Repository policy selects short in-context design for bounded work
-and native execution by default, including architectural work. It does not copy skill
-checklists or introduce another execution framework. Delegation earns its additional
-context through an identified isolation, specialization, review, or parallelism benefit.
-New abstractions and persistent process machinery likewise need a concrete reason.
+Repository policy selects short in-context design followed by direct implementation for
+bounded work. When an implementation plan exists, native/inline execution is the default.
+It does not copy skill checklists or introduce another execution framework. Delegation
+earns its additional context through a concrete benefit in isolation, specialization,
+per-task independent review, or safe parallelism.
+New abstractions and persistent process machinery likewise need a concrete benefit.
 
 Durable specifications preserve useful design knowledge; they are not a receipt for
 every edit. This update extends the existing policy design record instead of assigning
 a new design identifier. Transient plans help when sequencing matters. Exploratory work
-can end with conclusions and evidence without authorizing production implementation.
+ends with conclusions and evidence; production implementation is a new task to classify
+before implementation, not a separate authorization event.
 These choices affect process overhead only: existing worktree, authority, credential,
 validation, and merge protections continue to apply.
 
