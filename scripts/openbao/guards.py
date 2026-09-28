@@ -19,7 +19,7 @@ def digest(value: object) -> str:
 
 def confirmation(phase: str, source_sha: str, target_digest: str) -> str:
     if (
-        phase not in {"prepare", "initialize", "config-apply"}
+        phase not in {"prepare", "initialize", "config-apply", "reset-staged"}
         or not re.fullmatch("[0-9a-f]{40}", source_sha)
         or not re.fullmatch("[0-9a-f]{64}", target_digest)
     ):
