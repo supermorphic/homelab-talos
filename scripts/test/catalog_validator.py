@@ -1110,11 +1110,12 @@ class CatalogValidator:
         if violations:
             fail("Verifier access contract violations:\n" + "\n".join(violations) + "\n")
         self.validate_diagnostic_contexts()
-        self.validate_agent_access_matrix()
-        self.validate_portainer_rbac_oracle()
         self.validate_scoped_rbac_source()
 
     def validate_diagnostic_contexts(self) -> None:
+        # Retain this narrow static guard until every diagnostic verifier has a
+        # credential-layout fixture. The context name is an external identity
+        # contract; the guard is not proof of runtime routing.
         for entry in self.suites:
             suite_id = shell_text(entry.get("metadata", {}).get("id"))
             if (
@@ -1136,49 +1137,6 @@ class CatalogValidator:
                     f"Diagnostic verifier {suite_id} must select homelab-diagnostic "
                     "conditionally.\n"
                 )
-
-    def validate_agent_access_matrix(self) -> None:
-        entry = self.entry_by_id("verification.agent-access")
-        implementation = shell_text(entry.get("runner", {}).get("implementation"))
-        content = (REPO_ROOT / implementation).read_text(encoding="utf-8")
-        required = {
-            "homelab-observer",
-            "homelab-diagnostic",
-            "homelab-report-publisher",
-            "named-contexts",
-            "admin-impersonation",
-            "system:authenticated",
-            "system:serviceaccounts",
-            "system:serviceaccounts:kube-system",
-            "for verb in get list watch",
-            "get secrets",
-            "get pods kube-system log",
-            "create pods kube-system exec",
-            "create pods kube-system portforward",
-            "create pods test-reports exec",
-            "get secrets test-reports",
-            "patch deployments.apps test-reports",
-            "gitrepositories.source.toolkit.fluxcd.io",
-            "homelab-test-report-publish-lock",
-            "create leases.coordination.k8s.io",
-            "update leases.coordination.k8s.io",
-            "--subresource",
-            # kubectl auth can-i names a resource as TYPE/NAME.
-            'resource_arg="$resource/$resource_name"',
-            "patch kustomizations.kustomize.toolkit.fluxcd.io",
-            "bind clusterroles.rbac.authorization.k8s.io",
-            "escalate clusterroles.rbac.authorization.k8s.io",
-            "impersonate users",
-            "talosctl version",
-            "talosctl services",
-        }
-        required.update(
-            f"{resource}.{api_group}" if api_group else resource
-            for api_group, resources in scoped_read_rules(self.catalog).items()
-            for resource in resources
-        )
-        if not all(marker in content for marker in required):
-            fail("verification.agent-access does not cover the required authorization matrix.\n")
 
     def validate_scoped_rbac_source(self) -> None:
         path = REPO_ROOT / "kubernetes/apps/kube-system/agent-access/app/rbac.yaml"
@@ -1207,28 +1165,6 @@ class CatalogValidator:
         )
         if actual != expected or any("*" in item for item in actual):
             fail("Scoped verifier campaign requirements and observer RBAC grants differ.\n")
-
-    def validate_portainer_rbac_oracle(self) -> None:
-        entry = self.entry_by_id("verification.portainer")
-        implementation = shell_text(entry.get("runner", {}).get("implementation"))
-        content = reachable_verifier_source(REPO_ROOT, implementation)
-        required = {
-            "get clusterrole portainer-readonly",
-            "get clusterrolebinding portainer-readonly",
-            "get clusterrolebindings --output json",
-            "get rolebindings --all-namespaces --output json",
-            "system:serviceaccount:portainer:portainer-readonly",
-            "system:authenticated",
-            "system:serviceaccounts:portainer",
-            "system:service-account-issuer-discovery",
-            "Live portainer-readonly ClusterRole rules differ",
-            "Unexpected direct ClusterRoleBinding grants Portainer access",
-            "Unexpected direct RoleBinding grants Portainer access",
-            "Unsafe system:authenticated ClusterRole rules",
-            "Unsafe system:serviceaccounts ClusterRole rules",
-        }
-        if "--as" in content or not all(marker in content for marker in required):
-            fail("verification.portainer must prove exact live RBAC without impersonation.\n")
 
     def validate_duplicates(self) -> None:
         duplicate_ids = duplicates(

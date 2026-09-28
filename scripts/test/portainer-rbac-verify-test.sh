@@ -2,7 +2,10 @@
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+source scripts/lib/network.sh
 verifier="$repo_root/scripts/verify/portainer-rbac.sh"
+suite_verifier="$repo_root/$(yq -r '.suites[] | select(.metadata.id == "verification.portainer") | .runner.implementation' "$repo_root/tests/catalog.yaml")"
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/portainer-rbac-test.XXXXXX")"
 trap 'rm -rf -- "$fixture"' EXIT
 mkdir -p "$fixture/bin"
@@ -11,6 +14,27 @@ touch "$fixture/kubeconfig"
 cat >"$fixture/bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
+[[ -z "${FAKE_CALL_LOG:-}" ]] || printf 'kubectl %s\n' "$*" >>"$FAKE_CALL_LOG"
+[[ " $* " != *' --as'* ]] || {
+  echo 'Portainer verification must not impersonate another identity.' >&2
+  exit 64
+}
+case " $* " in
+  *' --namespace flux-system get kustomization portainer '*) printf True; exit 0 ;;
+  *' --namespace portainer get helmrelease portainer '*) printf True; exit 0 ;;
+  *' --namespace portainer rollout status deployment/portainer '*) exit 0 ;;
+  *' get deployment portainer '*'.spec.strategy.type'*) printf Recreate; exit 0 ;;
+  *' get deployment portainer '*'.spec.template.spec.serviceAccountName'*) printf portainer-readonly; exit 0 ;;
+  *' get deployment portainer '*AGENT_SECRET*) exit 0 ;;
+  *' get service portainer '*'.spec.type'*) printf ClusterIP; exit 0 ;;
+  *' get service portainer '*'.spec.ports'*) printf '9000\n'; exit 0 ;;
+  *' get persistentvolumeclaim portainer '*'.status.phase'*) printf Bound; exit 0 ;;
+  *' get persistentvolumeclaim portainer '*'.spec.storageClassName'*) printf longhorn; exit 0 ;;
+  *' get persistentvolumeclaim portainer '*helm\\.sh/resource-policy*) printf keep; exit 0 ;;
+  *' get ciliumnetworkpolicy portainer '*) printf ciliumnetworkpolicy/portainer; exit 0 ;;
+  *' get httproute portainer '*) printf True; exit 0 ;;
+esac
 
 resource=''
 name=''
@@ -25,6 +49,7 @@ done
 
 case "$resource:$name" in
   clusterrole:portainer-readonly)
+    [[ -z "${FAKE_CALL_LOG:-}" ]] || printf 'rbac-read\n' >>"$FAKE_CALL_LOG"
     role="$(yq ea -o=json -I=0 \
       'select(.kind == "ClusterRole" and .metadata.name == "portainer-readonly")' \
       "$FAKE_RBAC_SOURCE")"
@@ -43,6 +68,7 @@ case "$resource:$name" in
           '.rules |= map(to_entries | reverse | from_entries)' <<<"$role"
         ;;
       resourceNames | nonResourceURLs)
+        [[ -z "${FAKE_CALL_LOG:-}" ]] || printf 'rbac-drift\n' >>"$FAKE_CALL_LOG"
         FAKE_ROLE_DRIFT="$FAKE_ROLE_DRIFT" yq -o=json -I=0 \
           '.rules[0][env(FAKE_ROLE_DRIFT)] = []' <<<"$role"
         ;;
@@ -136,6 +162,28 @@ esac
 EOF
 chmod +x "$fixture/bin/kubectl"
 
+cat >"$fixture/bin/dig" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'dig\n' >>"$FAKE_CALL_LOG"
+printf '%s\n' "$FAKE_GATEWAY_IP"
+EOF
+cat >"$fixture/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'curl\n' >>"$FAKE_CALL_LOG"
+EOF
+cat >"$fixture/bin/just" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  'kube portainer-validate'|'kube portainer-policy-validate') ;;
+  *) echo "Unexpected just request: $*" >&2; exit 64 ;;
+esac
+printf 'just %s\n' "$*" >>"$FAKE_CALL_LOG"
+EOF
+chmod +x "$fixture/bin/dig" "$fixture/bin/curl" "$fixture/bin/just"
+
 PATH="$fixture/bin:$PATH" \
 FAKE_RBAC_SOURCE="$repo_root/kubernetes/apps/monitoring/portainer/app/rbac.yaml" \
 FAKE_RISKY=false \
@@ -191,5 +239,34 @@ if PATH="$fixture/bin:$PATH" \
 fi
 rg -q 'Unsafe system:serviceaccounts ClusterRole rules.*system:service-account-issuer-discovery' \
   "$fixture/unsafe-issuer.out"
+
+run_wrapper() {
+  local drift="$1"
+  PATH="$fixture/bin:$PATH" \
+    FAKE_RBAC_SOURCE="$repo_root/kubernetes/apps/monitoring/portainer/app/rbac.yaml" \
+    FAKE_RISKY=false FAKE_ROLE_DRIFT="$drift" \
+    FAKE_GATEWAY_IP="$HOMELAB_GATEWAY_VIP" FAKE_CALL_LOG="$fixture/wrapper-$drift.calls" \
+    "$suite_verifier" "$fixture/kubeconfig" >"$fixture/wrapper-$drift.out" 2>&1
+}
+
+# A complete success path prevents an unrelated later failure from satisfying
+# the negative case. RBAC drift must stop the wrapper at that API response.
+if ! run_wrapper none; then
+  cat "$fixture/wrapper-none.out" >&2
+  echo 'Portainer suite rejected the valid baseline.' >&2
+  exit 1
+fi
+rg -Fxq 'rbac-read' "$fixture/wrapper-none.calls"
+rg -Fxq 'just kube portainer-policy-validate' "$fixture/wrapper-none.calls"
+for drift in resourceNames nonResourceURLs; do
+  if run_wrapper "$drift"; then
+    echo "Portainer suite accepted $drift RBAC drift." >&2
+    exit 1
+  fi
+  [[ "$(tail -n 1 "$fixture/wrapper-$drift.calls")" == rbac-drift ]] || {
+    echo 'Portainer suite continued after RBAC failure.' >&2
+    exit 1
+  }
+done
 
 echo 'Portainer effective RBAC graph tests passed.'

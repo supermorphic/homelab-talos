@@ -95,6 +95,7 @@ contracts:
       - kubernetes/apps/security/openbao/app/helmrelease.yaml
       - kubernetes/apps/security/openbao/app/helmrepository.yaml
       - kubernetes/apps/security/openbao/app/kustomization.yaml
+      - kubernetes/apps/security/openbao/app/openbao-seal.sops.yaml
       - kubernetes/apps/security/openbao/app/pdb.yaml
       - kubernetes/apps/security/openbao/app/serviceaccount.yaml
       - kubernetes/apps/security/openbao/app/values.yaml

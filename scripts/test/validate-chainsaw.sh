@@ -275,6 +275,7 @@ fi
 if group_selected core; then
 	ruff_files=(
 		scripts/repository/github_protection.py scripts/test/catalog_compatibility.py
+		scripts/test/agent-access-kubectl-contract.py
 		scripts/test/catalog_validator.py scripts/test/allure_report.py
 		scripts/test/test_allure_report.py scripts/test/report_publish.py
 		scripts/test/test_report_publish.py scripts/test/junit_report.py

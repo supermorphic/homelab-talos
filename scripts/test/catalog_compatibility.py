@@ -1048,32 +1048,6 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
         "conditionally.\n",
     )
 
-    def agent_access_without_matrix(data: dict[str, Any]) -> None:
-        suite(data, "verification.agent-access")["runner"]["implementation"] = (
-            "scripts/verify/metrics-server.sh"
-        )
-
-    expect_rejection(
-        root,
-        canonical,
-        "agent-access-matrix-contract",
-        agent_access_without_matrix,
-        "verification.agent-access does not cover the required authorization matrix.\n",
-    )
-
-    def portainer_without_rbac_oracle(data: dict[str, Any]) -> None:
-        suite(data, "verification.portainer")["runner"]["implementation"] = (
-            "scripts/verify/metrics-server.sh"
-        )
-
-    expect_rejection(
-        root,
-        canonical,
-        "portainer-rbac-oracle",
-        portainer_without_rbac_oracle,
-        "verification.portainer must prove exact live RBAC without impersonation.\n",
-    )
-
     def campaign_rbac_drift(data: dict[str, Any]) -> None:
         data["campaigns"]["scoped-verification"]["access"]["required_read_rules"][
             "cilium.io"
