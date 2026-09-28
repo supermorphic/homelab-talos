@@ -19,7 +19,9 @@ class NotFound(ReadFailure):
 
 
 class AmbiguousWrite(SafeError):
-    pass
+    def __init__(self, code: str = 'ambiguous-write', *, http_status: int | None = None):
+        super().__init__(code)
+        self.http_status = http_status if type(http_status) is int and 300 <= http_status <= 599 else None
 
 
 class MalformedResponse(SafeError):
@@ -78,6 +80,8 @@ class BaoClient:
                 if response.geturl() != url:
                     raise ReadFailure('invalid-response')
                 if response.status < 200 or response.status >= 300:
+                    if method == 'POST':
+                        raise AmbiguousWrite('ambiguous-write', http_status=response.status)
                     raise ReadFailure('read-denied' if response.status == 403 else 'invalid-response')
                 length = response.headers.get('Content-Length')
                 if length is not None:
@@ -98,7 +102,7 @@ class BaoClient:
                     raise MalformedResponse('invalid-response') from None
         except urllib.error.HTTPError as error:
             if method == 'POST':
-                raise AmbiguousWrite('ambiguous-write') from None
+                raise AmbiguousWrite('ambiguous-write', http_status=error.code) from None
             if error.code == 404:
                 raise NotFound('invalid-response') from None
             raise ReadFailure('read-denied' if error.code == 403 else 'invalid-response') from None

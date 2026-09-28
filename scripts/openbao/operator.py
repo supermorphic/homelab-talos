@@ -19,7 +19,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import apply, bootstrap, guards
-from .client import BaoClient, NotFound
+from .client import AmbiguousWrite, BaoClient, NotFound
 from .configuration import SafeError, canonical_json
 
 HOST = "openbao.lab.supermorphic.com"
@@ -399,15 +399,14 @@ def main(argv):
         return 0 if result["status"] in {"pass", "prepared"} else 1
     except Exception:  # noqa: BLE001 -- Never render exceptions from credential-bearing operations.
         error = sys.exc_info()[1]
+        result = {
+            "status": "incomplete",
+            "classification": str(error) if isinstance(error, SafeError) else "invalid-response",
+        }
+        if isinstance(error, AmbiguousWrite) and error.http_status is not None:
+            result["http_status"] = error.http_status
         print(
-            json.dumps(
-                {
-                    "status": "incomplete",
-                    "classification": str(error)
-                    if isinstance(error, SafeError)
-                    else "invalid-response",
-                }
-            )
+            json.dumps(result)
         )
         return 1
     finally:
