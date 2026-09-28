@@ -112,7 +112,8 @@ The existing folder layout supplies broad ownership boundaries:
 - Repository-wide public-route and internal-DNS invariants remain in core. An unrelated
   application change must not bypass a global uniqueness check.
 - CI workflows, planner/reconciler code, catalog, shared harness libraries, and shared
-  foundational infrastructure select full.
+  foundational infrastructure select full. Owned test files and scenario documents can
+  select `ci-framework` with their other actual consumers.
 - Other known, non-shared application paths select core.
 
 The flat script and fixture trees need deliberate ownership, not assumptions based on
@@ -128,6 +129,31 @@ A rebase produces a fresh plan but does not automatically select full. An unrela
 change already validated on main does not make all candidate evidence affected.
 Relevant shared inputs broaden the selection, and every selected target still executes
 against the complete rebased tree.
+
+### Impact reassessment after validation cleanup
+
+The selector accepts `ci-framework` as a conditional group. The campaign documentation
+read by its framework test selects `core` and `ci-framework`. Chainsaw test documents
+select those groups for lint and catalog checks; the n8n smoke document also selects
+`automation` because its validation reads that file. The cluster and node `just` modules
+select `core`, which owns their command contract test. Shared bootstrap and repository
+modules, CI gate code, catalog inputs, and unknown paths still select full.
+
+These examples classify the complete file changes in recent merged commits against the
+previous and current maps. They show actual group reductions, including cases where other
+changed files retain an additional group.
+
+| Merged change | Previous groups | Current groups |
+| --- | --- | --- |
+| `#446` Portainer Chainsaw assertion (one file) | all four | `core`, `ci-framework` |
+| `#457` media playback fix and testing documentation | all four | `core`, `ci-framework` |
+| `#454` qbit_manage fixture and testing documentation | all four | `core`, `ci-framework` |
+| `#448` Flux alert delivery test and testing documentation | all four | `core`, `observability`, `ci-framework` |
+| `#445` shared campaign runner and fixture | all four | all four |
+
+The ownership fixture ties each reduced input to independently listed catalog or harness
+evidence. The planner tests also require unknown inputs to fall back to full, `core` to
+remain always selected, and full selection to remain the exact ordered group union.
 
 ## Harness decomposition and exact-once ownership
 
