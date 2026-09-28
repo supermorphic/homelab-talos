@@ -7,9 +7,12 @@ this file.
 
 This repository manages a three-node Talos Linux and Flux GitOps Kubernetes cluster.
 Git is the source of truth, and merged changes to `main` can affect the live environment.
-Before changing a subsystem, inspect its relevant README or runbook and relevant completed
-design specifications. This root file is the sole repository-policy surface; supporting
-documentation supplies procedure, not competing instructions. Use the current repository
+Before changing a subsystem, inspect its current source, relevant README or runbook, and
+current design specification where applicable. Expand to related callers, dependencies,
+and tests only as needed; do not load unrelated documentation by default.
+
+This root file is the sole repository-policy surface; supporting documentation supplies
+procedure, not competing instructions. Use the current repository
 state and current documentation as the implementation baseline. Repository policy and
 current source state take precedence over historical specifications, transient plans,
 prior conversation context, and assumptions.
@@ -141,7 +144,8 @@ solely to satisfy these style rules.
     change. Use short in-context reasoning/design, focused tests, and repository-required
     validation. No durable specification or formal implementation plan is required by
     default; use a transient plan only when sequencing adds value. Use one fresh final
-    review when substantive code changes warrant it.
+    review when substantive changes to behavior, configuration, or repository policy
+    warrant it.
   - **Architectural change:** a new platform or service, security or credential boundary,
     cross-component interface, migration/recovery architecture, or substantial operational
     lifecycle. Use explicit brainstorming/design, a durable specification when the design
