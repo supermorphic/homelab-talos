@@ -284,7 +284,7 @@ class SourceTests(unittest.TestCase):
                          ("manager", "/metrics", "http"))
         self.assertNotIn("metricRelabelings", endpoint)
 
-    def test_activation_and_audit_are_safe_to_stage(self):
+    def test_active_gatus_and_audit_source(self):
         from scripts.openbao.apply import AUDIT
         gatus = yaml.safe_load(Path(
             "kubernetes/apps/monitoring/gatus/app/openbao-activation.values.yaml").read_text())
@@ -293,12 +293,14 @@ class SourceTests(unittest.TestCase):
         self.assertIn("standbyok=true", endpoint["url"])
         self.assertIn("[BODY].initialized == true", endpoint["conditions"])
         self.assertIn("[BODY].sealed == false", endpoint["conditions"])
-        self.assertFalse(any(item["name"] == "openbao" for item in active["config"]["endpoints"]))
+        self.assertEqual([item for item in active["config"]["endpoints"] if item["name"] == "openbao"],
+                         [endpoint])
         self.assertEqual(AUDIT["options"]["log_raw"], "false")
         self.assertEqual(AUDIT["options"]["hmac_accessor"], "true")
         ks = list(yaml.safe_load_all((self.base / "ks.yaml").read_text()))
         self.assertEqual({item["metadata"]["name"] for item in ks if not item["spec"]["suspend"]},
-                         {"openbao-prerequisites", "openbao", "openbao-acceptance", "openbao-backup"})
+                         {"openbao-prerequisites", "openbao", "openbao-acceptance", "openbao-backup",
+                          "openbao-access", "openbao-monitoring"})
         backup = next(item for item in ks if item["metadata"]["name"] == "openbao-backup")
         self.assertTrue(backup["spec"]["prune"])
         self.assertEqual(self.doc("backup/pvc.yaml")["metadata"]["annotations"],

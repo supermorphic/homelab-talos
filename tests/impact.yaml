@@ -101,6 +101,7 @@ conditional_paths:
     - scripts/test/alertmanager-ntfy-verify-test.sh
     - scripts/test/ntfy-publish-test.sh
     - scripts/test/gatus-validator-test.sh
+    - scripts/test/gatus-verifier-test.sh
     - scripts/test/monitoring-alerts-validator-test.sh
     - scripts/test/ntfy-identity-test.sh
     - scripts/test/ntfy-consumer-sync-test.sh

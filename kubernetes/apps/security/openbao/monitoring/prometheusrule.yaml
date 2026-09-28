@@ -14,6 +14,15 @@ spec:
           for: 10m
           labels: {severity: critical}
           annotations: {summary: OpenBao metrics are missing}
+        - alert: OpenBaoPrivateRouteUnavailable
+          expr: >-
+            absent(gatus_results_endpoint_success{group="Platform",name="openbao"})
+            or (gatus_results_endpoint_success{group="Platform",name="openbao"} == 0)
+            or absent(gatus_results_total{group="Platform",name="openbao"})
+            or (sum by (group,name) (increase(gatus_results_total{group="Platform",name="openbao"}[5m])) == 0)
+          for: 5m
+          labels: {severity: critical}
+          annotations: {summary: OpenBao private route probe is unavailable}
         - alert: OpenBaoNoLeader
           expr: sum(vault_core_active{namespace="openbao"}) != 1
           for: 5m

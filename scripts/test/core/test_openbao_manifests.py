@@ -31,7 +31,7 @@ class OpenBaoManifestTests(unittest.TestCase):
         server = {"openbao-prerequisites", "openbao"}
         assurance = server | {"openbao-acceptance", "openbao-backup"}
         all_units = {unit["metadata"]["name"] for unit in units}
-        self.assertEqual({u["metadata"]["name"] for u in units if not u["spec"]["suspend"]}, assurance)
+        self.assertEqual({u["metadata"]["name"] for u in units if not u["spec"]["suspend"]}, all_units)
         for allowed in (set(), server, assurance, all_units):
             staged = copy.deepcopy(units)
             for unit in staged:

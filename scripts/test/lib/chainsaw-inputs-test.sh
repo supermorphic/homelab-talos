@@ -262,8 +262,8 @@ if rg -q 'chainsaw-test\.ya?ml' "$yq_log"; then
 	echo 'Chainsaw test documents were reparsed with yq.' >&2
 	exit 1
 fi
-[[ "$(wc -l <"$shell_case_log" | tr -d ' ')" -eq 67 ]]
-rg -Fx 'Harness shell cases passed: cases=67 parallel_jobs=4.' "$passing_output" || {
+[[ "$(wc -l <"$shell_case_log" | tr -d ' ')" -eq 68 ]]
+rg -Fx 'Harness shell cases passed: cases=68 parallel_jobs=4.' "$passing_output" || {
 	cat "$passing_output" >&2
 	exit 1
 }
@@ -275,7 +275,8 @@ for expected_case in \
 	scripts/test/run-native-junit-validator-test.sh \
 	scripts/test/n8n-failure-notifications-test.sh \
 	scripts/test/monitoring-flux-exporter-test.sh \
-	scripts/test/monitoring-verify-test.sh; do
+	scripts/test/monitoring-verify-test.sh \
+	scripts/test/gatus-verifier-test.sh; do
 	invocation_count=0
 	while IFS= read -r invoked_case; do
 		[[ "$invoked_case" == "$expected_case" ]] && invocation_count=$((invocation_count + 1))
