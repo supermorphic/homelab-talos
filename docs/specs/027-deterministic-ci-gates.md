@@ -280,43 +280,46 @@ as the authoritative merge evidence. Local `ci-publish` remains available to rep
 hosted selection and failures or to validate CI changes when useful. This policy was
 already introduced in [PR 463](https://github.com/supermorphic/homelab-talos/pull/463).
 
-On 2026-09-28, four recent successful four-group PR runs
-([469](https://github.com/supermorphic/homelab-talos/actions/runs/36459264466),
-[466](https://github.com/supermorphic/homelab-talos/actions/runs/36456146034),
-[470](https://github.com/supermorphic/homelab-talos/actions/runs/36462000300), and
-[471](https://github.com/supermorphic/homelab-talos/actions/runs/36462329861)) had a
-median 288 seconds from workflow creation to completion (range 242–308) and a median
-757 seconds of summed job time (range 680–793). Three successful core-only runs
-([463](https://github.com/supermorphic/homelab-talos/actions/runs/36449194507),
-[464](https://github.com/supermorphic/homelab-talos/actions/runs/36443604893), and
-[465](https://github.com/supermorphic/homelab-talos/actions/runs/36447595868)) had a
-median 220 seconds of workflow time (range 187–229). The samples span changing
-revisions and runner conditions; they are observations, not a controlled latency target.
+The [assessment in PR 472](https://github.com/supermorphic/homelab-talos/pull/472)
+retains the 2026-09-28 measurements, source identities, method, and rebase example.
+A local full-group run took 12m34s; the hosted run on the same source tree took 4m40s.
+Their sum, about 17m14s, is an illustrative serial validation budget, not an observed
+implementation-to-merge time. It excludes focused checks, commits, review, and rebases.
+The local run explicitly requested all groups with base equal to head after merge;
+it does not measure typical selective PR savings. Cache state and host load were not
+controlled. All local groups passed, but a base advance prevented a publication receipt.
 
-One local `ci-publish-full` run on the same source tree as PR 471 took 753.85 seconds
-on a pinned, cached toolchain. All four groups passed (153, 118, 262, and 208 seconds
-respectively). `origin/main` advanced before the final freshness check, so the command
-correctly produced no passing publication receipt. The local and hosted runs used
-different commits, bases, and machines; their timing comparison estimates the cost of
-duplicate work rather than proving equal performance. If local publication had been
-mandatory for this update, its 12m34s wall time would have preceded hosted validation,
-putting about 17m14s of measured validation on the serial path before any rebase. The
-base advance would have required a rebase and another local cycle.
+For the comparison below, local publication means the planner-selected groups;
+it need not select every group. Focused checks and commit-time hooks precede every push.
 
-The alternatives have these operational tradeoffs:
+| Consideration | Mandatory local plus hosted | Focused local plus hosted (selected) | Mandatory local for selected shared changes |
+| --- | --- | --- | --- |
+| Validation time before merge | Focused checks + local publication + hosted run | Focused checks + hosted run | Adds local publication only when the trigger applies |
+| Duplicate execution | Selected groups run locally and on GitHub | Focused checks may overlap hosted work; no required complete local cycle | Triggered changes repeat their selected groups |
+| Feedback and broken PRs | More failures can be caught before push | Failures outside focused coverage first appear in hosted CI | Earlier broad feedback for triggered changes; other changes depend on focused checks |
+| Rebase cost | Rerun affected focused checks, local publication, and hosted validation | Rerun affected focused checks and hosted validation | Recompute the trigger; repeat local publication if required, plus fresh hosted validation |
+| Operational complexity | One mandatory local path using the shared planner | Requires choosing relevant focused checks | Could reuse the planner's full-selection result, but adds a mandatory trigger decision before push |
 
-| Model | Feedback, duplication, and merge path |
-| --- | --- |
-| Mandatory local plus hosted | Finds full-suite failures before push and permits local diagnosis during a GitHub Actions outage, but repeats selected groups before every PR update. A base advance can invalidate the entire local cycle; hosted validation is still required. |
-| Focused local plus hosted (selected) | Focused checks and hooks catch known failures before push. GitHub plans and runs the exact candidate and required base; an Actions outage blocks merge. The local reproduction commands remain available without adding a second required cycle. |
-| Mandatory local only for selected shared changes | Reduces routine duplication but adds a second risk classification and still repeats full validation for selected changes. It does not improve the required hosted gate or remove rebase races. |
+All three models require the same exact candidate/base binding and strict GitHub
+Actions `merge-gate`. An Actions outage blocks merge in every model; local diagnosis
+can continue. Each edited or rebased candidate needs fresh hosted evidence, and no
+local result can replace it. `mise exec -- just test ci-publish` reproduces hosted
+selection against current main; `mise exec -- just test ci-publish-full` and
+`mise exec -- just ci` retain full local validation. Reproducing an older revision does
+not make its result evidence for the current PR.
 
-No fourth execution model has a measured advantage that justifies added machinery.
+The selected model removes a measured source of duplicate work while preserving the
+required merge evidence. The sample does not establish failure-detection rates or
+whether more broken PRs reach GitHub under focused local checks. That remains a
+tradeoff: focused checks and hooks reduce obvious failures, while hosted CI provides
+the complete selected validation before merge. There is no measured detection benefit
+in this assessment that justifies making local publication mandatory for shared changes;
+it remains available when useful. No additional execution model is proposed.
 
-The required GitHub Actions `merge-gate` and strict up-to-date protection remain in
-force. Each edited or rebased candidate needs fresh hosted evidence; a stale or passing
-local result cannot authorize merge. No CI workflow or branch-protection change is
-needed for this decision.
+`AGENTS.md` and the contributor guide already specify this model. The workflow checks
+out the exact head, the planner requires base ancestry, and reconciliation checks
+plan/base/head identities and required provider outcomes. Protection readback confirmed
+strict GitHub Actions `merge-gate`; this decision needs no enforcement change.
 
 ### Evidence requirements
 

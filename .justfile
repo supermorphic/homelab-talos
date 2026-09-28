@@ -28,8 +28,8 @@ mod test "tests"
 # `just test ci-publish` optionally reproduces GitHub's selected PR groups from a clean
 # committed feature branch. CI requires the mise toolchain and network egress (Helm
 # pulls public charts), but NO kubeconfig, SOPS age key, or cluster access.
-# Cluster-dependent checks (*-verify, *-status,
-# bootstrap, pihole-status) are intentionally excluded. AGENTS.md defines their
+# Cluster-dependent checks (*-verify, *-status, bootstrap, pihole-status) are
+# intentionally excluded. AGENTS.md defines their
 # authority boundaries, including approved scoped agent verification.
 [group("CI")]
 ci:
