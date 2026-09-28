@@ -1,0 +1,121 @@
+global:
+  tlsDisable: false
+injector:
+  enabled: false
+csi:
+  enabled: false
+snapshotAgent:
+  enabled: false
+server:
+  image:
+    registry: quay.io
+    repository: openbao/openbao
+    tag: "2.7.0@sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315"
+  updateStrategyType: OnDelete
+  podManagementPolicy: Parallel
+  authDelegator:
+    enabled: false
+  serviceAccount:
+    create: false
+    name: openbao
+    createSecret: false
+    serviceDiscovery:
+      enabled: false
+  statefulSet:
+    securityContext:
+      pod:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      container:
+        allowPrivilegeEscalation: false
+        capabilities: {drop: [ALL]}
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  dataStorage:
+    enabled: true
+    size: 10Gi
+    storageClass: longhorn
+    accessMode: ReadWriteOnce
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  service:
+    active: {enabled: false}
+    standby: {enabled: false}
+    publishNotReadyAddresses: false
+  extraPorts:
+    - {containerPort: 8203, name: monitoring}
+  volumes:
+    - name: openbao-tls
+      secret: {secretName: openbao-tls}
+    - name: openbao-seal
+      secret: {secretName: openbao-seal, defaultMode: 0440}
+    - name: kubernetes-api-token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 600
+          - configMap:
+              name: kube-root-ca.crt
+              items:
+                - {key: ca.crt, path: ca.crt}
+  volumeMounts:
+    - {name: openbao-tls, mountPath: /openbao/tls, readOnly: true}
+    - {name: openbao-seal, mountPath: /openbao/seal, readOnly: true}
+    - {name: kubernetes-api-token, mountPath: /var/run/secrets/kubernetes.io/serviceaccount, readOnly: true}
+  ha:
+    enabled: true
+    replicas: 3
+    disruptionBudget: {enabled: false}
+    raft:
+      enabled: true
+      setNodeId: true
+      config: |
+        ui = true
+        disable_mlock = true
+        api_addr = "https://$(POD_IP):8200"
+        cluster_addr = "https://$(POD_IP):8201"
+        listener "tcp" {
+          address = "[::]:8200"
+          cluster_address = "[::]:8201"
+          tls_cert_file = "/openbao/tls/tls.crt"
+          tls_key_file = "/openbao/tls/tls.key"
+          tls_auto_reload = true
+        }
+        listener "tcp" {
+          address = "[::]:8203"
+          tls_cert_file = "/openbao/tls/tls.crt"
+          tls_key_file = "/openbao/tls/tls.key"
+          tls_auto_reload = true
+          telemetry {
+            unauthenticated_metrics_access = "true"
+          }
+        }
+        telemetry {
+          prometheus_retention_time = "30s"
+          disable_hostname = true
+        }
+        seal "static" {
+          current_key_id = "openbao-static-seal-v1"
+          current_key = "file:///openbao/seal/key"
+        }
+        storage "raft" {
+          path = "/openbao/data"
+          retry_join {
+            leader_api_addr = "https://openbao-0.openbao-internal.openbao.svc:8200"
+            leader_tls_servername = "openbao.lab.supermorphic.com"
+          }
+          retry_join {
+            leader_api_addr = "https://openbao-1.openbao-internal.openbao.svc:8200"
+            leader_tls_servername = "openbao.lab.supermorphic.com"
+          }
+          retry_join {
+            leader_api_addr = "https://openbao-2.openbao-internal.openbao.svc:8200"
+            leader_tls_servername = "openbao.lab.supermorphic.com"
+          }
+        }

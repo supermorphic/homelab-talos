@@ -285,11 +285,8 @@ Cilium policy limits traffic by workload role:
   and
 - SQL Exporter can reach PostgreSQL and accepts metrics scrapes only from Prometheus.
 
-The temporary restore drill adds run-owned policy only for its lifetime. Its isolated
-n8n and database-helper pods receive the minimum DNS and PostgreSQL paths. A separate
-policy in `gatus` selects only the run-labeled request Job and permits only DNS and the
-run-owned n8n endpoint on TCP/5678. Cleanup must remove and prove absence of both exact
-policies.
+The guarded restore drill uses isolated, temporary network policy and proves its
+removal. The test implementation owns the exact resource topology and checks.
 
 Inbound webhooks do not themselves require n8n to pull data from the provider.
 Outbound HTTPS remains part of the initial platform because later workflows must call
@@ -322,30 +319,11 @@ contains portable logical dumps and is also copied off-cluster by Longhorn's NAS
 ### Logical backup
 
 A daily CronJob runs at 01:00 UTC, before the existing Longhorn snapshot and NAS backup
-windows. It uses `concurrencyPolicy: Forbid`, a bounded execution deadline, and a short
-retained Job history. One successful run performs these steps in order:
-
-1. Write a compressed custom-format `pg_dump` archive to a temporary filename on the
-   backup claim.
-2. Read and expand the archive through `pg_restore` without applying it to a database.
-3. Calculate a SHA-256 checksum and write it to a temporary sidecar file.
-4. Rename the archive and checksum sidecar to their final timestamped filenames on the
-   same filesystem.
-5. Recheck the final archive against its checksum and update an operational status row
-   with its timestamp, filename, and checksum.
-6. Remove archive-and-checksum pairs older than the newest seven successful artifacts and
-   remove incomplete temporary or unpaired artifacts.
-
-The status row is not updated when dump creation, archive reading, checksum calculation,
-rename, or final inspection fails. Kubernetes Job success is useful diagnostic evidence,
-but it is not the backup-freshness oracle.
-
-Only a final archive with its matching checksum sidecar is a successful artifact. The
-accepted artifact check proves that the complete archive is readable and internally
-processable, and the sidecar permits verification when the source database is no longer
-available. A documented temporary-database restore drill supplies the stronger end-to-end
-recovery test and must be completed during initial acceptance and after material backup
-changes.
+windows. It retains the newest seven complete logical archives with matching checksums.
+The backup freshness timestamp advances only after an archive has been validated and
+finalized. Job success alone is not evidence of a usable backup. The guarded restore
+drill provides stronger recovery evidence during initial acceptance and after material
+backup changes. Artifact validation and restore mechanics live in the scripts and tests.
 
 ### Encryption key and Secrets
 
@@ -376,30 +354,21 @@ cluster as backup payload.
 The recovery unit is deliberately distributed: the dated logical archive is retained on
 the backup claim and its Longhorn NAS backup, while the unchanged SOPS-encrypted key
 manifest is retained in the remote Git history. Repository validation confirms that the
-encrypted manifest remains present. Restore documentation identifies both artifacts and
-does not describe the dump alone as a complete n8n backup. The backup job never reads or
-copies the plaintext encryption key into a dump, checksum file, log, or metrics series.
+encrypted manifest remains present. The platform runbook identifies both recovery roots;
+the logical dump alone is not a complete n8n backup. The backup job never reads or copies
+the plaintext encryption key into a dump, checksum file, log, or metrics series.
 
 Changing only `N8N_ENCRYPTION_KEY` makes existing credential ciphertext unreadable. Key
 rotation is a separate controlled operation using n8n's supported rotation procedure; it
 is not a normal Secret refresh.
 
-### Restore objective and procedure
+### Recovery objective
 
 The off-cluster recovery-point objective is 24 hours. There is no fixed recovery-time
-objective because database restore and validation are manual. The implementation adds a
-runbook that, at minimum, covers:
-
-1. selecting and checksum-validating a logical artifact;
-2. preserving the current database volume before destructive recovery;
-3. restoring first into a temporary empty database;
-4. validating n8n schema access and the synthetic workflow;
-5. restoring or retaining the matching SOPS-encrypted `N8N_ENCRYPTION_KEY`;
-6. cutting n8n over only after validation; and
-7. confirming a new successful dump and freshness metric after recovery.
-
-The runbook must distinguish routine pod rescheduling, Longhorn volume recovery, logical
-database restore, and full service reconstruction.
+objective because database restore and validation are manual. The operations guide
+distinguishes pod rescheduling, storage recovery, and logical restore; the platform
+runbook covers the recovery roots and operator authorization. Guarded scripts and tests
+own artifact selection, isolated restore, credential proof, and cleanup behavior.
 
 ## Workflow and data ownership
 
@@ -724,11 +693,9 @@ Combined read-only and attended live acceptance verifies:
    and required filesystem state.
 6. A logical backup creates a validated final artifact and advances the Prometheus
    freshness timestamp.
-7. The documented procedure restores that artifact into a temporary database, identifies
-   the exact active Platform Canary workflow and its exact bound Header Auth credential
-   from non-secret metadata, rejects an unauthenticated request, and accepts a structurally
-   exact authenticated response. This proves that the unchanged encryption key permits
-   n8n to read restored credential ciphertext.
+7. The guarded restore drill proves that a retained logical backup and stable encryption
+   key restore n8n's ability to use the existing canary credential. The scenario test owns
+   the detailed authentication and cleanup assertions.
 8. Prometheus scrapes n8n and SQL Exporter, the new rules evaluate without errors, and the
    Grafana dashboard shows data for both services.
 9. An off-network client reaches the authenticated public webhook while public editor,
@@ -798,7 +765,8 @@ operator, larger claims, more frequent off-cluster backups, or Authentik integra
 They do not require those components in advance.
 
 Before merge, reconcile this specification with the implemented chart and image versions,
-actual configuration fields, rendered resources, runbook, and validated cluster result.
+actual configuration fields, rendered resources, operations guide, platform recovery
+boundary, and validated cluster result.
 
 ## External references
 

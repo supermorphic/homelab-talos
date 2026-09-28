@@ -126,6 +126,9 @@ def main() -> int:
         if args.command == "repository-shell":
             return repository_shell_report(args.output, args.suite, args.result)
         if args.command == "unittest":
+            # This CLI is launched as scripts/test/junit_tools.py, which otherwise
+            # puts scripts/test rather than the repository root on sys.path.
+            sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
             return unittest_report(
                 args.output,
                 args.suite,

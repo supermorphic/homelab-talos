@@ -95,7 +95,7 @@ read_rules := [{
 	resources := read_requirements[api_group]
 ]
 
-valid_fixture := [
+valid_fixture_base := [
 	service_account("homelab-observer"),
 	service_account("homelab-diagnostic"),
 	service_account("homelab-report-publisher"),
@@ -113,16 +113,8 @@ valid_fixture := [
 		["homelab-observer", "homelab-diagnostic"],
 		"homelab-observer-extra",
 	),
-	cluster_role("homelab-diagnostic-extra", [{
-		"apiGroups": [""],
-		"resources": ["pods/exec", "pods/portforward"],
-		"verbs": ["create"],
-	}]),
-	cluster_role_binding(
-		"homelab-diagnostic-extra",
-		["homelab-diagnostic"],
-		"homelab-diagnostic-extra",
-	),
+	cluster_role("homelab-diagnostic-exec", [{"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["create"]}]),
+	cluster_role("homelab-diagnostic-portforward", [{"apiGroups": [""], "resources": ["pods/portforward"], "verbs": ["create"]}]),
 	role("homelab-report-publisher-test-reports", "test-reports", [
 		{
 			"apiGroups": ["apps"],
@@ -163,6 +155,22 @@ valid_fixture := [
 	),
 	lease("homelab-test-report-publish-lock", "flux-system"),
 ]
+
+diagnostic_test_namespaces := {
+	"exec": ["kube-system", "media", "homepage", "ntfy", "automation"],
+	"portforward": ["kube-system", "media", "monitoring"],
+}
+
+diagnostic_test_bindings := [object.union(
+	cluster_role_binding(name, ["homelab-diagnostic"], name),
+	{"kind": "RoleBinding", "metadata": {"name": name, "namespace": namespace}},
+) |
+	some capability, namespaces in diagnostic_test_namespaces
+	some namespace in namespaces
+	name := concat("", ["homelab-diagnostic-", capability])
+]
+
+valid_fixture := array.concat(valid_fixture_base, diagnostic_test_bindings)
 
 combined_fixture := [{
 	"path": "kubernetes/apps/kube-system/agent-access/app/rbac.yaml",
@@ -398,7 +406,7 @@ test_observer_requires_longhorn_evidence_reads if {
 }
 
 test_diagnostic_cannot_patch_flux if {
-	messages := deny with input as fixture_with_rule("homelab-diagnostic-extra", ["kustomize.toolkit.fluxcd.io"], ["kustomizations"], ["patch"])
+	messages := deny with input as fixture_with_rule("homelab-diagnostic-exec", ["kustomize.toolkit.fluxcd.io"], ["kustomizations"], ["patch"])
 	count(messages) == 1
 }
 
@@ -416,4 +424,21 @@ test_expected_role_cannot_use_aggregation if {
 	}])
 	messages := deny with input as fixture_input
 	count(messages_matching(messages, "must not use aggregationRule")) == 1
+}
+
+test_diagnostic_cannot_be_cluster_wide if {
+	bad := cluster_role_binding("homelab-diagnostic-exec", ["homelab-diagnostic"], "homelab-diagnostic-exec")
+	messages := deny with input as array.concat(valid_fixture, [bad])
+	count(messages) > 0
+}
+
+test_diagnostic_cannot_exec_openbao if {
+	bad := object.union(diagnostic_test_bindings[0], {"metadata": {"name": "homelab-diagnostic-exec", "namespace": "openbao"}, "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "homelab-diagnostic-exec"}})
+	messages := deny with input as array.concat(valid_fixture, [bad])
+	count(messages) > 0
+}
+
+test_diagnostic_must_have_all_required_bindings if {
+	messages := deny with input as valid_fixture_base
+	count(messages) > 0
 }

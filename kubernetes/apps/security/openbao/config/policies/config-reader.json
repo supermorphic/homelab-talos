@@ -1,0 +1,23 @@
+{
+  "path": {
+    "sys/auth": {"capabilities": ["read"]},
+    "sys/mounts": {"capabilities": ["read"]},
+    "sys/storage/raft/configuration": {"capabilities": ["read"]},
+    "sys/policies/acl": {"capabilities": ["list"]},
+    "sys/policies/acl/openbao-operator": {"capabilities": ["read"]},
+    "sys/policies/acl/openbao-backup": {"capabilities": ["read"]},
+    "sys/policies/acl/openbao-acceptance": {"capabilities": ["read"]},
+    "sys/policies/acl/openbao-config-reader": {"capabilities": ["read"]},
+    "auth/homelab-jwt/config": {"capabilities": ["read"]},
+    "auth/homelab-jwt/role": {"capabilities": ["list"]},
+    "auth/homelab-jwt/role/openbao-backup": {"capabilities": ["read"]},
+    "auth/homelab-jwt/role/openbao-acceptance": {"capabilities": ["read"]},
+    "auth/homelab-jwt/role/openbao-config-reader": {"capabilities": ["read"]},
+    "auth/homelab-userpass/users": {"capabilities": ["list"]},
+    "auth/homelab-userpass/users/openbao-operator": {"capabilities": ["read"]},
+    "kubernetes/config": {"capabilities": ["read"]},
+    "kubernetes/roles": {"capabilities": ["list"]},
+    "kubernetes/roles/openbao-acceptance": {"capabilities": ["read"]},
+    "auth/token/revoke-self": {"capabilities": ["update"]}
+  }
+}

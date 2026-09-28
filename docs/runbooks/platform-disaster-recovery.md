@@ -411,24 +411,56 @@ Use [Media automation setup](../guides/media-automation-setup.md) as a greenfiel
 only when no trusted configuration backup exists. Do not replace a recoverable stateful
 application with empty first-run state merely because greenfield setup is documented.
 
-### n8n and automation-data state
+### n8n / automation-data recovery
 
-Recover n8n and the automation-data PostgreSQL platform as one credential recovery unit.
-The n8n database contains encrypted client credentials. The automation-data globals dump
-contains the matching PostgreSQL role password verifiers, and each database dump contains
-its local schema, ownership, ACLs, grants, and data. The operator-held
-`N8N_ENCRYPTION_KEY`, SOPS age private key, and off-cluster backup access are required
-recovery roots.
+Recover n8n and automation-data as one credential recovery unit.
 
-Follow [Recover n8n](n8n-recovery.md) and
-[Recover automation-data PostgreSQL](automation-data-recovery.md). Keep both restored
-services private. Restore n8n with its retained encryption key, restore automation-data
-globals before all captured databases, then run the attended full-chain drill. Require a
-restored n8n runtime credential to authenticate against the restored role verifier and a
-fresh post-recovery automation-data bundle before normal workflow traffic resumes.
+Human-held recovery roots:
 
-This recovery capability is not established until Issue 317 is deployed and that drill
-passes. Backup files by themselves are not full-chain recovery evidence.
+- SOPS age identity
+- off-cluster backup access
+- `N8N_ENCRYPTION_KEY`
+
+The PostgreSQL logical backup and its matching, stable `N8N_ENCRYPTION_KEY` are one
+recovery unit. The `n8n-data` claim holds filesystem and binary state that the logical
+PostgreSQL dump does not cover; recover it from its storage backup when that state is lost.
+
+Use the repository's guarded automation-data restore workflow. Recovery must prove
+that the restored n8n runtime credential authenticates against the restored
+automation-data PostgreSQL role verifier.
+
+Do not attempt to reconstruct generated domain plaintext passwords.
+
+Production claim replacement or other destructive recovery requires explicit
+operator authorization.
+
+### NocoDB metadata recovery
+
+NocoDB is an optional layer. Recover it only after automation-data PostgreSQL is
+healthy. Keep the SOPS age identity, the exact retained `NC_CONNECTION_ENCRYPT_KEY`,
+and complete automation-data logical backups available as recovery roots. NocoDB
+application-local storage is disposable; PostgreSQL holds its durable metadata.
+
+If the matching connection-encryption key is lost, stop ordinary recovery and prepare
+a separately reviewed recovery design. A restored database cannot decrypt its saved
+source credentials without that key.
+
+### OpenBao credential broker state
+
+Recover OpenBao only after Talos/Kubernetes, Cilium, Flux/SOPS, and Longhorn are
+healthy. Keep the SOPS age identity, OpenBao recovery and operator material, and
+backup access independently available. Their retrieval must never depend on a
+credential issued by OpenBao.
+
+Select a Raft snapshot and its **matching static seal-key generation**. Recovery
+shares and operator credentials cannot substitute for that seal key. Preserve each
+seal-key generation while its snapshots remain retained. Follow the guarded
+[restore assurance workflow](../guides/openbao-operations.md#isolated-restore-assurance),
+then verify OpenBao and restricted issuance before resuming credential consumers.
+
+Production PVC or Raft replacement and force restore require a separately reviewed,
+explicitly operator-authorized recovery plan. The isolated drill proves backup
+recoverability without changing production state.
 
 ## Verify the recovered platform
 

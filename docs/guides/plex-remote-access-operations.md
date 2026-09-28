@@ -328,6 +328,67 @@ Do not remove workload hardening, the read-only media mount, bounded egress, det
 or Relay fallback merely because public exposure is disabled. Durable Kubernetes changes
 still go through reviewed Git.
 
+## Relay fallback / troubleshooting
+
+Use Relay when the direct path is unavailable or its UniFi DNAT is intentionally
+disabled. First require normal local Plex browse and playback and a healthy
+`mise exec -- just kube plex-verify` result. Confirm **Enable Relay** is on,
+**Secure connections** is **Preferred** or **Required**, and the affected off-site
+client is signed in with library access. Leave Plex's Remote Access feature enabled
+even when the direct DNAT is removed.
+
+While that client attempts to browse, run:
+
+```bash
+mise exec -- just kube plex-relay-status
+```
+
+| Observed state | Investigate |
+| --- | --- |
+| Relay never starts | Plex account, client discovery, Remote Access and Relay settings, and library authorization |
+| Relay starts but cannot authenticate | Plex runtime identity and retained configuration; preserve its native Relay cache |
+| Relay authenticates but allocates no port | Ordinary outbound HTTPS and Plex Relay service availability |
+| Relay allocates a port but the client cannot browse | Client support, account access, and discovery |
+| Client browses but playback fails | Relay bandwidth, transcoding capacity, media, and client capability |
+
+An allocated port alone is not client acceptance. Require the actual off-site client
+to browse and play, confirm Plex or client activity identifies Relay or indirect use,
+and recheck local playback. For an intentional Relay-only test, temporarily remove
+direct DNAT through [Disable or roll back exposure](#disable-or-roll-back-exposure),
+then restore direct access through [Create or restore the direct path](#create-or-restore-the-direct-path).
+
+Relay is a limited fallback. Plex currently limits streams to 2 Mbps, and client
+support is incomplete; see [Plex's Relay guidance](https://support.plex.tv/articles/216766168-accessing-a-server-through-relay/).
+Do not add another inbound listener or port, enable UPnP/NAT-PMP, inject or replace
+raw Relay credentials, or widen Cilium or router policy to make Relay work.
+
+## Sonos / Plexamp troubleshooting
+
+First require healthy `mise exec -- just kube plex-verify` output and normal
+authenticated local Plex browse and playback. Then distinguish the two paths:
+
+| Failure | Check |
+| --- | --- |
+| The Plex service in the native Sonos app cannot browse or play | Confirm that Sonos is authorized to the intended Plex account and library. Confirm the Sonos network reaches the current Plex LoadBalancer on TCP `32400`, that discovery uses its private LoadBalancer-derived `plex.direct` address rather than the internal Envoy hostname, and that Pi-hole permits the private `plex.direct` answer. Test browse before playback. |
+| Native Sonos works, but Plexamp cannot find or control the player | Confirm Plex Pass, a full Plex account, the intended Sonos account link, and Plexamp sign-in to that account. Initial linking requires a supported Plex app on the Sonos network. |
+
+To restore the account link, temporarily put a supported Plex client on the Sonos
+network. Use its player menu to complete Sonos authorization with the intended full
+Plex account. Confirm the player appears there, return the client to its normal
+network, and verify Plexamp still lists and controls the player. Remove any temporary
+Sonos-network SSID created for this step. Plex documents the
+[same-network linking requirement](https://support.plex.tv/articles/control-sonos-playback-with-a-plex-app/).
+
+If linking works on the Sonos network but cross-VLAN control fails, use the bounded
+`mise exec -- just kube plex-network-observe 600` diagnostic privately. Require an
+exact missing flow before proposing a reviewed policy change. Do not add broad
+inter-VLAN access or multicast reflection, open SSDP/UPnP, or add an unauthenticated
+Plex network as a workaround.
+
+Finish with native Sonos library browse and playback, Plexamp listing and controlling
+the intended player, and native Sonos playback rather than AirPlay when that is the
+test objective. Platform health alone does not prove either application path.
+
 ## Recovery readiness
 
 Before changing production exposure, confirm scheduled Plex database backups and the
@@ -346,6 +407,6 @@ entries.
 Review the production design after a material change to the gateway mapping, public DNS,
 address families, Plex network or account settings, Service listener, Cilium policy,
 notification route, or recovery design. When direct access is unavailable, use
-[Recover Plex remote playback with Relay](../runbooks/plex-relay-fallback.md). For native
+[Relay fallback / troubleshooting](#relay-fallback--troubleshooting). For native
 Sonos or Plexamp failures, use
-[Recover Plex and Plexamp Sonos playback](../runbooks/plex-sonos-recovery.md).
+[Sonos / Plexamp troubleshooting](#sonos--plexamp-troubleshooting).

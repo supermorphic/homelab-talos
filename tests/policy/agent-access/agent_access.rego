@@ -2,7 +2,13 @@ package homelab.agent_access
 
 import rego.v1
 
-agent_role_names := {"homelab-observer-extra", "homelab-diagnostic-extra"}
+diagnostic_namespaces := {
+	"homelab-diagnostic-exec": {"kube-system", "media", "homepage", "ntfy", "automation"},
+	"homelab-diagnostic-portforward": {"kube-system", "media", "monitoring"},
+}
+
+diagnostic_role_names := {name | some name in object.keys(diagnostic_namespaces)}
+agent_role_names := {"homelab-observer-extra"} | diagnostic_role_names
 publisher_role_names := {
 	"homelab-report-publisher-flux-system",
 	"homelab-report-publisher-test-reports",
@@ -16,11 +22,10 @@ expected_document_names := {
 		"homelab-observer-view",
 		"homelab-diagnostic-view",
 		"homelab-observer-extra",
-		"homelab-diagnostic-extra",
 	},
 	"Lease": {"homelab-test-report-publish-lock"},
 	"Role": publisher_role_names,
-	"RoleBinding": publisher_role_names,
+	"RoleBinding": publisher_role_names | diagnostic_role_names,
 	"ServiceAccount": {"homelab-observer", "homelab-diagnostic", "homelab-report-publisher"},
 }
 
@@ -147,8 +152,12 @@ allowed_rule("homelab-observer-extra", rule) if {
 	rule_matches(rule, {api_group}, resources, {"get", "list", "watch"})
 }
 
-allowed_rule("homelab-diagnostic-extra", rule) if {
-	rule_matches(rule, {""}, {"pods/exec", "pods/portforward"}, {"create"})
+allowed_rule("homelab-diagnostic-exec", rule) if {
+	rule_matches_named(rule, {""}, {"pods/exec"}, set(), {"create"})
+}
+
+allowed_rule("homelab-diagnostic-portforward", rule) if {
+	rule_matches_named(rule, {""}, {"pods/portforward"}, set(), {"create"})
 }
 
 allowed_publisher_rule("homelab-report-publisher-test-reports", rule) if {
@@ -218,12 +227,39 @@ deny contains "observer extras must be bound to observer and diagnostic" if {
 	)
 }
 
-deny contains "diagnostic extras must be bound only to diagnostic" if {
-	not has_binding(
-		"homelab-diagnostic-extra",
-		"homelab-diagnostic-extra",
-		{"ServiceAccount:kube-system:homelab-diagnostic"},
-	)
+diagnostic_binding_exact(document, name, namespace) if {
+	object.get(document, "kind", "") == "RoleBinding"
+	metadata_name(document) == name
+	metadata_namespace(document) == namespace
+	object.get(document, "roleRef", {}) == {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": name}
+	object.get(document, "subjects", []) == [{"kind": "ServiceAccount", "namespace": "kube-system", "name": "homelab-diagnostic"}]
+}
+
+deny contains msg if {
+	some name, namespaces in diagnostic_namespaces
+	some namespace in namespaces
+	matching := [document | some document in documents; diagnostic_binding_exact(document, name, namespace)]
+	count(matching) != 1
+	msg := sprintf("diagnostic binding %s/%s must occur exactly once", [namespace, name])
+}
+
+deny contains msg if {
+	some document in documents
+	object.get(document, "kind", "") in {"ClusterRoleBinding", "RoleBinding"}
+	name := object.get(object.get(document, "roleRef", {}), "name", "")
+	name in diagnostic_role_names
+	namespace := metadata_namespace(document)
+	not diagnostic_namespaces[name][namespace]
+	msg := sprintf("diagnostic interactive binding %s must use an approved namespace", [name])
+}
+
+deny contains msg if {
+	some document in documents
+	object.get(document, "kind", "") == "RoleBinding"
+	name := metadata_name(document)
+	name in diagnostic_role_names
+	not diagnostic_binding_exact(document, name, metadata_namespace(document))
+	msg := sprintf("diagnostic binding %s has unexpected authority", [name])
 }
 
 deny contains msg if {
@@ -303,13 +339,11 @@ deny contains msg if {
 	msg := sprintf("observer extras must grant required %s reads", [api_group])
 }
 
-deny contains "diagnostic extras must grant only pod exec and port-forward" if {
-	not has_allowed_rule(
-		"homelab-diagnostic-extra",
-		{""},
-		{"pods/exec", "pods/portforward"},
-		{"create"},
-	)
+deny contains msg if {
+	some name in diagnostic_role_names
+	resource := concat("", ["pods/", trim_prefix(name, "homelab-diagnostic-")])
+	not has_allowed_rule(name, {""}, {resource}, {"create"})
+	msg := sprintf("diagnostic role %s must grant its required subresource", [name])
 }
 
 deny contains "publisher test-reports Role must grant only named deployment rollout reads, Pod reads, and Pod exec" if {

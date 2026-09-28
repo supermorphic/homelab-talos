@@ -89,13 +89,13 @@ done
 
 [[ "$domain" != 'monitoring' ]] || validate_n8n_alert_activation
 
-# No PrometheusRule may live outside a domain alerts application. This is the invariant
-# the refactor exists to hold; without it the tree silently re-fragments.
+# OpenBao owns its staged monitoring unit beside its server package so its alert
+# activation follows bootstrap. Other PrometheusRules live in domain alerts apps.
 mapfile -t stray < <(rg --files kubernetes/apps | rg '\.yaml$' \
   | xargs rg -l '^kind: PrometheusRule' 2>/dev/null \
-  | rg -v '/alerts/app/' | sort)
+  | rg -v '/alerts/app/|/security/openbao/monitoring/prometheusrule\.yaml$' | sort)
 [[ "${#stray[@]}" -eq 0 ]] || {
-  echo 'PrometheusRule files must live in kubernetes/apps/<domain>/alerts/app/:' >&2
+  echo 'PrometheusRule files must live in domain alerts apps or the staged OpenBao monitoring unit:' >&2
   printf '  %s\n' "${stray[@]}" >&2
   exit 1
 }

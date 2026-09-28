@@ -116,8 +116,8 @@ mise exec -- just kube qbit-manage-verify
 Changing the qbit_manage Kustomization's `spec.suspend` through Git stops Flux
 reconciliation. It does not stop the running Deployment or its 15-minute policy loop.
 For an active policy incident, use the
-[mistaken-clean runbook's workload-stop procedure](../runbooks/qbit-manage-mistaken-clean.md).
-That procedure leaves qBittorrent running so it can continue seeding. Disable cleanup by
+[guarded containment command](../guides/qbit-manage-operations.md#contain-and-resume-qbit_manage).
+It leaves qBittorrent running so it can continue seeding. Disable cleanup by
 changing both cleanup-enabled groups to `cleanup: false`; disable all share limits with
 `commands.share_limits: false`. Make these changes through a reviewed pull request.
 

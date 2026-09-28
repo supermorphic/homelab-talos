@@ -3,6 +3,9 @@
 preUpgradeChecker:
   jobEnabled: false
 defaultSettings:
+  # Recurring jobs must also back up PVCs whose short-lived consumers have exited.
+  # This applies to all scheduled detached volumes; see the Longhorn README.
+  allowRecurringJobWhileVolumeDetached: true
   # Longhorn stores replicas on the dedicated Talos user volume, not the chart
   # default /var/lib/longhorn (which would land on EPHEMERAL).
   defaultDataPath: /var/mnt/longhorn
@@ -20,8 +23,8 @@ defaultSettings:
   # stuck Terminating and it never recreates. Verified by the Plex node-down test.
   nodeDownPodDeletionPolicy: delete-both-statefulset-and-deployment-pod
 metrics:
-  # Keep the chart ServiceMonitor disabled because the current monitoring source does
-  # not declare a Longhorn scrape through this value.
+  # The OpenBao monitoring unit owns a native Longhorn ServiceMonitor. Keeping
+  # collection there avoids a monitoring-CRD dependency during storage bootstrap.
   serviceMonitor:
     enabled: false
 persistence:

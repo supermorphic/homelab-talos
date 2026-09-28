@@ -63,7 +63,7 @@ n8n_persistence='scripts/test/scenarios/n8n-persistence.sh'
 n8n_restore_drill='scripts/test/scenarios/n8n-restore-drill.sh'
 n8n_smoke='tests/chainsaw/smoke/platform/n8n/chainsaw-test.yaml'
 n8n_operations='docs/guides/n8n-operations.md'
-n8n_recovery='docs/runbooks/n8n-recovery.md'
+platform_recovery='docs/runbooks/platform-disaster-recovery.md'
 bootstrap_just='.just/bootstrap.just'
 kubernetes_just='kubernetes/mod.just'
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/n8n-validate.XXXXXX")"
@@ -185,7 +185,7 @@ for file in "$n8n_verifier" "$n8n_verification_lib" "$n8n_verification_contract_
   "$n8n_job_wait_lib" "$n8n_job_wait_test" \
   "$n8n_restore_command_lib" "$n8n_restore_command_test" \
   "$n8n_persistence" "$n8n_restore_drill" "$n8n_smoke" \
-  "$n8n_operations" "$n8n_recovery" "$catalog" "$bootstrap_just" \
+  "$n8n_operations" "$platform_recovery" "$catalog" "$bootstrap_just" \
   "$kubernetes_just"; do
   [[ -f "$file" ]] || { echo "Missing n8n operations source: $file" >&2; exit 1; }
 done

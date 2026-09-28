@@ -138,7 +138,12 @@ if [[ "$publisher" == true ]]; then
 else
   case "$verb:$resource:$subresource" in
     create:pods:exec|create:pods:portforward)
-      [[ "$diagnostic" == true ]] || answer=no
+      answer=no
+      if [[ "$diagnostic" == true ]]; then
+        case "$subresource:$namespace" in
+          exec:kube-system|exec:media|exec:homepage|exec:ntfy|exec:automation|          portforward:kube-system|portforward:media|portforward:monitoring) answer=yes ;;
+        esac
+      fi
       ;;
     get:secrets:*|create:*:*|patch:*:*|delete:*:*|bind:*:*|escalate:*:*|impersonate:*:*) answer=no ;;
   esac

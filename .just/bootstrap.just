@@ -3281,3 +3281,7 @@ automation-data:
 # Activate the staged NocoDB package and bind its API token directly to n8n.
 nocodb:
     scripts/nocodb/bootstrap.sh '{{kubeconfig}}'
+
+# Attended OpenBao deployment or one-shot initialization with explicit credentials.
+openbao phase:
+    @uv run --locked python -m scripts.openbao.operator {{quote(phase)}}

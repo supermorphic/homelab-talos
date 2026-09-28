@@ -124,7 +124,19 @@ returned job ID, then discovers and validates the created source before it recor
 `ready`. The reader exposes only `read_model`; the optional operator exposes only exact
 reviewed DML in `operator`. See the
 [NocoDB operations guide](../docs/guides/nocodb-operations.md) and
-[NocoDB recovery runbook](../docs/runbooks/nocodb-recovery.md).
+[platform recovery boundary](../docs/runbooks/platform-disaster-recovery.md#nocodb-metadata-recovery).
+
+The OpenBao package is staged under `kubernetes/apps/security/openbao/`. Its six Flux
+Kustomizations remain suspended until the operator has committed encrypted seal
+material, completed guarded initialization, and authorized live acceptance. The
+official Helm chart is pinned to `0.29.6`; the server image is pinned to OpenBao
+`2.7.0` and an OCI digest. Reviewed auth roles and policies live in
+`kubernetes/apps/security/openbao/config/desired.json` and
+`kubernetes/apps/security/openbao/config/policies/`. They are applied by an attended
+source-bound command and compared with actual readable API state by the diagnostic
+verifier. See the [package README](../kubernetes/apps/security/openbao/README.md),
+[operations guide](../docs/guides/openbao-operations.md), and
+[platform recovery boundary](../docs/runbooks/platform-disaster-recovery.md#openbao-credential-broker-state).
 
 For an established cluster, `just cluster verify` composes the authoritative Node, etcd,
 Talos, Cilium, Longhorn, and foundation checks. It intentionally excludes arbitrary

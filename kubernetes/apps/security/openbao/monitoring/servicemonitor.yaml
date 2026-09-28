@@ -1,0 +1,20 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: openbao
+  namespace: openbao
+  labels:
+    app.kubernetes.io/name: openbao
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: openbao-monitoring
+  endpoints:
+    - port: monitoring
+      path: /v1/sys/metrics
+      params:
+        format: [prometheus]
+      scheme: https
+      tlsConfig:
+        serverName: openbao.lab.supermorphic.com
+      interval: 1m

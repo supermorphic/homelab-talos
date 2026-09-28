@@ -12,13 +12,13 @@ Greenfield qBittorrent, Prowlarr, Sonarr, Radarr, Lidarr, and Seerr UI
 configuration is documented in the
 [media automation startup guide](docs/guides/media-automation-setup.md).
 The [n8n operations guide](docs/guides/n8n-operations.md) covers its private bootstrap,
-exact public webhook, controlled assurance, and rollback. Use the
-[n8n recovery runbook](docs/runbooks/n8n-recovery.md) for retained-volume or logical
-database recovery.
+exact public webhook, controlled assurance, rollback, and recovery choice. The
+[platform disaster recovery runbook](docs/runbooks/platform-disaster-recovery.md#n8n--automation-data-recovery)
+identifies the shared recovery roots and storage boundary.
 The [NocoDB operations guide](docs/guides/nocodb-operations.md) covers the staged private
-operator UI, domain source adoption, targeted rotation, and attended acceptance. Use the
-[NocoDB recovery runbook](docs/runbooks/nocodb-recovery.md) for pod, metadata,
-source-operation, or isolated logical-bundle recovery.
+operator UI, domain source adoption, targeted rotation, failure decisions, and attended
+acceptance. The [platform disaster recovery runbook](docs/runbooks/platform-disaster-recovery.md#nocodb-metadata-recovery)
+identifies NocoDB recovery roots and the lost-key boundary.
 
 ## Development workflow
 

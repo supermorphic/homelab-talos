@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: openbao-monitoring
+  namespace: openbao
+  labels:
+    app.kubernetes.io/name: openbao-monitoring
+spec:
+  type: ClusterIP
+  # Scrape sealed or unready members too; their missing or zero metrics matter.
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: openbao
+    app.kubernetes.io/instance: openbao
+    component: server
+  ports:
+    - {name: monitoring, port: 8203, targetPort: monitoring, protocol: TCP}

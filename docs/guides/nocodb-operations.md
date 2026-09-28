@@ -18,8 +18,10 @@ The replacement-domain drill passed again on 2026-09-23; see the implementation 
 in [specification 028](../specs/028-nocodb-operator-ui.md).
 
 Use [Staged activation](#staged-activation) for the first deployment and
-[Routine operation](#routine-operation) afterward. For failure classification and
-recovery, use [Recover NocoDB](../runbooks/nocodb-recovery.md).
+[Routine operation](#routine-operation) afterward. Use [Failure states](#failure-states)
+for day-2 decisions and the
+[platform recovery section](../runbooks/platform-disaster-recovery.md#nocodb-metadata-recovery)
+for recovery roots and the key-loss boundary.
 
 ## Before you start
 
@@ -548,10 +550,9 @@ NOCODB_RESTORE_CONFIRM='restore:nocodb:metadata' \
   mise exec -- just kube nocodb-restore-drill
 ```
 
-The drill selects one complete logical bundle, restores it to an isolated 20 GiB
-PostgreSQL claim, and starts NocoDB with fresh ephemeral scratch. It never overwrites the
-production database and creates no HTTPRoute. For its full gates and cleanup behavior,
-see [Isolated metadata recovery](../runbooks/nocodb-recovery.md#isolated-metadata-recovery).
+The drill proves one complete logical bundle can recover NocoDB metadata without
+overwriting production state. The guarded workflow and tests own its exact validation,
+isolation, and cleanup behavior.
 
 **Expected result:** Restored metadata, source identities, PostgreSQL grants, saved view,
 operator decision, and artifact metadata/reference pass; the isolated restored database
@@ -578,60 +579,39 @@ workflows. Do not broaden a NocoDB login to work around an application problem.
 
 ## Failure states
 
+- If only the NocoDB pod fails while automation-data PostgreSQL remains healthy, let
+  the Deployment replace it and run `mise exec -- just kube nocodb-verify`. Its local
+  scratch is disposable; a pod replacement does not require a metadata restore.
 - `awaiting_grants` means the operator role exists as `NOLOGIN`; apply the reviewed
   migration and sync again.
-- A failed source-creation job remains recorded with its non-secret job and object
-  identities. See the recovery runbook before retrying.
-- A timed-out job stays `waiting_for_source`. The next explicit sync resumes polling the
-  same job; it must not queue another source.
-- A failed targeted rotation keeps `operation=rotate` and exact retained identities. Run
-  the same explicit rotation only after those identities still match.
-- A lost bootstrap token response uses the bounded bootstrap rerun described above.
-  There is no separate lost-token recovery command.
-- A missing or unreadable `NC_CONNECTION_ENCRYPT_KEY` is a recovery-root failure, not an
-  ordinary source rotation.
+- A timed-out source job stays `waiting_for_source`. Run the same confirmed
+  [source sync](#5-adopt-one-domain) to resume its stored job; do not start another
+  source generation.
+- A failed or partial source creation retains its job, base, integration, source,
+  role, and generation identity. Inspect the recorded state and any surviving source
+  before a reviewed retry. Do not automatically delete or adopt a partial source.
+- If bootstrap loses the API-token response, rerun the same guarded
+  [bootstrap](#2-bootstrap-nocodb-and-its-n8n-api-credential). Do not manually create
+  a replacement token.
+- A failed targeted rotation keeps `operation=rotate` and exact retained identities.
+  PostgreSQL and NocoDB credentials may temporarily differ. Verify the base,
+  integration, and source IDs, then retry only the same
+  [targeted rotation](#6-rotate-one-source-login). Ordinary sync and rotation of the
+  other access kind remain blocked while this error is recorded.
+- A missing or unreadable `NC_CONNECTION_ENCRYPT_KEY` is a hard stop for ordinary
+  recovery; prepare a separately reviewed recovery design.
 
 ## Destructive administration
 
 The lifecycle workflows do not delete a NocoDB source, base, registry row, domain, or
-PostgreSQL role. Decommissioning requires a separately reviewed, attended procedure with
-an explicit target, current ownership and dependency checks, a fresh validated logical
-bundle, and immediate precondition checks before each destructive mutation.
+PostgreSQL role. Decommissioning requires a separately reviewed, attended procedure
+for one explicit target. Identify its current owners, registry rows, source objects,
+credentials, and consumers; protect a fresh complete logical bundle and matching n8n
+recovery material. Repeat identity, ownership, dependency, backup, and concurrency
+checks immediately before each destructive step, then verify the result.
 
-### Attended domain decommission
-
-For each approved target, prepare a private, target-bound execution record before the
-attended window. Record the current PostgreSQL database, owner, migrator, runtime,
-reader and operator role identities; `managed_domains` and
-`managed_nocodb_sources` rows and generations; NocoDB base, source, integration,
-view and membership identities; n8n credential identities; and every saved,
-published, running, or external consumer. Read all result pages. A matching name is
-not proof of exclusive ownership. Mark missing, duplicated, shared, and unknown
-objects as blockers until independently explained. Do not publish live identifiers,
-tokens, connection settings, or raw account exports in this repository.
-
-Before any deletion, the operator reviews the exact object list and the supported
-application actions, confirms the authority for each action, and protects a fresh
-complete automation-data bundle plus the n8n recovery material needed for removed
-credentials and workflows. Verify checksums and that the bundle includes the target
-database, retained databases, `nocodb` metadata, and the control registry.
-Normal backup retention keeps seven complete bundles; agree how to retain this
-recovery set through the recovery window without disrupting that schedule. Exclude or
-detect concurrent provisioning, source sync, rotation, acceptance, and backup work;
-record how any approved temporary pause will be restored.
-
-During the attended window, repeat identity, ownership, dependency, backup, and
-concurrency checks immediately before **each** consequential action. Remove or stop
-consumers before their credential or data source. Verify whether deleting a base also
-removes its sources and views; remove an integration only when no other base or source
-uses it. Recheck PostgreSQL sessions and role dependencies before database or role
-deletion. Do not use broad `CASCADE`, force a database drop, or terminate unclassified
-sessions. Preserve registry referential integrity and the backup generation contract.
-Perform a bounded readback after every step, then independently verify absence across
-PostgreSQL, both registries, n8n, and NocoDB. Recheck each additional target from live
-state; another target's preflight does not cover it. On any mismatch, follow
-[partial-decommission recovery](../runbooks/nocodb-recovery.md#partial-domain-decommission)
-instead of repeating a deletion blindly.
-
-Finally, validate a **post-change** complete backup, verify current application health,
-and retain the results. A pre-change restore does not establish the final state.
+If a decommission stops partway through, preserve the completed-step record and all
+surviving objects. Freeze further deletion until an operator reviews the current
+identities and remaining steps. Do not infer completion from one missing object or
+delete additional objects as automatic compensation. Validate a new complete bundle
+after an authorized decommission finishes.
