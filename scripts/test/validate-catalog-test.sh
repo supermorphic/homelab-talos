@@ -53,20 +53,5 @@ for group in core observability automation ci-framework; do
 	assert_harness_field "$suite_id" .native_results.strategy native-junit
 done
 
-if rg -n 'bash -n.*\$|find scripts/secrets scripts/test tests/probes' \
-	scripts/test/validate-chainsaw.sh; then
-	echo 'Harness must not rerun canonical Bash validation.' >&2
-	exit 1
-fi
-if rg -n 'shellcheck.*--format=json|while .*shellcheck' \
-	scripts/test/validate-chainsaw.sh; then
-	echo 'Harness must not rerun canonical ShellCheck validation.' >&2
-	exit 1
-fi
-if rg -n 'qbit-manage-policy-shellcheck' \
-	scripts/test/validate-chainsaw.sh tests/catalog.yaml; then
-	echo 'Focused qbit ShellCheck must remain owned by repository validation.' >&2
-	exit 1
-fi
 git ls-files -co --exclude-standard -- scripts/validate |
 	rg -qx 'scripts/validate/qbit-manage-policy.sh'

@@ -196,6 +196,7 @@ core_paths:
   - scripts/talos/**
   - scripts/validate/**
   - scripts/verify/**
+  - scripts/test/agent-access-kubectl-contract.py
   - scripts/test/agent-access-verify-test.sh
   - scripts/test/arr-validator-test.sh
   - scripts/test/bootstrap-recovery-test.sh

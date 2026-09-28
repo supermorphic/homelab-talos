@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 verifier="$repo_root/scripts/verify/portainer-rbac.sh"
+suite_verifier="$repo_root/$(yq -r '.suites[] | select(.metadata.id == "verification.portainer") | .runner.implementation' "$repo_root/tests/catalog.yaml")"
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/portainer-rbac-test.XXXXXX")"
 trap 'rm -rf -- "$fixture"' EXIT
 mkdir -p "$fixture/bin"
@@ -11,6 +12,24 @@ touch "$fixture/kubeconfig"
 cat >"$fixture/bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
+[[ " $* " != *' --as'* ]] || {
+  echo 'Portainer verification must not impersonate another identity.' >&2
+  exit 64
+}
+case " $* " in
+  *' --namespace flux-system get kustomization portainer '*) printf True; exit 0 ;;
+  *' --namespace portainer get helmrelease portainer '*) printf True; exit 0 ;;
+  *' --namespace portainer rollout status deployment/portainer '*) exit 0 ;;
+  *' get deployment portainer '*'.spec.strategy.type'*) printf Recreate; exit 0 ;;
+  *' get deployment portainer '*'.spec.template.spec.serviceAccountName'*) printf portainer-readonly; exit 0 ;;
+  *' get deployment portainer '*AGENT_SECRET*) exit 0 ;;
+  *' get service portainer '*'.spec.type'*) printf ClusterIP; exit 0 ;;
+  *' get service portainer '*'.spec.ports'*) printf '9000\n'; exit 0 ;;
+  *' get persistentvolumeclaim portainer '*'.status.phase'*) printf Bound; exit 0 ;;
+  *' get persistentvolumeclaim portainer '*'.spec.storageClassName'*) printf longhorn; exit 0 ;;
+  *' get persistentvolumeclaim portainer '*helm\\.sh/resource-policy*) printf keep; exit 0 ;;
+esac
 
 resource=''
 name=''
@@ -191,5 +210,14 @@ if PATH="$fixture/bin:$PATH" \
 fi
 rg -q 'Unsafe system:serviceaccounts ClusterRole rules.*system:service-account-issuer-discovery' \
   "$fixture/unsafe-issuer.out"
+
+if PATH="$fixture/bin:$PATH" \
+  FAKE_RBAC_SOURCE="$repo_root/kubernetes/apps/monitoring/portainer/app/rbac.yaml" \
+  FAKE_RISKY=false FAKE_ROLE_DRIFT=resourceNames \
+    "$suite_verifier" "$fixture/kubeconfig" >"$fixture/wrapper.out" 2>&1; then
+  echo 'Portainer suite accepted an RBAC graph change.' >&2
+  exit 1
+fi
+rg -q 'Live portainer-readonly ClusterRole rules differ' "$fixture/wrapper.out"
 
 echo 'Portainer effective RBAC graph tests passed.'
