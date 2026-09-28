@@ -119,3 +119,11 @@ server:
             leader_tls_servername = "openbao.lab.supermorphic.com"
           }
         }
+        audit "file" "homelab" {
+          description = "Homelab hashed audit output"
+          options {
+            file_path = "stdout"
+            log_raw = "false"
+            hmac_accessor = "true"
+          }
+        }

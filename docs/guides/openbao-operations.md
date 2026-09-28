@@ -107,6 +107,15 @@ This verifies the installed configuration and operator login, retires the suppli
 root token, and closes its temporary operator session. It does not initialize again
 or replace storage. A successful normal initialization already performs these steps.
 
+Audit logging is declared in the Git-owned server configuration. If a reviewed server
+configuration correction must be loaded before bootstrap is complete, merge it, wait
+for Flux, then run `mise exec -- just bootstrap openbao restart-staged` with the same
+operator kubeconfig, public recipient, and retained root token. Review its exact
+confirmation. This attended, disruptive command replaces one voter at a time, standbys
+first, and requires restored quorum and audit logging. It preserves claims and refuses
+active access, acceptance, backup, or monitoring units. Then run `finalize`; do not
+reinitialize. Established deployments use the attended maintenance procedure.
+
 ### 5. Run attended acceptance
 
 Use the explicit operator kubeconfig for `OPENBAO_OPERATOR_KUBECONFIG` and
@@ -169,6 +178,10 @@ A changed source or live target requires a new review. The command applies revie
 reads back the result. Run `openbao-verify` after the reader has produced a fresh
 observation. If apply or read-back fails, stop and inspect; do not patch live state by
 hand.
+
+An `audit-unavailable` result means the server's declarative audit device is absent.
+Correct and load the reviewed server configuration before applying API changes. The
+apply command does not create audit devices through the API.
 
 Leave `OPENBAO_CONFIG_CONFIRM` (or `OPENBAO_BOOTSTRAP_CONFIRM` for finalization) unset
 for interactive review. Setting it explicitly to an empty value gives a read-only

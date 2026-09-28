@@ -189,6 +189,7 @@ contracts:
       - scripts/openbao/maintenance.py
       - scripts/openbao/manifests.py
       - scripts/openbao/operator.py
+      - scripts/openbao/restart.py
       - scripts/openbao/reader.py
       - scripts/openbao/reset.py
       - scripts/openbao/restore.py
@@ -204,6 +205,7 @@ contracts:
       - scripts/test/core/test_openbao_bootstrap.py
       - scripts/test/core/test_openbao_finalize.py
       - scripts/test/core/test_openbao_operator.py
+      - scripts/test/core/test_openbao_restart.py
       - scripts/test/core/test_openbao_catalog.py
       - scripts/test/core/test_openbao_client.py
       - scripts/test/core/test_openbao_drift.py
@@ -233,6 +235,7 @@ contracts:
       - python:scripts/test/core/test_openbao_bootstrap.py
       - python:scripts/test/core/test_openbao_finalize.py
       - python:scripts/test/core/test_openbao_operator.py
+      - python:scripts/test/core/test_openbao_restart.py
       - python:scripts/test/core/test_openbao_catalog.py
       - python:scripts/test/core/test_openbao_client.py
       - python:scripts/test/core/test_openbao_drift.py

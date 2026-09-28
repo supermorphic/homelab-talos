@@ -151,7 +151,8 @@ class ApplyTest(unittest.TestCase):
     def test_missing_or_raw_audit_cannot_pass_independent_readback(self):
         self.client.audit = {}
         with self.assertRaises(SafeError):
-            apply.ensure_audit(self.client, "synthetic-token")
+            apply.require_audit(self.client)
+        self.assertEqual(self.client.writes, [])
         self.client.audit = {
             "homelab/": {
                 "type": "file",
@@ -159,7 +160,14 @@ class ApplyTest(unittest.TestCase):
             }
         }
         with self.assertRaises(SafeError):
-            apply.ensure_audit(self.client, "synthetic-token")
+            apply.require_audit(self.client)
+
+    def test_missing_declarative_audit_blocks_configuration_before_any_write(self):
+        self.client.audit = {}
+        self.client.state[("issuance-role", "openbao-acceptance")]["token_max_ttl"] = 900
+        with self.assertRaisesRegex(SafeError, "audit-unavailable"):
+            apply.run(confirm="", **self.inputs)
+        self.assertEqual(self.client.writes, [])
 
     def test_unowned_objects_wrong_backend_and_sensitive_fields_refuse(self):
         for key, fields in [

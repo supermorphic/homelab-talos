@@ -6,6 +6,7 @@ the upstream behavior check; this creates only an in-memory local dev server.
 
 import json
 import os
+import re
 import socket
 import subprocess
 import tempfile
@@ -14,6 +15,8 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+import yaml
 
 from scripts.openbao import apply, restore
 from scripts.openbao.configuration import load_document
@@ -30,7 +33,11 @@ class PinnedServerContract(unittest.TestCase):
         self.assertTrue(version.startswith("OpenBao v2.7.0 ("))
         with tempfile.TemporaryDirectory(prefix="openbao-contract-") as directory:
             config = Path(directory) / "server.hcl"
-            config.write_text("raw_storage_endpoint = true\n")
+            values = yaml.safe_load((apply.DESIRED.parents[1] / "app/values.yaml").read_text())
+            audit = re.search(r'(?ms)^audit "file" "homelab" \{\n.*?^\}',
+                              values["server"]["ha"]["raft"]["config"])
+            self.assertIsNotNone(audit)
+            config.write_text("raw_storage_endpoint = true\n" + audit.group(0) + "\n")
             with socket.socket() as listener:
                 listener.bind(("127.0.0.1", 0))
                 port = listener.getsockname()[1]
@@ -61,6 +68,14 @@ class PinnedServerContract(unittest.TestCase):
                 except OSError:
                     time.sleep(0.1)
             self.assertEqual(request("DELETE", "sys/mounts/secret")[0], 204)
+            # The actual server must load the production audit stanza. API creation
+            # stays disabled; a fake API readback cannot establish this contract.
+            status, audit_response = request("GET", "sys/audit")
+            self.assertEqual(status, 200)
+            self.assertEqual(set(audit_response["data"]), {"homelab/"})
+            self.assertEqual(audit_response["data"]["homelab/"]["options"],
+                             {"file_path": "stdout", "log_raw": "false", "hmac_accessor": "true"})
+            self.assertEqual(request("POST", "sys/audit/forbidden", apply.AUDIT)[0], 400)
 
             def post(path, payload, token=None):
                 self.assertIn(request("POST", path, payload, token)[0], (200, 204))

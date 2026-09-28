@@ -19,6 +19,7 @@ class SafeError(Exception):
         "timeout",
         "authentication-failed",
         "ambiguous-write",
+        "audit-unavailable",
     }
 
     def __init__(self, code: str = "invalid-response"):
