@@ -225,24 +225,12 @@ will cover the remaining generic behavior.
 
 ## Delivery and branch history
 
-The migration lands atomically through the current pull request. `main` must not receive a
-partially migrated state containing both documentation models.
-
-The stale feature branch is rewritten into coherent, reviewable commits. The two existing
-Git-hook fixes remain separate independent commits. The rejected lifecycle migration
-commits are replaced by commits that establish the new policy and documentation
-structure, retire lifecycle tooling, reconcile specifications by lineage, reclassify
-current documentation, remove obsolete artifacts, repair references, and validate the
-result. Exact commit boundaries may be refined in the implementation plan.
-
-The migration preserves `.claude/settings.json` and unrelated worktree changes. It does
-not merge, enable auto-merge, or publish rewritten history without explicit operator
-authorization.
-
-Before publication, fetch and inspect `origin/main` and the remote feature branch. If
-`origin/main` advanced, rebase the clean rewritten branch and repeat required validation.
-Stop if the remote feature branch contains unexpected commits. When rewriting the known
-feature branch is authorized, push only with `--force-with-lease`.
+The migration design grouped the policy, documentation structure, tooling retirement,
+specification reconciliation, and link repair into one atomic delivery. This avoided
+deploying a partially migrated tree with two competing documentation models. Independent
+Git-hook fixes were separate work. Current publication and rebase steps belong to the
+[contributor workflow](../guides/repository-worktree-setup.md#prepare-validate-and-publish-a-change),
+under the Git safety policy in [`AGENTS.md`](../../AGENTS.md#git-and-worktrees).
 
 ## Validation
 
@@ -253,9 +241,6 @@ validation includes:
 - repository-wide link validation;
 - repository lint and staged-blob or secret checks where applicable; and
 - a full local `mise exec -- just ci` run for that migration.
-
-Current PR and rebase procedure is in the
-[repository and worktree guide](../guides/repository-worktree-setup.md#prepare-validate-and-publish-a-change).
 
 ## Completion criteria
 

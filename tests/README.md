@@ -39,12 +39,8 @@ only the catalog checks.
 
 ## Deterministic CI groups and ownership checks
 
-For intentional initiative completion or assurance after bootstrap, setup, provisioning,
-or recovery, use `mise exec -- just test record <suite-id|scoped-verification>`.
-The coordinator retains canonical child reports automatically, including candidate
-feature-branch evidence. Normal CI, standalone verifiers, and scoped campaigns remain
-local. See [recorded evidence](../docs/guides/test-campaign-operations.md#record-initiative-and-infrequent-assurance)
-for the third scoped publisher identity, authority boundaries, and publication retry.
+For retained acceptance after initiative completion, bootstrap, setup, or recovery, use
+the [recorded evidence procedure](../docs/guides/test-campaign-operations.md#record-initiative-and-infrequent-assurance).
 
 The Stage 2 runtime selector has four execution groups: always-running `core`, plus
 `observability`, `automation`, and `ci-framework`. `full` selects their exact union.
@@ -183,30 +179,9 @@ For campaign selection, cadence, recorded acceptance, publication, and resume, u
 [test campaign guide](../docs/guides/test-campaign-operations.md). Current membership and
 effects come from [`catalog.yaml`](catalog.yaml).
 
-n8n assurance remains in the existing tier campaigns; it does not add a dedicated
-campaign:
-
-- `verification.n8n` -> `verification`, `scoped-verification`, `weekly`, `full`
-- `chainsaw.smoke.platform.n8n` -> smoke coverage, `standard`, `weekly`, `full`
-- `test.n8n-restore-drill` -> `integration`, `weekly`, `full`
-- `test.n8n-persistence` -> `resilience`, `weekly`, `full`
-
-`test.automation-data-provisioning` remains a registered standalone acceptance suite.
-Run it through `mise exec -- just test record test.automation-data-provisioning`
-with its existing operator credentials, confirmation, and private inputs to retain its
-canonical evidence automatically. Use `mise exec -- just test publish <run-id>` for an existing
-finalized run.
-It is excluded from `integration`, `weekly`, and `full` because it rotates the acceptance
-runtime credential. For one-time acceptance, create both a new n8n logical dump and a new
-automation-data bundle after that rotation before starting
-`test.automation-data-restore-drill`. A pre-rotation n8n dump and a post-rotation
-automation-data bundle contain different credential ciphertext and password verifiers,
-so that pair is not valid recovery evidence. The restore drill remains in `integration`,
-`weekly`, and `full` for periodic recovery coverage.
-
-Before an operator starts a `weekly` or `full` campaign, they must silently prompt for
-and export `N8N_CANARY_TOKEN`; unset it after the campaign completes. The token value must
-not appear in the catalog or campaign plan.
+Application acceptance steps are in the
+[n8n guide](../docs/guides/n8n-operations.md#activation-upgrade-and-recovery-change-acceptance)
+and the [automation-data guide](../docs/guides/automation-data-operations.md#5-validate-provisioning-and-rotation).
 
 Live commands remain outside `just ci`. [`AGENTS.md`](../AGENTS.md) defines their
 authority boundaries: agents may run approved scoped verification with task-local
@@ -328,11 +303,11 @@ Sonobuoy archives are retained below `diagnostics/sonobuoy/`.
 JUnit, ShellCheck JSON and Python unittest are adapted without collapsing their
 individual findings/cases, and Bash-only commands receive wrapper cases. A
 failed suite stops execution while every remaining catalog suite is recorded as
-skipped. GitHub Actions uploads `.test-results/` on both success and failure
-with 90-day retention; open the workflow run's **Artifacts** section and
-download `canonical-test-results-<run>-<attempt>`. It also generates and uploads
-`allure-test-report-<run>-<attempt>` when canonical finalization succeeded and
-writes the run/suite counts to the job summary.
+skipped. Each hosted validation group writes its own canonical run. In the workflow
+run's **Artifacts** section, download `ci-group-<group>-<run>-<attempt>` for canonical
+results and `allure-group-report-<group>-<run>-<attempt>` when static report generation
+succeeded. These artifacts have 90-day retention. The required gate also uploads
+`merge-gate-<run>-<attempt>` with its reconciliation result and writes a job summary.
 
 The coordinator resolves the complete ordered CI execution list before it starts
 the first suite. Each suite receives `/dev/null` as stdin. A validator cannot
@@ -344,7 +319,7 @@ results against the plan and the complete catalog executions from its exact cand
 Git commit. Every expected suite must be present and passed; unexpected suites fail.
 The candidate commit and its `tests/catalog.yaml` blob must be available locally.
 Reconciliation does not use a changed working-tree catalog as evidence for that commit.
-This interface is offline groundwork; the advisory shadow rollout still runs full CI.
+The hosted `merge-gate` runs this reconciliation for all groups selected by the plan.
 
 Node.js and Allure are pinned through mise. Generate static Awesome reports with
 `mise exec -- just test report <run-id>` or `report-latest`; output is
@@ -355,14 +330,10 @@ Only canonical `junit.xml`, validated root metadata, and evidence-indexed files
 are staged for Allure, preventing native diagnostic XML from being counted
 twice and excluding unindexed files.
 
-After the persistent report host is bootstrapped, an operator can publish a
-clean finalized run with
-`TEST_REPORT_PUBLISH_CONFIRM=publish:test-report:<run-id> mise exec -- just test
-publish <run-id>`. Published reports remain continuously viewable at
-`https://tests.lab.supermorphic.com`; Caddy serves Allure's static output from a
-retained Longhorn PVC, so viewing does not require a local command or a running
-Allure process. GitHub Actions has no cluster path and does not publish there.
-See `docs/reference/test-reports.md` for authority, retention, and activation details.
+Use the [campaign guide](../docs/guides/test-campaign-operations.md#run-a-standalone-suite)
+to publish a finalized run. The [persistent report reference](../docs/reference/test-reports.md)
+covers archive viewing, storage, and retention. GitHub Actions retains its own artifacts
+and does not publish to the cluster archive.
 
 `scripts/test/junit_report.py` owns JUnit XML structure; `junit_tools.py` is its
 thin CLI. The library inspects and merges native reports, creates wrapper cases,

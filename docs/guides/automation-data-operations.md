@@ -214,6 +214,12 @@ apply broad initial grants. Use the application's reviewed migration workflow in
 exist, unchanged reconciliation preserves their credentials, explicit rotation changes
 only the selected login credential, and the resulting backup is complete.
 
+After this rotation, create both a new n8n logical dump and a new automation-data bundle
+before the restore drill. A pre-rotation n8n dump paired with a post-rotation database
+bundle contains mismatched encrypted credentials and password verifiers, so it cannot
+prove recovery. Use the [recorded evidence procedure](test-campaign-operations.md#record-initiative-and-infrequent-assurance)
+to retain acceptance results.
+
 If the bundle-validation Job fails, the command prints a bounded
 `bundle_check_failed=<check>` diagnostic before cleanup. Stop at that failure; do not
 proceed to restore or NocoDB bootstrap. A message that the canonical test run passed

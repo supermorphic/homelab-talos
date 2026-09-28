@@ -167,18 +167,20 @@ record its relevant post-operation acceptance suite.
 | Attended electrical node loss | Standalone guarded procedure with a physical target; excluded from automatic campaigns |
 
 Automation-data provisioning intentionally remains outside integration, weekly, and full:
-it rotates the acceptance runtime credential. After that one-time acceptance, the operator
-must create both a new n8n dump and a new automation-data bundle before the restore drill.
-Use the private inputs and paired-backup procedure in
-[automation-data operations](automation-data-operations.md#5-validate-provisioning-and-rotation)
-and the [testing contract](../../tests/README.md). Recorded publication retains the
-provisioning evidence without changing that execution boundary.
+it rotates the acceptance runtime credential. Use the private inputs and paired-backup
+procedure in [automation-data operations](automation-data-operations.md#5-validate-provisioning-and-rotation).
+Recorded publication retains the provisioning evidence without changing that execution
+boundary.
 
 ## Run scoped verification
 
-Scoped verification is the normal grouped live check for an agent working in a linked
-worktree. First mint credentials on demand as described in
-[Agent cluster access](agent-cluster-access.md), then run it directly:
+Scoped verification runs from a clean linked worktree. Commit or safely set aside
+checkout changes before starting; both the plan and run reject a dirty checkout.
+Install credentials as described in
+[Agent cluster access](agent-cluster-access.md#what-the-installer-creates).
+Preflight requires the worktree's `.kube/config` and `.talos/config` files with mode
+`0600`, the installer's three scoped Kubernetes contexts with `homelab-observer`
+current, and a Talos identity with exactly the `os:reader` role. Then run:
 
 ```bash
 mise exec -- just test scoped-campaign
@@ -219,6 +221,17 @@ The plan shows:
 
 Planning does not run a suite, acquire a Lease, publish a report, create a journal, or
 authorize execution. Review the plan before deciding whether to run it.
+
+### Prepare suite inputs
+
+Supply each selected suite's private inputs through its application procedure before
+running the campaign. The catalog and campaign plan contain no secret values.
+
+For a campaign containing `test.n8n-persistence` (currently `resilience`, `weekly`, and
+`full`), silently prompt for and export `N8N_CANARY_TOKEN` before starting. Use the token
+for the deployed Platform Canary, and unset it when the campaign finishes. The
+[n8n controlled assurance procedure](n8n-operations.md#day-2-operation-and-controlled-assurance)
+shows how to read this input privately for a standalone run.
 
 ### Understand the confirmation
 

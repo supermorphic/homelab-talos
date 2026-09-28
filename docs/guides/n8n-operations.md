@@ -492,12 +492,8 @@ and persistence recovery checks.
 change accepted. Preserve bounded failure output, correct the fault, and rerun the
 controlled sequence.
 
-The existing tier campaigns retain these entries: `verification.n8n` in `verification` and
-`scoped-verification`; `chainsaw.smoke.platform.n8n` in smoke coverage; `test.n8n-restore-drill`
-in `integration`; and `test.n8n-persistence` in `resilience`. Their aggregate placements
-remain `standard`, `weekly`, and `full` as applicable. An operator running `weekly` or
-`full` must export `N8N_CANARY_TOKEN` before the campaign starts and unset it afterward.
-The catalog and campaign plan never contain its value.
+For grouped assurance, use the [campaign procedure and suite inputs](test-campaign-operations.md#prepare-suite-inputs).
+The [test catalog](../../tests/catalog.yaml) owns current n8n campaign membership.
 
 ## Off-network acceptance
 

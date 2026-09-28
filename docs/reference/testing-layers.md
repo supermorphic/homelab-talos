@@ -10,8 +10,11 @@ other — nothing here replaces the production monitoring.
 | **Controlled failure** | Disruption + recovery scenarios (VPN stop, pod recreation, node reschedule/reboot) with recorded evidence | Catalog-dispatched **resilience** (`just test resilience <target>`, Chainsaw for Kubernetes lifecycles and a direct orchestrator for Talos reboot) | Operator, on demand |
 | **Deep validation** | Upstream Kubernetes conformance | **Sonobuoy** (`just kube conformance`) | Operator, on demand |
 
-Offline correctness (source/render validation, Conftest policy, ShellCheck, probe unit
-tests) is the `just ci` contract and gates every PR; it needs no cluster.
+Offline correctness includes source/render validation, Conftest policy, ShellCheck, and
+probe unit tests. Hosted `merge-gate` reconciles the selected groups for each PR;
+`mise exec -- just ci` runs the complete suite locally when useful. See the
+[contributor workflow](../guides/repository-worktree-setup.md#prepare-validate-and-publish-a-change)
+for validation and PR procedures.
 
 The [repository command lifecycle](repository-command-lifecycle.md) defines the semantic
 boundary: verification is observational toward its target, while deliberate temporary

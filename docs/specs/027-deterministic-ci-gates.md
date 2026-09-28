@@ -278,8 +278,8 @@ categories. No runtime number overrides correctness or justifies unnecessary mac
 
 Stage 2 implementation and rollout are complete. Pull requests plan affected groups, while
 manual dispatch requests full validation. The matrix consumes the validated plan's
-groups; the duplicate provider `ci` job is removed. Local publication uses the same
-planner and grouped execution, with clean-candidate and fresh-base checks in root policy.
+groups; the duplicate provider `ci` job is removed. The optional local publication
+wrapper uses the same planner and grouped execution and checks the candidate and base.
 
 Split-all provider execution established equivalent full and grouped evidence on the
 same candidate tree. On the merged workflow, cancellation of the group jobs caused
@@ -292,7 +292,6 @@ omitted unrelated groups, and passed required reconciliation. The local publicat
 command also passed end to end on the same candidate as full local CI, with identical
 test identities and outcomes, including final candidate and remote-base checks.
 
-Root policy adopts the local command; no separate operator adoption step is required.
 Long-term skip-frequency, runtime variance, capacity, and serialized merge-drain
 measurements remain normal operational observations, not unfinished rollout prerequisites.
 
