@@ -737,6 +737,12 @@ flaresolverr-verify: require-bash
 qbit-manage-validate: require-bash
     @scripts/validate/qbit-manage.sh
 
+# Operator-only mistaken-clean containment. `stop` freezes Flux owners and stops only
+# qbit_manage; `finalize` restores broad reconciliation after a reviewed main commit
+# suspends the child in Git. Guard: QBIT_MANAGE_CONTAIN_CONFIRM='contain:qbit-manage:<phase>'.
+qbit-manage-contain phase: require-bash
+    @scripts/operations/qbit-manage-contain.sh {{quote(phase)}} {{quote(kubeconfig)}}
+
 # Verify the live qbit_manage: Kustomization + HelmRelease Ready, rollout, no crash-loop, and
 # a recent authenticated run with no config-parse/login failure. Operator-only; not in ci.
 qbit-manage-verify: require-bash

@@ -218,6 +218,7 @@ register_group_shell_case ci-framework allure-report scripts/test/allure-report-
 register_group_shell_case ci-framework report-publish-install scripts/test/report-publish-install-test.sh
 register_group_shell_case ci-framework report-publish-guard scripts/test/report-publish-guard-test.sh
 register_group_shell_case core qbit-manage-policy-validator scripts/test/qbit-manage-policy-validator-test.sh
+register_group_shell_case core qbit-manage-containment scripts/test/qbit-manage-contain-test.sh
 register_group_shell_case core arr-validator scripts/test/arr-validator-test.sh
 register_group_shell_case observability gatus-validator scripts/test/gatus-validator-test.sh
 register_group_shell_case observability monitoring-alerts-validator scripts/test/monitoring-alerts-validator-test.sh

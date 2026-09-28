@@ -72,7 +72,7 @@ credential.
 | qBittorrent WebUI credential changes | Regenerate the encrypted qbit_manage Secret through Git. The writer also updates the Pod rollout stamp. |
 | Fresh, empty, or deliberately rebuilt deployment | Stage the source suspended and use the guarded bootstrap workflow. |
 | First active run after bootstrap | Attend the run and inspect sanitized policy behavior in qBittorrent and local logs. |
-| Unexpected classification or cleanup | Use the recovery runbook to stop qbit_manage through the complete Flux ownership chain. |
+| Unexpected classification or cleanup | Run guarded containment; use the recovery runbook when data was moved or removed. |
 | Mistaken clean | Keep qBittorrent running and recover the exact item before the seven-day recycle window expires. |
 
 Credential rotation is normal maintenance. It does not require the exceptional
@@ -86,7 +86,7 @@ bootstrap when qbit_manage is already active.
 | `mise exec -- just kube qbit-manage-validate` | Checks source shape, Secret and rollout wiring, active policy invariants, storage boundary, and rendered manifests. | Local and read-only; agent-owned during normal implementation. |
 | `mise exec -- just kube qbit-manage-verify` | Observes live Flux, Helm, Deployment, restart, and sanitized scheduler/authentication state. | Read-oriented observer-tier verification; agents may run it autonomously for approved scoped work. |
 | `mise exec -- just bootstrap qbit-manage` | Temporarily resumes and reconciles source that was deliberately deployed suspended. | Privileged live mutation with administrator credentials; operator-run. |
-| qbit_manage containment and mistaken-clean recovery | Freezes the Flux ownership chain, stops the Deployment, preserves qBittorrent, and establishes durable Git suspension. | Exceptional, broad-impact administrator mutation; operator-run from the recovery runbook. |
+| `mise exec -- just kube qbit-manage-contain <stop\|finalize>` | Stops the scheduler, then restores broad Flux reconciliation after reviewed Git suspension. | Exceptional administrator mutation; operator-run from the authorized primary checkout. |
 
 A confirmation variable prevents accidental execution. It does not decide authority.
 Secret creation is operator-owned because it needs the private age identity and plaintext
@@ -269,6 +269,50 @@ mise exec -- just kube qbit-manage-verify
 If classification or cleanup is unexpected, do not continue with ordinary activation.
 Use the containment procedure below.
 
+## Contain and resume qbit_manage
+
+From a clean, updated primary checkout with the operator `.kube/config`, run the
+guarded stop phase when qbit_manage makes an unsafe decision:
+
+```bash
+QBIT_MANAGE_CONTAIN_CONFIRM='contain:qbit-manage:stop' \
+  mise exec -- just kube qbit-manage-contain stop
+```
+
+The command freezes `flux-system`, `cluster-apps`, the qbit_manage child, and its
+HelmRelease in ownership order; waits for each observed generation; scales only the
+qbit_manage Deployment to zero; and checks that no qbit_manage Pods remain. It checks
+qBittorrent/Gluetun readiness without changing that workload. A failure leaves the
+broad Flux freeze in place and needs operator investigation. Notify other operators
+that broad GitOps reconciliation is temporarily frozen.
+
+Commit, review, and merge `spec.suspend: true` in the qbit_manage Flux Kustomization.
+Then update the clean primary checkout to the exact merged `origin/main` commit and run:
+
+```bash
+QBIT_MANAGE_CONTAIN_CONFIRM='contain:qbit-manage:finalize' \
+  mise exec -- just kube qbit-manage-contain finalize
+```
+
+Finalization checks that the fetched Flux artifact contains that exact commit, restores
+the two broad owners, and confirms that the Git-managed child suspension and stopped
+workload remain in place. If finalization fails, keep the freeze and investigate; do
+not manually resume an owner. The review and merge between phases are the durable Git
+boundary, so the two phases cannot be collapsed into one unattended invocation.
+
+After correcting the policy through Git, stage the HelmRelease unsuspended while
+keeping the qbit_manage child suspended. Merge the source, update the clean primary
+checkout, then use the guarded bootstrap to resume:
+
+```bash
+QBIT_MANAGE_BOOTSTRAP_CONFIRM='bootstrap:media:qbit-manage' \
+  mise exec -- just bootstrap qbit-manage
+```
+
+Attend the first corrected policy run. The
+[mistaken-clean runbook](../runbooks/qbit-manage-mistaken-clean.md) covers exact-item
+recovery and stop conditions.
+
 ## Failure and containment
 
 ### Authentication failure
@@ -287,14 +331,14 @@ containment procedure.
 The bootstrap trap re-suspends the qbit_manage Kustomization after a failed resumed run.
 Flux suspension preserves existing resources, so a Deployment that already exists can
 continue its 15-minute policy loop. Check whether the workload is still active. If it
-must stop, use the containment runbook.
+must stop, run the guarded containment command above.
 
 ### Unexpected classification or cleanup
 
 Changing only the qbit_manage Kustomization to `spec.suspend: true` stops reconciliation;
-it does not stop the running scheduler. Use
+it does not stop the running scheduler. Run the guarded containment command above. Use
 [Recover a qbit_manage mistaken clean](../runbooks/qbit-manage-mistaken-clean.md)
-for the exact containment procedure.
+when download-side data was moved or removed.
 
 Containment temporarily freezes the ownership chain from the top-level `flux-system`
 Kustomization through `cluster-apps`, the qbit_manage Kustomization, and its HelmRelease
@@ -302,8 +346,8 @@ before scaling qbit_manage to zero. The higher-level freeze prevents an active o
 from immediately recreating the child state. It affects broader GitOps reconciliation,
 so keep it only as long as required to merge and verify the durable child suspension.
 
-Do not duplicate or improvise those commands from this guide. Use the pinned runbook and
-its generation, source-revision, zero-replica, empty-Pod, and safe-resume checks.
+The command owns the generation, source-revision, zero-replica, empty-Pod, and
+safe-resume checks.
 
 ## Recover a mistaken clean
 
@@ -333,4 +377,5 @@ operator recovery problem.
 | [`.just/bootstrap.just`](../../.just/bootstrap.just) | Implements guarded suspended-source bootstrap. |
 | [`scripts/validate/qbit-manage.sh`](../../scripts/validate/qbit-manage.sh) | Validates source, policy wiring, rollout stamps, and rendered resources. |
 | [`scripts/verify/qbit-manage.sh`](../../scripts/verify/qbit-manage.sh) | Performs sanitized live readiness and authentication verification. |
-| [`docs/runbooks/qbit-manage-mistaken-clean.md`](../runbooks/qbit-manage-mistaken-clean.md) | Owns the containment and mistaken-clean recovery commands. |
+| [`scripts/operations/qbit-manage-contain.sh`](../../scripts/operations/qbit-manage-contain.sh) | Owns guarded containment and Flux-owner restoration. |
+| [`docs/runbooks/qbit-manage-mistaken-clean.md`](../runbooks/qbit-manage-mistaken-clean.md) | Guides human identification, exact-item recovery, and safe-resumption decisions. |
