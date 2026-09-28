@@ -146,19 +146,14 @@ def load_impact(path: Path, catalog_path: Path) -> ImpactConfig:
         )
     conditional = config["conditional_paths"]
     require(
-        isinstance(conditional, dict) and set(conditional) == {"observability", "automation"},
-        "conditional_paths must map observability and automation",
+        isinstance(conditional, dict) and set(conditional) == set(GROUPS[1:]),
+        "conditional_paths must map each optional group",
     )
     return ImpactConfig(
         GROUPS,
         MappingProxyType(EXECUTIONS.copy()),
         patterns(config["full_paths"], "full_paths"),
-        MappingProxyType(
-            {
-                group: patterns(conditional[group], group)
-                for group in ("observability", "automation")
-            }
-        ),
+        MappingProxyType({group: patterns(conditional[group], group) for group in GROUPS[1:]}),
         patterns(config["core_paths"], "core_paths"),
     )
 
@@ -340,9 +335,6 @@ def read_plan(path: Path) -> Plan:
         "plan groups must include core and be unique, known, and canonically ordered",
     )
     require(
-        "ci-framework" not in groups or groups == list(GROUPS), "ci-framework requires full groups"
-    )
-    require(
         payload["mode"] == ("full" if groups == list(GROUPS) else "selective"),
         "plan mode does not match selected groups",
     )
@@ -378,7 +370,7 @@ def read_plan(path: Path) -> Plan:
             require(wanted == ["core"], "core reason must select only core")
         else:
             require(
-                len(wanted) > 1 and "ci-framework" not in wanted,
+                len(wanted) > 1,
                 "conditional reason must select conditional groups",
             )
     require(

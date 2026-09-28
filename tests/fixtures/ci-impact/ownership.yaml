@@ -1,5 +1,64 @@
 schema_version: 1
 contracts:
+  campaign-documentation:
+    changed_inputs:
+      - README.md
+      - tests/README.md
+      - docs/guides/test-campaign-operations.md
+      - docs/guides/agent-cluster-access.md
+    required_tests:
+      - catalog:validation.links
+      - shell:campaign-runner
+  narrow-just-commands:
+    changed_inputs:
+      - .just/cluster.just
+      - .just/node.just
+    required_tests:
+      - shell:cluster-commands
+  chainsaw-lint:
+    changed_inputs:
+      - tests/chainsaw/smoke/platform/portainer/chainsaw-test.yaml
+      - tests/chainsaw/resilience/qbittorrent-vpn-disconnect/chainsaw-test.yaml
+      - tests/fixtures/chainsaw/lint/chainsaw-test.yaml
+    required_tests:
+      - setup:chainsaw-test-files
+  chainsaw-n8n-consumer:
+    changed_inputs:
+      - tests/chainsaw/smoke/platform/n8n/chainsaw-test.yaml
+    required_tests:
+      - setup:chainsaw-test-files
+      - catalog:validation.n8n
+  chainsaw-documentation:
+    changed_inputs:
+      - tests/chainsaw/README.md
+      - tests/fixtures/chainsaw/README.md
+    required_tests:
+      - catalog:validation.links
+  allure-report-unit:
+    changed_inputs:
+      - scripts/test/test_allure_report.py
+    required_tests:
+      - python:scripts/test/test_allure_report.py
+  junit-tools-unit:
+    changed_inputs:
+      - scripts/test/test_junit_tools.py
+    required_tests:
+      - python:scripts/test/test_junit_tools.py
+  report-publisher-unit:
+    changed_inputs:
+      - scripts/test/test_report_publish.py
+    required_tests:
+      - python:scripts/test/test_report_publish.py
+  repository-secret-scan-unit:
+    changed_inputs:
+      - scripts/test/test_repository_secret_scan.py
+    required_tests:
+      - python:scripts/test/test_repository_secret_scan.py
+  repository-shell-validation-unit:
+    changed_inputs:
+      - scripts/test/test_repository_shell_validation.py
+    required_tests:
+      - python:scripts/test/test_repository_shell_validation.py
   public-webhook-routes:
     changed_inputs:
       - scripts/validate/public-webhook-routes.sh

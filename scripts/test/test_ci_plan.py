@@ -53,6 +53,8 @@ class ClassificationTests(unittest.TestCase):
             ".github/workflows/ci.yml",
             "tests/impact.yaml",
             "tests/catalog.yaml",
+            ".just/bootstrap.just",
+            ".just/repository.just",
             "talos/patches/global/machine.yaml",
             "kubernetes/flux/cluster/ks.yaml",
             "kubernetes/apps/flux-system/flux/app/helmrelease.yaml",
@@ -86,13 +88,19 @@ class ClassificationTests(unittest.TestCase):
                 )
 
     def test_unmapped_inputs_fail_broad(self):
-        for path in ("unknown/new.yaml", "scripts/test/new-shared-tool.sh"):
+        for path in (
+            "unknown/new.yaml",
+            "scripts/test/new-shared-tool.sh",
+            "scripts/test/test_new_framework.py",
+            ".just/new.just",
+            "tests/chainsaw/smoke/platform/new/support.yaml",
+        ):
             self.assertEqual(classify([Change("A", None, path)], self.impact, full=False), FULL)
 
     def test_empty_diff_still_requires_core(self):
         self.assertEqual(classify([], self.impact, full=False), ("core",))
 
-    def test_campaign_consumed_documentation_selects_explicit_full(self):
+    def test_campaign_consumed_documentation_selects_its_runner(self):
         for path in (
             "README.md",
             "tests/README.md",
@@ -103,8 +111,45 @@ class ClassificationTests(unittest.TestCase):
                 groups, reasons = planner.select(
                     [Change("M", None, path)], self.impact, full=False
                 )
-                self.assertEqual(groups, ("core", "observability", "automation", "ci-framework"))
-                self.assertEqual(reasons[0]["reason"], "full")
+                self.assertEqual(groups, ("core", "ci-framework"))
+                self.assertEqual(reasons[0]["reason"], "conditional")
+
+    def test_narrow_chainsaw_inputs_select_lint_and_real_consumers(self):
+        cases = {
+            "tests/chainsaw/smoke/platform/portainer/chainsaw-test.yaml": ("core", "ci-framework"),
+            "tests/chainsaw/smoke/platform/n8n/chainsaw-test.yaml": (
+                "core",
+                "automation",
+                "ci-framework",
+            ),
+            "tests/chainsaw/resilience/qbittorrent-vpn-disconnect/chainsaw-test.yaml": (
+                "core",
+                "ci-framework",
+            ),
+            "tests/fixtures/chainsaw/lint/chainsaw-test.yaml": ("core", "ci-framework"),
+            "tests/chainsaw/README.md": ("core",),
+        }
+        for path, expected in cases.items():
+            with self.subTest(path=path):
+                self.assertEqual(
+                    classify([Change("M", None, path)], self.impact, full=False), expected
+                )
+
+    def test_narrow_command_and_framework_test_inputs_select_owners(self):
+        cases = {
+            ".just/node.just": ("core",),
+            ".just/cluster.just": ("core",),
+            "scripts/test/test_allure_report.py": ("core", "ci-framework"),
+            "scripts/test/test_junit_tools.py": ("core", "ci-framework"),
+            "scripts/test/test_report_publish.py": ("core", "ci-framework"),
+            "scripts/test/test_repository_secret_scan.py": ("core", "ci-framework"),
+            "scripts/test/test_repository_shell_validation.py": ("core", "ci-framework"),
+        }
+        for path, expected in cases.items():
+            with self.subTest(path=path):
+                self.assertEqual(
+                    classify([Change("M", None, path)], self.impact, full=False), expected
+                )
 
     def test_unconsumed_synthetic_documentation_still_selects_core(self):
         self.assertEqual(
@@ -427,6 +472,27 @@ class OwnershipContractTests(unittest.TestCase):
                         f"input {path} selects {selected}, which omits required evidence",
                     )
 
+    def test_every_tracked_chainsaw_test_runs_its_lint(self):
+        tracked = subprocess.run(
+            ["git", "ls-files", "-z", "--", "tests/chainsaw", "tests/fixtures/chainsaw"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+        ).stdout
+        test_files = [
+            os.fsdecode(raw_path)
+            for raw_path in tracked.split(b"\0")
+            if raw_path and Path(os.fsdecode(raw_path)).name == "chainsaw-test.yaml"
+        ]
+        self.assertTrue(test_files)
+        for path in test_files:
+            with self.subTest(path=path):
+                selected = classify([Change("M", None, path)], self.impact, full=False)
+                selected_work = frozenset().union(*(self.group_work[group] for group in selected))
+                self.assertIn("setup:chainsaw-test-files", selected_work)
+                if path == "tests/chainsaw/smoke/platform/n8n/chainsaw-test.yaml":
+                    self.assertIn("catalog:validation.n8n", selected_work)
+
     def test_every_openbao_source_input_has_core_ownership(self):
         fixture = yaml.safe_load(OWNERSHIP.read_text())
         owned = set(fixture["contracts"]["openbao-source"]["changed_inputs"])
@@ -623,6 +689,33 @@ class GitPlanTests(unittest.TestCase):
         self.assertNotEqual(payload["plan_id"], json.loads(first)["plan_id"])
         self.assertEqual(list(self.repo.glob(".plan.json.*")), [])
 
+    def test_selective_framework_document_plan_round_trips(self):
+        self.write("README.md", "Campaign instructions\n")
+        self.head = self.commit()
+        result = self.plan_cli()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        groups = self.cli("groups", "--plan", str(self.output))
+        self.assertEqual((groups.returncode, groups.stdout), (0, '["core","ci-framework"]\n'))
+        self.assertEqual(planner.read_plan(self.output).groups, ("core", "ci-framework"))
+        self.assertEqual(
+            self.cli("validate", "--plan", str(self.output), "--head", self.head).returncode,
+            0,
+        )
+
+    def test_selective_framework_and_automation_plan_round_trips(self):
+        self.write("tests/chainsaw/smoke/platform/n8n/chainsaw-test.yaml", "kind: Test\n")
+        self.head = self.commit()
+        result = self.plan_cli()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        groups = self.cli("groups", "--plan", str(self.output))
+        self.assertEqual(
+            (groups.returncode, groups.stdout),
+            (0, '["core","automation","ci-framework"]\n'),
+        )
+        self.assertEqual(
+            planner.read_plan(self.output).groups, ("core", "automation", "ci-framework")
+        )
+
     def test_full_fallback_records_unmatched_reason(self):
         self.write("unknown/new.txt", "unowned\n")
         self.head = self.commit()
@@ -664,6 +757,7 @@ class GitPlanTests(unittest.TestCase):
             ),
             original.replace("always: true", "always: false"),
             original.replace("full_paths:\n", "full_paths:\n  - 12\n"),
+            original.replace("  ci-framework:\n", "  missing-framework:\n"),
             original + "\ngroups: {}\n",
             "schema_version: 1\ngroups: [\n",
         ]
@@ -689,7 +783,6 @@ class GitPlanTests(unittest.TestCase):
             {**original, "groups": ["core", "core"]},
             {**original, "groups": ["core", "bogus"]},
             {**original, "groups": ["automation", "core"]},
-            {**original, "groups": ["core", "ci-framework"]},
             {**original, "mode": "full"},
             {**original, "schema_version": True},
             {**original, "base_sha": "HEAD"},
