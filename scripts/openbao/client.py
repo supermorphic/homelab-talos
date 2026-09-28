@@ -71,7 +71,10 @@ class BaoClient:
             headers['X-Vault-Token'] = token
         request = urllib.request.Request(url, data=body, headers=headers, method=method)
         try:
-            with self._open(request, timeout=self.timeout) as response:
+            # Raft initialization can finish after the ordinary API deadline;
+            # the one-time response contains the only initial recovery material.
+            timeout = 30 if method == 'POST' and path == 'sys/init' else self.timeout
+            with self._open(request, timeout=timeout) as response:
                 if response.geturl() != url:
                     raise ReadFailure('invalid-response')
                 if response.status < 200 or response.status >= 300:

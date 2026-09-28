@@ -132,6 +132,28 @@ class ClientTest(unittest.TestCase):
             client.post("sys/init", {"secret_shares": 1}, token="synthetic-token")
         self.assertEqual(len(calls), 1)
 
+    def test_slow_initialization_response_is_retainable_without_extending_other_writes(self):
+        calls = []
+
+        def open_request(request, timeout):
+            calls.append((request.full_url, timeout))
+            if timeout < 8:
+                raise TimeoutError("synthetic-response-still-pending")
+            return Response(
+                b'{"root_token":"synthetic-root","recovery_keys_base64":["synthetic-share"]}',
+                url=request.full_url,
+            )
+
+        client = BaoClient("https://openbao.example", opener=open_request)
+        response = client.post("sys/init", {"recovery_shares": 1, "recovery_threshold": 1})
+        self.assertEqual(response["root_token"], "synthetic-root")
+        self.assertEqual(response["recovery_keys_base64"], ["synthetic-share"])
+        with self.assertRaises(AmbiguousWrite):
+            client.post("sys/policies/acl/synthetic", {"policy": "synthetic"})
+        self.assertEqual(len(calls), 2)
+        self.assertGreaterEqual(calls[0][1], 8)
+        self.assertEqual(calls[1][1], 5)
+
 
 if __name__ == "__main__":
     unittest.main()

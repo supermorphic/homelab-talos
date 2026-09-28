@@ -275,6 +275,19 @@ recovery. A rerun against an initialized cluster refuses reinitialization even
 when later configuration failed. Configuration repair uses a separate command
 with an existing authorized OpenBao identity.
 
+The one-time initialization request has a longer, bounded 30-second response
+deadline because Raft setup can outlast ordinary five-second API calls. It
+still sends exactly one POST. If an unused staged cluster has no retained
+recovery material, an explicitly authorized operator can use the separate
+`openbao-reset-staged` command. It requires the deployed source, all six
+OpenBao Flux units suspended, the exact HelmRelease/server/claim identities,
+three initialized peers, no additional workload or route, and an empty selected
+recovery destination. It deletes the HelmRelease first so the Helm controller
+uninstalls the servers, then waits for the Pods to disappear before deleting
+the three exact claims with API UID and resource-version preconditions. The
+command stops on ambiguity or drift; it never retries initialization or
+performs a general production restore.
+
 ## Authentication and declarative issuance
 
 Bootstrap enables only the authentication needed for operator access, backup,

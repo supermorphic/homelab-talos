@@ -3285,3 +3285,7 @@ nocodb:
 # Attended OpenBao deployment or one-shot initialization with explicit credentials.
 openbao phase:
     @uv run --locked python -m scripts.openbao.operator {{quote(phase)}}
+
+# Operator-owned reset for an unused, staged OpenBao initialization.
+openbao-reset-staged:
+    @uv run --locked python -m scripts.openbao.reset reset-staged

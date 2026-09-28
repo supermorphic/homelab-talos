@@ -190,6 +190,7 @@ contracts:
       - scripts/openbao/manifests.py
       - scripts/openbao/operator.py
       - scripts/openbao/reader.py
+      - scripts/openbao/reset.py
       - scripts/openbao/restore.py
       - scripts/openbao/secrets.py
       - scripts/openbao/verify.py
@@ -206,6 +207,7 @@ contracts:
       - scripts/test/core/test_openbao_drift.py
       - scripts/test/core/test_openbao_manifests.py
       - scripts/test/core/test_openbao_pinned_contract.py
+      - scripts/test/core/test_openbao_reset.py
       - scripts/test/core/test_openbao_secrets.py
       - scripts/test/core/test_openbao_snapshot.py
       - scripts/test/core/test_openbao_verify.py
@@ -231,6 +233,7 @@ contracts:
       - python:scripts/test/core/test_openbao_client.py
       - python:scripts/test/core/test_openbao_drift.py
       - python:scripts/test/core/test_openbao_manifests.py
+      - python:scripts/test/core/test_openbao_reset.py
       - python:scripts/test/core/test_openbao_secrets.py
       - python:scripts/test/core/test_openbao_snapshot.py
       - python:scripts/test/core/test_openbao_verify.py

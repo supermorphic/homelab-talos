@@ -176,11 +176,19 @@ cluster state for recovery review; do not improvise a rollback.
 
 ## Failure and stop boundaries
 
-- Stop if seal material, the matching generation, backup access, or operator recovery
-  material is missing. Do not substitute an OpenBao-issued credential for a recovery
-  root.
+- For an established cluster, stop if seal material, the matching generation,
+  backup access, or operator recovery material is missing. Do not substitute
+  an OpenBao-issued credential for a recovery root.
 - Treat an ambiguous initialization result as initialized until inspected. Do not
-  retry, uninstall, delete claims, or regenerate the seal key.
+  retry, manually uninstall or delete claims, or regenerate the seal key.
+- If an unused staged initialization has no retained recovery bundle, use the
+  attended `mise exec -- just bootstrap openbao-reset-staged` workflow only
+  after explicitly authorizing replacement of that staged Raft state. Supply
+  the same explicit operator kubeconfig, empty initialization recovery directory,
+  public recovery recipient, and the reported `OPENBAO_RESET_CONFIRM` value.
+  The command requires all OpenBao Flux units suspended, removes the exact
+  HelmRelease and claims, and waits for their storage to disappear. Then run
+  guarded `prepare` and `initialize` again from clean deployed `main`.
 - Do not activate or call recovery complete while issuance, HA, restore, cleanup, or
   observer verification is failing.
 - A restore drill proves only its selected isolated backup. Production PVC/Raft
