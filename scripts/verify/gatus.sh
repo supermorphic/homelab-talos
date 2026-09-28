@@ -36,17 +36,45 @@ done
 [[ "$dns_answer" == "$gateway_ip" ]] || { echo "Pi-hole returned '$dns_answer' for gatus, not $gateway_ip." >&2; exit 1; }
 curl --silent --show-error --fail --max-time 15 --resolve "gatus.lab.supermorphic.com:443:$gateway_ip" https://gatus.lab.supermorphic.com/health >/dev/null
 
-echo_metric_response="$(
+for probe in echo openbao; do
+  metric_response="$(
+    flux_alerts_prometheus_query \
+      "$prometheus_base_url" \
+      "$prometheus_resolve" \
+      "gatus_results_endpoint_success{group=\"Platform\",name=\"$probe\"}"
+  )"
+  [[ "$(yq -r '.status // ""' <<<"$metric_response")" == 'success' ]]
+  [[ "$(yq -r '.data.result | length' <<<"$metric_response")" == '1' ]]
+  [[ "$(yq -r '.data.result[0].metric.group' <<<"$metric_response")" == 'Platform' ]]
+  [[ "$(yq -r '.data.result[0].metric.name' <<<"$metric_response")" == "$probe" ]]
+  [[ "$(yq -r '.data.result[0].value[1]' <<<"$metric_response")" == '1' ]] || {
+    echo "Platform/$probe Gatus probe is failing." >&2
+    exit 1
+  }
+  sample_epoch="$(yq -r '.data.result[0].value[0]' <<<"$metric_response")"
+  sample_epoch="${sample_epoch%%.*}"
+  [[ "$sample_epoch" =~ ^[0-9]+$ ]] || { echo "Platform/$probe Gatus sample has no valid timestamp." >&2; exit 1; }
+  sample_age="$(( $(date -u +%s) - sample_epoch ))"
+  (( sample_age >= -30 && sample_age <= 180 )) || {
+    echo "Platform/$probe Gatus sample is stale or dated in the future." >&2
+    exit 1
+  }
+done
+
+# The success gauge can remain set while Gatus stops running an individual probe.
+# Require an actual OpenBao result in the last five minutes as well.
+activity_response="$(
   flux_alerts_prometheus_query \
     "$prometheus_base_url" \
     "$prometheus_resolve" \
-    'gatus_results_endpoint_success{group="Platform",name="echo"}'
+    'sum(increase(gatus_results_total{group="Platform",name="openbao"}[5m]))'
 )"
-[[ "$(yq -r '.status // ""' <<<"$echo_metric_response")" == 'success' ]]
-[[ "$(yq -r '.data.result | length' <<<"$echo_metric_response")" == '1' ]]
-[[ "$(yq -r '.data.result[0].metric.group' <<<"$echo_metric_response")" == 'Platform' ]]
-[[ "$(yq -r '.data.result[0].metric.name' <<<"$echo_metric_response")" == 'echo' ]]
-[[ "$(yq -r '.data.result[0].value[1]' <<<"$echo_metric_response")" == '1' ]]
+[[ "$(yq -r '.status // ""' <<<"$activity_response")" == 'success' ]]
+[[ "$(yq -r '.data.result | length' <<<"$activity_response")" == '1' ]]
+[[ "$(yq -r '.data.result[0].value[1] | tonumber > 0' <<<"$activity_response")" == 'true' ]] || {
+  echo 'Platform/openbao Gatus probe has no recent execution.' >&2
+  exit 1
+}
 
 just kube foundation-verify
-echo 'Gatus acceptance passed: Kustomization and HelmRelease Ready, deployment rolled out (in-memory storage), HTTPRoute accepted, and the dashboard reachable with trusted HTTPS at gatus.lab.supermorphic.com. The deployed echo Gatus result proves ordinary DNS, trusted production wildcard TLS, the internal Gateway, route, Service, and backend.'
+echo 'Gatus acceptance passed: Kustomization and HelmRelease Ready, deployment rolled out (in-memory storage), HTTPRoute accepted, dashboard reachable with trusted HTTPS, and fresh successful Platform/echo and Platform/openbao probes. The echo probe proves the shared Gateway path; the OpenBao probe proves private credential-broker health.'

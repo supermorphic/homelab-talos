@@ -116,6 +116,7 @@ campaigns:
     members:
       - verification.metrics-server
       - verification.cilium
+      - verification.openbao
       - verification.flux
       - verification.foundation
       - verification.n8n
@@ -179,6 +180,7 @@ campaigns:
     members:
       - verification.metrics-server
       - verification.cilium
+      - verification.openbao
       - verification.flux
       - verification.foundation
       - verification.n8n

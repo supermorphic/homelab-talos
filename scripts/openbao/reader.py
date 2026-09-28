@@ -141,15 +141,16 @@ def monitoring_ready(service: dict, monitor: dict, rules: dict) -> bool:
 
 
 def source_phase(path: Path) -> str:
-    """Require all four source Flux units to agree on their activation phase."""
-    expected = {'openbao-prerequisites', 'openbao', 'openbao-access', 'openbao-acceptance'}
+    """Require all six source Flux units to agree on their activation phase."""
+    expected = {'openbao-prerequisites', 'openbao', 'openbao-access',
+                'openbao-acceptance', 'openbao-backup', 'openbao-monitoring'}
     try:
         docs = path.read_text().split('---')
     except OSError:
         raise SafeError('invalid-source') from None
     states = {}
     for document in docs:
-        name = re.search(r'^\s*name:\s*(openbao(?:-prerequisites|-access|-acceptance)?)\s*$',
+        name = re.search(r'^\s*name:\s*(openbao(?:-prerequisites|-access|-acceptance|-backup|-monitoring)?)\s*$',
                          document, re.MULTILINE)
         suspended = re.search(r'^\s*suspend:\s*(true|false)\s*$', document, re.MULTILINE)
         if name and suspended:

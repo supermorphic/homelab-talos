@@ -2,6 +2,42 @@ rule_files:
   - openbao.yaml
 evaluation_interval: 1m
 tests:
+  - name: private route probe is failing
+    interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Platform",name="openbao"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: OpenBaoPrivateRouteUnavailable
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: OpenBaoPrivateRouteUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, group: Platform, name: openbao}
+            exp_annotations: {summary: OpenBao private route probe is unavailable}
+  - name: private route probe is missing
+    interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: OpenBaoPrivateRouteUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, group: Platform, name: openbao}
+            exp_annotations: {summary: OpenBao private route probe is unavailable}
+  - name: private route success is stale when no new probes run
+    interval: 1m
+    input_series:
+      - series: 'gatus_results_endpoint_success{group="Platform",name="openbao"}'
+        values: '1x12'
+      - series: 'gatus_results_total{group="Platform",name="openbao",success="true"}'
+        values: '4x12'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: OpenBaoPrivateRouteUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, group: Platform, name: openbao}
+            exp_annotations: {summary: OpenBao private route probe is unavailable}
   - name: missing metrics
     interval: 1m
     input_series:

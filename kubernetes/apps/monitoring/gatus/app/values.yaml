@@ -93,6 +93,15 @@ config:
       interval: 1m
       conditions:
         - "[STATUS] == 200"
+    # Private credential broker health; a sealed or uninitialized server fails.
+    - name: openbao
+      group: Platform
+      url: "https://openbao.lab.supermorphic.com/v1/sys/health?standbyok=true"
+      interval: 1m
+      conditions:
+        - "[STATUS] == 200"
+        - "[BODY].initialized == true"
+        - "[BODY].sealed == false"
     # Portainer operational UI (black-box through internal DNS, TLS, Gateway,
     # Service, and the isolated application pod).
     - name: portainer

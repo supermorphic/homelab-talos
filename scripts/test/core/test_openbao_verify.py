@@ -235,14 +235,18 @@ class VerifyTest(unittest.TestCase):
 
     def test_source_phase_rejects_mixed_activation(self):
         source = ROOT / 'kubernetes/apps/security/openbao/ks.yaml'
-        # Server reconciliation alone is not active service acceptance.
-        with self.assertRaises(SafeError):
-            source_phase(source)
+        self.assertEqual(source_phase(source), 'active')
         with tempfile.TemporaryDirectory() as directory:
             altered = Path(directory) / 'ks.yaml'
             staged = source.read_text().replace('suspend: false', 'suspend: true')
             altered.write_text(staged)
             self.assertEqual(source_phase(altered), 'staged-absent')
+            import yaml
+            units = list(yaml.safe_load_all(source.read_text()))
+            next(u for u in units if u['metadata']['name'] == 'openbao-backup')['spec']['suspend'] = True
+            altered.write_text(yaml.safe_dump_all(units))
+            with self.assertRaises(SafeError):
+                source_phase(altered)
             altered.write_text(staged.replace('suspend: true', 'suspend: false', 1))
             with self.assertRaises(SafeError):
                 source_phase(altered)

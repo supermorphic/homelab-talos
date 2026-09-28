@@ -1,11 +1,10 @@
-# OpenBao staged package
+# OpenBao credential broker
 
-This package deploys an OpenBao credential broker with three Raft voters. The prerequisite,
-server, acceptance, and backup Flux units reconcile through Git. Private access and
-monitoring remain suspended pending attended acceptance. The guarded bootstrap workflow
-prepares the namespace Certificate and server after the operator supplies the encrypted
-`openbao-seal` Secret and independent recovery destination. Activate the private route
-and monitoring in Git after acceptance succeeds.
+This package deploys an OpenBao credential broker with three Raft voters. All six Flux
+units reconcile through Git. The guarded bootstrap workflow prepares the namespace
+Certificate and server after the operator supplies the encrypted `openbao-seal` Secret
+and independent recovery destination. Attended acceptance precedes Git activation
+of the private route and monitoring.
 The expected Secret key is `key`, containing exactly 32 random bytes. No Secret value is
 stored in this package.
 
@@ -18,11 +17,10 @@ verified against the registry's OCI index digest. The chart's default server ver
 
 Run `mise exec -- just kube openbao-validate` for offline source and rendered-chart checks.
 `validation.openbao` runs in both complete and core CI. The catalog registers
-`verification.openbao` with observer access, but excludes it from verification
-campaigns while any of this package's six Flux Kustomizations is suspended, the
-encrypted seal artifact is absent from the app Kustomization, or the staged Gatus
-endpoint is not enrolled. Direct
-observation of an absent staged service is not active acceptance. The human-owned
+`verification.openbao` with observer access and enrolls it in verification
+campaigns with final activation. It fails if any of this package's six Flux
+Kustomizations is suspended or the service is staged. Source validation requires
+the encrypted seal artifact and enrolled Gatus endpoint. The human-owned
 `test.openbao-issuance`, `test.openbao-ha`, and `test.openbao-restore-drill` suites
 remain standalone for intentional retained runs. No live result is claimed here.
 The reviewed OpenBao mounts, auth roles, policies, and Kubernetes issuance role live in
@@ -79,9 +77,9 @@ Longhorn's manager metrics Service for the backup and capacity alerts. The alert
 [OpenBao's documented metrics](https://openbao.org/docs/internals/telemetry/metrics/)
 and [Longhorn's last successful backup metric](https://longhorn.io/docs/1.12.0/monitoring/metrics/).
 The local CronJob success and off-cluster Longhorn transfer have separate freshness
-alerts. The private Homepage route is staged. The Gatus endpoint is retained as
-activation source in `kubernetes/apps/monitoring/gatus/app/openbao-activation.values.yaml`; it must
-be enrolled only after bootstrap and route activation.
+alerts. Homepage discovers the active private route. Gatus checks the private health
+endpoint; its expected configuration is retained in
+`kubernetes/apps/monitoring/gatus/app/openbao-activation.values.yaml`.
 
 See the [operator operations guide](../../../../docs/guides/openbao-operations.md) for
 seal creation, separate prepare/initialize confirmations, encrypted recovery retention,

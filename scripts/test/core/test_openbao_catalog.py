@@ -1,4 +1,4 @@
-"""OpenBao assurance stays staged until its durable Flux activation."""
+"""OpenBao assurance joins normal verification after durable Flux activation."""
 
 import base64
 import subprocess
@@ -17,7 +17,7 @@ MUTATING = {"test.openbao-issuance", "test.openbao-ha", "test.openbao-restore-dr
 
 
 class OpenBaoCatalogTests(unittest.TestCase):
-    def test_staged_catalog_registration(self):
+    def test_active_catalog_registration(self):
         catalog = yaml.safe_load(CATALOG.read_text())
         suites = {entry["metadata"]["id"]: entry for entry in catalog["suites"]}
         for execution in ("ci", "ci-core"):
@@ -29,9 +29,9 @@ class OpenBaoCatalogTests(unittest.TestCase):
         verifier = suites["verification.openbao"]
         self.assertEqual(verifier["access"]["tier"], "observer")
         self.assertFalse(verifier["metadata"]["mutates_cluster"])
-        self.assertIn("verification.openbao", catalog_validator.campaign_exclusions())
+        self.assertNotIn("verification.openbao", catalog_validator.campaign_exclusions())
         for campaign in ("verification", "scoped-verification"):
-            self.assertNotIn("verification.openbao", catalog["campaigns"][campaign]["members"])
+            self.assertIn("verification.openbao", catalog["campaigns"][campaign]["members"])
         for suite_id in MUTATING:
             self.assertEqual(suites[suite_id]["metadata"]["execution_owner"], "human")
             self.assertTrue(suites[suite_id]["metadata"]["mutates_cluster"])

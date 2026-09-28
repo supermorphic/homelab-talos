@@ -8,10 +8,11 @@ node, after reviewing the existing cluster, and accepted this specification with
 refinements to the seal threat model and configuration-drift verification.
 The source implementation is merged. Seal material and the initialization recovery
 bundle are retained by the operator; three servers are initialized and Ready.
-The prerequisite and server Flux units reconcile through Git. Access, acceptance,
-backup, and monitoring remain suspended while configuration and bootstrap completion
-are attended. Integration activation and live acceptance are not complete. A passing local or CI gate is
-candidate source evidence only; issue 449 remains open until deployed acceptance.
+The prerequisite, server, acceptance, and backup Flux units reconcile through Git.
+The private route and monitoring activate through a reviewed Git change after
+attended issuance, HA, and restore acceptance. Source and CI results are candidate
+evidence only; issue 449 remains open until deployed route and monitoring
+verification pass.
 
 Deploy OpenBao inside the Talos cluster to issue short-lived credentials for
 pre-existing Kubernetes ServiceAccounts. Git and Flux own every ServiceAccount,
@@ -611,11 +612,11 @@ Implement commands using the [repository command lifecycle](../reference/reposit
 and register assurance in the [test catalog](../../tests/catalog.yaml).
 
 The implemented catalog uses `validation.openbao` in core CI and registers
-`verification.openbao` as observer-tier observation. The verifier is excluded
-from verification and scoped-verification campaigns while any OpenBao Flux unit
-is suspended, the encrypted seal artifact is absent from the app Kustomization,
-or the Gatus endpoint is not enrolled. It fails on staged absence, incomplete
-reads and observed drift.
+`verification.openbao` as observer-tier observation. The verifier enters
+verification and scoped-verification campaigns with final activation. It fails
+on any suspended OpenBao Flux unit, staged absence, incomplete reads, or
+observed drift. Source validation requires the encrypted seal artifact and
+enrolled Gatus endpoint.
 The attended `test.openbao-issuance`, `test.openbao-ha`, and
 `test.openbao-restore-drill` suites are human-owned standalone entries. Their
 catalog registration does not authorize live mutation. Normal CI does not run
