@@ -1,10 +1,9 @@
-# Repository and worktree setup
+# Repository and worktree workflow
 
 ## Purpose and mental model
 
-Use this guide to prepare a new primary checkout and to create or receive an isolated
-worktree for repository tasks. It covers local repository setup. It does not bootstrap,
-repair, or change the live Talos or Flux platform.
+Use this guide to prepare a checkout, work in an isolated task worktree, and submit a
+change. It does not bootstrap, repair, or change the live Talos or Flux platform.
 
 Repository policy in [`AGENTS.md`](../../AGENTS.md) defines who may perform each action.
 The local setup model is:
@@ -178,14 +177,44 @@ linked Git worktrees. A normal linked worktree therefore does not need another
 `mise trust` command. A separate clone is not a linked worktree and needs its own
 one-time review and trust decision.
 
-From the assigned worktree, run:
+When a complete baseline is useful, run from the assigned worktree:
 
 ```bash
 mise exec -- just ci
 ```
 
-This proves that the source passes the canonical local gate before the task adds any
-live cluster dependency. It does not create cluster credentials or contact the cluster.
+This runs the complete offline suite. It does not create cluster credentials or contact
+the cluster. It is optional during routine contribution work.
+
+## Prepare, validate, and publish a change
+
+Read the source and its adjacent README or runbook before editing. If the toolchain
+changed, run `mise exec -- just repo tools`. Edit source files, run the relevant focused
+checks through the pinned toolchain, and inspect the diff and `git status`. Check that
+generated configuration, decrypted secrets, kubeconfig, talosconfig, and private keys
+are not staged. Install commit-time hooks once per clone with
+`mise exec -- just repo hooks`; they cover linked worktrees. Commit coherent changes
+on the feature branch. `mise exec -- just repo lint` runs the hooks across the repository
+when broader coverage is useful.
+
+Before each push, fetch `origin` and inspect both `origin/main` and the remote feature
+branch. If the remote feature branch has unexpected commits, stop. If `main` advanced,
+rebase the clean feature branch and rerun affected focused checks. Do not rebase with
+uncommitted changes. Push the feature branch and open or update its pull request with
+`mise exec -- gh pr create` or the GitHub PR interface. A rewritten remote branch may be
+pushed only with `--force-with-lease` after the remote-state check. See
+[`AGENTS.md`](../../AGENTS.md#git-and-worktrees) for the full Git safety policy.
+
+GitHub's CI workflow plans `core` plus affected groups and requires the hosted
+`merge-gate` result for the exact candidate and required base. After a push or rebase,
+wait for fresh hosted validation. The operator must authorize each specific merge.
+Local `mise exec -- just ci` runs the complete cluster-independent suite, and
+`mise exec -- just test ci-publish` runs the planned groups against freshly fetched
+`origin/main` from a clean committed worktree. Both are optional for routine PRs;
+use them to reproduce hosted failures or validate CI and selection changes. See
+[`tests/README.md`](../../tests/README.md#deterministic-ci-groups-and-ownership-checks)
+for group ownership and local validation details, and the
+[GitHub protection guide](github-main-protection.md) for the enforced branch settings.
 
 ## Cluster access is not installed by default
 

@@ -252,9 +252,10 @@ validation includes:
 - focused tests for the simplified link-integrity checker;
 - repository-wide link validation;
 - repository lint and staged-blob or secret checks where applicable; and
-- `mise exec -- just ci` as the canonical full, cluster-independent validation gate.
+- a full local `mise exec -- just ci` run for that migration.
 
-After any required rebase, rerun affected validation including `mise exec -- just ci`.
+Current PR and rebase procedure is in the
+[repository and worktree guide](../guides/repository-worktree-setup.md#prepare-validate-and-publish-a-change).
 
 ## Completion criteria
 

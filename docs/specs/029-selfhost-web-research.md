@@ -523,8 +523,9 @@ validation `401`, and a late `401` for a superseded token generation separately.
 Explicitly test bootstrap replacement and coordinated server rollout. Keep the
 route unavailable if a required policy or usable credential is absent.
 
-Before publication, commit the candidate and run
-`mise exec -- just test ci-publish` from a clean feature worktree. Operator bootstrap
+Before publication, follow the
+[contributor workflow](../guides/repository-worktree-setup.md#prepare-validate-and-publish-a-change).
+Operator bootstrap
 precedes initial deployment. Required live acceptance precedes Gatus activation and
 declaring the platform ready. Merge needs explicit operator authorization. Reconcile
 this specification with implemented and validated behavior.

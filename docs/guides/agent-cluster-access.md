@@ -323,34 +323,9 @@ is rejected.
 
 ## Plan and run scoped verification
 
-Run the current executable campaign directly:
-
-```bash
-mise exec -- just test scoped-campaign
-```
-
-The run repeats scoped preflight, freezes and displays the campaign membership, source
-revision, plan digest, and effects, then starts the first verifier. To inspect those
-inputs without starting the campaign, use the optional read-only preview:
-
-```bash
-mise exec -- just test scoped-campaign-plan
-```
-
-The plan and run fail closed unless all of these conditions hold:
-
-- The checkout is a clean linked Git worktree.
-- `.kube/config` and `.talos/config` are inside that worktree and have mode `0600`.
-- The kubeconfig contains exactly the `homelab-observer`, `homelab-diagnostic`, and
-  `homelab-report-publisher` contexts and token users, with `homelab-observer` current
-  and no administrator identity.
-- The Talos credential has exactly the `os:reader` role.
-
-The scoped campaign runs every catalog member assigned to the observer or diagnostic
-tier. Observer is the default identity. A verifier that needs exec or port-forward must
-explicitly select `homelab-diagnostic`. The campaign records and validates canonical
-results locally. It does not acquire the cluster test Lease, publish reports, or run as
-part of the cluster-independent `just ci` gate.
+Use the [test campaign guide](test-campaign-operations.md#run-scoped-verification) for the
+scoped campaign procedure, preflight, and result handling. The observer is the default
+identity; a verifier that needs exec or port-forward selects `homelab-diagnostic`.
 
 The catalog's `execution_owner: human` metadata distinguishes these interactive live
 suites from shared automation. It does not require the operator to type the command when

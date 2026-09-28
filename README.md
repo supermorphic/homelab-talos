@@ -20,99 +20,23 @@ operator UI, domain source adoption, targeted rotation, failure decisions, and a
 acceptance. The [platform disaster recovery runbook](docs/runbooks/platform-disaster-recovery.md#nocodb-metadata-recovery)
 identifies NocoDB recovery roots and the lost-key boundary.
 
-## Development workflow
+## Contributing and validation
 
-`main` is the Flux **production deployment boundary** — Flux reconciles it onto the
-live cluster — so every change enters through a protected pull request:
+`main` is the Flux production deployment boundary. Changes enter through protected
+pull requests. Follow the [repository and worktree guide](docs/guides/repository-worktree-setup.md#prepare-validate-and-publish-a-change)
+for preparation, focused checks, rebases, and PR updates. [`AGENTS.md`](AGENTS.md)
+defines repository policy and authority boundaries.
 
-```bash
-mise exec -- just repo hooks     # once per clone; installs the commit-time hooks
-git fetch origin
-git switch -c feat/<short-description> origin/main
-# ... make changes ...
-git add -A
-git commit -m "..."             # staged-file hooks provide fast feedback
-git fetch origin
-git rebase origin/main           # when main advanced and the branch is clean
-mise exec -- just ci             # required before opening or updating a PR
-git push -u origin HEAD
-mise exec -- gh pr create
-```
+GitHub plans affected, cluster-independent validation groups for each pull request.
+The required `merge-gate` reconciles their results for the current candidate and base.
+Local `mise exec -- just ci` runs the complete offline suite when useful; it is
+optional for routine PRs. See [test framework details](tests/README.md#deterministic-ci-groups-and-ownership-checks)
+and the [GitHub protection guide](docs/guides/github-main-protection.md).
 
-Commit-time pre-commit hooks are the only automatic local gate and inspect staged
-files, so install them with `mise exec -- just repo hooks` in every fresh clone —
-an uninstalled hook suite silently removes that gate. `mise exec -- just repo lint`
-runs the same hook suite repository-wide. The hook recipe installs into Git's shared
-common directory and configures `core.hooksPath` to use it. One installation covers the
-clone and its linked worktrees; rerunning the recipe from either location is safe.
-Run `mise exec -- just ci`, the single canonical full validation command, before
-opening or updating a pull request and again after a required rebase. The required
-GitHub Actions `ci` check is the authoritative merge gate for every pull request
-targeting `main`. It needs network egress for public Helm
-charts but **no kubeconfig, SOPS age key, cluster access, or repository secrets**.
-
-The active `Protect main` ruleset requires the branch to be current, the GitHub
-Actions `ci` check to pass, and squash as the only merge method. Actions validates
-GitHub's merge candidate; with the strict up-to-date rule, the later squash commit
-has different commit identity but the equivalent source tree. The operator reviews
-and merges, then Flux reconciles the resulting `main`. See the
-[GitHub protection guide](docs/guides/github-main-protection.md) for the applied settings, GitHub
-inspection locations, complete verification, and guarded recovery.
-
-### Test cadence and campaigns
-
-Use this cadence so "full test suite" has one unambiguous meaning:
-
-| Cadence | Run | Purpose |
-| --- | --- | --- |
-| Every PR | `mise exec -- just ci` | Required cluster-independent source gate; GitHub runs this automatically |
-| Nightly | `standard` campaign | Validation, smoke, E2E, and quick conformance, with every canonical child uploaded to Allure |
-| Weekly | `weekly` campaign | Nightly coverage plus verification, integration, probes, and disruptive resilience |
-| Full | `full` campaign | Every implemented assurance suite, including certified conformance; run monthly and around major platform upgrades |
-
-Preview the desired campaign from clean, deployed `origin/main`:
-
-```bash
-mise exec -- just test campaign-plan standard
-mise exec -- just test campaign-plan weekly
-mise exec -- just test campaign-plan full
-```
-
-Then run the exact confirmation command printed by its plan:
-
-```bash
-TEST_CAMPAIGN_CONFIRM='<standard token printed by campaign-plan>' \
-  mise exec -- just test campaign standard
-TEST_CAMPAIGN_CONFIRM='<weekly token printed by campaign-plan>' \
-  mise exec -- just test campaign weekly
-TEST_CAMPAIGN_CONFIRM='<full token printed by campaign-plan>' \
-  mise exec -- just test campaign full
-```
-
-Every published campaign token binds the campaign, source revision, and plan digest.
-Campaigns capture and publish every child run automatically. See the
-[test campaign guide](docs/guides/test-campaign-operations.md) for focused campaigns,
-failure behavior, resume, and exact membership.
-
-n8n assurance remains in the existing tier campaigns; it does not add a dedicated
-campaign:
-
-- `verification.n8n` -> `verification`, `scoped-verification`, `weekly`, `full`
-- `chainsaw.smoke.platform.n8n` -> smoke coverage, `standard`, `weekly`, `full`
-- `test.n8n-restore-drill` -> `integration`, `weekly`, `full`
-- `test.n8n-persistence` -> `resilience`, `weekly`, `full`
-
-Before an operator starts a `weekly` or `full` campaign, they must silently prompt for
-and export `N8N_CANARY_TOKEN`; unset it after the campaign completes. The token value must
-not appear in the catalog or campaign plan.
-
-### Agent workflow
-
-Agents use the development workflow above. Repository authority, credential, live-action,
-publication, and merge boundaries are defined only in [`AGENTS.md`](AGENTS.md);
-[`CLAUDE.md`](CLAUDE.md) is a thin adapter. The
-[agent cluster-access guide](docs/guides/agent-cluster-access.md) describes the current
-task-scoped credential procedure.
+For live assurance, use the [test campaign guide](docs/guides/test-campaign-operations.md)
+for cadence, recorded acceptance, publication, and campaign procedures. The
+[agent cluster-access guide](docs/guides/agent-cluster-access.md) covers task-scoped
+credentials.
 
 ## Physical KVM Note
 
@@ -295,7 +219,7 @@ available for focused developer validation.
 | `just kube portainer-verify` | Verify live Portainer, internal HTTPS, storage, policy, and effective authorization | Worktree-local scoped credentials | Approved read-oriented scoped verification |
 | `just kube portainer-persistence-test` | Recreate the Portainer pod and prove the original PVC and UI recover | `PORTAINER_PERSISTENCE_CONFIRM` | Operator-only and disruptive after confirmation |
 | `just test smoke platform portainer` | Run read-only Portainer deployed-state assertions | `.kube/config` | Operator-only |
-| `just ci` | Run the cluster-independent, secret-free validation gate and write one canonical fail-fast JUnit/JSON result | — | Manual local check + authoritative GitHub PR gate; Actions retains the artifact for 90 days |
+| `just ci` | Run the complete cluster-independent, secret-free validation suite and write one canonical JUnit/JSON result | — | Optional local check; GitHub requires hosted `merge-gate` |
 | `just test validate` | Validate the suite catalog and canonical artifact contract; lint Chainsaw configuration/tests, enforce read-only smoke policy, parse test YAML, and check test scripts | — | Cluster-independent; included in `just ci` |
 | `just test catalog-validate` | Validate suite metadata, implementations, dispatch uniqueness, and mutation guards | — | Cluster-independent; included in `just test validate` |
 | `just test result-validate <run-id>` | Validate one finalized canonical run, including JUnit/summary consistency, evidence size/path safety, and its complete evidence index | `.test-results/<run-id>` | Cluster-independent; coordinated runners invoke it automatically |
@@ -307,7 +231,7 @@ available for focused developer validation.
 | `just test campaign-resume <campaign-run-id>` | Retry failed publication and continue unstarted campaign members without rerunning completed suites | `TEST_CAMPAIGN_CONFIRM=resume-publish:<campaign-run-id>` | Only publication-failed campaigns are resumable |
 | `just kube test-reports-validate` | Validate the suspended persistent Caddy report host, RWO/Recreate storage, isolation, metrics, and atomic installer | — | Cluster-independent; included in `just ci` |
 | `just bootstrap test-reports` | Guardedly resume the staged report host and run live acceptance | `TEST_REPORTS_BOOTSTRAP_CONFIRM=bootstrap:test-reports` | Operator-only; mutating after confirmation |
-| `just test publish <run-id>` | Secret-scan and publish one canonical run plus static Allure report to the retained in-cluster archive | `.kube/config`; `TEST_REPORT_PUBLISH_CONFIRM=publish:test-report:<run-id>` | Operator-only; no upload API |
+| `just test publish <run-id>` | Secret-scan and publish one canonical run plus static Allure report to the retained in-cluster archive | Task-scoped publisher in linked worktrees, or exact run confirmation for manual publication | Publication only; see the test campaign guide |
 | `just kube test-reports-verify` | Verify the live report host, PVC, no-RBAC runtime, internal HTTPS, policy, monitoring resources, and catalog | `.kube/config` | Operator-only and read-only |
 | `just test smoke cluster` | Run the read-only Flux readiness proof and write evidence under `.test-results/` | `.kube/config` | Operator-only; never in `just ci` |
 | `just test smoke cluster diagnostics-self-test` | Deliberately fail a read-only assertion to prove catch/fallback diagnostics and failure preservation | `.kube/config` | Operator-only; expected failure |
@@ -506,20 +430,8 @@ restoring access after workstation or cluster loss.
 
 ## Normal Change Workflow
 
-1. Read the source-adjacent README and current documentation for the subsystem.
-2. Run `just repo tools` after pulling a change to `.mise.toml` or `mise.lock`.
-3. Load the SOPS identity only when the change requires encrypted material.
-4. Edit declarative source files, never generated output.
-5. Run the subsystem's generation or validation recipe when it is available.
-6. Inspect `git status` and confirm no generated config, decrypted secret,
-   kubeconfig, talosconfig, or private key is trackable.
-7. Run `mise exec -- just ci` before opening or updating a pull request. After a
-   required rebase, rerun affected validation, including `mise exec -- just ci`.
-8. Commit on the feature branch, push it, and open a pull request. GitHub's required
-   `ci` check supplies the authoritative full validation result.
-
-Do not bypass a disabled recipe with a raw cluster-changing command. Enable and
-test the guarded recipe in the subsystem that owns that operation.
+Follow the [contributor procedure](docs/guides/repository-worktree-setup.md#prepare-validate-and-publish-a-change).
+Repository policy and live-action authority remain in [`AGENTS.md`](AGENTS.md).
 
 ## Updating Tool Versions
 

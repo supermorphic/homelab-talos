@@ -109,10 +109,10 @@ The full `mise exec -- just ci` command remains available. See
 [Spec 027](../docs/specs/027-deterministic-ci-gates.md)
 for the shadow, split-all, and selective rollout checkpoints and protection transition.
 
-### Local publication gate
+### Optional local publication validation
 
-Commit your candidate, leave the worktree clean, and run
-`mise exec -- just test ci-publish` before opening or updating a PR. The command fetches
+For a local reproduction of hosted selection or a CI change, commit the candidate,
+leave the worktree clean, and run `mise exec -- just test ci-publish`. The command fetches
 `origin/main`, requires it to be an ancestor of the candidate, and runs the groups
 selected by the same impact map used on GitHub. For example, ordinary spec edits
 select core; an automation-owned edit also selects automation; shared framework edits
@@ -179,18 +179,9 @@ truncated, schema-invalid, status-inconsistent, or corrupt artifact, always
 recomputes the complete canonical validation and writes its harness JUnit
 fragment when result fragments are enabled.
 
-For routine grouped execution and automatic Allure publication, use
-`mise exec -- just test campaign-plan <name>` followed by its printed
-`mise exec -- just test campaign <name>` command. The `standard`, `weekly`, and
-`full` compositions provide nightly, weekly, and complete coverage respectively. Every
-published command binds its campaign, source revision, and plan digest. Approved scoped
-verification runs directly with `mise exec -- just test scoped-campaign`; its separate
-plan is optional, and the run repeats preflight and displays its frozen inputs.
-The integration campaign includes the exact-confirmed `test.ntfy-publish` suite. Therefore,
-the weekly and full campaigns send three explicit ntfy test notifications to `media`,
-`critical`, and `homelab` after the suite's observational preflight.
-See `docs/guides/test-campaign-operations.md` for campaign selection, cadence, safety stops, and resume
-behavior.
+For campaign selection, cadence, recorded acceptance, publication, and resume, use the
+[test campaign guide](../docs/guides/test-campaign-operations.md). Current membership and
+effects come from [`catalog.yaml`](catalog.yaml).
 
 n8n assurance remains in the existing tier campaigns; it does not add a dedicated
 campaign:

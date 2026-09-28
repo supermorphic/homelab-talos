@@ -530,8 +530,8 @@ the NocoDB Flux Kustomization to `spec.suspend: false`, adds the Homepage
 and NocoDB alert rules, and enrolls `verification.nocodb` in both verification campaigns.
 Homepage discovers the tile from the NocoDB HTTPRoute; it needs no API credential.
 
-Run `mise exec -- just test ci-publish` from the clean candidate. The human operator
-reviews and merges the PR, then waits for Flux source parity. Then run
+Follow the [contributor workflow](repository-worktree-setup.md#prepare-validate-and-publish-a-change).
+The human operator reviews and merges the PR, then waits for Flux source parity. Then run
 `mise exec -- just kube nocodb-verify`, confirm the Homepage link opens the private UI,
 and confirm the Gatus NocoDB endpoint is healthy. Record and publish the final evidence.
 After activation verification, complete the backup and restore step below. Do not

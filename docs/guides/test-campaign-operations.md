@@ -39,7 +39,8 @@ its result: keep it local, run and record it, or publish an already-finalized ru
 
 | Mode | Cluster access | Publication | Use it for |
 | --- | --- | --- | --- |
-| `mise exec -- just ci` | None | None | Required pull-request and source validation |
+| Hosted `merge-gate` | None | None | Required pull-request validation of selected offline groups |
+| `mise exec -- just ci` | None | None | Optional complete local offline validation |
 | Standalone suite | Depends on the suite | Manual, when wanted | Focused investigation or one assurance target |
 | Scoped campaign | Worktree-local observer/diagnostic credentials | None | Agent-autonomous, read-oriented live verification |
 | Recorded evidence | Existing suite credentials plus scoped publisher for worktrees | Automatic, including candidate results | Initiative completion and infrequent bootstrap, setup, provisioning, or recovery assurance |
@@ -56,7 +57,7 @@ monthly campaigns by itself.
 
 | When | Choice | Coverage |
 | --- | --- | --- |
-| Every pull request | `mise exec -- just ci` | Required cluster-independent validation; no publication |
+| Every pull request | Hosted `merge-gate` | Required selected cluster-independent validation; no publication |
 | Routine periodic assurance | `standard` | Validation, smoke, qbit_manage E2E, and quick conformance |
 | Broader periodic assurance | `weekly` | `standard` plus live verification, integration, probes, and resilience |
 | Deep or upgrade assurance | `full` | `weekly` plus certified Kubernetes conformance |
