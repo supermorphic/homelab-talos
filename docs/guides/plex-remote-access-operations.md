@@ -362,6 +362,33 @@ support is incomplete; see [Plex's Relay guidance](https://support.plex.tv/artic
 Do not add another inbound listener or port, enable UPnP/NAT-PMP, inject or replace
 raw Relay credentials, or widen Cilium or router policy to make Relay work.
 
+## Sonos / Plexamp troubleshooting
+
+First require healthy `mise exec -- just kube plex-verify` output and normal
+authenticated local Plex browse and playback. Then distinguish the two paths:
+
+| Failure | Check |
+| --- | --- |
+| The Plex service in the native Sonos app cannot browse or play | Confirm that Sonos is authorized to the intended Plex account and library. Confirm the Sonos network reaches the current Plex LoadBalancer on TCP `32400`, that discovery uses its private LoadBalancer-derived `plex.direct` address rather than the internal Envoy hostname, and that Pi-hole permits the private `plex.direct` answer. Test browse before playback. |
+| Native Sonos works, but Plexamp cannot find or control the player | Confirm Plex Pass, a full Plex account, the intended Sonos account link, and Plexamp sign-in to that account. Initial linking requires a supported Plex app on the Sonos network. |
+
+To restore the account link, temporarily put a supported Plex client on the Sonos
+network. Use its player menu to complete Sonos authorization with the intended full
+Plex account. Confirm the player appears there, return the client to its normal
+network, and verify Plexamp still lists and controls the player. Remove any temporary
+Sonos-network SSID created for this step. Plex documents the
+[same-network linking requirement](https://support.plex.tv/articles/control-sonos-playback-with-a-plex-app/).
+
+If linking works on the Sonos network but cross-VLAN control fails, use the bounded
+`mise exec -- just kube plex-network-observe 600` diagnostic privately. Require an
+exact missing flow before proposing a reviewed policy change. Do not add broad
+inter-VLAN access or multicast reflection, open SSDP/UPnP, or add an unauthenticated
+Plex network as a workaround.
+
+Finish with native Sonos library browse and playback, Plexamp listing and controlling
+the intended player, and native Sonos playback rather than AirPlay when that is the
+test objective. Platform health alone does not prove either application path.
+
 ## Recovery readiness
 
 Before changing production exposure, confirm scheduled Plex database backups and the
@@ -382,4 +409,4 @@ address families, Plex network or account settings, Service listener, Cilium pol
 notification route, or recovery design. When direct access is unavailable, use
 [Relay fallback / troubleshooting](#relay-fallback--troubleshooting). For native
 Sonos or Plexamp failures, use
-[Recover Plex and Plexamp Sonos playback](../runbooks/plex-sonos-recovery.md).
+[Sonos / Plexamp troubleshooting](#sonos--plexamp-troubleshooting).
