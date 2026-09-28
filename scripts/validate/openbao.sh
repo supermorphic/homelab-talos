@@ -109,11 +109,14 @@ assert reader_role.fields["bound_subject"] == "system:serviceaccount:openbao:ope
 assert len([c for c in pod["containers"] if c["name"] == "openbao"]) == 1
 config = one(rendered, "ConfigMap", "openbao-config")["data"]["extraconfig-from-values.hcl"]
 for fragment in ['seal "static"', 'file:///openbao/seal/key', 'tls_auto_reload = true',
+                 'audit "file" "homelab"', 'file_path = "stdout"',
+                 'log_raw = "false"', 'hmac_accessor = "true"',
                  'disable_mlock = true', 'leader_tls_servername = "openbao.lab.supermorphic.com"',
                  'openbao-0.openbao-internal.openbao.svc', 'openbao-1.openbao-internal.openbao.svc',
                  'openbao-2.openbao-internal.openbao.svc']:
     assert fragment in config, f"missing config fragment: {fragment}"
 assert 'service_registration' not in config
+assert 'unsafe_allow_api_audit_creation' not in config
 route = one(docs("access"), "HTTPRoute", "openbao")
 assert route["spec"]["hostnames"] == ["openbao.lab.supermorphic.com"]
 assert route["spec"]["parentRefs"] == [{"group": "gateway.networking.k8s.io",

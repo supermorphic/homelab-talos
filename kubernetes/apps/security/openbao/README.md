@@ -69,6 +69,11 @@ The Python 3.13.14 slim runtime image is pinned to registry index digest
 The archive check follows [OpenBao 2.7.0's snapshot format](https://github.com/openbao/openbao/blob/v2.7.0/internal/physical/raft/snapshot/archive.go).
 No seal or recovery material is mounted in the backup job or stored on its claim.
 
+The server HCL declares the hashed stdout audit device. Configuration apply verifies
+it and never enables audit devices through the API. Existing staged servers load
+reviewed configuration corrections through the attended `bootstrap openbao restart-staged`
+command; the StatefulSet retains its `OnDelete` strategy.
+
 One ServiceMonitor scrapes OpenBao's HTTPS monitoring listener; a second selects
 Longhorn's manager metrics Service for the backup and capacity alerts. The alerts use
 [OpenBao's documented metrics](https://openbao.org/docs/internals/telemetry/metrics/)

@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import apply, bootstrap, guards
+from . import apply, bootstrap, guards, restart
 from .client import AmbiguousWrite, BaoClient, NotFound
 from .configuration import SafeError, canonical_json
 
@@ -132,6 +132,13 @@ class OperatorClient:
         self.token = token
 
     def peer(self, name):
+        tunnel = self.tunnels.get(name)
+        if tunnel is not None and (tunnel.process is None or tunnel.process.poll() is not None):
+            # A restarting server can terminate its forward after the port opens.
+            # Reconnect for the next caller; never retry an ambiguous write here.
+            tunnel.close()
+            self.tunnels.pop(name, None)
+            self.clients.pop(name, None)
         if name not in self.clients:
             tunnel = Tunnel(self.kubeconfig, name)
             tunnel.start()
@@ -354,7 +361,7 @@ def private_prompt(label):
 def main(argv):
     client = None
     try:
-        if len(argv) != 2 or argv[1] not in {"prepare", "initialize", "config-apply", "finalize"}:
+        if len(argv) != 2 or argv[1] not in {"prepare", "initialize", "config-apply", "finalize", "restart-staged"}:
             raise SafeError("invalid-source")
         phase = argv[1]
         selected = os.environ.get("OPENBAO_OPERATOR_KUBECONFIG", "")
@@ -362,10 +369,10 @@ def main(argv):
         if not selected or not kubeconfig.is_absolute() or not kubeconfig.is_file():
             raise SafeError("invalid-source")
         # Never adopt .kube/config or ambient administrative credentials implicitly.
-        guards.freeze_target(kubeconfig, "config-apply" if phase == "finalize" else phase)
+        guards.freeze_target(kubeconfig, "config-apply" if phase in {"finalize", "restart-staged"} else phase)
         client = OperatorClient(kubeconfig)
         inputs = {"client": client, "kubeconfig": kubeconfig, "journal": []}
-        if phase in {"config-apply", "finalize"}:
+        if phase in {"config-apply", "finalize", "restart-staged"}:
             token = private_prompt("OpenBao token (retained root token during bootstrap, not password): ")
             if not token:
                 raise SafeError("authentication-failed")
@@ -374,8 +381,11 @@ def main(argv):
             if phase == "config-apply":
                 operation = lambda confirm: apply.run(confirm=confirm, **inputs)
                 supplied = os.environ.get("OPENBAO_CONFIG_CONFIRM")
-            else:
+            elif phase == "finalize":
                 operation = lambda confirm: bootstrap.finalize(confirm=confirm, **inputs)
+                supplied = os.environ.get("OPENBAO_BOOTSTRAP_CONFIRM")
+            else:
+                operation = lambda confirm: restart.run(confirm=confirm, **inputs)
                 supplied = os.environ.get("OPENBAO_BOOTSTRAP_CONFIRM")
         else:
             inputs.update(
@@ -386,7 +396,7 @@ def main(argv):
             supplied = os.environ.get("OPENBAO_BOOTSTRAP_CONFIRM", "")
         plan = operation("")
         prompted = False
-        if phase in {"config-apply", "finalize"} and supplied is None and sys.stdin.isatty():
+        if phase in {"config-apply", "finalize", "restart-staged"} and supplied is None and sys.stdin.isatty():
             print(json.dumps(plan, sort_keys=True))
             prompted = True
             supplied = input("Enter exact confirmation: ")

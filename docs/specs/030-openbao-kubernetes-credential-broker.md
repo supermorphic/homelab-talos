@@ -262,7 +262,8 @@ and repeats safety-critical checks immediately before initialization:
    arguments, shell tracing, routine stdout/stderr, or test evidence.
 6. Wait for automatic unseal and peer joining. Verify one cluster identity,
    three healthy voting peers, and exactly one leader. Configure the Git-owned
-   authentication, policy, audit, and issuance inputs using the initial token.
+   authentication, policy, and issuance inputs using the initial token. Require
+   the declarative audit device before configuration writes.
 7. Generate a separate operator login credential, retain it encrypted in the
    operator recovery bundle, and prove that login works before revoking the
    initial root token. Verify root-token rejection without displaying its value.
@@ -287,6 +288,16 @@ target under the mutation lease. It verifies root-token rejection and retires it
 temporary operator session. It never initializes, resets storage, or writes
 configuration. A lost revocation acknowledgement is resolved by a denied token lookup,
 not an automatic repeat of the write; unresolved results fail closed.
+
+Before integrations are active, `just bootstrap openbao restart-staged` can load a
+reviewed server configuration correction. It binds confirmation to clean deployed
+source, storage/workload identities and the current leader, requires the installed
+API configuration, and reuses the existing UID/resource-version-bound Eviction and
+three-voter recovery checks. Standbys are replaced before the leader, one at a time;
+the image must match source throughout. Changed storage, source, unexpected pod
+replacement, failed recovery, or active integration Flux units stop the operation.
+The final check requires the declarative audit device. This is a staged bootstrap
+operation, not issuance acceptance or an image-upgrade shortcut.
 
 Configuration apply and retained-bootstrap finalization show their sanitized plan
 and accept exact confirmation within one attended terminal session. An explicitly
@@ -573,7 +584,12 @@ Retain upstream health semantics; do not mask sealed or uninitialized status as
 success. Monitoring failure must not prevent issuance.
 
 Enable OpenBao audit logging with secret fields protected by its audit hashing;
-never enable raw audit logging. Send bounded operational/audit output through the
+never enable raw audit logging. Declare the `homelab/` file audit device in the server
+HCL with `file_path=stdout`, `log_raw=false`, and `hmac_accessor=true`. OpenBao 2.7
+disables API-created audit devices by default; keep that default. Git owns the device,
+and bootstrap/configuration apply only verify it. Isolated restore servers declare
+the same device so restored audit verification remains valid.
+Send bounded operational/audit output through the
 existing container-log collection. Validate with synthetic credential canaries
 that logs and test output contain no credential values. Avoid query strings and
 debug response dumps containing tokens. An audit-device write failure can block
@@ -628,6 +644,7 @@ until authorized live tests record them.
 | `just bootstrap openbao prepare` | Operator-owned deployment of the staged uninitialized servers. |
 | `just bootstrap openbao initialize` | Operator-owned initialization and configuration with independent recovery output. |
 | `just bootstrap openbao finalize` | Operator-owned completion from retained initialization credentials after configuration repair. |
+| `just bootstrap openbao restart-staged` | Operator-owned sequential restart to load reviewed server configuration before integrations are activated. |
 | `just kube openbao-config-apply` | Operator-owned application of reviewed configuration and sanitized read-back. |
 | `just kube openbao-issuance-test` | Authorized bounded issuance, privilege-boundary, expiry, and redaction acceptance. |
 | `just kube openbao-ha-test` | Authorized sequential follower/leader replacement and auto-unseal acceptance under disruption coordination. |

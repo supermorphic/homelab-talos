@@ -147,16 +147,16 @@ def audit_state(client):
     return True
 
 
-def ensure_audit(client, token):
+def require_audit(client):
+    """Audit devices are owned by server configuration, never by an API write."""
     if not audit_state(client):
-        client.post("sys/audit/homelab", copy.deepcopy(AUDIT), token=token)
-    if not audit_state(client):
-        raise SafeError("source-mismatch")
+        raise SafeError("audit-unavailable")
 
 
 def install_initial(client, token, password, kubeconfig, expected_target, desired_path=DESIRED):
     if hasattr(client, "set_token"):
         client.set_token(token)
+    require_audit(client)
     document, states = snapshot(desired_path, client)
     for spec in document["objects"]:
         actual, differences = states[(spec.kind, spec.name)]
@@ -168,7 +168,7 @@ def install_initial(client, token, password, kubeconfig, expected_target, desire
     guards.assert_mutation_allowed(kubeconfig)
     if guards.freeze_target(kubeconfig, "initialize") != expected_target:
         raise SafeError("source-mismatch")
-    ensure_audit(client, token)
+    require_audit(client)
     verify_configuration(desired_path, client)
 
 
@@ -183,11 +183,10 @@ def run(
     operator_password: str | None = None,
 ):
     target = guards.freeze_target(kubeconfig, "config-apply")
+    require_audit(client)
     document, states = snapshot(desired_path, client)
     changes = _changes(document, states)
     audit = audit_state(client)
-    if not audit:
-        changes.append({"kind": "audit", "name": "homelab/", "action": "enable"})
     plan_digest = guards.digest(
         {
             "target": target,
@@ -224,6 +223,6 @@ def run(
     guards.assert_mutation_allowed(kubeconfig)
     if guards.freeze_target(kubeconfig, "config-apply") != target:
         raise SafeError("source-mismatch")
-    ensure_audit(client, token)
+    require_audit(client)
     result = verify_configuration(desired_path, client)
     return {"status": "pass", **result}

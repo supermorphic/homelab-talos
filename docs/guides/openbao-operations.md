@@ -6,8 +6,7 @@ The staged OpenBao package defines three Raft voters and short-lived Kubernetes
 credential issuance. Git and Flux own its Kubernetes resources. Reviewed
 authentication, policy, and issuance configuration is applied through an attended
 command. No privileged controller repairs it automatically. Use a clean checkout of
-published, deployed `main`
-for operator workflows.
+published, deployed `main` for operator workflows.
 
 | Situation | Operator action |
 | --- | --- |
@@ -34,9 +33,8 @@ issued by OpenBao:
   need restoration.
 
 A recovery share or operator password cannot replace a missing matching seal key.
-The live Kubernetes Secret contains usable seal bytes; restrict administrative Secret
-access. Keep recovery material and credentials out of repository files, command
-arguments, logs, and retained test evidence.
+Keep recovery material and credentials out of repository files, command arguments,
+logs, and retained test evidence.
 
 ## First deployment
 
@@ -58,10 +56,9 @@ installation. Use a different empty recovery directory for initialization.
 
 ### 2. Prepare the staged servers
 
-This step is for a new installation with all OpenBao Flux units suspended in Git.
-The current deployment already has initialized servers; its prerequisite and server
-units reconcile through Git. Continue at step 4 for an interrupted initialization
-with a retained recovery bundle. Do not prepare or initialize it again.
+Use this step only for a new installation with all OpenBao Flux units suspended in
+Git. For an interrupted initialization with a retained recovery bundle, continue at
+step 4. Do not prepare or initialize an existing installation again.
 
 Set `OPENBAO_OPERATOR_KUBECONFIG` to the absolute path of the operator kubeconfig,
 `OPENBAO_RECOVERY_RECIPIENT` to the public recipient in the seal artifact, and
@@ -71,20 +68,17 @@ Set `OPENBAO_OPERATOR_KUBECONFIG` to the absolute path of the operator kubeconfi
 mise exec -- just bootstrap openbao prepare
 ```
 
-Review the reported target and confirmation, set `OPENBAO_BOOTSTRAP_CONFIRM` to its
-reported `prepare:openbao:<main-sha>:<package-digest>` value, and rerun the command.
-Preparation checks the staged three-server target without initializing it. The
-operator kubeconfig is selected explicitly; ambient or agent diagnostic credentials
-are not adopted.
+Review the reported target, set `OPENBAO_BOOTSTRAP_CONFIRM` to the exact reported
+confirmation, and rerun the command. A `prepared` result means the staged servers
+are ready for initialization.
 
 ### 3. Initialize exactly once
 
 Run `mise exec -- just bootstrap openbao initialize` without confirmation. Review the
-reported target, set `OPENBAO_BOOTSTRAP_CONFIRM` to its reported
-`initialize:openbao:<main-sha>:<target-digest>` value, and rerun it. Initialization
-is a one-time action. A lost response or timeout is ambiguous; preserve the servers
-and claims and investigate before any further action. Never retry initialization as a
-repair step.
+reported target, set `OPENBAO_BOOTSTRAP_CONFIRM` to the exact reported confirmation,
+and rerun it. Success establishes initialized servers and working operator access.
+A lost response or timeout is ambiguous; preserve the servers, claims, and recovery
+bundle and investigate. Never retry initialization as a repair step.
 
 ### 4. Retain credentials
 
@@ -103,9 +97,15 @@ mise exec -- just bootstrap openbao finalize
 Keep `OPENBAO_OPERATOR_KUBECONFIG` and the public `OPENBAO_RECOVERY_RECIPIENT` set.
 Enter the bundle's retained root token at the token prompt. Review and enter the
 exact confirmation, then enter the retained operator password at its private prompt.
-This verifies the installed configuration and operator login, retires the supplied
-root token, and closes its temporary operator session. It does not initialize again
-or replace storage. A successful normal initialization already performs these steps.
+Success establishes working configuration and operator access, with the initial root
+token retired. A successful normal initialization already completes this step.
+
+If configuration is installed but a reviewed server correction must be loaded before
+integrations are active, merge it and wait for Flux. Run
+`mise exec -- just bootstrap openbao restart-staged` with the same operator kubeconfig,
+public recipient, and retained root token; review its exact confirmation. This is
+attended and disruptive. Success establishes healthy servers with working configuration
+and audit logging. Then run `finalize`.
 
 ### 5. Run attended acceptance
 
@@ -121,7 +121,7 @@ and requires operator authority.
 | HA | `mise exec -- just test record test.openbao-ha`; provide an authorized OpenBao token at its private prompt. | Voters recover and issuance continues through attended, disruptive member replacement. |
 | Restore | `mise exec -- just test record test.openbao-restore-drill`; provide the selected snapshot, matching recovery record and seal material, and operator password as below. | The selected backup restores in isolation and passes recovery checks. It does not perform production recovery. |
 
-### Isolated restore assurance
+**Restore inputs and timing:**
 
 Run the restore drill after a material snapshot, seal-generation, or recovery-workflow
 change, and before accepting a selected backup as recoverable. Production OpenBao must
@@ -148,8 +148,7 @@ production storage replacement needs a separate recovery plan.
 
 After acceptance, review and merge the remaining Flux unsuspension, private route,
 backup, monitoring, and Gatus enrollment changes. Run the observer verifier after
-reconciliation. Do not call Issue 449 complete on offline validation or a staged
-verifier alone.
+reconciliation. Activation is complete only when acceptance and live verification pass.
 
 ## Apply configuration changes
 
@@ -161,16 +160,17 @@ mise exec -- just kube openbao-config-apply
 ```
 
 Enter an existing authorized OpenBao token at the private prompt. Review the sanitized
-change plan and reported `config-apply:openbao:<main-sha>:<target-and-plan-digest>`
-confirmation, then enter that exact value in the same terminal session. During
+change plan, then enter the exact reported confirmation in the same terminal session. During
 bootstrap repair, use the retained **root token**, not the operator password. If the
 operator account is missing, a separate private prompt requests its retained password.
-A changed source or live target requires a new review. The command applies reviewed owned objects and
-reads back the result. Run `openbao-verify` after the reader has produced a fresh
-observation. If apply or read-back fails, stop and inspect; do not patch live state by
-hand.
+A changed source or live target requires a new review. Success means the installed
+configuration matches the reviewed source. Run `openbao-verify` once fresh observations
+are available. If apply fails, stop and inspect; do not patch live state by hand.
 
-Leave `OPENBAO_CONFIG_CONFIRM` (or `OPENBAO_BOOTSTRAP_CONFIRM` for finalization) unset
+For `audit-unavailable`, correct and load the reviewed server configuration before
+applying API changes. During staged bootstrap, use the restart procedure in step 4.
+
+Leave `OPENBAO_CONFIG_CONFIRM` (or `OPENBAO_BOOTSTRAP_CONFIRM` for finalize/restart) unset
 for interactive review. Setting it explicitly to an empty value gives a read-only
 preview; setting the exact reported value supports a separately reviewed invocation.
 
@@ -195,9 +195,10 @@ mise exec -- just kube openbao-upgrade
 ```
 
 The command prompts privately for an authorized OpenBao token and exact confirmation.
-It replaces standbys before the leader and checks recovery between replacements. This
-is attended and disruptive. If it stops partway through, preserve the snapshot and
-cluster state for recovery review; do not improvise a rollback.
+This is attended and disruptive. Success establishes healthy voters on the reviewed
+version with working issuance. Run `openbao-verify` afterward. If the upgrade stops
+partway through, preserve the snapshot and cluster state for recovery review; do not
+improvise a rollback.
 
 ## Failure and stop boundaries
 
@@ -211,9 +212,8 @@ cluster state for recovery review; do not improvise a rollback.
   after explicitly authorizing replacement of that staged Raft state. Supply
   the same explicit operator kubeconfig, empty initialization recovery directory,
   public recovery recipient, and the reported `OPENBAO_RESET_CONFIRM` value.
-  The command requires all OpenBao Flux units suspended, removes the exact
-  HelmRelease and claims, and waits for their storage to disappear. Then run
-  guarded `prepare` and `initialize` again from clean deployed `main`.
+  Keep all OpenBao Flux units suspended. Only after reset succeeds, run `prepare`
+  and `initialize` again from clean deployed `main`.
 - Do not activate or call recovery complete while issuance, HA, restore, cleanup, or
   observer verification is failing.
 - A restore drill proves only its selected isolated backup. Production PVC/Raft
