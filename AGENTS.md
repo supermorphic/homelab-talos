@@ -134,6 +134,27 @@ solely to satisfy these style rules.
 
 ## Agent orchestration
 
+- Scale design and execution to the change's behavior, uncertainty, and risk; reassess
+  when its scope grows. Use supported skill workflows with these repository defaults:
+  - **Bounded change:** a known configuration adjustment, understood bug fix,
+    documentation or narrow test correction, or small refactor without architectural
+    change. Use short in-context reasoning/design, focused tests, and repository-required
+    validation. No durable specification or formal implementation plan is required by
+    default; use a transient plan only when sequencing adds value. Use one fresh final
+    review when substantive code changes warrant it.
+  - **Architectural change:** a new platform or service, security or credential boundary,
+    cross-component interface, migration/recovery architecture, or substantial operational
+    lifecycle. Use explicit brainstorming/design, a durable specification when the design
+    has lasting value, an implementation plan, and an independent final review.
+  - **Exploratory/spike work:** investigate a bounded question, retain only useful
+    conclusions and evidence, and obtain separate authorization before production
+    implementation.
+- Default to native execution in one implementation context, including for architectural
+  work. Use subagent-driven execution only for an identified benefit in context isolation,
+  specialization, independent review, or safe parallelism.
+- State a concrete reason before adding an abstraction, registry, report mechanism,
+  persistent test layer, or subagent stage. Process proportionality does not reduce
+  worktree, authority, credential, testing, or merge protections.
 - Use an economical model appropriate for each subagent role. Do not inherit the
   coordinator's high-capability model by default when a lower-cost model can
   reliably perform the task.
@@ -150,9 +171,8 @@ solely to satisfy these style rules.
 - If the same implementation approach fails twice, stop repeating it. Diagnose
   the failure and change the approach, provide missing context, split the task,
   or escalate to a more capable model.
-- Delegation must provide useful context isolation, independent judgment,
-  specialization, or safe parallelism. Do not spawn additional subagents merely
-  to obtain more opinions or repeat completed analysis.
+- Do not spawn additional subagents merely to obtain more opinions or repeat completed
+  analysis.
 - Prefer focused tests, diffs, queries, and bounded logs over broad command
   output when they provide the required evidence.
 - Treat repeated context compaction, excessive retries, or rapidly growing
