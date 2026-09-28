@@ -17,6 +17,84 @@ from scripts.openbao.guards import PACKAGE
 
 
 class ResetTest(unittest.TestCase):
+    def test_helm_delete_refused_when_final_peer_read_revokes_authority(self):
+        from scripts.openbao import guards, reset
+
+        snapshot = {
+            "target": {"source_revision": "a" * 40},
+            "helmrelease_uid": "synthetic-helm",
+            "pvs": {},
+        }
+        helm = {"metadata": {"uid": "synthetic-helm", "resourceVersion": "17"}}
+        allowed = True
+
+        def check(_):
+            if not allowed:
+                raise SafeError("source-mismatch")
+
+        class Client:
+            reads = 0
+
+            def states_now(self):
+                nonlocal allowed
+                self.reads += 1
+                if self.reads == 2:
+                    allowed = False
+                return [{"initialized": True}] * 3
+
+        with (
+            patch("scripts.openbao.secrets.preflight_recovery"),
+            patch("scripts.openbao.reset._snapshot", return_value=(snapshot, helm)),
+            patch("scripts.openbao.guards.assert_mutation_allowed", side_effect=check),
+            patch("scripts.openbao.reset.delete_exact") as delete,
+            patch("scripts.openbao.reset._wait_helm_absent"),
+            patch("scripts.openbao.reset._remove_claims"),
+        ):
+            with self.assertRaises(SafeError):
+                reset.run(
+                    kubeconfig=Path("/synthetic/operator-kubeconfig"),
+                    client=Client(),
+                    recovery_directory=Path("/synthetic/recovery"),
+                    recipient="synthetic-recipient",
+                    confirm=guards.confirmation("reset-staged", "a" * 40, guards.digest(snapshot)),
+                )
+            delete.assert_not_called()
+
+    def test_claim_delete_refused_when_inventory_read_revokes_authority(self):
+        from scripts.openbao import reset
+
+        names = [f"data-openbao-{i}" for i in range(3)]
+        claims = {
+            name: {"metadata": {"uid": f"synthetic-{name}", "resourceVersion": "31"}}
+            for name in names
+        }
+        snapshot = {"target": {"pvc_uids": dict.fromkeys(names)}}
+        allowed = True
+
+        def check(_):
+            if not allowed:
+                raise SafeError("source-mismatch")
+
+        def observe(*_):
+            nonlocal allowed
+            allowed = False
+            return {
+                "helmrelease": None,
+                "statefulset": None,
+                "pods": {},
+                "claims": claims,
+                "pvs": dict.fromkeys(names),
+            }
+
+        with (
+            patch("scripts.openbao.guards.assert_mutation_allowed", side_effect=check),
+            patch("scripts.openbao.reset._remaining", side_effect=observe),
+            patch("scripts.openbao.reset.delete_exact") as delete,
+        ):
+            with self.assertRaises(SafeError):
+                reset._remove_claims(Path("/synthetic/operator-kubeconfig"), snapshot)
+            delete.assert_not_called()
+
     def test_cli_preview_does_not_acquire_mutation_lease(self):
         from scripts.openbao import reset
 

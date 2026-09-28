@@ -247,6 +247,7 @@ def _remove_claims(kubeconfig: Path, snapshot: dict) -> None:
         ):
             raise SafeError("source-mismatch")
         claim = observed["claims"][name]
+        guards.assert_mutation_allowed(kubeconfig)
         delete_exact(
             kubeconfig,
             f"/api/v1/namespaces/openbao/persistentvolumeclaims/{name}",
@@ -291,6 +292,7 @@ def run(
     states = client.states_now()
     if len(states) != 3 or any(s.get("initialized") is not True for s in states):
         raise SafeError("source-mismatch")
+    guards.assert_mutation_allowed(kubeconfig)
     delete_exact(
         kubeconfig,
         "/apis/helm.toolkit.fluxcd.io/v2/namespaces/openbao/helmreleases/openbao",
