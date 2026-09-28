@@ -23,58 +23,58 @@ if [[ " $* " == *' config get-contexts '* ]]; then
   esac
 fi
 
-[[ " $* " == *' auth can-i '* ]] || {
-  echo "unexpected kubectl call: $*" >&2
-  exit 64
-}
-printf '%q ' "$@" >>"$FAKE_CALL_LOG"
-printf '\n' >>"$FAKE_CALL_LOG"
-
-args=("$@")
-verb=''
-resource=''
+positional=()
+groups=()
+context=''
+impersonation=''
 subresource=''
 namespace=''
 all_namespaces=false
 diagnostic=false
 publisher=false
 resource_name=''
-for ((index = 0; index < ${#args[@]}; index++)); do
-  case "${args[$index]}" in
-    --context|--as)
-      identity="${args[$((index + 1))]}"
-      [[ "$identity" != *homelab-diagnostic ]] || diagnostic=true
-      [[ "$identity" != *homelab-report-publisher ]] || publisher=true
-      ;;
-    --context=*|--as=*)
-      [[ "${args[$index]}" != *homelab-diagnostic ]] || diagnostic=true
-      [[ "${args[$index]}" != *homelab-report-publisher ]] || publisher=true
-      ;;
-    can-i)
-      verb="${args[$((index + 1))]}"
-      resource="${args[$((index + 2))]}"
-      ;;
-    --subresource)
-      subresource="${args[$((index + 1))]}"
-      ;;
-    --subresource=*)
-      subresource="${args[$index]#--subresource=}"
-      ;;
-    --namespace)
-      namespace="${args[$((index + 1))]}"
-      ;;
-    --namespace=*)
-      namespace="${args[$index]#--namespace=}"
-      ;;
-    --all-namespaces|-A)
-      all_namespaces=true
-      ;;
-    --resource-name|--resource-name=*)
-      echo 'kubectl auth can-i does not accept --resource-name' >&2
-      exit 64
-      ;;
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --kubeconfig) shift ;;
+    --kubeconfig=*) ;;
+    --context) context="$2"; shift ;;
+    --context=*) context="${1#*=}" ;;
+    --as) impersonation="$2"; shift ;;
+    --as=*) impersonation="${1#*=}" ;;
+    --as-group) groups+=("$2"); shift ;;
+    --as-group=*) groups+=("${1#*=}") ;;
+    --subresource) subresource="$2"; shift ;;
+    --subresource=*) subresource="${1#*=}" ;;
+    --namespace|-n) namespace="$2"; shift ;;
+    --namespace=*|-n=*) namespace="${1#*=}" ;;
+    -n?*) namespace="${1#-n}" ;;
+    --all-namespaces|-A|--all-namespaces=true|-A=true) all_namespaces=true ;;
+    --all-namespaces=false|-A=false) all_namespaces=false ;;
+    -*) echo "unexpected kubectl flag: $1" >&2; exit 64 ;;
+    *) positional+=("$1") ;;
   esac
+  shift
 done
+[[ "${#positional[@]}" -eq 4 && "${positional[0]} ${positional[1]}" == 'auth can-i' ]] || exit 64
+verb="${positional[2]}"
+resource="${positional[3]}"
+if [[ "$FAKE_LAYOUT" == named ]]; then
+  [[ -n "$context" && -z "$impersonation" && "${#groups[@]}" -eq 0 ]] || exit 65
+  identity="$context"
+else
+  [[ -z "$context" && "$impersonation" == system:serviceaccount:kube-system:* ]] || exit 65
+  [[ "$(printf '%s\n' "${groups[@]}" | LC_ALL=C sort)" == \
+    $'system:authenticated\nsystem:serviceaccounts\nsystem:serviceaccounts:kube-system' ]] || exit 65
+  identity="${impersonation#system:serviceaccount:kube-system:}"
+fi
+case "$identity" in
+  homelab-observer) ;;
+  homelab-diagnostic) diagnostic=true ;;
+  homelab-report-publisher) publisher=true ;;
+  *) exit 65 ;;
+esac
+request="$identity|$verb|$resource|${namespace:--}|${subresource:--}"
+printf '%s\n' "$request" >>"$FAKE_CALL_LOG"
 if [[ "$resource" == */* ]]; then
   resource_name="${resource#*/}"
   resource="${resource%%/*}"
@@ -148,6 +148,11 @@ else
     get:secrets:*|create:*:*|patch:*:*|delete:*:*|bind:*:*|escalate:*:*|impersonate:*:*) answer=no ;;
   esac
 fi
+if [[ -n "${FAKE_AUTH_EXPECTED:-}" && "$answer" == "$FAKE_AUTH_EXPECTED" ]]; then
+  printf '%s\n' "$request" >>"$FAKE_FAULT_LOG"
+  [[ -z "$FAKE_AUTH_REPLY" ]] || printf '%s\n' "$FAKE_AUTH_REPLY"
+  exit "$FAKE_AUTH_STATUS"
+fi
 printf '%s\n' "$answer"
 [[ "$answer" == yes ]] || exit 1
 EOF
@@ -157,6 +162,7 @@ cat >"$fixture/bin/talosctl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 [[ "$1" == version || "$1" == services ]] || exit 64
+[[ -z "${FAKE_TALOS_LOG:-}" ]] || printf '%s\n' "$1" >>"$FAKE_TALOS_LOG"
 case "${FAKE_TALOS_FAILURE:-}:$1" in
   version:version) exit 70 ;;
   services:services) exit 71 ;;
@@ -183,7 +189,7 @@ named_log="$(run_layout named)"
 while IFS= read -r resource; do
   for context in homelab-observer homelab-diagnostic; do
     for verb in get list watch; do
-      rg -Fq -- "--context $context auth can-i $verb $resource " "$named_log" || {
+      rg -Fq -- "$context|$verb|$resource|" "$named_log" || {
         echo "Missing $context $verb request for $resource." >&2
         exit 1
       }
@@ -198,14 +204,8 @@ done < <(yq -r '
 # Check emitted requests for the exceptional grants and denials.
 expect_request() {
   local context="$1" verb="$2" resource="$3" scope="$4" subresource="$5"
-  local request="--context $context auth can-i $verb $resource"
-  [[ "$subresource" == - ]] || request+=" --subresource $subresource"
-  if [[ "$scope" == - ]]; then
-    request+=' --all-namespaces'
-  else
-    request+=" --namespace $scope"
-  fi
-  rg -Fq -- "$request " "$named_log" || {
+  local request="$context|$verb|$resource|$scope|$subresource"
+  rg -Fxq -- "$request" "$named_log" || {
     echo "Missing authorization request: $request" >&2
     exit 1
   }
@@ -285,54 +285,60 @@ for context in homelab-observer homelab-diagnostic; do
   expect_request "$context" patch replicas.longhorn.io longhorn-system -
   expect_request "$context" patch settings.longhorn.io longhorn-system -
 done
-if rg -q -- '--as(=| )' "$named_log"; then
-  echo 'Named-context layout unexpectedly used impersonation.' >&2
-  exit 1
-fi
-rg -q -- '--context homelab-observer' "$named_log"
-rg -q -- '--context homelab-diagnostic' "$named_log"
-rg -q -- '--context homelab-report-publisher' "$named_log"
-
 admin_log="$(run_layout admin)"
-if rg -q -- '--context(=| )' "$admin_log"; then
-  echo 'Admin fallback unexpectedly selected a named context.' >&2
-  exit 1
-fi
-while IFS= read -r call; do
-  rg -q -- '--as=system:serviceaccount:kube-system:homelab-(observer|diagnostic|report-publisher)' <<<"$call"
-  rg -q -- '--as-group=system:authenticated' <<<"$call"
-  rg -q -- '--as-group=system:serviceaccounts ' <<<"$call"
-  rg -q -- '--as-group=system:serviceaccounts:kube-system' <<<"$call"
-done <"$admin_log"
-for context in homelab-observer homelab-diagnostic; do
-  for verb in get list watch; do
-    rg -q -- "--as=system:serviceaccount:kube-system:$context .* auth can-i $verb referencegrants.gateway.networking.k8s.io --namespace automation" \
-      "$admin_log"
-  done
-done
-rg -q -- '--as=system:serviceaccount:kube-system:homelab-report-publisher .* auth can-i get gitrepositories.source.toolkit.fluxcd.io/flux-system --namespace flux-system' \
-  "$admin_log"
+# The fake validates the identity selection and groups before writing normalized
+# fields. Both credential layouts must cover the same authorization requests.
+diff -u <(LC_ALL=C sort -u "$named_log") <(LC_ALL=C sort -u "$admin_log")
+
+# Unexpected grants, denials, malformed output and client errors must stop the
+# verifier before another request or Talos inspection. A marker proves the
+# injected response was consumed, independent of diagnostic wording.
+while read -r layout scenario expected reply status; do
+  [[ "$reply" != EMPTY ]] || reply=''
+  fault_log="$fixture/$layout-$scenario.fault"
+  call_log="$fixture/$layout-$scenario.calls"
+  talos_log="$fixture/$layout-$scenario.talos"
+  if PATH="$fixture/bin:$PATH" FAKE_LAYOUT="$layout" FAKE_CALL_LOG="$call_log" \
+    FAKE_AUTH_EXPECTED="$expected" FAKE_AUTH_REPLY="$reply" FAKE_AUTH_STATUS="$status" \
+    FAKE_FAULT_LOG="$fault_log" FAKE_TALOS_LOG="$talos_log" \
+    "$verifier" "$fixture/kubeconfig" "$fixture/talosconfig" \
+    >"$fixture/$layout-$scenario.out" 2>&1; then
+    echo "Verifier accepted $scenario with $layout credentials." >&2
+    exit 1
+  fi
+  [[ -s "$fault_log" && ! -s "$talos_log" ]]
+  [[ "$(wc -l <"$fault_log" | tr -d ' ')" -eq 1 ]]
+  [[ "$(tail -n 1 "$call_log")" == "$(cat "$fault_log")" ]]
+done <<'AUTH_FAILURES'
+named unexpected-grant no yes 0
+named unexpected-denial yes no 1
+named empty-client-error yes EMPTY 70
+named malformed-output yes maybe 0
+named allowed-client-error yes yes 70
+named denied-client-error no no 70
+named denial-with-success-status no no 0
+admin unexpected-grant no yes 0
+admin unexpected-denial yes no 1
+AUTH_FAILURES
 
 if PATH="$fixture/bin:$PATH" FAKE_LAYOUT=partial FAKE_CALL_LOG="$fixture/partial.log" \
   "$verifier" "$fixture/kubeconfig" "$fixture/talosconfig" >"$fixture/partial.out" 2>&1; then
   echo 'Partial scoped context layout unexpectedly passed.' >&2
   exit 1
 fi
-rg -q 'requires all three scoped contexts or none' "$fixture/partial.out"
+[[ ! -s "$fixture/partial.log" ]]
 
 for talos_failure in version services; do
   talos_failure_output="$fixture/talos-$talos_failure.out"
   if PATH="$fixture/bin:$PATH" FAKE_LAYOUT=named FAKE_CALL_LOG="$fixture/talos-$talos_failure.log" \
     FAKE_TALOS_FAILURE="$talos_failure" \
+    FAKE_TALOS_LOG="$fixture/talos-$talos_failure.calls" \
     "$verifier" "$fixture/kubeconfig" "$fixture/talosconfig" \
     >"$talos_failure_output" 2>&1; then
     echo "Talos $talos_failure failure unexpectedly passed." >&2
     exit 1
   fi
-  rg -q "Talos reader $talos_failure inspection failed" "$talos_failure_output" || {
-    echo "Talos $talos_failure failure lacked a boundary-specific diagnostic." >&2
-    exit 1
-  }
+  [[ "$(tail -n 1 "$fixture/talos-$talos_failure.calls")" == "$talos_failure" ]]
 done
 
 mise exec -- python "$repo_root/scripts/test/agent-access-kubectl-contract.py"
