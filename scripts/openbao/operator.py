@@ -248,8 +248,9 @@ class OperatorClient:
                         "reconcile",
                         "kustomization",
                         name,
-                        "--timeout=45s",
-                    ]
+                        "--timeout=5m",
+                    ],
+                    timeout=330,
                 )
         finally:
             failed = False
@@ -280,14 +281,16 @@ class OperatorClient:
             if failed:
                 raise SafeError("source-mismatch")
         deadline = time.monotonic() + 180
+        last_error = SafeError("timeout")
         while time.monotonic() < deadline:
             try:
                 observed = guards.freeze_target(self.kubeconfig, "initialize")
                 bootstrap._uninitialized(self)
                 return observed
-            except SafeError:
+            except SafeError as error:
+                last_error = error
                 time.sleep(2)
-        raise SafeError("timeout")
+        raise last_error
 
     def close(self):
         self.token = None
