@@ -77,8 +77,9 @@ solely to satisfy these style rules.
 - Before each push, fetch `origin` and inspect `origin/main` and, when it exists, the
   remote feature branch. If the remote feature branch contains unexpected commits absent
   locally, stop rather than overwriting or automatically reconciling it. Otherwise, if
-  `origin/main` advanced, rebase the clean feature branch onto it and rerun required
-  validation.
+  `origin/main` advanced, rebase the clean feature branch onto it and rerun relevant
+  focused checks as needed. Require fresh hosted validation for the updated candidate
+  and required base before merge.
 - Never rebase with uncommitted changes. If unrelated changes prevent a required rebase,
   stop and ask the operator. When pushing rebased commits requires rewriting the assigned
   remote feature branch, use only `--force-with-lease`; a failed lease is a hard stop.
@@ -255,18 +256,27 @@ solely to satisfy these style rules.
 
 ## Validation
 
-- Before opening or updating a pull request, commit the candidate and run
-  `mise exec -- just test ci-publish` from a clean feature worktree. The command fetches
-  current `origin/main`, computes the repository-owned validation plan, executes every
-  selected group, and reconciles fresh results. Do not edit this worktree while it runs.
-  Use `mise exec -- just test ci-publish-full` to escalate to every group.
-- `just ci` is the canonical full, cluster-independent, secret-free validation gate.
+- Before pushing, run focused validation appropriate to the change and ensure
+  commit-time checks pass. Ordinary documentation changes, including specification
+  updates, use applicable focused checks, then push without asking permission to omit
+  optional local CI.
+- A successful hosted `merge-gate` for the exact candidate and required base is the
+  authoritative validation gate before merge. Missing or failed hosted validation must
+  not fall back to a local passing result. Do not manually reduce required validation
+  groups. Passing validation does not replace explicit operator authorization for that
+  specific merge.
+- Local `mise exec -- just ci`, `mise exec -- just test ci-publish`, and
+  `mise exec -- just test ci-publish-full` are optional for reproducing hosted failures,
+  validating CI, harness, or selection changes when useful, or an explicit operator
+  request. Do not automatically run them for every PR creation or update. When using
+  `ci-publish` or `ci-publish-full`, keep the committed feature worktree clean and
+  untouched while the command runs.
+- `just ci` is the canonical full, cluster-independent, secret-free validation command.
   Cluster-dependent verification, status, preflight, and diagnostic workflows remain
   outside it.
-- After a required rebase or any later candidate edit, rerun
-  `mise exec -- just test ci-publish`. A passing result applies only to its recorded
-  head and base. If the pre-push fetch finds newer main, rebase and rerun the gate.
-  Do not choose reduced groups manually or reuse an earlier candidate's passing result.
+- After candidate edits or rebases, rerun relevant focused checks as needed and require
+  fresh hosted evidence for the updated candidate and required base before merge. Do not
+  reuse an earlier candidate's passing result.
 - Commit-time hooks provide staged-file feedback. Use `mise exec -- just repo lint` when
   repository-wide hook coverage is useful.
 - Follow the relevant testing documentation for additional task-specific or scoped live
@@ -275,6 +285,8 @@ solely to satisfy these style rules.
 ## Completion
 
 Report changed files, validation performed and its results, validation not performed and
-why, remaining non-sensitive risks, and required operator actions. Report actionable
+why, remaining non-sensitive risks, and required operator actions. Distinguish focused
+local results from hosted CI status; report pending hosted validation as pending. An
+intentionally omitted optional local CI run is not a policy exception. Report actionable
 security-sensitive risks to the operator outside repository artifacts rather than
 publishing them.
