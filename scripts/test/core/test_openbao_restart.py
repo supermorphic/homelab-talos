@@ -1,5 +1,6 @@
 import copy
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -104,18 +105,25 @@ class StagedRestartTest(unittest.TestCase):
 
 
 class StagingBoundaryTest(unittest.TestCase):
-    def test_live_activation_of_any_integration_refuses_restart(self):
+    def test_only_original_server_stage_allows_restart(self):
         import yaml
         source = list(yaml.safe_load_all((restart.guards.PACKAGE / "ks.yaml").read_text()))
-        with patch("scripts.openbao.guards.kube", return_value={"items": source}):
-            restart.require_staged(Path("/synthetic"))
-        for name in ("openbao-access", "openbao-acceptance", "openbao-backup", "openbao-monitoring"):
-            changed = copy.deepcopy(source)
-            next(u for u in changed if u["metadata"]["name"] == name)["spec"]["suspend"] = False
-            with (self.subTest(name=name),
-                  patch("scripts.openbao.guards.kube", return_value={"items": changed}),
-                  self.assertRaises(SafeError)):
+        staged = copy.deepcopy(source)
+        integrations = ("openbao-access", "openbao-acceptance", "openbao-backup", "openbao-monitoring")
+        for unit in staged:
+            if unit["metadata"]["name"] in integrations:
+                unit["spec"]["suspend"] = True
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "ks.yaml").write_text(yaml.safe_dump_all(staged))
+            with (patch.object(restart.guards, "PACKAGE", Path(directory)),
+                  patch("scripts.openbao.guards.kube", return_value={"items": staged}) as live):
                 restart.require_staged(Path("/synthetic"))
+                for name in integrations:
+                    changed = copy.deepcopy(staged)
+                    next(u for u in changed if u["metadata"]["name"] == name)["spec"]["suspend"] = False
+                    live.return_value = {"items": changed}
+                    with self.subTest(name=name), self.assertRaises(SafeError):
+                        restart.require_staged(Path("/synthetic"))
 
 
 if __name__ == "__main__":

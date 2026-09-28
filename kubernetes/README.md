@@ -126,11 +126,10 @@ reviewed DML in `operator`. See the
 [NocoDB operations guide](../docs/guides/nocodb-operations.md) and
 [platform recovery boundary](../docs/runbooks/platform-disaster-recovery.md#nocodb-metadata-recovery).
 
-The OpenBao package is staged under `kubernetes/apps/security/openbao/`. The prerequisite
-and server Flux Kustomizations reconcile the initialized servers. Access, acceptance,
-backup, and monitoring remain suspended pending bootstrap completion and attended
-acceptance. The
-official Helm chart is pinned to `0.29.6`; the server image is pinned to OpenBao
+The OpenBao package is under `kubernetes/apps/security/openbao/`. The prerequisite,
+server, acceptance, and backup Flux Kustomizations reconcile through Git. Private access
+and monitoring remain suspended pending attended acceptance. The official Helm chart
+is pinned to `0.29.6`; the server image is pinned to OpenBao
 `2.7.0` and an OCI digest. Reviewed auth roles and policies live in
 `kubernetes/apps/security/openbao/config/desired.json` and
 `kubernetes/apps/security/openbao/config/policies/`. They are applied by an attended

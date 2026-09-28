@@ -27,7 +27,7 @@ spec:
   path: ./kubernetes/apps/security/openbao/backup
   prune: true
   sourceRef: {kind: GitRepository, name: flux-system, namespace: flux-system}
-  suspend: true
+  suspend: false
   wait: true
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
@@ -92,5 +92,5 @@ spec:
   path: ./kubernetes/apps/security/openbao/acceptance
   prune: true
   sourceRef: {kind: GitRepository, name: flux-system, namespace: flux-system}
-  suspend: true
+  suspend: false
   wait: true

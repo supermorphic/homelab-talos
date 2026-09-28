@@ -24,14 +24,23 @@ class OpenBaoManifestTests(unittest.TestCase):
             with self.subTest(rule=rule):
                 self.assertIn("api-backend-egress", validate_network_policy({"spec": {"egress": [rule]}}))
 
-    def test_flux_accepts_only_server_stage_as_partial_activation(self):
+    def test_flux_accepts_server_and_assurance_stages_before_full_activation(self):
         import yaml
 
         units = list(yaml.safe_load_all(pathlib.Path("kubernetes/apps/security/openbao/ks.yaml").read_text()))
+        server = {"openbao-prerequisites", "openbao"}
+        assurance = server | {"openbao-acceptance", "openbao-backup"}
+        all_units = {unit["metadata"]["name"] for unit in units}
+        self.assertEqual({u["metadata"]["name"] for u in units if not u["spec"]["suspend"]}, assurance)
+        for allowed in (set(), server, assurance, all_units):
+            staged = copy.deepcopy(units)
+            for unit in staged:
+                unit["spec"]["suspend"] = unit["metadata"]["name"] not in allowed
+            with self.subTest(allowed=allowed):
+                self.assertEqual(validate_flux_units(staged), [])
         for unit in units:
-            unit["spec"]["suspend"] = unit["metadata"]["name"] not in {"openbao-prerequisites", "openbao"}
-        self.assertEqual(validate_flux_units(units), [])
-        for name in ("openbao-prerequisites", "openbao"):
+            unit["spec"]["suspend"] = unit["metadata"]["name"] not in assurance
+        for name in assurance:
             broken = copy.deepcopy(units)
             next(u for u in broken if u["metadata"]["name"] == name)["spec"]["suspend"] = True
             self.assertIn("flux-activation", validate_flux_units(broken))

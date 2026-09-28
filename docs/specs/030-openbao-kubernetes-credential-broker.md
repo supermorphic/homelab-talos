@@ -569,7 +569,7 @@ fail the drill. Scratch still receives no production API token or egress.
 
 The [platform recovery section](../runbooks/platform-disaster-recovery.md#openbao-credential-broker-state)
 owns the dependency order and break-glass boundary. The
-[operations guide](../guides/openbao-operations.md#isolated-restore-assurance) owns
+[operations guide](../guides/openbao-operations.md#5-run-attended-acceptance) owns
 operator inputs and the guarded command. Restore mechanics and exact acceptance
 assertions remain in source and tests.
 
@@ -623,6 +623,9 @@ them. Source-owned API objects are applied only by a confirmed command against
 clean deployed `main`; Git/Flux do not continuously write them through a
 privileged controller. The reader role can observe readable configuration but
 cannot compare the private operator password.
+After bootstrap, the acceptance and backup units activate for attended tests and
+snapshot production. The private route, monitoring, and Gatus endpoint activate
+through a later reviewed Git change after acceptance; Homepage discovers that route.
 
 The source pins chart `0.29.6` and the equivalent official OCI chart digest
 `sha256:98c8fc901e2579ac6da9a805537fcd7a19525ef8e563ae8737dc16fc8f641e3e`,
