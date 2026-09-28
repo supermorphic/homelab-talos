@@ -134,7 +134,7 @@ def port_set(rules):
     return {p["port"] for rule in rules for item in rule.get("toPorts", [])
             for p in item["ports"]}
 assert port_set(network["ingress"]) == {"8200", "8201", "8203"}
-assert port_set(network["egress"]) == {"53", "443", "8200", "8201"}
+assert port_set(network["egress"]) == {"53", "6443", "8200", "8201"}
 for rule in network["ingress"]:
     assert "fromCIDR" not in rule and "fromCIDRSet" not in rule
     assert "fromEntities" in rule or "fromEndpoints" in rule
@@ -147,7 +147,7 @@ for rule in network["egress"]:
     assert "toCIDR" not in rule and "toCIDRSet" not in rule
     assert "toEntities" in rule or "toEndpoints" in rule
 assert any(rule.get("toEntities") == ["kube-apiserver"] and
-           rule["toPorts"][0]["ports"] == [{"port": "443", "protocol": "TCP"}]
+           rule["toPorts"][0]["ports"] == [{"port": "6443", "protocol": "TCP"}]
            for rule in network["egress"])
 assert any(rule.get("fromEndpoints", [{}])[0].get("matchLabels", {}).get("app.kubernetes.io/name") ==
            "openbao" and rule["toPorts"][0]["ports"] == [{"port": "8201", "protocol": "TCP"}]

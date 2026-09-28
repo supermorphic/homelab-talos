@@ -20,6 +20,10 @@ class BootstrapClient:
         self.login_ok = True
         self.revoke_ok = True
         self.revoked = False
+        self.revoked_tokens = set()
+
+    def set_token(self, token):
+        self.token = token
 
     def states_now(self):
         return [{"initialized": value} for value in self.states]
@@ -41,15 +45,16 @@ class BootstrapClient:
         if path == "auth/token/revoke-self":
             if not self.revoke_ok:
                 raise AmbiguousWrite("ambiguous-write")
-            self.revoked = True
+            self.revoked_tokens.add(token)
+            self.revoked = "synthetic-root" in self.revoked_tokens
         return {}
 
     def read(self, path, token=None):
         self.calls.append(("GET", path))
         if path == "auth/token/lookup-self":
-            if token == "synthetic-root" and self.revoked:
+            if token in self.revoked_tokens:
                 raise SafeError("read-denied")
-            return {"data": {"policies": ["openbao-operator"]}}
+            return {"data": {"policies": ["root"] if token == "synthetic-root" else ["openbao-operator"]}}
         return {"data": {}}
 
     def wait_quorum(self, token):
@@ -92,6 +97,8 @@ class BootstrapTest(unittest.TestCase):
         self.mock("preflight_recovery", None, "secrets")
         self.mock("write_recovery", Path("/synthetic-retained"), "secrets")
         self.mock("install_initial", None, "apply")
+        self.mock("verify_configuration", {"differences": []}, "apply")
+        self.mock("audit_state", True, "apply")
 
     def mock(self, name, value, module):
         p = patch(f"scripts.openbao.{module}.{name}", return_value=value)
@@ -302,6 +309,22 @@ class PinnedReadbackTest(unittest.TestCase):
 
 
 class GuardTest(unittest.TestCase):
+    def test_api_egress_requires_live_source_match_and_real_backend_port(self):
+        policy = {"spec": {"egress": [{"toEntities": ["kube-apiserver"],
+                  "toPorts": [{"ports": [{"port": "6443", "protocol": "TCP"}]}]}]}}
+        backend = {"items": [{"ports": [{"port": 6443, "protocol": "TCP"}]}]}
+        with patch("scripts.openbao.guards.kube", side_effect=[policy, backend]):
+            self.assertEqual(guards.require_api_egress(Path('/synthetic'), policy),
+                             guards.digest(policy["spec"]))
+        stale = copy.deepcopy(policy)
+        stale["spec"]["egress"][0]["toPorts"][0]["ports"][0]["port"] = "443"
+        for live, endpoints in ((stale, backend), (policy, {"items": []}),
+                                (policy, {"items": [{"ports": [{"port": 443, "protocol": "TCP"}]}]})):
+            with self.subTest(live=live, endpoints=endpoints), \
+                    patch("scripts.openbao.guards.kube", side_effect=[live, endpoints]), \
+                    self.assertRaises(SafeError):
+                guards.require_api_egress(Path('/synthetic'), policy)
+
     def test_statefulset_accepts_omitted_false_host_network_without_changing_input(self):
         expected = {"template": {"spec": {"hostNetwork": False, "serviceAccountName": "openbao"}}}
         actual = {"template": {"spec": {"serviceAccountName": "openbao"}}}
@@ -495,6 +518,10 @@ class PrepareRaceTest(unittest.TestCase):
                     u["metadata"]["name"]: u
                     for u in yaml.safe_load_all((guards.PACKAGE / "ks.yaml").read_text())
                 }
+                # This race test represents the earlier, fully suspended prepare stage.
+                for unit in units.values():
+                    unit["spec"]["suspend"] = True
+                expected_units = copy.deepcopy(list(units.values()))
                 for name, unit in units.items():
                     unit["metadata"].update(uid="synthetic-" + name, resourceVersion="1")
                 approved = {
@@ -540,6 +567,7 @@ class PrepareRaceTest(unittest.TestCase):
                     return b""
 
                 with (
+                    patch("yaml.safe_load_all", return_value=expected_units),
                     patch("scripts.openbao.guards.command", side_effect=command),
                     patch("scripts.openbao.guards.kube", side_effect=kube),
                     patch(

@@ -36,10 +36,15 @@ def validate_gateway_namespace(namespace: dict) -> list[str]:
 
 
 def validate_network_policy(policy: dict) -> list[str]:
+    errors = []
     if any("fromEntities" in rule or "fromCIDR" in rule or "fromCIDRSet" in rule
            for rule in _get(policy, "spec", "ingress") or []):
-        return ["broad-node-api-ingress"]
-    return []
+        errors.append("broad-node-api-ingress")
+    api_rules = [r for r in _get(policy, "spec", "egress") or [] if "toEntities" in r]
+    if api_rules != [{"toEntities": ["kube-apiserver"],
+                      "toPorts": [{"ports": [{"port": "6443", "protocol": "TCP"}]}]}]:
+        errors.append("api-backend-egress")
+    return errors
 
 
 def validate_tokenrequest_binding(binding: dict) -> list[str]:
@@ -68,8 +73,10 @@ def validate_flux_units(documents: list[dict]) -> list[str]:
                   "./kubernetes/apps/security/openbao/"))]
     if (len(units) == len(expected) and
             {_get(d, "metadata", "name") for d in units} == set(expected) and
+            all(type(_get(d, "spec", "suspend")) is bool for d in units) and
+            { _get(d, "metadata", "name") for d in units if _get(d, "spec", "suspend") is False }
+            in (set(), {"openbao-prerequisites", "openbao"}) and
             all(_get(d, "metadata", "namespace") == "flux-system" and
-                _get(d, "spec", "suspend") is True and
                 _get(d, "spec", "path") ==
                 "./kubernetes/apps/security/openbao/" + expected[_get(d, "metadata", "name")]
                 for d in units)):

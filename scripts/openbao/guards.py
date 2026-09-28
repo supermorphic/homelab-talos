@@ -19,7 +19,7 @@ def digest(value: object) -> str:
 
 def confirmation(phase: str, source_sha: str, target_digest: str) -> str:
     if (
-        phase not in {"prepare", "initialize", "config-apply", "reset-staged"}
+        phase not in {"prepare", "initialize", "config-apply", "reset-staged", "finalize"}
         or not re.fullmatch("[0-9a-f]{40}", source_sha)
         or not re.fullmatch("[0-9a-f]{64}", target_digest)
     ):
@@ -128,6 +128,21 @@ def package_digest():
     return digest(
         {str(p.relative_to(PACKAGE)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
     )
+
+
+def require_api_egress(kubeconfig, expected):
+    """Require the reviewed policy and the translated Kubernetes API backend."""
+    from .manifests import validate_network_policy
+
+    actual = kube(kubeconfig, "-n", "openbao", "get", "ciliumnetworkpolicy", "openbao", "-o", "json")
+    endpoints = kube(kubeconfig, "-n", "default", "get", "endpointslices",
+                     "-l", "kubernetes.io/service-name=kubernetes", "-o", "json")
+    backend_ports = {(p.get("port"), p.get("protocol"))
+                     for item in endpoints.get("items", []) for p in item.get("ports", [])}
+    if (validate_network_policy(expected) or actual.get("spec") != expected.get("spec")
+            or backend_ports != {(6443, "TCP")}):
+        raise SafeError("source-mismatch")
+    return digest(actual["spec"])
 
 
 def preparation_unit(kubeconfig, approved, name):
@@ -265,6 +280,9 @@ def freeze_target(kubeconfig, phase) -> dict:
     if config["data"] != expected_config["data"]:
         raise SafeError("source-mismatch")
     target["configuration_digest"] = digest(config["data"])
+    target["network_policy_digest"] = require_api_egress(
+        kubeconfig, yaml.safe_load((PACKAGE / "app/ciliumnetworkpolicy.yaml").read_bytes())
+    )
     target["statefulset_uid"] = sts["metadata"]["uid"]
     pods = kube(
         kubeconfig, "-n", "openbao", "get", "pods", "-l", "component=server", "-o", "json"

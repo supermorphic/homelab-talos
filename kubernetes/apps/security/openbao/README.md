@@ -1,7 +1,8 @@
 # OpenBao staged package
 
-This package stages an OpenBao credential broker with three Raft voters. All six Flux
-Kustomizations are suspended. The guarded bootstrap workflow prepares the namespace
+This package stages an OpenBao credential broker with three Raft voters. The prerequisite
+and server Flux units reconcile through Git; access, acceptance, backup, and monitoring
+remain suspended pending bootstrap completion and attended acceptance. The guarded bootstrap workflow prepares the namespace
 Certificate and server after the operator supplies the encrypted `openbao-seal` Secret
 and independent recovery destination. Activate the private route, backup,
 monitoring, and acceptance resources in Git after bootstrap succeeds.
@@ -45,6 +46,9 @@ The native disruption budget protects a two-voter quorum, and StatefulSet claim 
 preserves data after scale-down or deletion. An `OnDelete` upgrade needs an attended
 standby-first procedure.
 
+The network policy permits Kubernetes API egress only to the `kube-apiserver` entity
+on TCP 6443, the backend port after Cilium translates the Service's TCP 443 address.
+Guarded preflight checks the live policy against source and the API EndpointSlices.
 The network policy does not grant node-wide API ingress. Guarded bootstrap uses a
 loopback-only port-forward to one named Pod; Kubernetes RBAC and the temporary tunnel
 bound that access. Cilium's default local-host handling is expected to carry the

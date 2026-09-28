@@ -202,6 +202,8 @@ contracts:
       - scripts/test/core/fixtures/openbao-2.7-read-responses.json
       - scripts/test/core/test_openbao_apply.py
       - scripts/test/core/test_openbao_bootstrap.py
+      - scripts/test/core/test_openbao_finalize.py
+      - scripts/test/core/test_openbao_operator.py
       - scripts/test/core/test_openbao_catalog.py
       - scripts/test/core/test_openbao_client.py
       - scripts/test/core/test_openbao_drift.py
@@ -229,6 +231,8 @@ contracts:
       - catalog:validation.openbao
       - python:scripts/test/core/test_openbao_apply.py
       - python:scripts/test/core/test_openbao_bootstrap.py
+      - python:scripts/test/core/test_openbao_finalize.py
+      - python:scripts/test/core/test_openbao_operator.py
       - python:scripts/test/core/test_openbao_catalog.py
       - python:scripts/test/core/test_openbao_client.py
       - python:scripts/test/core/test_openbao_drift.py

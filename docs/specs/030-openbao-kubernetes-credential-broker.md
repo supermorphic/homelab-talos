@@ -6,9 +6,11 @@ Design for [issue 449](https://github.com/supermorphic/homelab-talos/issues/449)
 The operator approved automatic unseal and three voting replicas, one per physical
 node, after reviewing the existing cluster, and accepted this specification with
 refinements to the seal threat model and configuration-drift verification.
-The source implementation is staged on a feature branch. All six OpenBao Flux
-Kustomizations remain suspended. Operator seal creation, live initialization,
-activation and live acceptance are not complete. A passing local or CI gate is
+The source implementation is merged. Seal material and the initialization recovery
+bundle are retained by the operator; three servers are initialized and Ready.
+The prerequisite and server Flux units reconcile through Git. Access, acceptance,
+backup, and monitoring remain suspended while configuration and bootstrap completion
+are attended. Integration activation and live acceptance are not complete. A passing local or CI gate is
 candidate source evidence only; issue 449 remains open until deployed acceptance.
 
 Deploy OpenBao inside the Talos cluster to issue short-lived credentials for
@@ -275,6 +277,22 @@ recovery. A rerun against an initialized cluster refuses reinitialization even
 when later configuration failed. Configuration repair uses a separate command
 with an existing authorized OpenBao identity.
 
+When the encrypted initialization bundle is retained, the attended
+`just bootstrap openbao finalize` phase completes bootstrap after configuration repair.
+It requires the retained root token and operator password, clean deployed source,
+the exact live target, a complete configuration comparison, and enabled audit.
+Before revoking the supplied root token, it independently logs in as the operator,
+checks that session's policy, configuration access and Raft health, and rechecks the
+target under the mutation lease. It verifies root-token rejection and retires its
+temporary operator session. It never initializes, resets storage, or writes
+configuration. A lost revocation acknowledgement is resolved by a denied token lookup,
+not an automatic repeat of the write; unresolved results fail closed.
+
+Configuration apply and retained-bootstrap finalization show their sanitized plan
+and accept exact confirmation within one attended terminal session. An explicitly
+empty confirmation variable retains read-only preview behavior. A supplied value
+must match exactly, and noninteractive execution never implies confirmation.
+
 The one-time initialization request has a longer, bounded 30-second response
 deadline because Raft setup can outlast ordinary five-second API calls. It
 still sends exactly one POST. If an unused staged cluster has no retained
@@ -465,6 +483,12 @@ Cilium policy permits only:
 - backup access to OpenBao and its mounted backup claim;
 - Prometheus access to a separate internal metrics listener.
 
+The Kubernetes Service exposes TCP 443, but the Talos API server endpoints use TCP
+6443. Cilium evaluates the connection after Service translation; server egress is
+restricted to the `kube-apiserver` entity on TCP 6443. Guarded operator preflight
+requires the live policy to match Git and the discovered backend port to match this
+rule before accepting credentials or issuing configuration writes.
+
 The separate listener permits unauthenticated metrics/health for observation;
 all administrative endpoints still require OpenBao authentication. Its network
 port is accessible only to the designated monitoring workloads.
@@ -603,6 +627,7 @@ until authorized live tests record them.
 | `just kube openbao-verify` | Scoped observer observation of workload, placement, health, route, monitoring, backup metadata, and sanitized desired-versus-live OpenBao configuration drift; no deliberate target mutation. |
 | `just bootstrap openbao prepare` | Operator-owned deployment of the staged uninitialized servers. |
 | `just bootstrap openbao initialize` | Operator-owned initialization and configuration with independent recovery output. |
+| `just bootstrap openbao finalize` | Operator-owned completion from retained initialization credentials after configuration repair. |
 | `just kube openbao-config-apply` | Operator-owned application of reviewed configuration and sanitized read-back. |
 | `just kube openbao-issuance-test` | Authorized bounded issuance, privilege-boundary, expiry, and redaction acceptance. |
 | `just kube openbao-ha-test` | Authorized sequential follower/leader replacement and auto-unseal acceptance under disruption coordination. |
