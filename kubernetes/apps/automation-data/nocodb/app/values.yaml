@@ -46,6 +46,8 @@ nocodb:
   extraEnvVars:
     - name: NC_ALLOW_LOCAL_EXTERNAL_DBS
       value: "true"
+    - name: NC_DISABLE_SINGLE_SESSION_ENFORCEMENT
+      value: "true"
     - name: NC_DISABLE_SUPPORT_CHAT
       value: "true"
     - name: NC_ADMIN_EMAIL
