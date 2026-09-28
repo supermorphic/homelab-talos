@@ -88,41 +88,75 @@ def run(
     client.wait_quorum(token)
     apply.install_initial(client, token, password, kubeconfig, target)
     journal.append("configuration-written")
+    return _finish(client, token, password, kubeconfig, target, phase, journal)
+
+
+def _revoke_checked(client, token):
+    try:
+        client.post("auth/token/revoke-self", {}, token=token)
+    except AmbiguousWrite:
+        # Resolve a lost acknowledgement by independent denial, never by retrying POST.
+        pass
+    try:
+        client.read("auth/token/lookup-self", token=token)
+    except SafeError as error:
+        if str(error) == "read-denied":
+            return
+        raise
+    raise SafeError("authentication-failed")
+
+
+def _finish(client, token, password, kubeconfig, target, phase, journal):
     guards.assert_mutation_allowed(kubeconfig)
     if guards.freeze_target(kubeconfig, phase) != target:
         raise SafeError("source-mismatch")
     login = client.post("auth/homelab-userpass/login/openbao-operator", {"password": password})
     operator_token = login.get("auth", {}).get("client_token") if isinstance(login, dict) else None
-    if (
-        not isinstance(operator_token, str)
-        or not operator_token
-        or operator_token == token
-        or set(login.get("auth", {}).get("policies", [])) != {"openbao-operator"}
-    ):
+    if not isinstance(operator_token, str) or not operator_token or operator_token == token:
         raise SafeError("authentication-failed")
-    lookup = client.read("auth/token/lookup-self", token=operator_token)
-    if set(lookup.get("data", {}).get("policies", [])) != {"openbao-operator"}:
-        raise SafeError("authentication-failed")
-    journal.append("operator-login-verified")
-    guards.assert_mutation_allowed(kubeconfig)
-    if guards.freeze_target(kubeconfig, phase) != target:
-        raise SafeError("source-mismatch")
-    client.post("auth/token/revoke-self", {}, token=token)
     try:
-        client.read("auth/token/lookup-self", token=token)
-    except SafeError as error:
-        if str(error) != "read-denied":
-            raise
-    else:
-        raise SafeError("authentication-failed")
-    journal.append("root-revoked")
-    client.wait_quorum(operator_token)
-    # API read-back was proved before revocation; reauthenticate the reader with the
-    # independent operator identity for final verification in the runtime adapter.
-    if hasattr(client, "set_token"):
+        if set(login.get("auth", {}).get("policies", [])) != {"openbao-operator"}:
+            raise SafeError("authentication-failed")
+        lookup = client.read("auth/token/lookup-self", token=operator_token)
+        if set(lookup.get("data", {}).get("policies", [])) != {"openbao-operator"}:
+            raise SafeError("authentication-failed")
+        client.wait_quorum(operator_token)
         client.set_token(operator_token)
         apply.verify_configuration(apply.DESIRED, client)
         if not apply.audit_state(client):
             raise SafeError("source-mismatch")
-    client.post("auth/token/revoke-self", {}, token=operator_token)
+        journal.append("operator-login-verified")
+        guards.assert_mutation_allowed(kubeconfig)
+        if guards.freeze_target(kubeconfig, phase) != target:
+            raise SafeError("source-mismatch")
+        root = client.read("auth/token/lookup-self", token=token)
+        if set(root.get("data", {}).get("policies", [])) != {"root"}:
+            raise SafeError("authentication-failed")
+        _revoke_checked(client, token)
+        journal.append("root-revoked")
+        client.wait_quorum(operator_token)
+    finally:
+        # This session belongs to this run; retire it even when read-back fails.
+        guards.assert_mutation_allowed(kubeconfig)
+        _revoke_checked(client, operator_token)
+        client.set_token(None)
     return {"status": "pass"}
+
+
+def finalize(*, client, token, kubeconfig, journal, password=None, confirm=""):
+    """Finish a retained initialization without initializing or changing configuration."""
+    target = guards.freeze_target(kubeconfig, "config-apply")
+    client.wait_quorum(token)
+    root = client.read("auth/token/lookup-self", token=token)
+    if set(root.get("data", {}).get("policies", [])) != {"root"}:
+        raise SafeError("authentication-failed")
+    apply.verify_configuration(apply.DESIRED, client)
+    if not apply.audit_state(client):
+        raise SafeError("source-mismatch")
+    required = guards.confirmation("finalize", target["source_revision"], guards.digest(target))
+    if confirm != required:
+        return {"status": "confirmation-required", "confirmation": required,
+                "actions": ["verify-operator-login", "revoke-supplied-root-token"]}
+    if not isinstance(password, str) or not password:
+        raise SafeError("authentication-failed")
+    return _finish(client, token, password, kubeconfig, target, "config-apply", journal)

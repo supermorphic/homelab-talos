@@ -277,6 +277,22 @@ recovery. A rerun against an initialized cluster refuses reinitialization even
 when later configuration failed. Configuration repair uses a separate command
 with an existing authorized OpenBao identity.
 
+When the encrypted initialization bundle is retained, the attended
+`just bootstrap openbao finalize` phase completes bootstrap after configuration repair.
+It requires the retained root token and operator password, clean deployed source,
+the exact live target, a complete configuration comparison, and enabled audit.
+Before revoking the supplied root token, it independently logs in as the operator,
+checks that session's policy, configuration access and Raft health, and rechecks the
+target under the mutation lease. It verifies root-token rejection and retires its
+temporary operator session. It never initializes, resets storage, or writes
+configuration. A lost revocation acknowledgement is resolved by a denied token lookup,
+not an automatic repeat of the write; unresolved results fail closed.
+
+Configuration apply and retained-bootstrap finalization show their sanitized plan
+and accept exact confirmation within one attended terminal session. An explicitly
+empty confirmation variable retains read-only preview behavior. A supplied value
+must match exactly, and noninteractive execution never implies confirmation.
+
 The one-time initialization request has a longer, bounded 30-second response
 deadline because Raft setup can outlast ordinary five-second API calls. It
 still sends exactly one POST. If an unused staged cluster has no retained
@@ -611,6 +627,7 @@ until authorized live tests record them.
 | `just kube openbao-verify` | Scoped observer observation of workload, placement, health, route, monitoring, backup metadata, and sanitized desired-versus-live OpenBao configuration drift; no deliberate target mutation. |
 | `just bootstrap openbao prepare` | Operator-owned deployment of the staged uninitialized servers. |
 | `just bootstrap openbao initialize` | Operator-owned initialization and configuration with independent recovery output. |
+| `just bootstrap openbao finalize` | Operator-owned completion from retained initialization credentials after configuration repair. |
 | `just kube openbao-config-apply` | Operator-owned application of reviewed configuration and sanitized read-back. |
 | `just kube openbao-issuance-test` | Authorized bounded issuance, privilege-boundary, expiry, and redaction acceptance. |
 | `just kube openbao-ha-test` | Authorized sequential follower/leader replacement and auto-unseal acceptance under disruption coordination. |

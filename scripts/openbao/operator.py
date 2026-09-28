@@ -354,7 +354,7 @@ def private_prompt(label):
 def main(argv):
     client = None
     try:
-        if len(argv) != 2 or argv[1] not in {"prepare", "initialize", "config-apply"}:
+        if len(argv) != 2 or argv[1] not in {"prepare", "initialize", "config-apply", "finalize"}:
             raise SafeError("invalid-source")
         phase = argv[1]
         selected = os.environ.get("OPENBAO_OPERATOR_KUBECONFIG", "")
@@ -362,17 +362,21 @@ def main(argv):
         if not selected or not kubeconfig.is_absolute() or not kubeconfig.is_file():
             raise SafeError("invalid-source")
         # Never adopt .kube/config or ambient administrative credentials implicitly.
-        guards.freeze_target(kubeconfig, phase)
+        guards.freeze_target(kubeconfig, "config-apply" if phase == "finalize" else phase)
         client = OperatorClient(kubeconfig)
         inputs = {"client": client, "kubeconfig": kubeconfig, "journal": []}
-        if phase == "config-apply":
-            token = private_prompt("Existing authorized OpenBao token: ")
+        if phase in {"config-apply", "finalize"}:
+            token = private_prompt("OpenBao token (retained root token during bootstrap, not password): ")
             if not token:
                 raise SafeError("authentication-failed")
             client.wait_quorum(token)
             inputs["token"] = token
-            operation = lambda confirm: apply.run(confirm=confirm, **inputs)
-            supplied = os.environ.get("OPENBAO_CONFIG_CONFIRM", "")
+            if phase == "config-apply":
+                operation = lambda confirm: apply.run(confirm=confirm, **inputs)
+                supplied = os.environ.get("OPENBAO_CONFIG_CONFIRM")
+            else:
+                operation = lambda confirm: bootstrap.finalize(confirm=confirm, **inputs)
+                supplied = os.environ.get("OPENBAO_BOOTSTRAP_CONFIRM")
         else:
             inputs.update(
                 recovery_directory=Path(os.environ.get("OPENBAO_RECOVERY_DIRECTORY", "")),
@@ -381,8 +385,14 @@ def main(argv):
             operation = lambda confirm: bootstrap.run(phase, confirm=confirm, **inputs)
             supplied = os.environ.get("OPENBAO_BOOTSTRAP_CONFIRM", "")
         plan = operation("")
-        if supplied != plan.get("confirmation"):
+        prompted = False
+        if phase in {"config-apply", "finalize"} and supplied is None and sys.stdin.isatty():
             print(json.dumps(plan, sort_keys=True))
+            prompted = True
+            supplied = input("Enter exact confirmation: ")
+        if supplied != plan.get("confirmation"):
+            if not prompted:
+                print(json.dumps(plan, sort_keys=True))
             return 2
         if phase == "config-apply" and any(
             change["kind"] == "userpass-user" for change in plan.get("changes", [])
@@ -393,6 +403,11 @@ def main(argv):
                 if not password:
                     raise SafeError("authentication-failed")
                 inputs["operator_password"] = password
+        if phase == "finalize":
+            password = private_prompt("Retained operator password: ")
+            if not password:
+                raise SafeError("authentication-failed")
+            inputs["password"] = password
         with lease(kubeconfig):
             result = operation(supplied)
         print(json.dumps(result, sort_keys=True))

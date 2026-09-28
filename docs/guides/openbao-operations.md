@@ -58,6 +58,11 @@ installation. Use a different empty recovery directory for initialization.
 
 ### 2. Prepare the staged servers
 
+This step is for a new installation with all OpenBao Flux units suspended in Git.
+The current deployment already has initialized servers; its prerequisite and server
+units reconcile through Git. Continue at step 4 for an interrupted initialization
+with a retained recovery bundle. Do not prepare or initialize it again.
+
 Set `OPENBAO_OPERATOR_KUBECONFIG` to the absolute path of the operator kubeconfig,
 `OPENBAO_RECOVERY_RECIPIENT` to the public recipient in the seal artifact, and
 `OPENBAO_RECOVERY_DIRECTORY` to the initialization recovery directory. Run:
@@ -87,6 +92,20 @@ Confirm that `openbao-recovery.age` was retained independently. Privately import
 non-root operator login and recovery material into the operator's recovery system.
 The bootstrap verifies the operator login and revokes the initial root token before
 reporting success. Do not depend on that root token for routine administration.
+
+If initialization retained the bundle but stopped during configuration, first run
+`mise exec -- just kube openbao-config-apply` as described below. Then complete bootstrap:
+
+```sh
+mise exec -- just bootstrap openbao finalize
+```
+
+Keep `OPENBAO_OPERATOR_KUBECONFIG` and the public `OPENBAO_RECOVERY_RECIPIENT` set.
+Enter the bundle's retained root token at the token prompt. Review and enter the
+exact confirmation, then enter the retained operator password at its private prompt.
+This verifies the installed configuration and operator login, retires the supplied
+root token, and closes its temporary operator session. It does not initialize again
+or replace storage. A successful normal initialization already performs these steps.
 
 ### 5. Run attended acceptance
 
@@ -143,11 +162,17 @@ mise exec -- just kube openbao-config-apply
 
 Enter an existing authorized OpenBao token at the private prompt. Review the sanitized
 change plan and reported `config-apply:openbao:<main-sha>:<target-and-plan-digest>`
-confirmation; set `OPENBAO_CONFIG_CONFIRM` to that value and rerun. A changed source or
-live target requires a new review. The command applies reviewed owned objects and
+confirmation, then enter that exact value in the same terminal session. During
+bootstrap repair, use the retained **root token**, not the operator password. If the
+operator account is missing, a separate private prompt requests its retained password.
+A changed source or live target requires a new review. The command applies reviewed owned objects and
 reads back the result. Run `openbao-verify` after the reader has produced a fresh
 observation. If apply or read-back fails, stop and inspect; do not patch live state by
 hand.
+
+Leave `OPENBAO_CONFIG_CONFIRM` (or `OPENBAO_BOOTSTRAP_CONFIRM` for finalization) unset
+for interactive review. Setting it explicitly to an empty value gives a read-only
+preview; setting the exact reported value supports a separately reviewed invocation.
 
 ## Normal verification
 

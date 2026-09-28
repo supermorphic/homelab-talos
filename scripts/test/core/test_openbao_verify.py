@@ -212,7 +212,8 @@ class VerifyTest(unittest.TestCase):
             kubeconfig = Path(directory) / 'config'
             kubeconfig.write_text('synthetic')
             reader = ObserverReader(kubeconfig, 'a' * 40)
-            with (patch.object(reader, '_get', return_value={'status': ['synthetic-private-marker']}),
+            with (patch('scripts.openbao.reader.source_phase', return_value='active'),
+                  patch.object(reader, '_get', return_value={'status': ['synthetic-private-marker']}),
                   self.assertRaises(SafeError) as caught):
                 reader.preflight()
             self.assertEqual(str(caught.exception), 'invalid-response')
@@ -234,10 +235,15 @@ class VerifyTest(unittest.TestCase):
 
     def test_source_phase_rejects_mixed_activation(self):
         source = ROOT / 'kubernetes/apps/security/openbao/ks.yaml'
-        self.assertEqual(source_phase(source), 'staged-absent')
+        # Server reconciliation alone is not active service acceptance.
+        with self.assertRaises(SafeError):
+            source_phase(source)
         with tempfile.TemporaryDirectory() as directory:
             altered = Path(directory) / 'ks.yaml'
-            altered.write_text(source.read_text().replace('suspend: true', 'suspend: false', 1))
+            staged = source.read_text().replace('suspend: false', 'suspend: true')
+            altered.write_text(staged)
+            self.assertEqual(source_phase(altered), 'staged-absent')
+            altered.write_text(staged.replace('suspend: true', 'suspend: false', 1))
             with self.assertRaises(SafeError):
                 source_phase(altered)
 

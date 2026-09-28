@@ -20,6 +20,10 @@ class BootstrapClient:
         self.login_ok = True
         self.revoke_ok = True
         self.revoked = False
+        self.revoked_tokens = set()
+
+    def set_token(self, token):
+        self.token = token
 
     def states_now(self):
         return [{"initialized": value} for value in self.states]
@@ -41,15 +45,16 @@ class BootstrapClient:
         if path == "auth/token/revoke-self":
             if not self.revoke_ok:
                 raise AmbiguousWrite("ambiguous-write")
-            self.revoked = True
+            self.revoked_tokens.add(token)
+            self.revoked = "synthetic-root" in self.revoked_tokens
         return {}
 
     def read(self, path, token=None):
         self.calls.append(("GET", path))
         if path == "auth/token/lookup-self":
-            if token == "synthetic-root" and self.revoked:
+            if token in self.revoked_tokens:
                 raise SafeError("read-denied")
-            return {"data": {"policies": ["openbao-operator"]}}
+            return {"data": {"policies": ["root"] if token == "synthetic-root" else ["openbao-operator"]}}
         return {"data": {}}
 
     def wait_quorum(self, token):
@@ -92,6 +97,8 @@ class BootstrapTest(unittest.TestCase):
         self.mock("preflight_recovery", None, "secrets")
         self.mock("write_recovery", Path("/synthetic-retained"), "secrets")
         self.mock("install_initial", None, "apply")
+        self.mock("verify_configuration", {"differences": []}, "apply")
+        self.mock("audit_state", True, "apply")
 
     def mock(self, name, value, module):
         p = patch(f"scripts.openbao.{module}.{name}", return_value=value)

@@ -3282,7 +3282,7 @@ automation-data:
 nocodb:
     scripts/nocodb/bootstrap.sh '{{kubeconfig}}'
 
-# Attended OpenBao deployment or one-shot initialization with explicit credentials.
+# Attended OpenBao prepare, initialize, or retained-bootstrap finalize.
 openbao phase:
     @uv run --locked python -m scripts.openbao.operator {{quote(phase)}}
 
