@@ -85,7 +85,7 @@
     "jwt_supported_algs": [],
     "jwks_url": "",
     "jwks_ca_pem": "",
-    "bound_issuer": "https://kubernetes.default.svc.cluster.local",
+    "bound_issuer": "https://192.168.90.20:6443",
     "provider_config": {
       "provider": "kubernetes"
     },
