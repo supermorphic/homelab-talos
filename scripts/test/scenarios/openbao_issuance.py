@@ -203,6 +203,8 @@ class Scope:
         self.kubeconfig, self.run_id = kubeconfig, run_id
         self.objects = []
         self.ambiguous = False
+        self.request_count = 0
+        self.probe = None
 
     def command(self, *args, input_bytes=None):
         return guards.command(
@@ -315,6 +317,8 @@ class PodAPI:
     def request(
         self, method, path, *, payload=None, token=None, headers=None, target="kube", login=False
     ):
+        self.scope.request_count += 1
+        self.scope.probe = {"request": self.scope.request_count, "phase": "preflight"}
         self.scope.check()
         self.scope.assert_owned(self.pod)
         meta = self.pod["metadata"]
@@ -327,22 +331,29 @@ class PodAPI:
             "headers": headers,
             "login": login,
         }
-        body = strict_json(
-            self.scope.command(
-                "-n",
-                meta["namespace"],
-                "exec",
-                "-i",
-                meta["name"],
-                "-c",
-                "probe",
-                "--",
-                "python",
-                "-c",
-                BRIDGE,
-                input_bytes=json.dumps(args).encode(),
-            )
+        self.scope.probe["phase"] = "transport"
+        raw = self.scope.command(
+            "-n",
+            meta["namespace"],
+            "exec",
+            "-i",
+            meta["name"],
+            "-c",
+            "probe",
+            "--",
+            "python",
+            "-c",
+            BRIDGE,
+            input_bytes=json.dumps(args).encode(),
         )
+        self.scope.probe["phase"] = "decode"
+        body = strict_json(raw)
+        status = body["status"]
+        self.scope.probe = {
+            "request": self.scope.request_count,
+            "phase": "response",
+            "status": status if type(status) is int and 100 <= status <= 599 else None,
+        }
         return body["status"], body["body"]
 
     def login(self):
@@ -515,6 +526,8 @@ def main():
         result["status"] = "fail"
     finally:
         if scope is not None:
+            if scope.probe is not None:
+                result["probe"] = scope.probe.copy()
             try:
                 scope.cleanup()
                 result["cleanup"] = "passed"
