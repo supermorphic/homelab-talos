@@ -21,6 +21,11 @@ SERVER_NAME = "openbao.lab.supermorphic.com"
 METRIC = "openbao_configuration_observation"
 RUNTIME_FILES = ("__init__.py", "configuration.py", "drift.py", "verify.py", "exporter.py")
 MAX_AGE = 300
+MAX_CLOCK_SKEW = 5
+FAILURE_CLASSES = frozenset({
+    "authentication-failed", "incomplete-list", "invalid-response", "invalid-source",
+    "read-denied", "timeout",
+})
 
 
 def source_digest(desired):
@@ -84,6 +89,11 @@ def metric_rows(result, digest, health, collected, *, desired=None):
         raise SafeError("invalid-response")
     if (result["status"] == "pass" and items) or (result["status"] == "drift" and not items):
         raise SafeError("invalid-response")
+    classification = result.get("classification", "")
+    if classification not in ({""} | FAILURE_CLASSES) or (
+        result["status"] != "inaccessible" and classification
+    ):
+        raise SafeError("invalid-response")
     labels = {
         "digest": digest,
         "kind": "summary",
@@ -92,6 +102,7 @@ def metric_rows(result, digest, health, collected, *, desired=None):
         "state": result["status"],
         "count": str(len(items)),
         "health": health,
+        "classification": classification,
     }
     rows = [(labels, collected)]
     for item in items:
@@ -124,13 +135,13 @@ def decode_observation(response, desired, *, now=None):
         digest = source_digest(desired)
         summaries, differences, times, scrape_times, fingerprints = [], [], set(), set(), set()
         for row in rows:
-            labels = {"name": "", "field": "", "health": "", **row["metric"]}
+            labels = {"name": "", "field": "", "health": "", "classification": "", **row["metric"]}
             stamp, value = map(float, row["value"])
             if (
                 not math.isfinite(value)
                 or not math.isfinite(stamp)
-                or not 0 <= now - value <= MAX_AGE
-                or not 0 <= now - stamp <= 120
+                or not -MAX_CLOCK_SKEW <= now - value <= MAX_AGE
+                or not -MAX_CLOCK_SKEW <= now - stamp <= 120
                 or labels["__name__"] != METRIC
                 or labels["namespace"] != "openbao"
                 or labels["service"] != "openbao-config-reader"
@@ -154,7 +165,7 @@ def decode_observation(response, desired, *, now=None):
                     item["field"] = labels["field"]
                 if labels["count"] != "0":
                     item["count"] = int(labels["count"])
-                if labels["health"] != "":
+                if labels["health"] != "" or labels["classification"] != "":
                     raise SafeError("invalid-response")
                 differences.append(item)
         if len(summaries) != 1 or len(times) != 1 or len(scrape_times) != 1:
@@ -163,6 +174,8 @@ def decode_observation(response, desired, *, now=None):
         if summary["name"] or summary["field"] or summary["count"] != str(len(differences)):
             raise SafeError("invalid-response")
         result = {"status": summary["state"], "differences": differences}
+        if summary["classification"]:
+            result["classification"] = summary["classification"]
         metric_rows(result, digest, summary["health"], next(iter(times)), desired=desired)
         return {
             **result,
@@ -322,9 +335,15 @@ def collect(desired, jwt_path, reader_factory=ConfigurationReader):
         health = reader.login()
         result = compare_configuration(desired, reader)
         checked_differences(result["differences"], desired)
+        if result["status"] == "inaccessible":
+            result["classification"] = "read-denied"
         return result, health
-    except (SafeError, OSError, KeyError, TypeError, ValueError, IndexError, AttributeError):
-        return {"status": "inaccessible", "differences": []}, "inaccessible"
+    except (SafeError, OSError, KeyError, TypeError, ValueError, IndexError, AttributeError) as error:
+        classification = str(error) if isinstance(error, SafeError) else "invalid-response"
+        if classification not in FAILURE_CLASSES:
+            classification = "invalid-response"
+        return {"status": "inaccessible", "differences": [],
+                "classification": classification}, "inaccessible"
     finally:
         try:
             reader.close()

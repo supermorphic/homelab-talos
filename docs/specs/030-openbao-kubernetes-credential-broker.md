@@ -383,12 +383,16 @@ placement, routes, backup metadata, monitoring, and all six deployed Flux revisi
 It reads configuration and quorum observations through the existing Prometheus route.
 Evidence binds the exact desired/policy/reader bytes by SHA-256, plus the independently
 checked clean source and deployed revisions. Scrape timestamps must be within two
-minutes and collection timestamps within five minutes, with neither in the future.
+minutes and collection timestamps within five minutes. A timestamp at most five
+seconds ahead of the observer is accepted for bounded host clock skew; larger future
+offsets fail.
 A complete single scrape must contain exactly one summary and its declared,
 source-whitelisted differences. Missing, duplicate, stale, inaccessible, malformed,
 or mismatched observations fail verification. Scraping an old success does not
 refresh its collection time. Reader failure alerts but never seals servers, stops
 issuance, or performs configuration repair.
+Collection failure exposes only a fixed classification, never raw error text or
+response bodies.
 
 Diagnostic exec and port-forward permissions use separate namespace-scoped bindings
 derived from existing callers, with no OpenBao grant. This restriction addresses
