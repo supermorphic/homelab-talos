@@ -868,6 +868,130 @@ Adding drop operations to the ordinary provisioning workflow would turn input mi
 or workflow misuse into destructive cluster-wide actions. Decommissioning remains a
 separate attended administrative boundary under the destructive-operation invariant.
 
+## Proposed extension: registered application logins (issue 491)
+
+This proposal supports the additional source pairs in
+[specification 028](028-nocodb-operator-ui.md#proposed-extension-independently-scoped-source-pairs-issue-491).
+It is pending design review and implementation. Existing domain runtime and migration
+credentials retain their current responsibilities.
+
+### Required consumers
+
+[Career Ops issue 197](https://github.com/supermorphic/career-ops/issues/197) needs a
+separate login for application-declared reads and integration functions. Its
+[existing CLI guide](https://github.com/supermorphic/career-ops/blob/main/docs/guides/career-evidence.md)
+uses explicitly selected protected service/pass files for status, validation, export,
+and migration. This requires a supported private CLI connection path now. The later
+interview capability consumes bounded application operations; this platform does not
+provide it with a general SQL execution API.
+
+The guide's existing runtime-role selection predates issue 197. Updating consumer role
+selection, queries, and grant expectations belongs to Career Ops. Migration continues
+to use a distinct migration identity and the existing reviewed migration runner.
+Deploying a worker or building the interview interface is outside issue 491.
+
+### Registration and grants
+
+Extend the existing provisioning workflow and fixed PostgreSQL function boundary with
+a small `managed_application_logins` registry. Each login is bound to one ready managed
+domain, one application name matching `^[a-z][a-z0-9_]{0,23}$`, and one explicit application
+schema. Registration fixes these fields and returns the role
+`app_<md5(domain + ':' + application)>_integration`. Check full registry binding and
+role uniqueness before creation; reject unrelated pre-existing roles and collisions.
+The schema may also be a named NocoDB pair's operator schema; the roles and privileges
+remain distinct. Registration creates a restricted `NOLOGIN` grant target.
+
+Consumer-owned migrations grant only intended reads and EXECUTE on reviewed functions.
+The integration role receives no direct DML, ownership, role memberships, grant options,
+schema creation, database creation, role creation, replication, or RLS bypass. Shared
+context writes, when needed, must use a consumer-declared function. Function semantics,
+definer authority, safe name resolution, and exact reads belong to consumer review and
+acceptance. The platform checks effective authority within the bound schema, including
+PUBLIC, column, default, and routine privileges, and rejects access to other application
+schemas and databases. There are no automatic consumer grants.
+
+Store only target identity, role name, lifecycle state, operation ID, credential
+generation, and bounded timestamps/error codes in the registry. The state sequence is
+`awaiting_grants`, `activating`, and `ready`, with `rotating` and `error` for explicit
+credential changes and failures. Sync/validation cannot rotate a credential.
+
+### Protected credential installation and recovery
+
+Reuse the private automation-data provisioner; add no database broker. Add guarded
+recipes under `mise exec -- just kube`:
+
+| Recipe | Purpose |
+| --- | --- |
+| `automation-data-login-register <domain> <application> <schema>` | Register the target and prepare its NOLOGIN role |
+| `automation-data-login-activate <domain> <application>` | Validate grants and install the first credential |
+| `automation-data-login-validate <domain> <application>` | Return bounded registry and authority status |
+| `automation-data-login-rotate <domain> <application>` | Explicitly replace only this login's credential |
+| `automation-data-connect <domain> <registered-identity>` | Open the fixed private CLI connection path |
+
+Activation and rotation generate a strong random credential locally and write it to a
+new, explicitly selected protected file outside the checkout before changing PostgreSQL.
+Refuse symlinks, unsafe permissions, wrong ownership, and implicit overwrite. Send that
+credential only through a protected request body to the existing authenticated private
+provisioner. Never put it in arguments, stdout, error bodies, saved workflow executions,
+or repository artifacts. Return only non-secret identity and generation metadata.
+
+Persist a local operation record beside the protected candidate file. The server binds
+the request to the selected login, operation ID, and expected prior generation.
+Retries of the same operation reapply the same retained candidate and cannot affect
+another generation. After private authentication and identity read-back succeed, write
+the service/pass profile atomically and mark the operation complete. Retain a candidate
+after ambiguous failure for explicit recovery; never overwrite it with a new generated
+password during ordinary retry. Missing retained material requires an explicit new
+rotation, with fresh target validation and confirmation.
+
+The operator retains application credentials in approved private storage. Backups retain
+the matching PostgreSQL verifier and registration; the protected credential is an
+additional recovery root for an external client. This lifecycle neither reads NocoDB
+credentials nor extracts encrypted n8n credentials. It does not change a domain runtime,
+migrator, or source credential as a side effect.
+
+### Private connection path and migration separation
+
+Implement a bounded loopback-only Kubernetes port-forward to the fixed automation-data
+PostgreSQL Pod and port. The helper accepts a registered identity, validates its domain
+binding, uses the approved scoped Kubernetes context, and cleans up its own tunnel.
+It accepts no arbitrary cluster target, database, forwarded address, or SQL. Protected
+service/pass files bind database and role; consumer commands independently check the
+authenticated database and session identity. Do not introduce a database ingress route.
+
+This requires a reviewed named port-forward permission for the fixed PostgreSQL Pod,
+plus registration of this connection workflow in the agent-access policy and tests.
+It grants no Secret reads, exec, or workload mutation. Until that authority is deployed,
+the helper must fail at the boundary without selecting a broader context. Merely having
+a tunnel does not authorize reading records, writing application data, or running a
+migration; consumer workflows retain their own guards.
+
+The same transport can serve an explicitly selected existing migration identity using
+an operator-retained protected credential. It does not retrieve that credential from
+n8n. If no usable migration credential is retained, recovery requires a separately
+authorized targeted migration-credential rotation and protected delivery, preserving
+the matching n8n credential through the existing provisioning lifecycle. Such recovery
+is an explicit prerequisite, never an automatic side effect of opening a connection.
+
+Future worker deployment may deliver the application credential through its approved
+secret mechanism and use private cluster networking. Worker manifests, workload secret
+delivery, and network access remain owned by issue 483.
+
+### Verification and rollout boundary
+
+Use synthetic application functions, a permitted read surface, a withheld bookkeeping
+table, and a withheld privileged function. Prove positive authentication and declared
+operations, effective privilege denials, credential rotation isolation, interrupted
+installation recovery, and absence of credential output. Test the tunnel's fixed target,
+loopback binding, context restrictions, lifecycle cleanup, and rejection of unsafe files.
+
+Restore the complete control database, roles/verifiers, and application database into
+isolated services. Authenticate using the retained synthetic client credential and
+prove both permitted operations and denials. Do not claim recovery from registry or
+backup-file inspection alone. Application-specific function behavior and CLI acceptance
+remain consumer-owned. Live credential installation and migration require their own
+explicit scope and guarded procedures after implementation and deployment.
+
 ## Review triggers
 
 Revisit this design when measured load requires connection pooling, automatic failover,

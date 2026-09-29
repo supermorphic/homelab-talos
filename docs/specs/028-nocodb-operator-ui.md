@@ -665,6 +665,164 @@ sources that do not depend on historical job retention.
 | NocoDB-specific object storage | It adds a storage platform without a demonstrated requirement; workflows already own their files. |
 | Native manifests instead of the supported chart | They duplicate maintained workload conventions without reducing the required repository integration. |
 
+## Proposed extension: independently scoped source pairs (issue 491)
+
+This section is a proposed design for
+[issue 491](https://github.com/supermorphic/homelab-talos/issues/491), pending operator
+review and implementation. Earlier sections describe the existing lifecycle. This
+proposal extends that lifecycle without changing existing source identities or grants.
+
+### Consumer requirement and ownership
+
+[Career Ops issue 197](https://github.com/supermorphic/career-ops/issues/197) needs an
+additional reader/operator surface and a separate application integration login in an
+existing managed database. Its existing status, validation, migration, and export CLI
+commands consume protected PostgreSQL service and password files. The platform must
+supply a supported private connection procedure for those commands. The later interview
+interface owns bounded application operations; it does not receive a general SQL tool.
+
+An in-cluster worker is not a prerequisite. Its deployment and workload secret delivery
+belong to [issue 483](https://github.com/supermorphic/homelab-talos/issues/483).
+The registered application login remains usable by a future workload with separately
+approved connectivity and credential delivery. Application schemas, exact grants,
+integration functions, migrations, and application acceptance remain consumer-owned.
+
+### Pair identity and compatibility
+
+Add `pair` to the existing source and mapping registries. Source identity becomes
+`(domain, pair, access_kind)`; mapping identity becomes `(domain, pair)`. The reserved
+pair `default` identifies the existing lifecycle. Upgrade existing rows to `default`
+without replacing them or changing timestamps, role names, NocoDB IDs, passwords,
+credential generations, saved views, or selected schemas. Domain-only APIs and commands
+continue to select `default`, retaining their existing response shape.
+
+Additional pair names match `^[a-z][a-z0-9_]{0,23}$`, excluding `default`. Registration
+requires an existing ready managed domain, an explicit reader schema, and an optional,
+different operator schema. Apply the current custom-schema naming restrictions and
+reject schema reuse across pairs in the same database. Include the implicit default
+schemas when checking collisions. An identical registration is idempotent; changing a
+registered mapping or adopting an existing unrelated role is refused.
+
+Use stable bounded role names for named pairs:
+`nocodb_<md5(domain + ':' + pair)>_reader` and
+`nocodb_<md5(domain + ':' + pair)>_operator`. The digest is an identifier, not a secret
+or authentication mechanism. Check the complete domain/pair binding and global role
+uniqueness before creation; any collision fails closed. Existing default role names stay
+unchanged. Return canonical role names for consumer migrations to use.
+
+Registration prepares restricted `NOLOGIN` candidates without creating consumer schemas
+or grants. Consumer migrations then grant the intended access. Preparation reports both
+roles' eligibility without generating credentials; sync activates only eligible roles.
+New pairs require explicit grants and receive no automatic grants on future objects.
+
+### NocoDB organization and command contract
+
+Give each additional pair its own base, titled `<domain>/<pair>`, with a reader source
+and optional operator source. This preserves the original base and provides a separate
+place for the additional surface's tables and saved views. A shared base would couple
+source naming and presentation across independently registered surfaces. A separate
+managed-domain alias would misrepresent database ownership and is not supported.
+
+Keep all existing recipes. Add these recipes under `mise exec -- just kube`:
+
+| Recipe | Purpose |
+| --- | --- |
+| `nocodb-pair-register <domain> <pair> <reader-schema> <operator-schema-or-dash>` | Freeze the mapping and create restricted role candidates |
+| `nocodb-pair-prepare <domain> <pair>` | Check initial grant eligibility without NocoDB registration |
+| `nocodb-pair-sync <domain> <pair>` | Create, resume, or validate only this pair |
+| `nocodb-pair-rotate <domain> <pair> <reader-or-operator>` | Rotate only the selected source login and integration |
+
+Use operation-specific confirmation values containing the full selected domain/pair
+and, for rotation, access kind. Extend the existing authenticated source workflow with
+an optional `pair` field and a named-pair registration operation. Routine prepare,
+sync, and rotation accept only registered identity selectors. Registration alone accepts
+schema names. No operation accepts caller-selected hosts, databases, SQL, or grants.
+Named-pair responses include `pair`; legacy requests retain the legacy response contract.
+
+The reader establishes the retained base ID for its pair. Integration titles include
+domain, pair, and access kind. Preserve all legacy names for `default`. A title match
+alone cannot authorize adoption of an additional base, integration, or source.
+
+### Concurrent requests, interruption, and rotation
+
+Carry pair identity through every function, workflow branch, readiness check, response,
+error, and recovery query. Use the existing domain lock for registration and collision
+checks, with a persistent operation claim for work spanning external API calls.
+The claim binds domain, pair, operation, access kind, and generation. Concurrent callers
+observe the active claim; they do not issue another create or rotate request. State
+writes compare that claim so a stale completion cannot overwrite a later operation.
+
+Do not treat an expired wait as proof that creation failed. Retain source creation job
+IDs and all known base/integration/source IDs. Resume only a bound operation. An unknown
+create outcome requires bounded observation or attended reconciliation before another
+create can occur. Ambiguous objects are preserved for diagnosis, never automatically
+adopted or deleted. Default-pair behavior must pass the same concurrency regression tests.
+
+Unchanged sync preserves credentials, generations, and durable NocoDB identities.
+Metadata refresh remains the supported additive refresh procedure followed by scoped
+sync and identity verification. Rotation changes only the selected pair/access kind.
+Partial rotation retains its claim and identities; ordinary sync cannot repair it by
+generating another password. Explicit retry is bound to that same target.
+
+### Effective authority and withheld objects
+
+Validate effective privileges before activation and during sync/rotation. Include table
+and column grants, grant options, sequences, inherited and `PUBLIC` access, default
+privileges, routine execution, ownership, role membership, and database isolation.
+Preserve the standard default reader contract. Explicitly mapped readers may have
+SELECT on a subset of their schema's presentation objects, with at least one usable
+presentation object; they need not read bookkeeping tables in that schema.
+
+Operators may have only the consumer's explicit SELECT and controlled DML grants within
+their selected schema. Require an eligible editing surface without requiring access to
+every object. Source logins cannot directly execute application routines or receive
+ownership, role assumption, DDL, grant options, or other databases' authority. Trigger
+execution caused by permitted writes remains governed by consumer-owned trigger
+definitions and application tests. Routine checks distinguish application routines from
+the platform's reviewed PostgreSQL system-function baseline.
+
+Platform validation enforces this authority ceiling; it does not invent an application
+object allowlist. Consumer migrations and acceptance establish the exact objects and
+operations. Synthetic platform tests must independently prove denial for withheld
+tables and functions in the same schema, as well as denial across pairs.
+
+The separate application-login lifecycle and CLI connection procedure are proposed in
+[specification 026](026-automation-data-postgresql-platform.md#proposed-extension-registered-application-logins-issue-491).
+
+### Upgrade, backup, and acceptance
+
+Introduce revision `026-nocodb-v3` through the guarded additive upgrade. Recognize the
+existing baseline and v1/v2 states explicitly; reject unknown state. Share definitions
+between fresh initialization and upgrade, and validate installed function contracts.
+Ship backup/restore compatibility before applying the upgrade. Do not mutate a captured
+bundle to make its format appear current.
+
+Complete bundles include every pair mapping, source row, operation claim, application
+login registration, role definition, password verifier, and NocoDB metadata database.
+Consistency capture must detect changes to any of these states. Keep prior supported
+bundles restorable and require a fresh complete bundle after upgrade and acceptance.
+
+Extend the existing disposable component test and isolated restore drill. Required
+evidence includes:
+
+- a populated default pair surviving upgrade and additional-pair registration with
+  identical credentials, generations, IDs, schema mapping, and saved views;
+- initial grant preparation, withheld objects, effective privilege ceilings, positive
+  access, and cross-pair denials demonstrated through real PostgreSQL sessions;
+- simultaneous requests, interrupted creation, bounded retry, additive metadata
+  refresh, selected-source rotation, and partial-rotation recovery without duplicates;
+- both pairs restored with their saved presentation state and connections targeting
+  only the isolated database, plus restored application-login authentication and denials;
+- native Community Edition table and linked-record editing on synthetic objects;
+- protected credential handling and fixed private CLI connectivity, including negative
+  cases for incorrect targets and accidental credential output.
+
+Local checks and hosted merge validation do not establish live acceptance. Record
+authorized live access, browser, and isolated restore evidence through the existing
+test catalog. The consumer handoff must include exact commands, returned role names,
+grant prerequisites, private access instructions, deployed revision, and evidence
+references. No production opt-in or credential rotation is implied by design approval.
+
 ## Review triggers
 
 Revisit the architecture when demonstrated requirements call for native attachments,
