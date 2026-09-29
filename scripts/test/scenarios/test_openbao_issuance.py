@@ -304,6 +304,29 @@ class OwnershipTests(unittest.TestCase):
         self.assertNotIn("synthetic-bearer-marker", repr(calls[0][0]))
         self.assertIn(b"synthetic-bearer-marker", calls[0][1]["input_bytes"])
 
+    def test_probe_failure_retains_only_request_position_and_safe_status(self):
+        from pathlib import Path
+
+        from scripts.test.scenarios import openbao_issuance as live
+
+        scope = live.Scope(Path("/synthetic/operator"), "synthetic-run")
+        pod = live.pod_document("synthetic-run", True)
+        scope.check = lambda: None
+        scope.assert_owned = lambda _: pod
+        scope.command = lambda *args, **kwargs: b'{"status":403,"body":{"token":"private-marker"}}'
+        live.PodAPI(scope, pod).request("POST", "/synthetic", token="private-marker")
+        self.assertEqual(getattr(scope, "probe", None), {"request": 1, "phase": "response", "status": 403})
+        self.assertNotIn("private-marker", json.dumps(getattr(scope, "probe", None)))
+
+        def interrupted(*args, **kwargs):
+            raise RuntimeError("private-marker")
+
+        scope.command = interrupted
+        with self.assertRaises(RuntimeError):
+            live.PodAPI(scope, pod).request("POST", "/synthetic", token="private-marker")
+        self.assertEqual(getattr(scope, "probe", None), {"request": 2, "phase": "transport"})
+        self.assertNotIn("private-marker", json.dumps(getattr(scope, "probe", None)))
+
 
 class ExpiryReviewTests(unittest.TestCase):
     def test_accepts_rejection_after_api_leeway_and_bounded_clock_skew(self):
