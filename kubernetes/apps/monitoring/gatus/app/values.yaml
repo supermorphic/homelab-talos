@@ -112,7 +112,7 @@ config:
         - "[STATUS] == 200"
     # Off-cluster edge managed by separate host automation. Caddy serves this
     # directly, independently of Semaphore. Confirm the deployed endpoint
-    # before activation; see ../README.md.
+    # before activation.
     - name: caddy
       group: Platform
       url: "https://caddy.infra.supermorphic.com/healthz"

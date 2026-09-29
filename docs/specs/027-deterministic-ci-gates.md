@@ -269,7 +269,8 @@ and canonical reconciliation. Its receipt binds the clean candidate and freshly 
 base, so an edited branch or newer main needs fresh validation. This shared selection
 path avoids a second classification system. Current contributor procedure is in the
 [repository and worktree guide](../guides/repository-worktree-setup.md#prepare-validate-and-publish-a-change);
-the executable contract is in [the test framework README](../../tests/README.md#optional-local-publication-validation).
+the executable contract is in the [CI impact map](../../tests/impact.yaml) and
+[planner](../../scripts/test/ci_plan.py).
 
 ### Evidence requirements
 

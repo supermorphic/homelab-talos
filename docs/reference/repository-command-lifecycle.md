@@ -171,6 +171,6 @@ describes the operation.
 13. New terminology or workflow shape requires a behavioral or safety distinction, not
     visual symmetry.
 
-Executable Just modules, source-adjacent README files, and `tests/catalog.yaml` remain the
-authority for individual commands. This reference defines shared semantics, not a second
-manual command inventory.
+Executable Just modules and `tests/catalog.yaml` remain the authority for individual
+commands. Applicable guides and references describe operator decisions and current facts.
+This reference defines shared semantics, not a second manual command inventory.

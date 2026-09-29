@@ -29,8 +29,8 @@ the repository at that time; they are not present-day policy gates.
 ## One policy surface
 
 Root `AGENTS.md` is the sole vendor-neutral repository-policy surface. Subtree-specific
-procedures and facts belong in source-adjacent README files, guides, references, and
-runbooks. A client adapter such as [`CLAUDE.md`](../../CLAUDE.md) may import the root
+procedures and facts belong in applicable guides, references, and runbooks. A client
+adapter such as [`CLAUDE.md`](../../CLAUDE.md) may import the root
 contract and add only client-specific operating guidance; it must not create a second
 repository policy.
 
@@ -216,7 +216,7 @@ effective workload.
 The following alternatives were considered and rejected:
 
 - Nested `AGENTS.md` files were rejected because nearest-file precedence can weaken the
-  repository contract and because source-adjacent documentation already carries local
+  repository contract and because applicable guides and references carry local
   procedure.
 - Tool-name prohibitions were rejected because different tools can cause the same
   effect, while the same tool can perform either bounded inspection or privileged

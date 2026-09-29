@@ -226,8 +226,8 @@ improvise a rollback.
 
 - [Spec 030](../specs/030-openbao-kubernetes-credential-broker.md) owns design,
   security, recovery, and detailed acceptance contracts.
-- The [OpenBao package README](../../kubernetes/apps/security/openbao/README.md)
-  summarizes the staged source and Flux units.
+- The [OpenBao Flux entrypoint](../../kubernetes/apps/security/openbao/ks.yaml)
+  selects the staged source units.
 - [Desired API configuration](../../kubernetes/apps/security/openbao/config/desired.json)
   and its policy files supply reviewed changes. The
   [operator workflow](../../scripts/openbao/operator.py),

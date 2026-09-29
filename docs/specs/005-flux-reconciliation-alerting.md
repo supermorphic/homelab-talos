@@ -12,7 +12,7 @@ observability metadata. Per-resource readiness is therefore load-bearing: health
 controller processes do not prove that the declared platform state is converging.
 
 This specification records the accepted rationale and evidence boundary. Current
-monitoring source, tests, and source-adjacent documentation define operational behavior.
+monitoring source, tests, and applicable guides or references define operational behavior.
 
 ## Metric architecture
 

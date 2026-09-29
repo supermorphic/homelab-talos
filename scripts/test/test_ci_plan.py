@@ -127,7 +127,7 @@ class ClassificationTests(unittest.TestCase):
                 "ci-framework",
             ),
             "tests/fixtures/chainsaw/lint/chainsaw-test.yaml": ("core", "ci-framework"),
-            "tests/chainsaw/README.md": ("core",),
+            "tests/fixtures/chainsaw/README.md": ("core",),
         }
         for path, expected in cases.items():
             with self.subTest(path=path):

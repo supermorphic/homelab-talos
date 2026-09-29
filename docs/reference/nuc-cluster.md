@@ -39,6 +39,10 @@ authoritative.
 MAC addresses are redacted to placeholders. The real values are held out-of-band
 and are not published here.
 
+For KVM keyboard and mouse access, `nuc1` and `nuc3` use rear USB-A ports.
+The rear USB-A port on `nuc2` does not provide working KVM input; connect its
+USB-A cable through a USB-A-to-USB-C adapter to the rear USB-C port.
+
 ## Image Factory
 
 The cluster uses one schematic for both Secure Boot artifacts:
