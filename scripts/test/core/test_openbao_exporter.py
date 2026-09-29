@@ -125,6 +125,15 @@ class EvidenceTest(unittest.TestCase):
             "inaccessible",
         )
 
+    def test_failure_evidence_reports_only_a_fixed_classification(self):
+        failed = {"status": "inaccessible", "differences": [], "classification": "incomplete-list"}
+        observed = self.api.decode_observation(self.evidence(failed), DESIRED, now=1020)
+        self.assertEqual(observed["classification"], "incomplete-list")
+
+        private = {**failed, "classification": "private-marker"}
+        with self.assertRaises(SafeError):
+            self.api.metric_rows(private, self.digest, "inaccessible", 1000, desired=DESIRED)
+
     def test_collection_time_not_scrape_time_controls_freshness(self):
         value = self.evidence(collected=500)
         value["data"]["result"][0]["value"][0] = 1019
@@ -196,6 +205,7 @@ class CollectionTest(unittest.TestCase):
         reader.fail_path = "sys/auth"
         result, health = collect(DESIRED, Path("unused"), lambda *_: reader)
         self.assertEqual(result["status"], "inaccessible")
+        self.assertEqual(result["classification"], "incomplete-list")
         self.assertEqual(health, "inaccessible")
         self.assertTrue(reader.closed)
 

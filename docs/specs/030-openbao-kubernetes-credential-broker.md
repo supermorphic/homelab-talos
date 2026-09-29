@@ -391,6 +391,8 @@ source-whitelisted differences. Missing, duplicate, stale, inaccessible, malform
 or mismatched observations fail verification. Scraping an old success does not
 refresh its collection time. Reader failure alerts but never seals servers, stops
 issuance, or performs configuration repair.
+Collection failure exposes only a fixed classification, never raw error text or
+response bodies.
 
 Diagnostic exec and port-forward permissions use separate namespace-scoped bindings
 derived from existing callers, with no OpenBao grant. This restriction addresses
