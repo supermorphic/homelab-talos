@@ -14,7 +14,7 @@
     {"kind": "policy", "name": "openbao-acceptance", "path": "sys/policies/acl/openbao-acceptance", "policy_file": "policies/acceptance.json"},
     {"kind": "policy", "name": "openbao-config-reader", "path": "sys/policies/acl/openbao-config-reader", "policy_file": "policies/config-reader.json"},
     {"kind": "kubernetes-config", "name": "kubernetes", "path": "kubernetes/config", "fields": {"kubernetes_host": "https://kubernetes.default.svc:443", "disable_local_ca_jwt": false}},
-    {"kind": "issuance-role", "name": "openbao-acceptance", "path": "kubernetes/roles/openbao-acceptance", "fields": {"allowed_kubernetes_namespaces": ["openbao-acceptance"], "allowed_kubernetes_namespace_selector": "", "service_account_name": "openbao-issued-reader", "kubernetes_role_name": "", "generated_role_rules": "", "token_default_ttl": 600, "token_max_ttl": 600, "token_default_audiences": ["https://kubernetes.default.svc.cluster.local"]}}
+    {"kind": "issuance-role", "name": "openbao-acceptance", "path": "kubernetes/roles/openbao-acceptance", "fields": {"allowed_kubernetes_namespaces": ["openbao-acceptance"], "allowed_kubernetes_namespace_selector": "", "service_account_name": "openbao-issued-reader", "kubernetes_role_name": "", "generated_role_rules": "", "token_default_ttl": 600, "token_max_ttl": 600, "token_default_audiences": ["https://192.168.90.20:6443"]}}
   ],
   "inventories": {
     "auth-method": ["homelab-jwt/", "homelab-userpass/"],

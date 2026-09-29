@@ -1,26 +1,39 @@
 import copy
+import json
 import pathlib
 import sys
 import unittest
 
+import yaml
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3]))
 
+from scripts.openbao import issuance
 from scripts.openbao.manifests import (
-    validate_documents, validate_issuance_role, validate_gateway_namespace,
-    validate_network_policy, validate_tokenrequest_binding, validate_flux_units,
+    validate_documents,
+    validate_flux_units,
+    validate_gateway_namespace,
+    validate_issuance_role,
+    validate_network_policy,
+    validate_tokenrequest_binding,
 )
 
 
 class OpenBaoManifestTests(unittest.TestCase):
     def test_jwt_issuer_matches_this_cluster_control_plane_endpoint(self):
-        import json
-        import yaml
-
         talos = yaml.safe_load(pathlib.Path("talos/talconfig.yaml").read_text())
         desired = json.loads(pathlib.Path(
             "kubernetes/apps/security/openbao/config/desired.json").read_text())
         jwt = next(item for item in desired["objects"] if item["kind"] == "jwt-config")
         self.assertEqual(jwt["fields"]["bound_issuer"], talos["endpoint"])
+
+    def test_issuance_audiences_match_this_cluster_api_endpoint(self):
+        talos = yaml.safe_load(pathlib.Path("talos/talconfig.yaml").read_text())
+        desired = json.loads(pathlib.Path(
+            "kubernetes/apps/security/openbao/config/desired.json").read_text())
+        role = next(item for item in desired["objects"] if item["kind"] == "issuance-role")
+        self.assertEqual(role["fields"]["token_default_audiences"], [talos["endpoint"]])
+        self.assertEqual(issuance.AUDIENCE, talos["endpoint"])
 
     def test_api_egress_matches_translated_backend_and_stays_narrow(self):
         policy = {"spec": {"egress": [{"toEntities": ["kube-apiserver"],

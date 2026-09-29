@@ -7,7 +7,7 @@ from datetime import datetime
 NAMESPACE = "openbao-acceptance"
 ACCOUNT = "openbao-issued-reader"
 IDENTITY = f"system:serviceaccount:{NAMESPACE}:{ACCOUNT}"
-AUDIENCE = "https://kubernetes.default.svc.cluster.local"
+AUDIENCE = "https://192.168.90.20:6443"
 SKEW = 30
 # Kubernetes v1.35.6 validates ServiceAccount claims with go-jose DefaultLeeway.
 API_EXPIRY_LEEWAY = 60

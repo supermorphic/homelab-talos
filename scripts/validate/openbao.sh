@@ -26,8 +26,14 @@ from scripts.openbao.manifests import (
     validate_network_policy, validate_tokenrequest_binding, validate_flux_units,
 )
 from scripts.openbao.configuration import load_document
+from scripts.openbao import issuance
 
 desired = load_document(pathlib.Path("kubernetes/apps/security/openbao/config/desired.json"))
+api_audience = yaml.safe_load(pathlib.Path("talos/talconfig.yaml").read_text())["endpoint"]
+issuance_role = next(obj for obj in desired["objects"] if obj.kind == "issuance-role" and
+                     obj.name == "openbao-acceptance")
+assert issuance_role.fields["token_default_audiences"] == [api_audience]
+assert issuance.AUDIENCE == api_audience
 assert desired["builtin_exceptions"] == {
     "auth-method": ["token/"],
     "secret-mount": ["cubbyhole/", "identity/", "sys/"],
