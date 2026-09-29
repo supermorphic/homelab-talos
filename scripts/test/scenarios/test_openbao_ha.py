@@ -163,6 +163,46 @@ class MaintenanceTests(unittest.TestCase):
 
 
 class AdapterTests(unittest.TestCase):
+    def test_maintenance_uses_private_operator_login_and_retires_session_on_failure(self):
+        from contextlib import contextmanager
+        from pathlib import Path
+        from unittest.mock import Mock, patch
+
+        from scripts.test.scenarios import openbao_ha as live
+
+        events = []
+
+        @contextmanager
+        def session(_client, password):
+            events.append(("login", password))
+            try:
+                yield "synthetic-session"
+            finally:
+                events.append(("revoke", "synthetic-session"))
+
+        scope = Mock(kubeconfig=Path("/synthetic/kubeconfig"))
+        cluster = Mock()
+        cluster.snapshot.side_effect = live.maintenance.MaintenanceError()
+        with (
+            patch.object(live, "OperatorClient") as client_type,
+            patch.object(live, "LiveCluster", return_value=cluster),
+            patch.object(live.guards, "source_revision", return_value="synthetic-revision"),
+            patch.object(live.guards, "require_deployed_revision"),
+            patch.object(live, "private_prompt", return_value="synthetic-password") as prompt,
+            patch.object(live, "operator_password_session", side_effect=session, create=True),
+            self.assertRaises(live.maintenance.MaintenanceError),
+        ):
+            live.execute(scope, "ha")
+
+        self.assertEqual(events, [
+            ("login", "synthetic-password"),
+            ("revoke", "synthetic-session"),
+        ])
+        prompt.assert_called_once_with("Retained OpenBao operator password: ")
+        client_type.return_value.set_token.assert_called_once_with("synthetic-session")
+        client_type.return_value.close.assert_called_once()
+        scope.create.assert_not_called()
+
     def test_eviction_uses_core_pod_subresource_and_both_preconditions(self):
         import json
         from unittest.mock import Mock

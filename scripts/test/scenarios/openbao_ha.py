@@ -16,7 +16,12 @@ import yaml
 from scripts.openbao import guards, issuance, maintenance, restore
 from scripts.openbao.configuration import strict_json
 from scripts.openbao.manifests import validate_documents
-from scripts.openbao.operator import OperatorClient, lease, private_prompt
+from scripts.openbao.operator import (
+    OperatorClient,
+    lease,
+    operator_password_session,
+    private_prompt,
+)
 from scripts.test.scenarios.openbao_issuance import PodAPI, Scope, pod_document, run_scope
 from scripts.test.scenarios.resilience_support import atomic_write_json, install_interrupt_handlers
 
@@ -206,59 +211,58 @@ def execute(scope, mode, progress=None):
         cluster = LiveCluster(scope, bao, None)
         cluster.source = guards.source_revision()
         guards.require_deployed_revision(scope.kubeconfig, cluster.source)
-        token = private_prompt("Existing authorized OpenBao token: ")
-        if not token:
-            raise maintenance.MaintenanceError()
-        bao.set_token(token)
-        initial = cluster.snapshot()
-        if not maintenance.healthy(initial):
-            raise maintenance.MaintenanceError()
-        old = {maintenance.version(p["image"]) for p in initial["pods"].values()}
-        if len(old) != 1:
-            raise maintenance.MaintenanceError()
-        cluster.old_version = ".".join(map(str, old.pop()))
-        target = {"source": cluster.source, "state": maintenance.identities(initial)}
-        if mode == "upgrade":
-            target["plan"] = cluster.upgrade_preconditions()
-        required = f"{mode}:openbao:{guards.digest(target)}:{scope.run_id}"
-        supplied = os.environ.get("OPENBAO_MAINTENANCE_CONFIRM") or private_prompt(
-            f"Exact confirmation {required}: "
-        )
-        if supplied != required:
-            raise maintenance.MaintenanceError()
-        install_interrupt_handlers()
-        pod = scope.create(pod_document(scope.run_id, False))
-        scope.command(
-            "-n",
-            "openbao-acceptance",
-            "wait",
-            "--for=condition=Ready",
-            "pod/" + pod["metadata"]["name"],
-            "--timeout=120s",
-        )
-        cluster.workload = PodAPI(scope, pod)
-        fresh = cluster.snapshot()
-        if maintenance.identities(fresh) != maintenance.identities(initial):
-            raise maintenance.MaintenanceError()
-        if mode == "upgrade":
-            return maintenance.upgrade(cluster, cluster, time, progress=progress)
-        standby = min(maintenance.NAMES - {initial["leader"]})
-        results = [
-            maintenance.replace_member(
-                initial["pods"][standby]["uid"], "standby", cluster, cluster, time,
-                progress=progress,
+        password = private_prompt("Retained OpenBao operator password: ")
+        with operator_password_session(bao, password) as token:
+            bao.set_token(token)
+            initial = cluster.snapshot()
+            if not maintenance.healthy(initial):
+                raise maintenance.MaintenanceError()
+            old = {maintenance.version(p["image"]) for p in initial["pods"].values()}
+            if len(old) != 1:
+                raise maintenance.MaintenanceError()
+            cluster.old_version = ".".join(map(str, old.pop()))
+            target = {"source": cluster.source, "state": maintenance.identities(initial)}
+            if mode == "upgrade":
+                target["plan"] = cluster.upgrade_preconditions()
+            required = f"{mode}:openbao:{guards.digest(target)}:{scope.run_id}"
+            supplied = os.environ.get("OPENBAO_MAINTENANCE_CONFIRM") or private_prompt(
+                f"Exact confirmation {required}: "
             )
-        ]
-        fresh = cluster.snapshot()
-        if fresh["leader"] != initial["leader"]:
-            raise maintenance.MaintenanceError()
-        results.append(
-            maintenance.replace_member(
-                initial["pods"][initial["leader"]]["uid"], "leader", cluster, cluster, time,
-                progress=progress,
+            if supplied != required:
+                raise maintenance.MaintenanceError()
+            install_interrupt_handlers()
+            pod = scope.create(pod_document(scope.run_id, False))
+            scope.command(
+                "-n",
+                "openbao-acceptance",
+                "wait",
+                "--for=condition=Ready",
+                "pod/" + pod["metadata"]["name"],
+                "--timeout=120s",
             )
-        )
-        return {"status": "pass", "replacements": results}
+            cluster.workload = PodAPI(scope, pod)
+            fresh = cluster.snapshot()
+            if maintenance.identities(fresh) != maintenance.identities(initial):
+                raise maintenance.MaintenanceError()
+            if mode == "upgrade":
+                return maintenance.upgrade(cluster, cluster, time, progress=progress)
+            standby = min(maintenance.NAMES - {initial["leader"]})
+            results = [
+                maintenance.replace_member(
+                    initial["pods"][standby]["uid"], "standby", cluster, cluster, time,
+                    progress=progress,
+                )
+            ]
+            fresh = cluster.snapshot()
+            if fresh["leader"] != initial["leader"]:
+                raise maintenance.MaintenanceError()
+            results.append(
+                maintenance.replace_member(
+                    initial["pods"][initial["leader"]]["uid"], "leader", cluster, cluster, time,
+                    progress=progress,
+                )
+            )
+            return {"status": "pass", "replacements": results}
     finally:
         bao.close()
 
