@@ -14,7 +14,7 @@ import tempfile
 import time
 import urllib.error
 import warnings
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -358,6 +358,43 @@ def private_prompt(label):
             raise SafeError("authentication-failed") from None
 
 
+@contextmanager
+def operator_password_session(client, password):
+    """Use one operator login for a guarded apply and retire its token on exit."""
+    if not isinstance(password, str) or not password:
+        raise SafeError("authentication-failed")
+    leaders = [
+        name for name in ("openbao-0", "openbao-1", "openbao-2")
+        if client.peer(name).read("sys/leader").get("is_self") is True
+    ]
+    if len(leaders) != 1:
+        raise SafeError("source-mismatch")
+    client.active = leaders[0]
+    try:
+        login = client.post(
+            "auth/homelab-userpass/login/openbao-operator", {"password": password}, token=None
+        )
+    except AmbiguousWrite as error:
+        if error.http_status in {400, 403}:
+            raise SafeError("authentication-failed") from None
+        raise
+    auth = login.get("auth") if isinstance(login, dict) else None
+    token = auth.get("client_token") if isinstance(auth, dict) else None
+    if not isinstance(token, str) or not token:
+        raise SafeError("invalid-response")
+    try:
+        if set(auth.get("policies", [])) != {"openbao-operator"}:
+            raise SafeError("authentication-failed")
+        lookup = client.read("auth/token/lookup-self", token=token)
+        if set(lookup.get("data", {}).get("policies", [])) != {"openbao-operator"}:
+            raise SafeError("authentication-failed")
+        client.wait_quorum(token)
+        yield token
+    finally:
+        bootstrap._revoke_checked(client, token)
+        client.set_token(None)
+
+
 def main(argv):
     client = None
     try:
@@ -372,54 +409,62 @@ def main(argv):
         guards.freeze_target(kubeconfig, "config-apply" if phase in {"finalize", "restart-staged"} else phase)
         client = OperatorClient(kubeconfig)
         inputs = {"client": client, "kubeconfig": kubeconfig, "journal": []}
-        if phase in {"config-apply", "finalize", "restart-staged"}:
-            token = private_prompt("OpenBao token (retained root token during bootstrap, not password): ")
-            if not token:
-                raise SafeError("authentication-failed")
-            client.wait_quorum(token)
-            inputs["token"] = token
-            if phase == "config-apply":
-                operation = lambda confirm: apply.run(confirm=confirm, **inputs)
-                supplied = os.environ.get("OPENBAO_CONFIG_CONFIRM")
-            elif phase == "finalize":
-                operation = lambda confirm: bootstrap.finalize(confirm=confirm, **inputs)
-                supplied = os.environ.get("OPENBAO_BOOTSTRAP_CONFIRM")
+        with ExitStack() as session:
+            if phase in {"config-apply", "finalize", "restart-staged"}:
+                auth_mode = os.environ.get("OPENBAO_CONFIG_AUTH", "token") if phase == "config-apply" else "token"
+                if auth_mode not in {"token", "userpass"}:
+                    raise SafeError("invalid-source")
+                if auth_mode == "userpass":
+                    password = private_prompt("Retained OpenBao operator password: ")
+                    token = session.enter_context(operator_password_session(client, password))
+                else:
+                    token = private_prompt("Authorized OpenBao token (root only for bootstrap repair): ")
+                    if not token:
+                        raise SafeError("authentication-failed")
+                    client.wait_quorum(token)
+                inputs["token"] = token
+                if phase == "config-apply":
+                    operation = lambda confirm: apply.run(confirm=confirm, **inputs)
+                    supplied = os.environ.get("OPENBAO_CONFIG_CONFIRM")
+                elif phase == "finalize":
+                    operation = lambda confirm: bootstrap.finalize(confirm=confirm, **inputs)
+                    supplied = os.environ.get("OPENBAO_BOOTSTRAP_CONFIRM")
+                else:
+                    operation = lambda confirm: restart.run(confirm=confirm, **inputs)
+                    supplied = os.environ.get("OPENBAO_BOOTSTRAP_CONFIRM")
             else:
-                operation = lambda confirm: restart.run(confirm=confirm, **inputs)
-                supplied = os.environ.get("OPENBAO_BOOTSTRAP_CONFIRM")
-        else:
-            inputs.update(
-                recovery_directory=Path(os.environ.get("OPENBAO_RECOVERY_DIRECTORY", "")),
-                recipient=os.environ.get("OPENBAO_RECOVERY_RECIPIENT", ""),
-            )
-            operation = lambda confirm: bootstrap.run(phase, confirm=confirm, **inputs)
-            supplied = os.environ.get("OPENBAO_BOOTSTRAP_CONFIRM", "")
-        plan = operation("")
-        prompted = False
-        if phase in {"config-apply", "finalize", "restart-staged"} and supplied is None and sys.stdin.isatty():
-            print(json.dumps(plan, sort_keys=True))
-            prompted = True
-            supplied = input("Enter exact confirmation: ")
-        if supplied != plan.get("confirmation"):
-            if not prompted:
+                inputs.update(
+                    recovery_directory=Path(os.environ.get("OPENBAO_RECOVERY_DIRECTORY", "")),
+                    recipient=os.environ.get("OPENBAO_RECOVERY_RECIPIENT", ""),
+                )
+                operation = lambda confirm: bootstrap.run(phase, confirm=confirm, **inputs)
+                supplied = os.environ.get("OPENBAO_BOOTSTRAP_CONFIRM", "")
+            plan = operation("")
+            prompted = False
+            if phase in {"config-apply", "finalize", "restart-staged"} and supplied is None and sys.stdin.isatty():
                 print(json.dumps(plan, sort_keys=True))
-            return 2
-        if phase == "config-apply" and any(
-            change["kind"] == "userpass-user" for change in plan.get("changes", [])
-        ):
-            _, current = apply.snapshot(apply.DESIRED, client)
-            if current[("userpass-user", "openbao-operator")][0] is None:
-                password = private_prompt("Retained operator password for missing account: ")
+                prompted = True
+                supplied = input("Enter exact confirmation: ")
+            if supplied != plan.get("confirmation"):
+                if not prompted:
+                    print(json.dumps(plan, sort_keys=True))
+                return 2
+            if phase == "config-apply" and any(
+                change["kind"] == "userpass-user" for change in plan.get("changes", [])
+            ):
+                _, current = apply.snapshot(apply.DESIRED, client)
+                if current[("userpass-user", "openbao-operator")][0] is None:
+                    password = private_prompt("Retained operator password for missing account: ")
+                    if not password:
+                        raise SafeError("authentication-failed")
+                    inputs["operator_password"] = password
+            if phase == "finalize":
+                password = private_prompt("Retained operator password: ")
                 if not password:
                     raise SafeError("authentication-failed")
-                inputs["operator_password"] = password
-        if phase == "finalize":
-            password = private_prompt("Retained operator password: ")
-            if not password:
-                raise SafeError("authentication-failed")
-            inputs["password"] = password
-        with lease(kubeconfig):
-            result = operation(supplied)
+                inputs["password"] = password
+            with lease(kubeconfig):
+                result = operation(supplied)
         print(json.dumps(result, sort_keys=True))
         return 0 if result["status"] in {"pass", "prepared"} else 1
     except Exception:  # noqa: BLE001 -- Never render exceptions from credential-bearing operations.
