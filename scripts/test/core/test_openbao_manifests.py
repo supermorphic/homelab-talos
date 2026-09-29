@@ -12,6 +12,16 @@ from scripts.openbao.manifests import (
 
 
 class OpenBaoManifestTests(unittest.TestCase):
+    def test_jwt_issuer_matches_this_cluster_control_plane_endpoint(self):
+        import json
+        import yaml
+
+        talos = yaml.safe_load(pathlib.Path("talos/talconfig.yaml").read_text())
+        desired = json.loads(pathlib.Path(
+            "kubernetes/apps/security/openbao/config/desired.json").read_text())
+        jwt = next(item for item in desired["objects"] if item["kind"] == "jwt-config")
+        self.assertEqual(jwt["fields"]["bound_issuer"], talos["endpoint"])
+
     def test_api_egress_matches_translated_backend_and_stays_narrow(self):
         policy = {"spec": {"egress": [{"toEntities": ["kube-apiserver"],
                   "toPorts": [{"ports": [{"port": "6443", "protocol": "TCP"}]}]}]}}

@@ -335,6 +335,9 @@ JWT method with the Kubernetes provider, bound issuer, exact namespace and
 ServiceAccount subject, and the dedicated audience. It discovers verification
 keys using the server's ordinary projected identity. This avoids granting
 `TokenReview` or `SubjectAccessReview` permissions to the issuer.
+The bound issuer follows the cluster's advertised service-account issuer,
+which currently matches the Talos API endpoint. It is distinct from the
+role's dedicated token audience.
 
 JWT verification does not immediately observe deletion of a Pod or ServiceAccount;
 an otherwise valid token can authenticate until it expires. Bound the issued
