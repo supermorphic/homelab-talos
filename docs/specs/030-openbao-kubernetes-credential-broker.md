@@ -466,6 +466,11 @@ The acceptance boundary consists of:
   ten-minute default and maximum TTL, and the Kubernetes API audience;
 - one acceptance-job auth role permitted to request only that issuance role.
 
+The API audience is the Talos control-plane endpoint in `talos/talconfig.yaml`,
+matching the running API servers' `--api-audiences` flag. The Kubernetes service
+DNS name is a transport address, not that authentication audience. The probe's
+projected issuer token and the issued credential must use the API audience.
+
 Do not grant wildcard token creation, ServiceAccount management, RBAC management,
 impersonation, binding, escalation, or Secret reads to the issuer. The server's
 ordinary Kubernetes discovery permissions are not an issuance grant. Disable

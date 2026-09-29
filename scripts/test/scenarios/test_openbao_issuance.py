@@ -23,7 +23,7 @@ class Clock:
 def jwt(**changes):
     claims = {
         "sub": "system:serviceaccount:openbao-acceptance:openbao-issued-reader",
-        "aud": ["https://kubernetes.default.svc.cluster.local"],
+        "aud": ["https://192.168.90.20:6443"],
         "iat": 1000,
         "exp": 1600,
     }
