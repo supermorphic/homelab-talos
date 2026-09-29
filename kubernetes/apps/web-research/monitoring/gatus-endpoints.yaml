@@ -33,16 +33,16 @@ config:
       headers:
         Content-Type: application/json
       body: >-
-        {"urls":["https://example.com/"],"crawler_config":{"type":"CrawlerRunConfig","params":{"cache_mode":{"type":"CacheMode","params":"bypass"},"page_timeout":30000,"verbose":false,"only_text":true,"exclude_all_images":true}}}
+        {"urls":["https://httpbin.org/html"],"crawler_config":{"type":"CrawlerRunConfig","params":{"cache_mode":{"type":"CacheMode","params":"bypass"},"page_timeout":30000,"verbose":false,"only_text":true,"exclude_all_images":true}}}
       conditions:
         - "[STATUS] == 200"
         - "[BODY].success == true"
         - "len([BODY].results) == 1"
         - "[BODY].results[0].success == true"
         - "[BODY].results[0].status_code == 200"
-        - "[BODY].results[0].url == https://example.com/"
-        - "[BODY].results[0].markdown.raw_markdown == pat(*Example Domain*)"
-        - '[BODY].results[0].redirected_url == https://example.com/'
+        - "[BODY].results[0].url == https://httpbin.org/html"
+        - "[BODY].results[0].markdown.raw_markdown == pat(*Herman Melville - Moby-Dick*)"
+        - '[BODY].results[0].redirected_url == https://httpbin.org/html'
       ui:
         hide-errors: true
     - name: searxng-search-e2e

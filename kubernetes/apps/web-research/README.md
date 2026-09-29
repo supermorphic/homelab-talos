@@ -90,13 +90,22 @@ fragment as a Helm values replacement for the existing endpoint array.
 | --- | --- | --- |
 | `searxng` | 1 minute | None for the private HTTPS health request |
 | `crawl4ai-readiness` | 1 minute | The request is internal; automatic token issuance requires the subject domain's MX lookup |
-| `crawl4ai-e2e` | 15 minutes | Fetches the fixed `https://example.com/` page and checks native extraction and final URL |
+| `crawl4ai-e2e` | 15 minutes | Fetches the fixed `https://httpbin.org/html` page and checks native extraction and final URL |
 | `searxng-search-e2e` | 30 minutes | Queries configured public search engines and requires a usable result URL |
 
 All four use the **Automation** group. The functional checks test capabilities
 that process health cannot establish: browser extraction through the authenticated
 route, and successful search-engine discovery. Partial engine failure is acceptable.
 No exact search ranking or external page latency is asserted.
+
+The crawl fixture is httpbin's documented
+[`/html` response](https://httpbin.org/#/Response_formats/get_html), an endpoint made for
+HTTP client tests. Its [source-controlled HTML template](https://github.com/postmanlabs/httpbin/blob/master/httpbin/templates/moby.html)
+places `Herman Melville - Moby-Dick`
+in a body heading, so the marker exercises extracted page text rather than title
+metadata. The httpbin service owns availability; the template is public and the
+endpoint's purpose makes the content more stable than a general-purpose website.
+The check still depends on external DNS, HTTPS, and that service's availability.
 
 The agent's separate ServiceMonitor exposes readiness, renewal and validation
 degradation, usable expiry, and fixed failure categories. Unsuspend the separate

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from copy import deepcopy
 from pathlib import Path
 
 import yaml
@@ -167,9 +168,13 @@ class PodmanRun:
             "gatus": "PASS gatus-production-conditions",
         }[mode]
         lines = [line for line in result.stdout.splitlines() if line.startswith("PASS ")]
-        if lines != [expected]:
+        expected_lines = [expected]
+        if mode == "gatus":
+            expected_lines.append("PASS gatus-negative-conditions")
+        if lines != expected_lines:
             raise AcceptanceFailure(f"{mode}-output")
-        print(lines[0], flush=True)
+        for line in lines:
+            print(line, flush=True)
 
     def cleanup(self) -> None:
         failed = False
@@ -284,6 +289,28 @@ def write_gatus_config(root: Path, destination: Path) -> None:
     destination.chmod(0o444)
 
 
+def write_gatus_negative_config(root: Path, destination: Path) -> None:
+    source = load_yaml(root / "kubernetes/apps/web-research/monitoring/gatus-endpoints.yaml")[0]
+    production = next(
+        endpoint for endpoint in source["config"]["endpoints"]
+        if endpoint["name"] == "crawl4ai-e2e"
+    )
+    endpoints = []
+    for name in ("missing-marker", "failed-extraction"):
+        endpoint = deepcopy(production)
+        endpoint["name"] = name
+        endpoint["url"] = f"http://gatus-fixture:8080/{name}"
+        endpoint["interval"] = "1h"
+        endpoints.append(endpoint)
+    destination.write_text(
+        yaml.safe_dump(
+            {"endpoints": endpoints, "metrics": True, "storage": {"type": "memory"},
+             "web": {"port": 8080}}
+        )
+    )
+    destination.chmod(0o444)
+
+
 def assert_container(
     run: PodmanRun, name: str, memory: int, shared_with: str | None = None
 ) -> None:
@@ -319,6 +346,8 @@ def execute(root: Path, directory: Path) -> None:
     envoy_config = translate(root, directory)
     gatus_config = directory / "gatus.yaml"
     write_gatus_config(root, gatus_config)
+    negative_config = directory / "gatus-negative.yaml"
+    write_gatus_negative_config(root, negative_config)
     print("PASS production-fixture-translation", flush=True)
 
     run = PodmanRun(root, directory)
@@ -326,6 +355,8 @@ def execute(root: Path, directory: Path) -> None:
     envoy = f"{run.owner}-envoy"
     searx = f"{run.owner}-searxng"
     gatus = f"{run.owner}-gatus"
+    gatus_stub = f"{run.owner}-gatus-fixture"
+    gatus_negative = f"{run.owner}-gatus-negative"
     fixture = root / "scripts/test/web_research/native_fixture.py"
     runtime = root / "kubernetes/apps/web-research/crawl4ai/runtime"
     settings = root / "kubernetes/apps/web-research/searxng/app/settings.yml"
@@ -479,6 +510,32 @@ def execute(root: Path, directory: Path) -> None:
             ],
         )
         assert_container(run, gatus, 128 * 1024**2)
+        run.run_container(
+            gatus_stub,
+            [
+                "--network", run.network,
+                "--network-alias", "gatus-fixture",
+                "--memory", "128m",
+                "--cap-drop", "ALL",
+                "--security-opt", "no-new-privileges",
+                "--mount", f"type=bind,src={fixture},dst=/opt/test/native_fixture.py,ro=true",
+                native_image,
+                "python3", "/opt/test/native_fixture.py", "gatus-stub",
+            ],
+        )
+        run.run_container(
+            gatus_negative,
+            [
+                "--network", run.network,
+                "--network-alias", "gatus-negative",
+                "--memory", "128m",
+                "--cap-drop", "ALL",
+                "--security-opt", "no-new-privileges",
+                "--mount", f"type=bind,src={negative_config},dst=/config/config.yaml,ro=true",
+                "--env", "GATUS_CONFIG_PATH=/config/config.yaml",
+                GATUS_IMAGE,
+            ],
+        )
         run.exec_fixture(native, "gatus", 240)
     except BaseException as error:  # noqa: BLE001 - cleanup must run on interruption.
         failure = error
