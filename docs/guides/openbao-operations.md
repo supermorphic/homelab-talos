@@ -152,16 +152,20 @@ reconciliation. Activation is complete only when acceptance and live verificatio
 ## Apply configuration changes
 
 Merge reviewed changes to the desired configuration and policy files. After the
-published source reaches Flux, select the explicit operator kubeconfig, then run:
+published source reaches Flux, set `OPENBAO_OPERATOR_KUBECONFIG` to the explicit
+operator kubeconfig and `OPENBAO_RECOVERY_RECIPIENT` to the public recipient in the
+seal artifact. For an established cluster, run:
 
 ```sh
-mise exec -- just kube openbao-config-apply
+OPENBAO_CONFIG_AUTH=userpass mise exec -- just kube openbao-config-apply
 ```
 
-Enter an existing authorized OpenBao token at the private prompt. Review the sanitized
-change plan, then enter the exact reported confirmation in the same terminal session. During
-bootstrap repair, use the retained **root token**, not the operator password. If the
-operator account is missing, a separate private prompt requests its retained password.
+Enter the retained `openbao-operator` password at the private prompt. The command
+checks the operator policy and revokes its temporary login token when it ends. Review
+the sanitized change plan, then enter the exact reported confirmation in the same
+terminal session. During incomplete bootstrap repair, omit `OPENBAO_CONFIG_AUTH` and
+enter the retained **root token** at its private prompt. If the operator account is
+missing, a separate private prompt requests its retained password.
 A changed source or live target requires a new review. Success means the installed
 configuration matches the reviewed source. Run `openbao-verify` once fresh observations
 are available. If apply fails, stop and inspect; do not patch live state by hand.

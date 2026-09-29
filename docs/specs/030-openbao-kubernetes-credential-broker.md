@@ -348,6 +348,10 @@ Git contains the desired mounts, policies, auth roles, and Kubernetes secrets-en
 role. Bootstrap applies them; subsequent changes use an operator-run
 `mise exec -- just kube openbao-config-apply` against clean deployed source,
 with target/revision confirmation, drift review, and sanitized read-back.
+For an established cluster, that command privately exchanges the retained operator
+password for one short-lived session, checks its exact policy, and revokes it on exit.
+Incomplete bootstrap repair keeps the retained root-token path because the operator
+account may not exist yet.
 Do not add a permanent privileged configuration controller. API writes outside
 these source-owned procedures are recovery actions, not a second configuration
 source.
