@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS platform_operations.platform_schema_revision (
 
 CREATE TABLE IF NOT EXISTS platform_operations.managed_nocodb_sources (
   domain text NOT NULL REFERENCES platform_operations.managed_domains(domain),
+  pair text NOT NULL DEFAULT 'default'
+    CHECK (pair = 'default' OR pair ~ '^[a-z][a-z0-9_]{0,23}$'),
   access_kind text NOT NULL CHECK (access_kind IN ('reader', 'operator')),
   role_name text NOT NULL,
   base_id text,
@@ -32,15 +34,19 @@ CREATE TABLE IF NOT EXISTS platform_operations.managed_nocodb_sources (
   validated_at timestamptz,
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   error_code text CHECK (error_code IS NULL OR error_code ~ '^[a-z][a-z0-9_]{0,63}$'),
-  PRIMARY KEY (domain, access_kind),
-  CHECK (role_name = domain || CASE access_kind
+  PRIMARY KEY (domain, pair, access_kind),
+  CHECK (role_name = CASE WHEN pair = 'default' THEN domain ELSE
+    'nocodb_' || md5(domain || ':' || pair) END || CASE access_kind
     WHEN 'reader' THEN '_reader' ELSE '_operator' END)
 );
 CREATE TABLE IF NOT EXISTS platform_operations.managed_nocodb_schema_mappings (
-  domain text PRIMARY KEY REFERENCES platform_operations.managed_domains(domain),
+  domain text NOT NULL REFERENCES platform_operations.managed_domains(domain),
+  pair text NOT NULL DEFAULT 'default'
+    CHECK (pair = 'default' OR pair ~ '^[a-z][a-z0-9_]{0,23}$'),
   reader_schema text NOT NULL CHECK (reader_schema ~ '^[a-z][a-z0-9_]{0,47}$'),
   operator_schema text CHECK (operator_schema ~ '^[a-z][a-z0-9_]{0,47}$'),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (domain, pair),
   CHECK (operator_schema IS NULL OR operator_schema <> reader_schema),
   CHECK (reader_schema NOT LIKE 'pg\_%' ESCAPE '\' AND
     reader_schema NOT LIKE 'platform%' AND
@@ -51,6 +57,87 @@ CREATE TABLE IF NOT EXISTS platform_operations.managed_nocodb_schema_mappings (
     operator_schema NOT IN ('app', 'public', 'read_model', 'operator',
       'information_schema')))
 );
+-- Existing v2 rows acquire the reserved pair key without changing their other fields.
+ALTER TABLE platform_operations.managed_nocodb_sources
+  ADD COLUMN IF NOT EXISTS pair text NOT NULL DEFAULT 'default';
+ALTER TABLE platform_operations.managed_nocodb_schema_mappings
+  ADD COLUMN IF NOT EXISTS pair text NOT NULL DEFAULT 'default';
+DO $upgrade$
+BEGIN
+  IF EXISTS (SELECT FROM pg_constraint WHERE conrelid =
+      'platform_operations.managed_nocodb_sources'::regclass
+      AND conname = 'managed_nocodb_sources_pkey' AND array_length(conkey, 1) = 2) THEN
+    ALTER TABLE platform_operations.managed_nocodb_sources
+      DROP CONSTRAINT managed_nocodb_sources_pkey;
+    ALTER TABLE platform_operations.managed_nocodb_sources
+      ADD CONSTRAINT managed_nocodb_sources_pkey PRIMARY KEY (domain, pair, access_kind);
+  END IF;
+  IF EXISTS (SELECT FROM pg_constraint WHERE conrelid =
+      'platform_operations.managed_nocodb_schema_mappings'::regclass
+      AND conname = 'managed_nocodb_schema_mappings_pkey' AND array_length(conkey, 1) = 1) THEN
+    ALTER TABLE platform_operations.managed_nocodb_schema_mappings
+      DROP CONSTRAINT managed_nocodb_schema_mappings_pkey;
+    ALTER TABLE platform_operations.managed_nocodb_schema_mappings
+      ADD CONSTRAINT managed_nocodb_schema_mappings_pkey PRIMARY KEY (domain, pair);
+  END IF;
+END;
+$upgrade$;
+ALTER TABLE platform_operations.managed_nocodb_sources
+  DROP CONSTRAINT IF EXISTS managed_nocodb_sources_role_name_check;
+ALTER TABLE platform_operations.managed_nocodb_sources
+  DROP CONSTRAINT IF EXISTS managed_nocodb_sources_check;
+ALTER TABLE platform_operations.managed_nocodb_sources
+  ADD CONSTRAINT managed_nocodb_sources_role_name_check CHECK (
+    role_name = (CASE WHEN pair = 'default' THEN domain ELSE
+      'nocodb_' || md5(domain || ':' || pair) END) ||
+      (CASE access_kind WHEN 'reader' THEN '_reader' ELSE '_operator' END)
+  );
+ALTER TABLE platform_operations.managed_nocodb_sources
+  DROP CONSTRAINT IF EXISTS managed_nocodb_sources_pair_check;
+ALTER TABLE platform_operations.managed_nocodb_sources
+  ADD CONSTRAINT managed_nocodb_sources_pair_check CHECK (
+    pair = 'default' OR pair ~ '^[a-z][a-z0-9_]{0,23}$'
+  );
+ALTER TABLE platform_operations.managed_nocodb_schema_mappings
+  DROP CONSTRAINT IF EXISTS managed_nocodb_schema_mappings_pair_check;
+ALTER TABLE platform_operations.managed_nocodb_schema_mappings
+  ADD CONSTRAINT managed_nocodb_schema_mappings_pair_check CHECK (
+    pair = 'default' OR pair ~ '^[a-z][a-z0-9_]{0,23}$'
+  );
+CREATE TABLE IF NOT EXISTS platform_operations.nocodb_source_operations (
+  domain text NOT NULL REFERENCES platform_operations.managed_domains(domain),
+  pair text NOT NULL CHECK (pair = 'default' OR pair ~ '^[a-z][a-z0-9_]{0,23}$'),
+  operation_id uuid NOT NULL,
+  operation text NOT NULL CHECK (operation IN ('sync', 'rotate')),
+  access_kind text CHECK (access_kind IN ('reader', 'operator')),
+  generation bigint NOT NULL CHECK (generation > 0),
+  phase text NOT NULL CHECK (phase IN ('active', 'uncertain', 'complete')),
+  operation_started_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  error_code text CHECK (error_code IS NULL OR error_code ~ '^[a-z][a-z0-9_]{0,63}$'),
+  PRIMARY KEY (domain, pair)
+);
+REVOKE ALL ON platform_operations.nocodb_source_operations FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION platform_internal.nocodb_pair_role(
+  p_domain text, p_pair text, p_access_kind text
+)
+RETURNS text
+LANGUAGE plpgsql
+SET search_path = pg_catalog, platform_operations
+AS $function$
+BEGIN
+  PERFORM platform_internal.assert_domain(p_domain);
+  IF p_pair IS NULL OR (p_pair <> 'default' AND
+      p_pair !~ '^[a-z][a-z0-9_]{0,23}$') THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_nocodb_pair';
+  END IF;
+  PERFORM platform_internal.assert_nocodb_access_kind(p_access_kind);
+  RETURN (CASE WHEN p_pair = 'default' THEN p_domain ELSE
+    'nocodb_' || md5(p_domain || ':' || p_pair) END) ||
+    (CASE WHEN p_access_kind = 'reader' THEN '_reader' ELSE '_operator' END);
+END;
+$function$;
 CREATE OR REPLACE FUNCTION platform_internal.assert_nocodb_access_kind(p_access_kind text)
 RETURNS void
 LANGUAGE plpgsql
@@ -264,6 +351,107 @@ BEGIN
     'operatorSchema', p_operator_schema,
     'readerRole', reader_name,
     'operatorRole', operator_name
+  );
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.configure_nocodb_pair(
+  p_domain text, p_pair text, p_reader_schema text, p_operator_schema text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+DECLARE
+  managed platform_operations.managed_domains%ROWTYPE;
+  mapping platform_operations.managed_nocodb_schema_mappings%ROWTYPE;
+  reader_name text;
+  operator_name text;
+  candidate_name text;
+BEGIN
+  PERFORM platform_internal.assert_domain(p_domain);
+  IF p_pair IS NULL OR p_pair = 'default' OR p_pair !~ '^[a-z][a-z0-9_]{0,23}$' OR
+     p_reader_schema IS NULL OR p_reader_schema !~ '^[a-z][a-z0-9_]{0,47}$' OR
+     p_reader_schema LIKE 'pg\_%' ESCAPE '\' OR
+     p_reader_schema LIKE 'platform%' OR
+     p_reader_schema IN ('app', 'public', 'read_model', 'operator', 'information_schema') OR
+     (p_operator_schema IS NOT NULL AND (
+       p_operator_schema !~ '^[a-z][a-z0-9_]{0,47}$' OR
+       p_operator_schema LIKE 'pg\_%' ESCAPE '\' OR
+       p_operator_schema LIKE 'platform%' OR
+       p_operator_schema IN ('app', 'public', 'read_model', 'operator', 'information_schema') OR
+       p_operator_schema = p_reader_schema)) THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_nocodb_pair_mapping';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
+  SELECT * INTO STRICT managed FROM platform_operations.managed_domains
+    WHERE domain = p_domain;
+  IF managed.state <> 'ready' THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'domain_not_ready';
+  END IF;
+  reader_name := platform_internal.nocodb_pair_role(p_domain, p_pair, 'reader');
+  operator_name := CASE WHEN p_operator_schema IS NULL THEN NULL ELSE
+    platform_internal.nocodb_pair_role(p_domain, p_pair, 'operator') END;
+  SELECT * INTO mapping FROM platform_operations.managed_nocodb_schema_mappings
+    WHERE domain = p_domain AND pair = p_pair;
+  IF FOUND THEN
+    IF mapping.reader_schema IS DISTINCT FROM p_reader_schema OR
+       mapping.operator_schema IS DISTINCT FROM p_operator_schema THEN
+      RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'nocodb_pair_mapping_frozen';
+    END IF;
+  ELSE
+    IF EXISTS (
+      SELECT FROM platform_operations.managed_nocodb_schema_mappings AS other
+      WHERE other.domain = p_domain AND other.pair <> p_pair AND
+        (other.reader_schema IN (p_reader_schema, p_operator_schema) OR
+         other.operator_schema IN (p_reader_schema, p_operator_schema))
+    ) OR EXISTS (
+      SELECT FROM pg_roles WHERE rolname IN (reader_name, operator_name)
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'nocodb_pair_collision';
+    END IF;
+    -- The reservation and role creation commit together in the control database.
+    PERFORM platform_internal.exec_in_database(
+      'automation_data_control',
+      format($sql$
+        INSERT INTO platform_operations.managed_nocodb_schema_mappings
+          (domain, pair, reader_schema, operator_schema)
+          VALUES (%1$L, %2$L, %3$L, %4$L);
+        CREATE ROLE %5$I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+          NOINHERIT NOREPLICATION NOBYPASSRLS;
+        %6$s
+        UPDATE platform_operations.platform_generation
+          SET generation = generation + 1 WHERE singleton;
+      $sql$, p_domain, p_pair, p_reader_schema, p_operator_schema, reader_name,
+      CASE WHEN operator_name IS NULL THEN '' ELSE format(
+        'CREATE ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;',
+        operator_name) END)
+    );
+  END IF;
+  FOREACH candidate_name IN ARRAY ARRAY[reader_name, operator_name] LOOP
+    IF candidate_name IS NULL THEN CONTINUE; END IF;
+    IF NOT EXISTS (
+      SELECT FROM pg_roles AS role WHERE role.rolname = candidate_name AND
+        (NOT role.rolcanlogin OR EXISTS (
+          SELECT FROM platform_operations.managed_nocodb_sources AS source
+          WHERE source.domain = p_domain AND source.pair = p_pair AND
+            source.role_name = candidate_name AND source.credential_generation > 0 AND
+            source.state IN ('provisioning', 'waiting_for_source', 'ready', 'rotating', 'error')
+        )) AND NOT role.rolsuper AND NOT role.rolcreatedb AND
+        NOT role.rolcreaterole AND NOT role.rolinherit AND NOT role.rolreplication AND
+        NOT role.rolbypassrls AND NOT EXISTS (
+          SELECT FROM pg_auth_members AS member
+          WHERE member.member = role.oid OR member.roleid = role.oid
+        )
+    ) THEN
+      RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'nocodb_pair_role_invalid';
+    END IF;
+  END LOOP;
+  RETURN jsonb_build_object(
+    'domain', p_domain, 'pair', p_pair,
+    'readerSchema', p_reader_schema, 'operatorSchema', p_operator_schema,
+    'readerRole', reader_name, 'operatorRole', operator_name
   );
 END;
 $function$;
@@ -1074,13 +1262,16 @@ $function$;
 
 REVOKE ALL ON TABLE platform_operations.platform_schema_revision,
   platform_operations.managed_nocodb_sources,
-  platform_operations.managed_nocodb_schema_mappings FROM PUBLIC;
+  platform_operations.managed_nocodb_schema_mappings,
+  platform_operations.nocodb_source_operations FROM PUBLIC;
 REVOKE ALL ON FUNCTION platform_internal.assert_nocodb_access_kind(text),
+  platform_internal.nocodb_pair_role(text, text, text),
   platform_internal.assert_nocodb_identifier(text, text),
   platform_internal.nocodb_source_result(text, text),
   platform_internal.validate_nocodb_access_authority(text, text, text, boolean),
   platform_internal.assert_nocodb_extension_contract() FROM PUBLIC;
 REVOKE ALL ON FUNCTION platform_operations.provision_nocodb_metadata(text),
+  platform_operations.configure_nocodb_pair(text, text, text, text),
   platform_operations.configure_nocodb_schema_mapping(text, text, text),
   platform_operations.prepare_nocodb_access(text),
   platform_operations.read_nocodb_source_state(text, text),
@@ -1095,6 +1286,8 @@ REVOKE ALL ON FUNCTION platform_operations.provision_nocodb_metadata(text),
 REVOKE EXECUTE ON FUNCTION platform_operations.read_nocodb_source_state(text, text) FROM PUBLIC;
 
 GRANT EXECUTE ON FUNCTION platform_operations.provision_nocodb_metadata(text) TO automation_data_provisioner;
+GRANT EXECUTE ON FUNCTION platform_operations.configure_nocodb_pair(text, text, text, text)
+  TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.configure_nocodb_schema_mapping(text, text, text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.prepare_nocodb_access(text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.read_nocodb_source_state(text, text) TO automation_data_provisioner;

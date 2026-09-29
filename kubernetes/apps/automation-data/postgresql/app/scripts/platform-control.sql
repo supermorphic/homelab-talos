@@ -589,3 +589,4 @@ GRANT SELECT ON platform_operations.managed_domains,
   platform_operations.logical_backup_status TO automation_data_exporter;
 
 \ir nocodb-extension.sql
+\ir application-login.sql

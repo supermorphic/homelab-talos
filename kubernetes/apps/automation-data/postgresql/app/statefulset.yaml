@@ -126,6 +126,10 @@ spec:
               subPath: nocodb-extension.sql
               readOnly: true
             - name: init
+              mountPath: /scripts/application-login.sql
+              subPath: application-login.sql
+              readOnly: true
+            - name: init
               mountPath: /scripts/nocodb-metadata.sql
               subPath: nocodb-metadata.sql
               readOnly: true

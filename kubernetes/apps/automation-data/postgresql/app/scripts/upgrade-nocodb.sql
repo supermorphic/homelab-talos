@@ -108,6 +108,7 @@ $validation$;
 \if :apply_upgrade
   \ir nocodb-extension.sql
 \endif
+\ir application-login.sql
 
 SELECT platform_internal.assert_nocodb_extension_contract();
 -- Reconcile reviewed metadata and validator functions on installed v1 and fresh installs.
