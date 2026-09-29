@@ -21,6 +21,7 @@ SERVER_NAME = "openbao.lab.supermorphic.com"
 METRIC = "openbao_configuration_observation"
 RUNTIME_FILES = ("__init__.py", "configuration.py", "drift.py", "verify.py", "exporter.py")
 MAX_AGE = 300
+MAX_CLOCK_SKEW = 5
 
 
 def source_digest(desired):
@@ -129,8 +130,8 @@ def decode_observation(response, desired, *, now=None):
             if (
                 not math.isfinite(value)
                 or not math.isfinite(stamp)
-                or not 0 <= now - value <= MAX_AGE
-                or not 0 <= now - stamp <= 120
+                or not -MAX_CLOCK_SKEW <= now - value <= MAX_AGE
+                or not -MAX_CLOCK_SKEW <= now - stamp <= 120
                 or labels["__name__"] != METRIC
                 or labels["namespace"] != "openbao"
                 or labels["service"] != "openbao-config-reader"

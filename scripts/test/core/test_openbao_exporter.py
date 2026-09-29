@@ -59,6 +59,19 @@ class EvidenceTest(unittest.TestCase):
             self.api.decode_observation(self.evidence(), DESIRED, now=1020)["status"], "pass"
         )
 
+    def test_bounded_future_clock_skew_passes(self):
+        evidence = self.evidence(collected=1020.04)
+        evidence["data"]["result"][0]["value"][0] = 1020.04
+        self.assertEqual(
+            self.api.decode_observation(evidence, DESIRED, now=1020)["status"], "pass"
+        )
+
+    def test_large_future_clock_skew_fails(self):
+        evidence = self.evidence(collected=1026)
+        evidence["data"]["result"][0]["value"][0] = 1026
+        with self.assertRaises(SafeError):
+            self.api.decode_observation(evidence, DESIRED, now=1020)
+
     def test_prometheus_omitted_empty_labels_are_accepted(self):
         evidence = self.evidence()
         for sample in evidence["data"]["result"]:
