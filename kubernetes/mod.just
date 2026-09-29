@@ -1156,7 +1156,7 @@ openbao-validate: require-bash
 # Compare clean deployed source with live OpenBao configuration through the fixed
 # homelab-observer and sanitized reader metrics. No configuration writes or acceptance tokens.
 openbao-verify: require-bash
-    @scripts/verify/openbao.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.openbao -- scripts/verify/openbao.sh {{quote(kubeconfig)}}
 
 # Apply reviewed OpenBao configuration with exact source/target/plan confirmation.
 openbao-config-apply: require-bash
