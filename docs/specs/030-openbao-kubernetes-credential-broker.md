@@ -618,6 +618,8 @@ lock. Update Git first; `OnDelete` prevents uncontrolled pod replacement. An
 operator-run upgrade workflow replaces one standby at a time and checks that it
 has rejoined and caught up. Transfer leadership to an upgraded member before
 replacing the old leader. Recheck live health immediately before every eviction.
+Attended HA and upgrade workflows use the retained operator password to obtain a
+policy-checked session and revoke that session when the workflow ends.
 Refuse concurrent node maintenance or a second unavailable voter. Version
 rollback requires a compatible retained snapshot; downgrading only the image is
 not the recovery procedure.

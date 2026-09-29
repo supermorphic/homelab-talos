@@ -117,7 +117,7 @@ its own exact execution confirmation and requires operator authority.
 | Acceptance | Command and additional input | Passing result establishes |
 | --- | --- | --- |
 | Issuance | `mise exec -- just test record test.openbao-issuance`; also supply `OPENBAO_DIAGNOSTIC_KUBECONFIG` for the actual scoped diagnostic identity. | Restricted issuance and access-denial behavior work with the intended identities. This is attended and creates temporary test resources. |
-| HA | `mise exec -- just test record test.openbao-ha`; provide an authorized OpenBao token at its private prompt. | Voters recover and issuance continues through attended, disruptive member replacement. |
+| HA | `mise exec -- just test record test.openbao-ha`; enter the retained operator password at its private prompt. | Voters recover and issuance continues through attended, disruptive member replacement. |
 | Restore | `mise exec -- just test record test.openbao-restore-drill`; provide the selected snapshot, matching recovery record and seal material, and operator password as below. | The selected backup restores in isolation and passes recovery checks. It does not perform production recovery. |
 
 **Restore inputs and timing:**
@@ -197,7 +197,7 @@ explicit operator kubeconfig, then run:
 mise exec -- just kube openbao-upgrade
 ```
 
-The command prompts privately for an authorized OpenBao token and exact confirmation.
+The command prompts privately for the retained operator password and exact confirmation.
 This is attended and disruptive. Success establishes healthy voters on the reviewed
 version with working issuance. Run `openbao-verify` afterward. If the upgrade stops
 partway through, preserve the snapshot and cluster state for recovery review; do not
