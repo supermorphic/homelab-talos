@@ -183,6 +183,7 @@ class AdapterTests(unittest.TestCase):
         scope = Mock(kubeconfig=Path("/synthetic/kubeconfig"))
         cluster = Mock()
         cluster.snapshot.side_effect = live.maintenance.MaintenanceError()
+        progress = {}
         with (
             patch.object(live, "OperatorClient") as client_type,
             patch.object(live, "LiveCluster", return_value=cluster),
@@ -192,8 +193,9 @@ class AdapterTests(unittest.TestCase):
             patch.object(live, "operator_password_session", side_effect=session, create=True),
             self.assertRaises(live.maintenance.MaintenanceError),
         ):
-            live.execute(scope, "ha")
+            live.execute(scope, "ha", progress=progress)
 
+        self.assertEqual(progress["stage"], "baseline")
         self.assertEqual(events, [
             ("login", "synthetic-password"),
             ("revoke", "synthetic-session"),
@@ -489,6 +491,42 @@ class RecoveryTests(unittest.TestCase):
 
 
 class CommandTests(unittest.TestCase):
+    def test_failed_ha_retains_bounded_probe_without_runtime_material(self):
+        import contextlib
+        import io
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import Mock, patch
+
+        from scripts.test.scenarios import openbao_ha
+
+        scope = Mock()
+        scope.probe = {"phase": "response", "request": 3, "status": 403,
+                       "token": "synthetic-secret"}
+
+        def fail(_scope, _mode, progress):
+            progress["stage"] = "standby-preflight"
+            raise openbao_ha.maintenance.MaintenanceError()
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            (path / "diagnostics").mkdir()
+            output = io.StringIO()
+            with (
+                patch.object(openbao_ha, "run_scope", return_value=(scope, path)),
+                patch.object(openbao_ha, "execute", side_effect=fail),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(openbao_ha.main(), 1)
+            result = json.loads((path / "diagnostics/openbao-maintenance.json").read_text())
+            self.assertEqual(result, {
+                "status": "fail", "cleanup": "passed", "recovery": "not-required",
+                "stage": "standby-preflight",
+                "probe": {"phase": "response", "request": 3, "status": 403},
+            })
+            self.assertEqual(json.loads(output.getvalue()), result)
+
     def test_retained_recovery_evidence_preserves_observed_mutation_progress(self):
         import contextlib
         import io

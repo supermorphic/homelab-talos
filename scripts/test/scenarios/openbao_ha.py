@@ -206,14 +206,18 @@ class LiveCluster:
 
 
 def execute(scope, mode, progress=None):
+    progress = {} if progress is None else progress
+    progress["stage"] = "source"
     bao = OperatorClient(scope.kubeconfig)
     try:
         cluster = LiveCluster(scope, bao, None)
         cluster.source = guards.source_revision()
         guards.require_deployed_revision(scope.kubeconfig, cluster.source)
+        progress["stage"] = "operator-login"
         password = private_prompt("Retained OpenBao operator password: ")
         with operator_password_session(bao, password) as token:
             bao.set_token(token)
+            progress["stage"] = "baseline"
             initial = cluster.snapshot()
             if not maintenance.healthy(initial):
                 raise maintenance.MaintenanceError()
@@ -231,6 +235,7 @@ def execute(scope, mode, progress=None):
             if supplied != required:
                 raise maintenance.MaintenanceError()
             install_interrupt_handlers()
+            progress["stage"] = "workload"
             pod = scope.create(pod_document(scope.run_id, False))
             scope.command(
                 "-n",
@@ -241,12 +246,15 @@ def execute(scope, mode, progress=None):
                 "--timeout=120s",
             )
             cluster.workload = PodAPI(scope, pod)
+            progress["stage"] = "fresh-snapshot"
             fresh = cluster.snapshot()
             if maintenance.identities(fresh) != maintenance.identities(initial):
                 raise maintenance.MaintenanceError()
             if mode == "upgrade":
+                progress["stage"] = "upgrade"
                 return maintenance.upgrade(cluster, cluster, time, progress=progress)
             standby = min(maintenance.NAMES - {initial["leader"]})
+            progress["stage"] = "standby-preflight"
             results = [
                 maintenance.replace_member(
                     initial["pods"][standby]["uid"], "standby", cluster, cluster, time,
@@ -256,12 +264,14 @@ def execute(scope, mode, progress=None):
             fresh = cluster.snapshot()
             if fresh["leader"] != initial["leader"]:
                 raise maintenance.MaintenanceError()
+            progress["stage"] = "leader-preflight"
             results.append(
                 maintenance.replace_member(
                     initial["pods"][initial["leader"]]["uid"], "leader", cluster, cluster, time,
                     progress=progress,
                 )
             )
+            progress["stage"] = "session-close"
             return {"status": "pass", "replacements": results}
     finally:
         bao.close()
@@ -277,6 +287,14 @@ def main(mode="ha"):
         result["status"] = "fail"
     finally:
         if scope:
+            probe = getattr(scope, "probe", None)
+            if (isinstance(probe, dict) and type(probe.get("request")) is int
+                    and probe["request"] > 0
+                    and probe.get("phase") in {"preflight", "transport", "decode", "response"}
+                    and ("status" not in probe or probe["status"] is None
+                         or type(probe["status"]) is int and 100 <= probe["status"] <= 599)):
+                result["probe"] = {key: probe[key] for key in ("phase", "request", "status")
+                                   if key in probe}
             try:
                 scope.cleanup()
                 result["cleanup"] = "passed"
