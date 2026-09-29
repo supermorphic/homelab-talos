@@ -30,7 +30,6 @@ contracts:
       - catalog:validation.n8n
   chainsaw-documentation:
     changed_inputs:
-      - tests/chainsaw/README.md
       - tests/fixtures/chainsaw/README.md
     required_tests:
       - catalog:validation.links
@@ -141,7 +140,6 @@ contracts:
       - kubernetes/apps/monitoring/gatus/app/kustomization.yaml
       - kubernetes/apps/monitoring/gatus/app/openbao-activation.values.yaml
       - kubernetes/apps/monitoring/gatus/app/values.yaml
-      - kubernetes/apps/security/openbao/README.md
       - kubernetes/apps/security/openbao/acceptance/canary.yaml
       - kubernetes/apps/security/openbao/acceptance/kustomization.yaml
       - kubernetes/apps/security/openbao/acceptance/namespace.yaml

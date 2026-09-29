@@ -37,8 +37,8 @@ repository reached its current state but do not override it.
 The repository uses these documentation roles:
 
 - `AGENTS.md` defines current, vendor-neutral repository policy.
-- Source-adjacent `README.md` files describe the current subsystem and its local
-  conventions.
+- The root and domain-level `README.md` files orient readers and state source
+  contracts. Exceptional local READMEs retain unique provenance or safety facts.
 - `docs/specs/` contains committed design specifications and their rationale.
 - `docs/reference/` contains current facts, contracts, supported values, and lookup
   material.
@@ -50,8 +50,9 @@ The repository uses these documentation roles:
 
 `docs/README.md` is a navigation surface for the documentation set. It does not define
 repository policy, a specification template, or a required specification outline.
-Specification placement and naming rules belong only in `AGENTS.md`. Source-adjacent
-README files remain in place rather than being moved into the four `docs/` categories.
+Specification placement and naming rules belong only in `AGENTS.md`. A README is
+retained when it serves a distinct entry-point or local provenance purpose, not
+merely because a subsystem has a directory.
 
 The old `docs/decisions/` category and root-level `docs/phase-*.md` files are removed. No
 replacement `history/` or `phases/` category is introduced.
@@ -121,7 +122,7 @@ Legacy records are reconciled as follows:
 - Amendments are merged into their parent specification with the final values and
   rationale, then deleted.
 - Findings contribute relevant conclusions to the final specification, runbook, guide,
-  reference, or source-adjacent README. The standalone finding record is then deleted.
+  or reference. The standalone finding record is then deleted.
 - Audits retain only conclusions that remain reflected in current policy or source. Those
   conclusions move to the appropriate current document or specification; obsolete audit
   narration is deleted.
@@ -132,7 +133,7 @@ Legacy records are reconciled as follows:
   in the reconciled specification or current repository state.
 - Phase documents lose their special category. Design rationale and durable outcomes move
   to specifications; current operating procedures move to guides or runbooks; current
-  facts move to references or source-adjacent README files; stale status, rollout logs,
+  facts move to references; stale status, rollout logs,
   and duplicated content are deleted.
 - Images and other durable supporting assets move with the specification or current
   document that uses them. Image names are descriptive and have no date or specification
@@ -172,8 +173,8 @@ rationale helps explain a non-obvious design choice, accepted tradeoff, or rejec
 alternative. The specification supplies context; it is not the source of current
 authority.
 
-Current procedures and facts link to the applicable guide, runbook, reference, or
-source-adjacent README. Generic specification banners and comprehensive source-to-spec
+Current procedures and facts link to the applicable guide, runbook, or reference.
+Generic specification banners and comprehensive source-to-spec
 traceability are not required. During this migration, existing callouts are retained only
 when they meet this boundary, and missing callouts are added only where a specific
 non-obvious constraint would otherwise be easy to change incorrectly.
@@ -214,8 +215,7 @@ The ordinary link-integrity checker remains because it detects useful failures s
 broken links after files move. It is simplified so that it:
 
 - verifies that explicit relative Markdown links resolve within the repository;
-- verifies bare paths to current documentation, source-adjacent README files, runbooks,
-  guides, and references;
+- verifies bare paths to current documentation, runbooks, guides, and references;
 - permits specifications to name planned implementation paths that do not exist yet; and
 - has no knowledge of document categories, numeric identifiers, lifecycle states,
   immutability, or changes relative to `origin/main`.

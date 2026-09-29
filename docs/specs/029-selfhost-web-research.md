@@ -634,6 +634,5 @@ internet access but no cluster credentials or production secret.
 - [n8n pinned HTTP transport configuration](https://github.com/n8n-io/n8n/blob/f09fcad454339ae8d16d88c85e2e4a38f85b1217/packages/%40n8n/backend-network/src/http/axios/request.ts#L35-L43)
 - [n8n platform](023-n8n-workflow-automation-platform.md)
 - [Current Gatus checks](../../kubernetes/apps/monitoring/gatus/app/values.yaml)
-- [Gatus operating conventions](../../kubernetes/apps/monitoring/gatus/README.md)
 - [Media integration evidence boundaries](019-media-integration-health-gatus.md)
 - [Private lab-domain Tailscale access](../guides/tailscale-lab-domain-access.md)

@@ -212,8 +212,8 @@ Local `mise exec -- just ci` runs the complete cluster-independent suite, and
 `mise exec -- just test ci-publish` runs the planned groups against freshly fetched
 `origin/main` from a clean committed worktree. Both are optional for routine PRs;
 use them to reproduce hosted failures or validate CI and selection changes. See
-[`tests/README.md`](../../tests/README.md#deterministic-ci-groups-and-ownership-checks)
-for group ownership and local validation details, and the
+the [CI impact map](../../tests/impact.yaml) and
+[suite catalog](../../tests/catalog.yaml) for group ownership, and the
 [GitHub protection guide](github-main-protection.md) for the enforced branch settings.
 
 ## Cluster access is not installed by default

@@ -7,9 +7,10 @@ this file.
 
 This repository manages a three-node Talos Linux and Flux GitOps Kubernetes cluster.
 Git is the source of truth, and merged changes to `main` can affect the live environment.
-Before changing a subsystem, inspect its current source, relevant README or runbook, and
-current design specification where applicable. Expand to related callers, dependencies,
-and tests only as needed; do not load unrelated documentation by default.
+Before changing a subsystem, inspect its current source and the applicable current
+guide, reference, or design specification only as needed. Do not load documentation
+merely because it exists alongside the source. Expand to related callers,
+dependencies, and tests only as needed.
 
 This root file is the sole repository-policy surface; supporting documentation supplies
 procedure, not competing instructions. Use the current repository

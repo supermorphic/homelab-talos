@@ -191,7 +191,6 @@ core_paths:
   - AGENTS.md
   - CLAUDE.md
   - docs/**
-  - tests/chainsaw/README.md
   - tests/fixtures/chainsaw/README.md
   - kubernetes/README.md
   - kubernetes/apps/media/**
