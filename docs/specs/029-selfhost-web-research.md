@@ -459,7 +459,7 @@ Add these stable names under Gatus group `Automation`:
 | --- | --- | --- |
 | `searxng` | 1m | GET `https://searxng.lab.supermorphic.com/healthz`; require HTTP 200. Covers private DNS, TLS, Gateway routing, and native service health, following existing application health checks. Browser acceptance separately verifies the UI. |
 | `crawl4ai-readiness` | 1m | GET the credential agent's dedicated internal readiness endpoint; require HTTP 200 and explicit ready state. It reads cached state and must not mint or validate a JWT as a side effect. |
-| `crawl4ai-e2e` | 15m | POST one fixed public HTTPS fixture URL through the same bounded Envoy crawl route as consumers. Require a successful native result, acceptable final URL/status, and an expected extracted-text marker. |
+| `crawl4ai-e2e` | 15m | POST `https://httpbin.org/html` through the same bounded Envoy crawl route as consumers. Require one successful native result, exact requested and final URL, HTTP 200, and the `Herman Melville - Moby-Dick` body-text marker. httpbin [documents `/html` as a test response](https://httpbin.org/#/Response_formats/get_html), and its [source-controlled template](https://github.com/postmanlabs/httpbin/blob/master/httpbin/templates/moby.html) owns the body heading. |
 | `searxng-search-e2e` | 30m | Make one fixed synthetic JSON search through the automation Service path. Require a valid response with at least one usable candidate URL and no total configured-engine failure. Do not depend on exact ranking or result count. |
 
 The crawl canary catches failures beyond process/token readiness: route/auth header

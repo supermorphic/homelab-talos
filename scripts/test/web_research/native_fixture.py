@@ -12,12 +12,15 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 BOOTSTRAP = Path("/run/bootstrap")
 SUBJECT = "crawl4ai-platform@supermorphic.com"
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 NEAR_LIMIT_MIN_BYTES = 7 * 1024 * 1024
+STATIC_URL = "https://httpbin.org/html"
+STATIC_TEXT = "Herman Melville - Moby-Dick"
 
 
 def request(
@@ -181,16 +184,16 @@ def gateway_contract() -> None:
         status, _, _ = request(8080, path, method, {})
         require(status == 404, "route-exclusion")
 
-    status, _, body = request(8080, "/crawl", "POST", crawl_body("https://example.com/"))
+    status, _, body = request(8080, "/crawl", "POST", crawl_body(STATIC_URL))
     document = json.loads(body)
     result = document.get("results", [{}])[0]
     require(status == 200 and document.get("success") is True, "public-crawl")
     require(result.get("success") is True, "public-result")
     require(result.get("status_code") == 200, "canary-status")
-    require(result.get("url") == "https://example.com/", "canary-url")
-    require(result.get("redirected_url") == "https://example.com/", "canary-final-url")
+    require(result.get("url") == STATIC_URL, "canary-url")
+    require(result.get("redirected_url") == STATIC_URL, "canary-final-url")
     require(
-        "Example Domain" in result.get("markdown", {}).get("raw_markdown", ""),
+        STATIC_TEXT in result.get("markdown", {}).get("raw_markdown", ""),
         "canary-extraction",
     )
     print("PASS translated-gateway-contract", flush=True)
@@ -346,8 +349,8 @@ def searx_contract() -> None:
 
 
 def gatus_contract() -> None:
-    def statuses():
-        status, _, body = request(8080, "/api/v1/endpoints/statuses", host="gatus", timeout=10)
+    def statuses(host="gatus"):
+        status, _, body = request(8080, "/api/v1/endpoints/statuses", host=host, timeout=10)
         if status != 200:
             return None
         try:
@@ -386,6 +389,61 @@ def gatus_contract() -> None:
     wait_for(all_passed, "gatus-parser", 180)
     print("PASS gatus-production-conditions", flush=True)
 
+    expected_failures = {"missing-marker": 6, "failed-extraction": 3}
+
+    def negatives_fail_at_expected_condition() -> bool:
+        document = statuses("gatus-negative")
+        if not isinstance(document, list):
+            return False
+        records = {item.get("name"): item for item in document if isinstance(item, dict)}
+        if set(records) != set(expected_failures):
+            return False
+        for name, failed_index in expected_failures.items():
+            results = records[name].get("results", [])
+            if not results or results[0].get("success") is not False:
+                return False
+            conditions = results[0].get("conditionResults", [])
+            if len(conditions) != 8 or [
+                index for index, condition in enumerate(conditions)
+                if condition.get("success") is not True
+            ] != [failed_index]:
+                return False
+        return True
+
+    wait_for(negatives_fail_at_expected_condition, "gatus-negative-parser", 90)
+    print("PASS gatus-negative-conditions", flush=True)
+
+
+def gatus_stub() -> None:
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            if self.path not in ("/missing-marker", "/failed-extraction"):
+                self.send_error(404)
+                return
+            result = {
+                "success": self.path != "/failed-extraction",
+                "status_code": 200,
+                "url": STATIC_URL,
+                "redirected_url": STATIC_URL,
+                "markdown": {
+                    "raw_markdown": (
+                        "Unrelated extracted content"
+                        if self.path == "/missing-marker" else STATIC_TEXT
+                    )
+                },
+            }
+            body = json.dumps({"success": True, "results": [result]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format, *_args) -> None:
+            pass
+
+    HTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+
 
 MODES = {
     "serve": serve,
@@ -396,6 +454,7 @@ MODES = {
     "rotation": rotation_contract,
     "searx": searx_contract,
     "gatus": gatus_contract,
+    "gatus-stub": gatus_stub,
 }
 
 
