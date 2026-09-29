@@ -470,7 +470,8 @@ def diagnostic_boundary(kubeconfig, namespace_uid):
         if (response.returncode == 0 or 'Error from server (Forbidden)' not in error
                 or f'User "{identity}"' not in error or
                 f'cannot {verb} resource "pods/exec"' not in error or
-                'in namespace "openbao"' not in error):
+                not any(location in error for location in
+                        ('in namespace "openbao"', 'in the namespace "openbao"'))):
             raise issuance.AcceptanceError()
     return True
 
