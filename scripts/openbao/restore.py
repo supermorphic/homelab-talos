@@ -262,4 +262,8 @@ def run(snapshot_path, metadata, run_id, client, kube):
             except Exception:  # noqa: BLE001 -- Credential-bearing adapters cannot render exceptions.
                 result["cleanup"] = "failed"
                 result["status"] = "fail"
+                if getattr(kube, "cleanup_resource", None):
+                    result["cleanup_resource"] = kube.cleanup_resource
+                if getattr(kube, "cleanup_stage", None):
+                    result["cleanup_stage"] = kube.cleanup_stage
     return result
