@@ -242,28 +242,26 @@ case "$*" in
     fi
     ;;
   *'--namespace automation-data get configmaps --output json')
-    expected="$(jq -c . "$UPGRADE_TEST_EXPECTED_CONFIGMAP")"
     case "${UPGRADE_TEST_CASE:-}" in
       stale-configmap)
         jq -cn '{items:[{metadata:{name:"automation-data-postgresql-upgrade-stale1"},data:{"nocodb-extension.sql":"stale","upgrade-nocodb.sql":"stale"}}]}'
         ;;
       wrong-generated-name)
-        jq -cn --argjson expected "$expected" '{items:[($expected | .metadata.name = "automation-data-postgresql-upgrade-wrong1")]}'
+        jq -cn --slurpfile expected "$UPGRADE_TEST_EXPECTED_CONFIGMAP" '{items:[($expected[0] | .metadata.name = "automation-data-postgresql-upgrade-wrong1")]}'
         ;;
       changed-upgrade-sql)
-        jq -cn --argjson expected "$expected" '{items:[($expected | .data["upgrade-nocodb.sql"] = "changed reviewed SQL")]}'
+        jq -cn --slurpfile expected "$UPGRADE_TEST_EXPECTED_CONFIGMAP" '{items:[($expected[0] | .data["upgrade-nocodb.sql"] = "changed reviewed SQL")]}'
         ;;
-      *) jq -cn --argjson expected "$expected" '{items:[$expected]}' ;;
+      *) jq -cn --slurpfile expected "$UPGRADE_TEST_EXPECTED_CONFIGMAP" '{items:[$expected[0]]}' ;;
     esac
     ;;
   *'--namespace automation-data get configmap '*"$UPGRADE_TEST_EXPECTED_CONFIGMAP_NAME"' --output json')
-    expected="$(jq -c . "$UPGRADE_TEST_EXPECTED_CONFIGMAP")"
     case "${UPGRADE_TEST_CASE:-}" in
       stale-configmap | wrong-generated-name) exit 1 ;;
       changed-upgrade-sql)
-        jq -cn --argjson expected "$expected" '$expected | .data["upgrade-nocodb.sql"] = "changed reviewed SQL"'
+        jq -cn --slurpfile expected "$UPGRADE_TEST_EXPECTED_CONFIGMAP" '$expected[0] | .data["upgrade-nocodb.sql"] = "changed reviewed SQL"'
         ;;
-      *) jq -cn --argjson expected "$expected" '$expected' ;;
+      *) jq -cn --slurpfile expected "$UPGRADE_TEST_EXPECTED_CONFIGMAP" '$expected[0]' ;;
     esac
     ;;
   *'--namespace automation-data create --filename -')
@@ -363,7 +361,10 @@ if run_case replacement-between-inspect-delete; then
 fi
 ! rg -Fxq unsafe-delete-replacement "$UPGRADE_TEST_LOG" ||
 	fail 'cleanup issued an unconditioned delete against a replacement Job'
-[[ -e "$case_root/job-exists" ]] || fail 'replacement Job was not retained'
+[[ -e "$case_root/job-exists" ]] || {
+	cat "$case_root/output" >&2
+	fail 'replacement Job was not retained'
+}
 
 if run_case ambiguous-create; then
 	fail 'ambiguous create response was accepted'
