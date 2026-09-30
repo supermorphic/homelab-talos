@@ -29,6 +29,7 @@ EXPORTER_PASSWORD=$(openssl rand -hex 24)
 FIXTURE_MIGRATOR_PASSWORD=$(openssl rand -hex 24)
 FIXTURE_RUNTIME_PASSWORD=$(openssl rand -hex 24)
 SOURCE_READER_PASSWORD=$(openssl rand -hex 24)
+SOURCE_RETRY_PASSWORD=$(openssl rand -hex 24)
 SOURCE_OPERATOR_PASSWORD=$(openssl rand -hex 24)
 EOF
 chmod 600 "$scratch/postgresql.env"
@@ -270,6 +271,60 @@ fi
 rg -q 'source_not_ready' "$scratch/rotate-again.err"
 [[ "$(query "SELECT credential_generation FROM platform_operations.managed_nocodb_sources
   WHERE domain = 'claim_fixture' AND pair = 'extra' AND access_kind = 'reader'")" == 2 ]]
+
+# Only an uncertain claim permits a new explicit retry for the same target.
+retry_id='00000000-0000-4000-8000-000000000106'
+if query "SELECT platform_operations.claim_nocodb_operation(
+  'claim_fixture','extra','rotate','reader','$retry_id'::uuid,true)" \
+  >"$scratch/early-retry.out" 2>"$scratch/early-retry.err"; then
+  echo 'A live rotation claim permitted premature retry.' >&2
+  exit 1
+fi
+rg -q 'nocodb_retry_not_eligible' "$scratch/early-retry.err"
+rotate_generation="$(query "SELECT generation FROM platform_operations.nocodb_source_operations
+  WHERE domain = 'claim_fixture' AND pair = 'extra'")"
+[[ "$(query "SELECT platform_operations.mark_nocodb_operation_uncertain(
+  'claim_fixture','extra','$rotate_id'::uuid,$rotate_generation,
+  'external_response_unknown')->>'phase'")" == uncertain ]]
+if query "SELECT platform_operations.claim_nocodb_operation(
+  'claim_fixture','extra','rotate','operator','$retry_id'::uuid,true)" \
+  >"$scratch/wrong-target-retry.out" 2>"$scratch/wrong-target-retry.err"; then
+  echo 'An uncertain rotation permitted retry of a different source.' >&2
+  exit 1
+fi
+rg -q 'nocodb_retry_not_eligible' "$scratch/wrong-target-retry.err"
+[[ "$(query "SELECT platform_operations.claim_nocodb_operation(
+  'claim_fixture','extra','rotate','reader','$retry_id'::uuid)->>'canExecute'")" == false ]]
+[[ "$(query "SELECT platform_operations.claim_nocodb_operation(
+  'claim_fixture','extra','rotate','reader','$retry_id'::uuid,true)->>'canExecute'")" == true ]]
+retry_generation="$(query "SELECT generation FROM platform_operations.nocodb_source_operations
+  WHERE domain = 'claim_fixture' AND pair = 'extra'")"
+if query "SELECT platform_operations.rotate_nocodb_source_credential(
+  'claim_fixture','extra','reader',repeat('x',48),'$rotate_id'::uuid,$rotate_generation)" \
+  >"$scratch/stale-rotate.out" 2>"$scratch/stale-rotate.err"; then
+  echo 'A stale rotation changed the source after retry was claimed.' >&2
+  exit 1
+fi
+rg -q 'nocodb_claim_stale' "$scratch/stale-rotate.err"
+cat >"$scratch/retry.sql" <<'SQL'
+\getenv retry_password SOURCE_RETRY_PASSWORD
+SELECT platform_operations.rotate_nocodb_source_credential(
+  'claim_fixture','extra','reader',:'retry_password',
+  '00000000-0000-4000-8000-000000000106'::uuid,
+  (SELECT generation FROM platform_operations.nocodb_source_operations
+    WHERE domain = 'claim_fixture' AND pair = 'extra'));
+SQL
+podman cp "$scratch/retry.sql" "$container:/tmp/retry.sql"
+podman exec --env-file "$scratch/postgresql.env" "$container" psql --no-psqlrc \
+  --set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_control \
+  --file /tmp/retry.sql >"$scratch/retry.out"
+[[ "$(query "SELECT credential_generation FROM platform_operations.managed_nocodb_sources
+  WHERE domain = 'claim_fixture' AND pair = 'extra' AND access_kind = 'reader'")" == 3 ]]
+query "SELECT platform_operations.record_nocodb_source_ready(
+  'claim_fixture','extra','reader','synthetic-reader-source',
+  '$retry_id'::uuid,$retry_generation)" >"$scratch/retry-ready.out"
+[[ "$(query "SELECT platform_operations.complete_nocodb_operation(
+  'claim_fixture','extra','$retry_id'::uuid,$retry_generation)->>'phase'")" == complete ]]
 
 # A mapped operator still awaiting reviewed grants does not block a ready reader.
 query "SELECT platform_operations.configure_nocodb_pair(

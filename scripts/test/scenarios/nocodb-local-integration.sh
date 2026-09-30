@@ -656,7 +656,7 @@ source_call() { # <operation> <access-kind|-> <output> [domain]
 	validate_source_response "$operation" "$access_kind" "$output" "$domain"
 }
 
-pair_call() { # <register|prepare|sync|rotate> <output> [access-kind]
+pair_call() { # <register|prepare|sync|rotate|retry> <output> [access-kind]
 	local operation="$1" output="$2" access_kind="${3:-}" body status
 	local domain='automation_data_acceptance' pair='extra'
 	local action="pair-$operation" confirmation_name confirmation_value
@@ -675,13 +675,14 @@ pair_call() { # <register|prepare|sync|rotate> <output> [access-kind]
 			confirmation_name="NOCODB_PAIR_${operation^^}_CONFIRM"
 			confirmation_value="$operation:nocodb:$domain:$pair"
 			;;
-		rotate)
+		rotate|retry)
 			[[ "$access_kind" == reader || "$access_kind" == operator ]] || fail 'invalid pair rotation target.'
 			body="$(jq -cn --arg domain "$domain" --arg pair "$pair" --arg access_kind "$access_kind" \
-				'{domain:$domain,pair:$pair,operation:"rotate",accessKind:$access_kind}')"
+				--arg operation "$operation" \
+				'{domain:$domain,pair:$pair,operation:$operation,accessKind:$access_kind}')"
 			command+=("$access_kind")
-			confirmation_name=NOCODB_PAIR_ROTATE_CONFIRM
-			confirmation_value="rotate:nocodb:$domain:$pair:$access_kind"
+			confirmation_name="NOCODB_PAIR_${operation^^}_CONFIRM"
+			confirmation_value="$operation:nocodb:$domain:$pair:$access_kind"
 			;;
 		*) fail 'invalid pair operation.' ;;
 	esac
@@ -1658,11 +1659,60 @@ prove_targeted_rotations() {
 		fail 'application rotation changed a NocoDB source registry entry.'
 }
 
+prove_partial_rotation_retry() {
+	local domain='automation_data_acceptance' pair='extra' access_kind='operator'
+	local claim_id='00000000-0000-4000-8000-000000000493' claim generation
+	local intermediate_password rotation_state body
+	phase='partial-operator-rotation'
+	claim="$("$podman_bin" exec "$postgres_name" psql --no-psqlrc --tuples-only --no-align \
+		--set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_control --command \
+		"SELECT platform_operations.claim_nocodb_operation('$domain','$pair','rotate','$access_kind','$claim_id');")"
+	jq -e '.canExecute == true and .phase == "active" and .operation == "rotate" and
+		.accessKind == "operator"' <<<"$claim" >/dev/null ||
+		fail 'partial rotation could not acquire its exact source claim.'
+	generation="$(jq -er '.generation' <<<"$claim")"
+	[[ "$generation" =~ ^[0-9]+$ ]] || fail 'partial rotation claim generation was invalid.'
+	intermediate_password="$(random_secret)"
+	record_secret "$intermediate_password"
+	rotation_state="$("$podman_bin" exec "$postgres_name" psql --no-psqlrc --tuples-only --no-align \
+		--set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_control --command \
+		"SELECT platform_operations.rotate_nocodb_source_credential('$domain','$pair','$access_kind','$intermediate_password','$claim_id',$generation);")"
+	jq -e --slurpfile before "$integration_root/extra-ready.json" '
+		.state == "rotating" and .sourceId == $before[0].operator.sourceId and
+		.credentialGeneration == ($before[0].operator.credentialGeneration + 1)
+	' <<<"$rotation_state" >/dev/null || fail 'partial rotation did not retain its source identity.'
+	"$podman_bin" exec "$postgres_name" psql --no-psqlrc --tuples-only --no-align \
+		--set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_control --command \
+		"SELECT platform_operations.mark_nocodb_operation_uncertain('$domain','$pair','$claim_id',$generation,'external_response_unknown');" \
+		>/dev/null
+	body="$(jq -cn --arg domain "$domain" --arg pair "$pair" \
+		'{domain:$domain,pair:$pair,operation:"sync"}')"
+	webhook_call automation-data-nocodb-source source-webhook "$body" \
+		"$integration_root/partial-ordinary-sync.json"
+	jq -e '.ok == false and .pair == "extra" and .activeOperation == "rotate" and
+		.errorCode == "operation_in_progress"' \
+		"$integration_root/partial-ordinary-sync.json" >/dev/null ||
+		fail 'ordinary sync tried to repair an uncertain partial rotation.'
+	phase='explicit-partial-rotation-retry'
+	pair_call retry "$integration_root/extra-retry-ready.json" operator
+	jq -e --slurpfile before "$integration_root/extra-ready.json" '
+		.pair == "extra" and .reader.state == "ready" and .operator.state == "ready" and
+		.reader.sourceId == $before[0].reader.sourceId and
+		.reader.credentialGeneration == $before[0].reader.credentialGeneration and
+		.operator.sourceId == $before[0].operator.sourceId and
+		.operator.integrationId == $before[0].operator.integrationId and
+		.operator.credentialGeneration == ($before[0].operator.credentialGeneration + 2)
+	' "$integration_root/extra-retry-ready.json" >/dev/null ||
+		fail 'explicit partial rotation retry changed sibling or source identity.'
+	cp "$integration_root/extra-retry-ready.json" "$integration_root/extra-ready.json"
+}
+
 slice_run first true
 prove_named_pair
 prove_concurrent_pair_sync
 prove_application_login
 prove_targeted_rotations
+prove_partial_rotation_retry
 prove_aged_jobs_rotation_and_restart "$integration_root/source-ready.json"
 slice_run second false
 prove_additive_metadata_refresh "$integration_root/source-ready.json" "$integration_root/acceptance-probe.json"

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo 'Usage: source-operation.sh <prepare|sync|rotate> <domain> [reader|operator]; configure <domain> <reader-schema> [operator-schema|-]; or pair-register|pair-prepare|pair-sync|pair-rotate <domain> <pair> [schema|access arguments]' >&2
+  echo 'Usage: source-operation.sh <prepare|sync|rotate|retry> <domain> [reader|operator]; configure <domain> <reader-schema> [operator-schema|-]; or pair-register|pair-prepare|pair-sync|pair-rotate|pair-retry <domain> <pair> [schema|access arguments]' >&2
   exit 2
 }
 
@@ -56,16 +56,17 @@ case "$action" in
       exit 1
     }
     ;;
-  rotate)
+  rotate|retry)
     [[ "$#" -eq 3 ]] || usage
     access_kind="$3"
     [[ "$access_kind" == reader || "$access_kind" == operator ]] || {
       echo 'NocoDB source rotation access kind must be reader or operator.' >&2
       exit 2
     }
-    expected_confirmation="rotate:nocodb:${domain}:${access_kind}"
-    [[ "${NOCODB_SOURCE_ROTATE_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo "Refusing NocoDB source rotation; set NOCODB_SOURCE_ROTATE_CONFIRM='$expected_confirmation'." >&2
+    expected_confirmation="${operation}:nocodb:${domain}:${access_kind}"
+    confirmation_variable="NOCODB_SOURCE_${operation^^}_CONFIRM"
+    [[ "${!confirmation_variable:-}" == "$expected_confirmation" ]] || {
+      echo "Refusing NocoDB source ${operation}; set ${confirmation_variable}='$expected_confirmation'." >&2
       exit 1
     }
     ;;
@@ -89,17 +90,17 @@ case "$action" in
       exit 1
     }
     ;;
-  pair-prepare|pair-sync|pair-rotate)
-    [[ "$#" -eq 3 || ( "$action" == pair-rotate && "$#" -eq 4 ) ]] || usage
+  pair-prepare|pair-sync|pair-rotate|pair-retry)
+    [[ "$#" -eq 3 || ( ( "$action" == pair-rotate || "$action" == pair-retry ) && "$#" -eq 4 ) ]] || usage
     pair="$3"
     [[ "$pair" =~ ^[a-z][a-z0-9_]{0,23}$ && "$pair" != default ]] || usage
     operation="${action#pair-}"
-    if [[ "$operation" == rotate ]]; then
+    if [[ "$operation" == rotate || "$operation" == retry ]]; then
       [[ "$#" -eq 4 ]] || usage
       access_kind="$4"
       [[ "$access_kind" == reader || "$access_kind" == operator ]] || usage
-      expected_confirmation="rotate:nocodb:${domain}:${pair}:${access_kind}"
-      confirmation_variable=NOCODB_PAIR_ROTATE_CONFIRM
+      expected_confirmation="${operation}:nocodb:${domain}:${pair}:${access_kind}"
+      confirmation_variable="NOCODB_PAIR_${operation^^}_CONFIRM"
     else
       [[ "$#" -eq 3 ]] || usage
       expected_confirmation="${operation}:nocodb:${domain}:${pair}"
@@ -150,9 +151,10 @@ elif [[ "$action" == pair-register ]]; then
   jq -cn --arg domain "$domain" --arg pair "$pair" --arg reader "$reader_schema" --arg operator "$operator_schema" \
     '{domain: $domain, pair: $pair, operation: "register", readerSchema: $reader,
       operatorSchema: (if $operator == "-" then null else $operator end)}' >"$request_body"
-elif [[ "$operation" == rotate ]]; then
+elif [[ "$operation" == rotate || "$operation" == retry ]]; then
   jq -cn --arg domain "$domain" --arg pair "$pair" --arg access_kind "$access_kind" \
-    '{domain: $domain, operation: "rotate", accessKind: $access_kind} +
+    --arg operation "$operation" \
+    '{domain: $domain, operation: $operation, accessKind: $access_kind} +
       (if $pair == "" then {} else {pair: $pair} end)' >"$request_body"
 else
   jq -cn --arg domain "$domain" --arg pair "$pair" --arg operation "$operation" \
@@ -222,7 +224,9 @@ elif [[ "$operation" == prepare ]]; then
     exit 1
   }
 else
-  jq -e --arg domain "$domain" --arg pair "$pair" --arg operation "$operation" '
+  response_operation="$operation"
+  [[ "$operation" != retry ]] || response_operation=rotate
+  jq -e --arg domain "$domain" --arg pair "$pair" --arg operation "$response_operation" '
   type == "object" and
   (keys | sort == (["baseId", "domain", "errorCode", "ok", "operation", "operator", "reader"] +
     (if $pair == "" then [] else ["pair"] end) | sort)) and
