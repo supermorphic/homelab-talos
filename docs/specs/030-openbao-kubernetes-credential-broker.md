@@ -9,12 +9,34 @@ refinements to the seal threat model and configuration-drift verification.
 The source implementation is merged. Seal material and the initialization recovery
 bundle are retained by the operator; three servers are initialized and Ready.
 The prerequisite, server, acceptance, and backup Flux units reconcile through Git.
-The private route and monitoring are active. Source and CI results are candidate
-evidence only; issue 449 remains open pending sustained issuance and retained,
-passing live acceptance. Readiness and configuration verification do not establish
-that the Kubernetes issuer credential remains usable over time. The approved
-stable-issuer workaround below requires an attended rollout and fresh acceptance
-before it can be called deployed and validated.
+The private route and monitoring are active. The stable-issuer workaround was
+rolled out, and clean deployed-main issuance, HA, isolated restore, and final
+observer verification passed with retained reports. Issue 449 is ready for
+closeout. These tests establish the observed behavior; future issuer maintenance
+still follows the stable-issuer lifecycle below.
+
+### Retained acceptance evidence
+
+All runs below passed and were published on 2026-09-30. Issuance and HA used the
+deployed stable-issuer implementation. The later restore and observer revisions
+include the reviewed harness corrections; intervening changes did not alter the
+accepted issuance or HA implementation.
+
+| Evidence | Passing report |
+| --- | --- |
+| Restricted issuance, real expiry, fresh issuance after expiry, and access denials | [Issuance](https://tests.lab.supermorphic.com/reports/20260930T132908Z-73f1ef5c2d23-operator-5fb264a4/awesome/) |
+| Standby and leader replacement, automatic unseal, quorum recovery, and issuance | [HA](https://tests.lab.supermorphic.com/reports/20260930T144003Z-73f1ef5c2d23-operator-7447cf59/awesome/) |
+| Selected snapshot recovery, isolated restored configuration, restart, negative issuance, and cleanup | [Restore](https://tests.lab.supermorphic.com/reports/20260930T180129Z-eb8f13abb15d-operator-ca433213/awesome/) |
+| Current deployed configuration, three ready servers, placement, private route, backup, and monitoring | [Observer verification](https://tests.lab.supermorphic.com/reports/20260930T192528Z-491655601924-operator-3eb727d8/awesome/) |
+
+The HA run recorded standby recovery in 23.857 seconds and leader recovery in
+26.617 seconds. Its issuance probe observed no interruption; this does not promise
+zero downtime. The passing restore run took 335 seconds including operator input,
+isolation checks, restart, and cleanup; this is not a production recovery-time
+guarantee. Local snapshot completion was observed at 14:53:13 UTC, and Longhorn
+reported a completed off-cluster backup at 03:01:10 UTC. The later manual snapshot
+was retrieved and restored separately; these observations distinguish local
+snapshot freshness from scheduled off-cluster transfer freshness.
 
 Deploy OpenBao inside the Talos cluster to issue short-lived credentials for
 pre-existing Kubernetes ServiceAccounts. Git and Flux own every ServiceAccount,
@@ -101,10 +123,9 @@ Secret for its issuer identity. The chart must not generate another credential.
 Automatic ServiceAccount token mounting remains disabled. See the stable-issuer
 contract below for the reason and lifecycle.
 
-Start with requests of 100m CPU and 256 MiB memory per server, and limits of one
-CPU and 1 GiB memory. These are provisional reservations, not measured capacity.
-Measure idle, issuance, snapshot, restart, and restore peaks during acceptance,
-then reconcile values and this specification before completion.
+Use requests of 100m CPU and 256 MiB memory per server, and limits of one CPU and
+1 GiB memory. Sampled acceptance observations below fit these reservations.
+Retain the current settings and reassess them when workload or version changes.
 
 ## Flux activation and readiness
 
@@ -769,10 +790,26 @@ and backup runtime image
 `docker.io/library/python:3.13.14-slim@sha256:9662417aace5ae7b8e2609cce472b72a8958e134ba372808abe9cc1a0c0125e6`.
 Each server currently requests `100m` CPU and `256Mi` memory and is limited to
 `1` CPU and `1Gi` memory; the backup job requests `50m` CPU and `128Mi` memory
-and is limited to `1` CPU and `512Mi` memory. These are source settings, not
-measured utilization or validated sizing. Restart, leadership transfer,
-issuance interruption, snapshot transfer and restore times remain unmeasured
-until authorized live tests record them.
+and is limited to `1` CPU and `512Mi` memory.
+
+Prometheus cAdvisor observations on 2026-09-30 measured the maximum per-container
+CPU rate over one-minute samples and maximum memory working set in bounded
+windows around the passing operations. Values are rounded up. Idle used a
+five-minute window; issuance, HA, snapshot, and restore used 15-, 5-, 3-, and
+8-minute windows respectively. These are sampled observations, not instantaneous
+peaks or a capacity benchmark.
+
+| OpenBao server observation | CPU | Memory working set |
+| --- | --- | --- |
+| Idle | 39m | 79 MiB |
+| Issuance acceptance | 44m | 86 MiB |
+| HA replacement | 42m | 79 MiB |
+| Manual snapshot | 43m | 70 MiB |
+| Isolated restore server | 7m | 37 MiB |
+
+The 13-second snapshot Job had no cAdvisor samples in its bounded window. Its
+successful execution validates the current workflow, while its resource
+reservations remain provisional rather than measured sizing.
 
 | Workflow | Authority and evidence |
 | --- | --- |
