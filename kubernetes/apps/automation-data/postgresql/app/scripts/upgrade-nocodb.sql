@@ -122,12 +122,18 @@ $validation$;
   \ir application-login.sql
   -- Existing databases predate the explicit TEMP and public-schema boundary.
   -- The remote schema REVOKE is monotonic, even if this control transaction aborts.
+  -- Never-ready records can lack a database; a missing previously ready one must fail.
   DO $backfill$
   DECLARE
     managed record;
   BEGIN
     FOR managed IN SELECT database_name, owner_role, migrator_role, runtime_role
-      FROM platform_operations.managed_domains ORDER BY domain LOOP
+      FROM platform_operations.managed_domains AS registered
+      WHERE registered.has_reached_ready OR EXISTS (
+        SELECT FROM pg_database AS database
+        WHERE database.datname = registered.database_name
+      )
+      ORDER BY domain LOOP
       EXECUTE format(
         'REVOKE TEMP ON DATABASE %1$I FROM PUBLIC; GRANT TEMP ON DATABASE %1$I TO %2$I, %3$I, %4$I',
         managed.database_name, managed.owner_role, managed.migrator_role,
