@@ -1,0 +1,46 @@
+--- a/internal/builtin/logical/kubernetes/backend.go
++++ b/internal/builtin/logical/kubernetes/backend.go
+@@ -38,8 +38,9 @@
+ // backend wraps the backend framework and adds a map for storing key value pairs
+ type backend struct {
+ 	*framework.Backend
+-	lock   sync.Mutex
+-	client *client
++	lock         sync.Mutex
++	client       *client
++	clientConfig kubeConfig
+
+ 	// localSATokenReader caches the service account token in memory.
+ 	// It periodically reloads the token to support token rotation/renewal.
+--- a/internal/builtin/logical/kubernetes/path_creds.go
++++ b/internal/builtin/logical/kubernetes/path_creds.go
+@@ -364,24 +364,22 @@
+ 	b.lock.Lock()
+ 	defer b.lock.Unlock()
+
+-	client := b.client
+-	if client != nil {
+-		return client, nil
+-	}
+-
+ 	config, err := b.configWithDynamicValues(ctx, s)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+
+-	if b.client == nil && config == nil {
+-		config = new(kubeConfig)
++	// Resolve the periodically reloaded local token before using the cached
++	// client. A client created with BearerToken retains that token forever.
++	if b.client != nil && b.clientConfig == *config {
++		return b.client, nil
+ 	}
+
+ 	b.client, err = newClient(config)
+ 	if err != nil {
+ 		return nil, err
+ 	}
++	b.clientConfig = *config
+
+ 	return b.client, nil
+ }

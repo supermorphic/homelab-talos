@@ -198,10 +198,15 @@ mise exec -- just kube openbao-upgrade
 ```
 
 The command prompts privately for the retained operator password and exact confirmation.
+Review the displayed actions. A compatibility upgrade from the original 2.7.0
+image includes one issuer-client refresh before member replacement.
 This is attended and disruptive. Success establishes healthy voters on the reviewed
 version with working issuance. Run `openbao-verify` afterward. If the upgrade stops
 partway through, preserve the snapshot and cluster state for recovery review; do not
 improvise a rollback.
+
+After a configuration or compatibility change, select a fresh snapshot for restore
+acceptance so that it contains the current reviewed configuration.
 
 ## Failure and stop boundaries
 

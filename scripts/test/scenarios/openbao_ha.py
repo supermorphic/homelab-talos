@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
 
 import yaml
 
-from scripts.openbao import guards, issuance, maintenance, restore
+from scripts.openbao import apply, guards, issuance, maintenance, restore
 from scripts.openbao.configuration import strict_json
 from scripts.openbao.manifests import validate_documents
 from scripts.openbao.operator import (
@@ -24,6 +24,11 @@ from scripts.openbao.operator import (
 )
 from scripts.test.scenarios.openbao_issuance import PodAPI, Scope, pod_document, run_scope
 from scripts.test.scenarios.resilience_support import atomic_write_json, install_interrupt_handlers
+
+AFFECTED_ISSUER_IMAGE = (
+    "quay.io/openbao/openbao:2.7.0@sha256:"
+    "71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315"
+)
 
 
 def snapshot_evidence(path, now, expected_version):
@@ -44,6 +49,7 @@ class LiveCluster:
         self.pod_uids = {}
         self.source = None
         self.old_version = None
+        self.original_images = set()
 
     def get(self, kind, name):
         return strict_json(self.scope.command("-n", "openbao", "get", kind, name, "-o", "json"))
@@ -152,6 +158,9 @@ class LiveCluster:
                 ]
                 == "pass"
             )
+        except issuance.AcceptanceError as error:
+            self.scope.issuance_failure = error
+            return False
         except Exception:  # noqa: BLE001 -- Discard credential-bearing adapter exception text.
             return False
 
@@ -202,7 +211,29 @@ class LiveCluster:
         checksum = snapshot_evidence(
             os.environ["OPENBAO_UPGRADE_SNAPSHOT"], time.time(), self.old_version
         )
-        return {"image": target, "revision": sts["status"]["updateRevision"], "snapshot": checksum}
+        return {"image": target, "revision": sts["status"]["updateRevision"], "snapshot": checksum,
+                "refresh_issuer_client": self.original_images == {AFFECTED_ISSUER_IMAGE}
+                and target != AFFECTED_ISSUER_IMAGE}
+
+    def refresh_issuer_client(self, approved_plan, initial):
+        """One confirmed upgrade repair for the known affected original image.
+
+        Reapply the exact source-owned backend configuration once, so its stale
+        cached client is invalidated before the normal issuance/eviction guards.
+        """
+        self.check()
+        if (approved_plan.get("refresh_issuer_client") is not True
+                or self.upgrade_preconditions() != approved_plan):
+            raise maintenance.MaintenanceError()
+        fresh = self.snapshot()
+        if not maintenance.healthy(fresh) or maintenance.identities(fresh) != maintenance.identities(initial):
+            raise maintenance.MaintenanceError()
+        apply.verify_configuration(apply.DESIRED, self.bao)
+        document = apply.load_document(apply.DESIRED)
+        config = next(spec for spec in document["objects"] if spec.kind == "kubernetes-config")
+        self.check()
+        self.bao.post(config.path, config.fields, token=self.bao.token)
+        apply.verify_configuration(apply.DESIRED, self.bao)
 
 
 def execute(scope, mode, progress=None):
@@ -224,11 +255,17 @@ def execute(scope, mode, progress=None):
             old = {maintenance.version(p["image"]) for p in initial["pods"].values()}
             if len(old) != 1:
                 raise maintenance.MaintenanceError()
-            cluster.old_version = ".".join(map(str, old.pop()))
+            cluster.old_version = ".".join(map(str, old.pop()[:3]))
+            cluster.original_images = {p["image"] for p in initial["pods"].values()}
             target = {"source": cluster.source, "state": maintenance.identities(initial)}
             if mode == "upgrade":
                 target["plan"] = cluster.upgrade_preconditions()
             required = f"{mode}:openbao:{guards.digest(target)}:{scope.run_id}"
+            if mode == "upgrade":
+                actions = (["refresh-kubernetes-client"] if target["plan"]["refresh_issuer_client"] else [])
+                actions += ["replace-standbys", "transfer-leadership", "replace-old-leader"]
+                print(json.dumps({"status": "confirmation-required", "confirmation": required,
+                                  "image": target["plan"]["image"], "actions": actions}, sort_keys=True))
             supplied = os.environ.get("OPENBAO_MAINTENANCE_CONFIRM") or private_prompt(
                 f"Exact confirmation {required}: "
             )
@@ -251,6 +288,9 @@ def execute(scope, mode, progress=None):
             if maintenance.identities(fresh) != maintenance.identities(initial):
                 raise maintenance.MaintenanceError()
             if mode == "upgrade":
+                if target["plan"]["refresh_issuer_client"]:
+                    progress["stage"] = "issuer-client-refresh"
+                    cluster.refresh_issuer_client(target["plan"], initial)
                 progress["stage"] = "upgrade"
                 return maintenance.upgrade(cluster, cluster, time, progress=progress)
             standby = min(maintenance.NAMES - {initial["leader"]})
@@ -287,6 +327,9 @@ def main(mode="ha"):
         result["status"] = "fail"
     finally:
         if scope:
+            failure = getattr(scope, "issuance_failure", None)
+            if result["status"] == "fail" and isinstance(failure, issuance.AcceptanceError):
+                result["issuance_failure"] = failure.evidence()
             probe = getattr(scope, "probe", None)
             if (isinstance(probe, dict) and type(probe.get("request")) is int
                     and probe["request"] > 0

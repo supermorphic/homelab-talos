@@ -1,0 +1,83 @@
+name: OpenBao image
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - kubernetes/apps/security/openbao/build/**
+      - .github/workflows/openbao-image.yml
+      - .just/repository.just
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openbao-image-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
+        with:
+          version: 2026.9.2
+          install: true
+          cache: true
+      - name: Build and prove token rotation
+        run: mise exec -- just repo openbao-build .tmp/openbao-image
+      - name: Exercise actual binary with non-root operator policy and restore readback
+        env:
+          OPENBAO_CONTRACT_BINARY: .tmp/openbao-image/container/bao
+        run: mise exec -- uv run --locked python -m unittest scripts.test.core.test_openbao_pinned_contract
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Log in for same-repository candidate publication
+        if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package the reviewed binary in the pinned official base image
+        id: image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .tmp/openbao-image/container
+          platforms: linux/amd64
+          push: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
+          tags: ghcr.io/supermorphic/homelab-openbao:2.7.0-homelab.1-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          provenance: true
+          sbom: true
+      - name: Retain candidate digest
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          SOURCE_REVISION: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          mise exec -- python - <<'PY'
+          import json, os
+          from pathlib import Path
+          result = {"repository": "ghcr.io/supermorphic/homelab-openbao", "digest": os.environ["IMAGE_DIGEST"], "source_revision": os.environ["SOURCE_REVISION"]}
+          Path(".tmp/openbao-image/image.json").write_text(json.dumps(result, indent=2) + "\n")
+          PY
+      - name: Retain synthetic test logs and image provenance
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: openbao-image-${{ github.run_id }}
+          path: |
+            .tmp/openbao-image/rotation-before.log
+            .tmp/openbao-image/rotation-after.log
+            .tmp/openbao-image/image.json
+            kubernetes/apps/security/openbao/build/source.json
+            kubernetes/apps/security/openbao/build/token-rotation.patch
+          include-hidden-files: true
+          if-no-files-found: error

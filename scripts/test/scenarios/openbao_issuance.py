@@ -487,6 +487,18 @@ def diagnostic_boundary(kubeconfig, namespace_uid):
     return True
 
 
+def server_processes(scope):
+    """Keep replacement/restarts from concealing failure across token rotation."""
+    result = {}
+    for name in ("openbao-0", "openbao-1", "openbao-2"):
+        pod = scope.get({"kind": "Pod", "metadata": {"namespace": "openbao", "name": name}})
+        status = next(item for item in pod["status"]["containerStatuses"] if item["name"] == "openbao")
+        if not status.get("ready") or not status.get("state", {}).get("running"):
+            raise issuance.AcceptanceError()
+        result[name] = (pod["metadata"]["uid"], status["restartCount"], status["state"]["running"]["startedAt"])
+    return result
+
+
 def main():
     result = {"status": "fail", "cleanup": "not-required"}
     scope = run_dir = None
@@ -520,8 +532,17 @@ def main():
                 raise issuance.AcceptanceError()
             scope.objects.append(document)
         result["issuer"] = issuance.issuer_boundary(issuer, time, suffix, owner=scope.run_id)
-        result["credential"] = issuance.acceptance(workload, workload, time)
+        processes = server_processes(scope)
+        credentials = issuance.sustained_acceptance(workload, workload, time)
+        if server_processes(scope) != processes:
+            raise issuance.AcceptanceError()
+        result["issuer_processes_unchanged"] = True
+        result["credential"] = credentials["initial"]
+        result["after_rotation"] = credentials["after_rotation"]
         result["status"] = "pass"
+    except issuance.AcceptanceError as error:
+        result["failure"] = error.evidence()
+        result["status"] = "fail"
     except Exception:  # noqa: BLE001 -- Discard credential-bearing adapter exception text.
         result["status"] = "fail"
     finally:

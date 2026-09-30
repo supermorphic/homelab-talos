@@ -1,0 +1,10 @@
+{
+  "version": "2.7.0",
+  "package_revision": 1,
+  "commit": "ca305a02daa68b203325daa1b25c18d7a252d4b3",
+  "archive_sha256": "9f7c6d9aab2364c6e9b355147589eb09868fae0343a2c1cde49657ebed09e7e5",
+  "go": "1.27.1",
+  "node": "20.20.2",
+  "pnpm": "10.34.4",
+  "base_image": "quay.io/openbao/openbao:2.7.0@sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315"
+}

@@ -77,6 +77,22 @@ class Cluster:
 
 
 class MaintenanceTests(unittest.TestCase):
+    def test_packaged_patch_upgrades_same_upstream_version_and_rejects_reverse(self):
+        from scripts.openbao import maintenance
+
+        cluster, clock = Cluster(), Clock()
+        original = "quay.io/openbao/openbao:2.7.0@sha256:" + "a" * 64
+        patched = "ghcr.io/supermorphic/homelab-openbao:2.7.0-homelab.1@sha256:" + "b" * 64
+        for pod in cluster.current["pods"].values():
+            pod["image"] = original
+        cluster.target = patched
+        self.assertEqual(maintenance.upgrade(cluster, cluster, clock)["status"], "pass")
+        cluster.events.clear()
+        cluster.target = original
+        with self.assertRaises(maintenance.MaintenanceError):
+            maintenance.upgrade(cluster, cluster, clock)
+        self.assertFalse(any(isinstance(event, tuple) for event in cluster.events))
+
     def setUp(self):
         self.assertIsNotNone(
             importlib.util.find_spec("scripts.openbao.maintenance"), "maintenance missing"
@@ -163,6 +179,80 @@ class MaintenanceTests(unittest.TestCase):
 
 
 class AdapterTests(unittest.TestCase):
+    def test_upgrade_refresh_occurs_only_after_exact_confirmation(self):
+        from contextlib import contextmanager
+        from pathlib import Path
+        from unittest.mock import Mock, patch
+
+        from scripts.test.scenarios import openbao_ha as live
+
+        @contextmanager
+        def session(*_args):
+            yield "synthetic-session"
+
+        for approved in (False, True):
+            scope = Mock(kubeconfig=Path("/synthetic/config"), run_id="synthetic-run")
+            scope.create.return_value = {"metadata": {"name": "synthetic-pod"}}
+            cluster = Mock()
+            initial = state()
+            cluster.snapshot.return_value = initial
+            plan = {"image": "synthetic-reviewed-image", "refresh_issuer_client": True}
+            cluster.upgrade_preconditions.return_value = plan
+            required = "upgrade:openbao:" + live.guards.digest({
+                "source": "synthetic-source", "state": live.maintenance.identities(initial),
+                "plan": plan,
+            }) + ":synthetic-run"
+            with (
+                patch.object(live, "OperatorClient"),
+                patch.object(live, "LiveCluster", return_value=cluster),
+                patch.object(live.guards, "source_revision", return_value="synthetic-source"),
+                patch.object(live.guards, "require_deployed_revision"),
+                patch.object(live, "operator_password_session", side_effect=session),
+                patch.object(live, "private_prompt", side_effect=["synthetic-password", required if approved else "wrong"]),
+                patch.object(live, "install_interrupt_handlers"),
+                patch.object(live.maintenance, "upgrade", return_value={"status": "pass"}),
+                patch.dict("os.environ", {"OPENBAO_MAINTENANCE_CONFIRM": ""}),
+                patch("builtins.print"),
+            ):
+                if approved:
+                    self.assertEqual(live.execute(scope, "upgrade")["status"], "pass")
+                    cluster.refresh_issuer_client.assert_called_once_with(plan, initial)
+                else:
+                    with self.assertRaises(live.maintenance.MaintenanceError):
+                        live.execute(scope, "upgrade")
+                    scope.create.assert_not_called()
+                    cluster.refresh_issuer_client.assert_not_called()
+
+    def test_issuer_refresh_requires_approved_plan_fresh_identity_and_source_readback(self):
+        from unittest.mock import Mock, patch
+
+        from scripts.test.scenarios import openbao_ha as live
+
+        for failure in (None, "plan", "identity", "configuration"):
+            scope, bao = Mock(), Mock()
+            cluster = live.LiveCluster(scope, bao, None)
+            plan = {"refresh_issuer_client": True, "image": "synthetic-reviewed-image"}
+            cluster.check = Mock()
+            cluster.upgrade_preconditions = Mock(return_value=plan if failure != "plan" else {})
+            fresh = state()
+            if failure == "identity":
+                fresh["pods"]["openbao-1"]["uid"] = "different"
+            cluster.snapshot = Mock(return_value=fresh)
+            with patch.object(live.apply, "verify_configuration") as verify:
+                if failure == "configuration":
+                    verify.side_effect = live.maintenance.MaintenanceError()
+                if failure:
+                    with self.assertRaises(live.maintenance.MaintenanceError):
+                        cluster.refresh_issuer_client(plan, state())
+                    bao.post.assert_not_called()
+                else:
+                    cluster.refresh_issuer_client(plan, state())
+                    bao.post.assert_called_once_with("kubernetes/config", {
+                        "kubernetes_host": "https://kubernetes.default.svc:443",
+                        "disable_local_ca_jwt": False,
+                    }, token=bao.token)
+                    self.assertEqual(verify.call_count, 2)
+
     def test_maintenance_uses_private_operator_login_and_retires_session_on_failure(self):
         from contextlib import contextmanager
         from pathlib import Path
@@ -502,6 +592,7 @@ class CommandTests(unittest.TestCase):
         from scripts.test.scenarios import openbao_ha
 
         scope = Mock()
+        scope.issuance_failure = openbao_ha.issuance.AcceptanceError(step="issue", http_status=500)
         scope.probe = {"phase": "response", "request": 3, "status": 403,
                        "token": "synthetic-secret"}
 
@@ -523,6 +614,7 @@ class CommandTests(unittest.TestCase):
             self.assertEqual(result, {
                 "status": "fail", "cleanup": "passed", "recovery": "not-required",
                 "stage": "standby-preflight",
+                "issuance_failure": {"step": "issue", "http_status": 500},
                 "probe": {"phase": "response", "request": 3, "status": 403},
             })
             self.assertEqual(json.loads(output.getvalue()), result)

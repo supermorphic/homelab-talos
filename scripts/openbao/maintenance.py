@@ -127,9 +127,15 @@ def version(image):
     match = re.fullmatch(
         r"quay\.io/openbao/openbao:(\d+)\.(\d+)\.(\d+)@sha256:[0-9a-f]{64}", image
     )
-    if not match:
-        raise MaintenanceError()
-    return tuple(map(int, match.groups()))
+    if match:
+        return (*map(int, match.groups()), 0)
+    match = re.fullmatch(
+        r"ghcr\.io/supermorphic/homelab-openbao:(\d+)\.(\d+)\.(\d+)"
+        r"-homelab\.([1-9][0-9]*)(?:-[0-9a-f]{40})?@sha256:[0-9a-f]{64}", image
+    )
+    if match:
+        return tuple(map(int, match.groups()))
+    raise MaintenanceError()
 
 
 def upgrade(kube, bao, clock, *, progress=None):
