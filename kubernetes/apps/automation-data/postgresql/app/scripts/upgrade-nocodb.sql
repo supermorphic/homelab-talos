@@ -117,9 +117,18 @@ BEGIN
 END;
 $validation$;
 
+-- Reconcile reviewed function definitions even when the schema is already v3.
+-- Capture before replay so a changed validator requires a fresh complete backup.
+SELECT md5(string_agg(prosrc, '' ORDER BY proname)) AS previous_function_bodies FROM pg_proc
+WHERE oid IN (
+  to_regprocedure('platform_operations.provision_nocodb_metadata(text)'),
+  to_regprocedure('platform_operations.validate_domain(text)'),
+  to_regprocedure('platform_internal.validate_role_behavior(text,text,text,text)'),
+  to_regprocedure('platform_internal.validate_nocodb_access_authority(text,text,text,text,boolean)')
+) \gset
+\ir nocodb-extension.sql
+\ir application-login.sql
 \if :apply_upgrade
-  \ir nocodb-extension.sql
-  \ir application-login.sql
   -- Existing databases predate the explicit TEMP and public-schema boundary.
   -- The remote schema REVOKE is monotonic, even if this control transaction aborts.
   -- Never-ready records can lack a database; a missing previously ready one must fail.
@@ -151,12 +160,6 @@ SELECT platform_internal.assert_nocodb_extension_contract();
 SELECT platform_internal.assert_application_login_contract();
 -- Reconcile reviewed metadata and validator functions on installed v1 and fresh installs.
 -- Keep the schema/backup format revision; advance backup freshness only on change.
-SELECT md5(string_agg(prosrc, '' ORDER BY proname)) AS previous_function_bodies FROM pg_proc
-WHERE oid IN (
-  'platform_operations.provision_nocodb_metadata(text)'::regprocedure,
-  'platform_operations.validate_domain(text)'::regprocedure,
-  'platform_internal.validate_role_behavior(text,text,text,text)'::regprocedure
-) \gset
 SET LOCAL ROLE postgres;
 \ir nocodb-metadata.sql
 \ir domain-validation.sql
@@ -167,7 +170,8 @@ WHERE singleton AND :'previous_function_bodies' <> (
   WHERE oid IN (
     'platform_operations.provision_nocodb_metadata(text)'::regprocedure,
     'platform_operations.validate_domain(text)'::regprocedure,
-    'platform_internal.validate_role_behavior(text,text,text,text)'::regprocedure
+    'platform_internal.validate_role_behavior(text,text,text,text)'::regprocedure,
+    'platform_internal.validate_nocodb_access_authority(text,text,text,text,boolean)'::regprocedure
   )
 );
 SELECT platform_internal.assert_nocodb_extension_contract();

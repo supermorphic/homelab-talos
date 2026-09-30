@@ -737,7 +737,8 @@ activation and during sync/rotation.
   within their schema. Neither role needs access to bookkeeping or other withheld objects.
 - Source logins cannot execute application routines directly or gain ownership, role
   assumption, DDL, grant options, or another database's authority. Routine checks distinguish
-  application routines from the reviewed system-function baseline. Consumer-owned triggers
+  application routines from the reviewed system-function baseline. A reviewed view may call
+  a function whose schema the source login cannot access directly. Consumer-owned triggers
   and their application tests govern effects of permitted writes.
 
 The platform enforces an authority ceiling. Consumers define the exact object/operation
