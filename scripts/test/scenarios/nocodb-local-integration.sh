@@ -601,6 +601,7 @@ chmod 700 "$integration_root/validator-bin/git" "$integration_root/validator-bin
 validate_source_response() { # <operation> <access-kind|-> <actual-response> [domain]
 	local operation="$1" access_kind="$2" response="$3" domain="${4:-automation_data_acceptance}"
 	local confirmation_name confirmation_value validator_status
+	local -a command=(scripts/nocodb/source-operation.sh "$operation" "$domain")
 	case "$operation" in
 		sync)
 			confirmation_name='NOCODB_SOURCE_SYNC_CONFIRM'
@@ -609,6 +610,7 @@ validate_source_response() { # <operation> <access-kind|-> <actual-response> [do
 		rotate)
 			confirmation_name='NOCODB_SOURCE_ROTATE_CONFIRM'
 			confirmation_value="rotate:nocodb:$domain:$access_kind"
+			command+=("$access_kind")
 			;;
 	esac
 	set +e
@@ -616,8 +618,7 @@ validate_source_response() { # <operation> <access-kind|-> <actual-response> [do
 		NOCODB_SOURCE_OPERATION_ACTUAL_RESPONSE="$response" \
 		NOCODB_SOURCE_PROVISIONING_HEADER="$source_webhook_secret" \
 		"$confirmation_name=$confirmation_value" \
-		scripts/nocodb/source-operation.sh "$operation" "$domain" \
-		"${access_kind/#-/}" >/dev/null
+		"${command[@]}" >/dev/null
 	validator_status=$?
 	set -e
 	if [[ "$validator_status" -ne 0 ]]; then
@@ -1097,15 +1098,21 @@ prove_logical_restore() { # <ready-source-response> <probe-response>
 SELECT jsonb_build_object(
   'items', COALESCE(jsonb_agg(jsonb_build_object(
     'domain', source.domain,
+    'pair', source.pair,
     'accessKind', source.access_kind,
     'state', source.state,
     'baseId', source.base_id,
     'sourceId', source.source_id,
     'integrationId', source.integration_id,
-    'valid', (platform_operations.validate_nocodb_access(source.domain, source.access_kind)->>'valid')::boolean
-  ) ORDER BY source.access_kind), '[]'::jsonb)
+    'schema', CASE source.access_kind WHEN 'reader' THEN
+      COALESCE(mapping.reader_schema, 'read_model') ELSE
+      COALESCE(mapping.operator_schema, 'operator') END,
+    'valid', (platform_operations.validate_nocodb_access(source.domain, source.pair, source.access_kind)->>'valid')::boolean
+  ) ORDER BY source.pair, source.access_kind), '[]'::jsonb)
 )
 FROM platform_operations.managed_nocodb_sources AS source
+LEFT JOIN platform_operations.managed_nocodb_schema_mappings AS mapping
+  ON mapping.domain = source.domain AND mapping.pair = source.pair
 WHERE source.domain = 'automation_data_acceptance';")" ||
 		fail 'could not capture the restored source registry for the production request helper.'
 	nocodb_restore_validate_source_registry <(printf '%s\n' "$source_registry") ||

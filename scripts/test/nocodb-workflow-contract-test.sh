@@ -155,6 +155,18 @@ for node in postgres_nodes:
             },
             "Prepare Unregistered Access must bind one domain and keep the atomic query in a transaction.",
         )
+    elif node["name"] in ("Record Reader Ready", "Record Operator Ready"):
+        require(
+            query == "SELECT CASE WHEN $7::boolean THEN platform_operations.read_nocodb_source_state($1, $2, $3) ELSE platform_operations.record_nocodb_source_ready($1, $2, $3, $4, $5, $6) END AS result;"
+            and calls == {
+                "platform_operations.read_nocodb_source_state",
+                "platform_operations.record_nocodb_source_ready",
+            }
+            and parameters.get("options", {}).get("queryReplacement", "").endswith(
+                "$json.state === 'ready'] }}"
+            ),
+            f"{node['name']} must observe ready sources without another transition.",
+        )
     else:
         require(
             len(calls) == 1

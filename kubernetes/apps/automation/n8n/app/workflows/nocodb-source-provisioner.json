@@ -1236,9 +1236,9 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT platform_operations.record_nocodb_source_ready($1, $2, $3, $4, $5, $6) AS result;",
+        "query": "SELECT CASE WHEN $7::boolean THEN platform_operations.read_nocodb_source_state($1, $2, $3) ELSE platform_operations.record_nocodb_source_ready($1, $2, $3, $4, $5, $6) END AS result;",
         "options": {
-          "queryReplacement": "={{ [$json.domain, $('Normalize Source Request').first().json.pair || 'default', $json.accessKind, $json.sourceId, $('Claim Source Operation').first().json.result.operationId, $('Claim Source Operation').first().json.result.generation] }}"
+          "queryReplacement": "={{ [$json.domain, $('Normalize Source Request').first().json.pair || 'default', $json.accessKind, $json.sourceId, $('Claim Source Operation').first().json.result.operationId, $('Claim Source Operation').first().json.result.generation, $json.state === 'ready'] }}"
         }
       },
       "type": "n8n-nodes-base.postgres",
@@ -2204,9 +2204,9 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT platform_operations.record_nocodb_source_ready($1, $2, $3, $4, $5, $6) AS result;",
+        "query": "SELECT CASE WHEN $7::boolean THEN platform_operations.read_nocodb_source_state($1, $2, $3) ELSE platform_operations.record_nocodb_source_ready($1, $2, $3, $4, $5, $6) END AS result;",
         "options": {
-          "queryReplacement": "={{ [$json.domain, $('Normalize Source Request').first().json.pair || 'default', $json.accessKind, $json.sourceId, $('Claim Source Operation').first().json.result.operationId, $('Claim Source Operation').first().json.result.generation] }}"
+          "queryReplacement": "={{ [$json.domain, $('Normalize Source Request').first().json.pair || 'default', $json.accessKind, $json.sourceId, $('Claim Source Operation').first().json.result.operationId, $('Claim Source Operation').first().json.result.generation, $json.state === 'ready'] }}"
         }
       },
       "type": "n8n-nodes-base.postgres",
