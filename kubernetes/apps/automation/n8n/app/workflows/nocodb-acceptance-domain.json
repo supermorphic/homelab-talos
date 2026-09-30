@@ -1823,7 +1823,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "BEGIN;\nSET LOCAL ROLE automation_data_acceptance_owner;\nDELETE FROM app.integration_facts WHERE id = ('x' || substr(md5($1),1,15))::bit(60)::bigint AND fact = 'acceptance:' || $1;\nCOMMIT;\nSELECT current_user AS \"credentialRole\", NOT EXISTS (SELECT 1 FROM app.integration_facts WHERE id = ('x' || substr(md5($1),1,15))::bit(60)::bigint AND fact = 'acceptance:' || $1) AS \"cleanupComplete\";",
+        "query": "BEGIN;\nSET LOCAL ROLE automation_data_acceptance_owner;\nDELETE FROM app.integration_facts WHERE id = ('x' || substr(md5($1),1,15))::bit(60)::bigint AND fact = 'acceptance:' || $1;\nSELECT session_user AS \"credentialRole\", NOT EXISTS (SELECT 1 FROM app.integration_facts WHERE id = ('x' || substr(md5($1),1,15))::bit(60)::bigint AND fact = 'acceptance:' || $1) AS \"cleanupComplete\";\nCOMMIT;",
         "options": {
           "queryReplacement": "={{ [$json.runId] }}"
         }
