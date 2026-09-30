@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.openbao import guards, issuance
+from scripts.openbao import issuer as issuer_identity
 from scripts.openbao.configuration import strict_json
 from scripts.openbao.operator import private_prompt
 from scripts.test.scenarios.resilience_support import atomic_write_json, install_interrupt_handlers
@@ -58,7 +59,7 @@ except Exception:  # noqa: BLE001 -- Discard credential-bearing adapter exceptio
 
 def pod_document(run_id, issuer):
     suffix = hashlib.sha256(run_id.encode()).hexdigest()[:16]
-    return {
+    document = {
         "apiVersion": "v1",
         "kind": "Pod",
         "metadata": {
@@ -123,6 +124,13 @@ def pod_document(run_id, issuer):
             ],
         },
     }
+    if issuer:
+        projection = issuer_identity.volume()
+        projection["name"] = "identity"
+        # Probe runs as nobody; group-read is restricted to this attended Pod.
+        document["spec"]["securityContext"]["fsGroup"] = 65532
+        document["spec"]["volumes"] = [projection]
+    return document
 
 
 def safe_probe_spec(expected, actual):
@@ -505,6 +513,8 @@ def main():
         cluster = scope.get({'kind': 'Namespace', 'metadata': {'name': 'kube-system'}})
         result['diagnostic_exec_denied'] = diagnostic_boundary(diagnostic_path, cluster['metadata']['uid'])
         issuer, workload = provision(scope)
+        issuer_identity.verify_identity(issuer)
+        result["stable_issuer"] = True
         suffix = hashlib.sha256(scope.run_id.encode()).hexdigest()[:16]
         # Predeclare exact empty objects for cleanup even after an ambiguous API response.
         for kind in ("ServiceAccount", "Role", "RoleBinding"):
@@ -520,7 +530,13 @@ def main():
                 raise issuance.AcceptanceError()
             scope.objects.append(document)
         result["issuer"] = issuance.issuer_boundary(issuer, time, suffix, owner=scope.run_id)
+        processes = issuer_identity.server_processes(scope)
         result["credential"] = issuance.acceptance(workload, workload, time)
+        result["after_expiry"] = issuance.acceptance(workload, workload, time, wait_expiry=False)
+        if issuer_identity.server_processes(scope) != processes:
+            raise issuance.AcceptanceError()
+        issuer_identity.verify_identity(issuer)
+        result["issuer_processes_unchanged"] = True
         result["status"] = "pass"
     except Exception:  # noqa: BLE001 -- Discard credential-bearing adapter exception text.
         result["status"] = "fail"

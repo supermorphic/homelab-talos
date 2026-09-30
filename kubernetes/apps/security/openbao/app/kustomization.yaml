@@ -5,6 +5,7 @@ resources:
   - ./helmrepository.yaml
   - ./helmrelease.yaml
   - ./serviceaccount.yaml
+  - ./issuer-token.yaml
   - ./pdb.yaml
   - ./ciliumnetworkpolicy.yaml
 configMapGenerator:

@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from scripts.openbao.configuration import SafeError, load_document
 from scripts.openbao.exporter import health_quorum
+from scripts.openbao.issuer import volume as issuer_volume
 from scripts.openbao.reader import (
     ObserverReader,
     _run,
@@ -88,7 +89,8 @@ class VerifyTest(unittest.TestCase):
                                   'uid': f'pod-{i}', 'ownerReferences': [
                                       {'uid': 'statefulset-uid', 'kind': 'StatefulSet'}]},
                      'spec': {'nodeName': f'node-{i}', 'serviceAccountName': 'openbao',
-                              'containers': [{'name': 'openbao', 'image': 'synthetic-image'}]},
+                              'containers': [{'name': 'openbao', 'image': 'synthetic-image'}],
+                              'volumes': [issuer_volume()]},
                      'status': ready} for i in range(3)]
             service = {'metadata': {'name': 'openbao-monitoring', 'namespace': 'openbao',
                                     'labels': {'app.kubernetes.io/name': 'openbao'}},
@@ -147,6 +149,9 @@ class VerifyTest(unittest.TestCase):
                 pods[2]['spec']['nodeName'] = 'node-1'
                 observed = reader.preflight()
                 self.assertEqual(observed['placement'], 'inaccessible')
+                pods[2]['spec']['volumes'] = []
+                with self.assertRaises(SafeError):
+                    reader.preflight()
 
     def test_independent_placement_health_and_raft_oracles(self):
         pods = [{'metadata': {'name': f'openbao-{index}'},

@@ -208,6 +208,12 @@ class AdapterTests(unittest.TestCase):
             self.assertIn("projected", spec["volumes"][0])
             self.assertLessEqual(spec["activeDeadlineSeconds"], 1800)
             self.assertFalse(spec.get("hostNetwork", False))
+            sources = spec["volumes"][0]["projected"]["sources"]
+            if issuer:
+                self.assertEqual(sources[0], {"secret": {"name": "openbao-issuer-token-v1",
+                    "items": [{"key": "token", "path": "token"}]}})
+            else:
+                self.assertEqual(sources[0]["serviceAccountToken"]["expirationSeconds"], 600)
 
     def test_bridge_has_verified_tls_discards_errors_and_never_follows_redirects(self):
         import io
@@ -329,6 +335,61 @@ class OwnershipTests(unittest.TestCase):
 
 
 class ExpiryReviewTests(unittest.TestCase):
+    def test_record_requires_new_issuance_after_real_expiry_without_server_restart(self):
+        import contextlib
+        import io
+        from pathlib import Path
+        from unittest.mock import Mock, patch
+
+        from scripts.test.scenarios import openbao_issuance as live
+
+        for second_issue_ok, processes_unchanged in ((True, True), (False, True), (True, False)):
+            with self.subTest(second_issue_ok=second_issue_ok, processes_unchanged=processes_unchanged):
+                clock = Clock()
+                api = API(clock)
+                issued_at = []
+                real_request = api.request
+
+                def issue(session, issued_at=issued_at, clock=clock, api=api, second_issue_ok=second_issue_ok):
+                    issued_at.append(clock.time())
+                    if len(issued_at) > 1 and not second_issue_ok:
+                        raise live.issuance.AcceptanceError()
+                    api.token = jwt(iat=int(clock.time()), exp=int(clock.time()) + 600)
+                    return API.issue(api, session)
+
+                def request(method, path, *, clock=clock, real_request=real_request, **kwargs):
+                    if path.endswith("/configmaps/openbao-canary"):
+                        claims = json.loads(base64.urlsafe_b64decode(kwargs["token"].split('.')[1] + '=='))
+                        return ((401, {}) if clock.time() > claims["exp"] else
+                                (200, {"data": {"marker": "synthetic-openbao-reader-canary"}}))
+                    return real_request(method, path, **kwargs)
+
+                api.issue, api.request = issue, request
+                scope = Mock(run_id="synthetic-run", probe=None, objects=[])
+                scope.get.side_effect = lambda doc: ({"metadata": {"uid": "cluster"}}
+                    if doc["kind"] == "Namespace" else None)
+                process = {"openbao-0": ("uid", 0, "start")}
+                with (
+                    patch.object(live, "run_scope", return_value=(scope, Path("/synthetic/result"))),
+                    patch.object(live.guards, "source_revision", return_value="source"),
+                    patch.object(live.guards, "require_deployed_revision"),
+                    patch.dict("os.environ", {"OPENBAO_ISSUANCE_CONFIRM": "issuance:openbao:source:synthetic-run"}),
+                    patch.object(live, "install_interrupt_handlers"),
+                    patch.object(live, "diagnostic_boundary", return_value=True),
+                    patch.object(live, "provision", return_value=(Mock(), api)),
+                    patch.object(live.issuer_identity, "verify_identity"),
+                    patch.object(live.issuer_identity, "server_processes", side_effect=[process,
+                        process if processes_unchanged else {"openbao-0": ("uid", 1, "restart")}]),
+                    patch.object(live.issuance, "issuer_boundary", return_value={"status": "pass"}),
+                    patch.object(live, "time", clock),
+                    patch.object(live, "atomic_write_json"),
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    self.assertEqual(live.main(), 0 if second_issue_ok and processes_unchanged else 1)
+                self.assertEqual(len(issued_at), 2)
+                self.assertGreater(issued_at[1] - issued_at[0], 600)
+                scope.cleanup.assert_called_once()
+
     def test_accepts_rejection_after_api_leeway_and_bounded_clock_skew(self):
         from scripts.openbao import issuance
 
@@ -478,7 +539,7 @@ class AdmissionReviewTests(unittest.TestCase):
                 },
             ],
         )
-        actual["spec"]["volumes"][0]["projected"]["defaultMode"] = 420
+        actual["spec"]["volumes"][0]["projected"].setdefault("defaultMode", 420)
         actual["spec"]["containers"][0].update(
             imagePullPolicy="IfNotPresent",
             terminationMessagePath="/dev/termination-log",

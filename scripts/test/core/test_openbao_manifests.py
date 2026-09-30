@@ -20,6 +20,25 @@ from scripts.openbao.manifests import (
 
 
 class OpenBaoManifestTests(unittest.TestCase):
+    def test_stable_issuer_is_manually_managed_and_consumers_stay_short_lived(self):
+        root = pathlib.Path("kubernetes/apps/security/openbao/app")
+        secret = yaml.safe_load((root / "issuer-token.yaml").read_text())
+        self.assertEqual(secret["type"], "kubernetes.io/service-account-token")
+        self.assertEqual(secret["metadata"]["annotations"], {"kubernetes.io/service-account.name": "openbao"})
+        self.assertFalse(set(secret) & {"data", "stringData", "immutable"})
+        account = yaml.safe_load((root / "serviceaccount.yaml").read_text())
+        self.assertNotIn("secrets", account)
+        self.assertIs(account["automountServiceAccountToken"], False)
+        values = yaml.safe_load((root / "values.yaml").read_text())
+        identity = next(v for v in values["server"]["volumes"] if v["name"] == "kubernetes-api-token")
+        self.assertEqual(identity["projected"]["sources"], [
+            {"secret": {"name": secret["metadata"]["name"], "items": [{"key": "token", "path": "token"}]}},
+            {"configMap": {"name": "kube-root-ca.crt", "items": [{"key": "ca.crt", "path": "ca.crt"}]}},
+        ])
+        desired = json.loads((root.parent / "config/desired.json").read_text())
+        role = next(o for o in desired["objects"] if o["kind"] == "issuance-role")
+        self.assertEqual((role["fields"]["token_default_ttl"], role["fields"]["token_max_ttl"]), (600, 600))
+
     def test_jwt_issuer_matches_this_cluster_control_plane_endpoint(self):
         talos = yaml.safe_load(pathlib.Path("talos/talconfig.yaml").read_text())
         desired = json.loads(pathlib.Path(

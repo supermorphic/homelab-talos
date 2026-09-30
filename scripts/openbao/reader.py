@@ -12,6 +12,7 @@ from .configuration import SafeError, strict_json
 from .exporter import (  # re-export for existing acceptance callers
     decode_observation,
 )
+from .issuer import volume as issuer_volume
 
 NAMESPACE = 'openbao'
 STATEFULSET = 'openbao'
@@ -244,7 +245,10 @@ class ObserverReader:
         candidates = []
         self._pod_uids = {}
         self._pod_nodes = {}
+        expected_issuer = issuer_volume()
         for pod in pods:
+            if expected_issuer not in pod.get('spec', {}).get('volumes', []):
+                raise SafeError('source-mismatch')
             name = pod.get('metadata', {}).get('name')
             owners = pod.get('metadata', {}).get('ownerReferences', [])
             containers = pod.get('spec', {}).get('containers', [])

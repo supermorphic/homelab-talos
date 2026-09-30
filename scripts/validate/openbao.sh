@@ -96,8 +96,16 @@ assert any(v["name"] == "openbao-seal" and v["secret"]["secretName"] == "openbao
 assert any(v["name"] == "kubernetes-api-token" and "projected" in v for v in pod["volumes"])
 token_volume = next(v for v in pod["volumes"] if v["name"] == "kubernetes-api-token")
 sources = token_volume["projected"]["sources"]
-assert any(s.get("serviceAccountToken", {}).get("expirationSeconds") == 600 for s in sources)
-assert any(s.get("configMap", {}).get("name") == "kube-root-ca.crt" for s in sources)
+issuer_secret = one(app, "Secret", "openbao-issuer-token-v1")
+assert issuer_secret["type"] == "kubernetes.io/service-account-token"
+assert issuer_secret["metadata"]["annotations"] == {"kubernetes.io/service-account.name": "openbao"}
+assert not ({"data", "stringData", "immutable"} & set(issuer_secret))
+assert "secrets" not in one(app, "ServiceAccount", "openbao")
+assert sources == [
+    {"secret": {"name": issuer_secret["metadata"]["name"], "items": [{"key": "token", "path": "token"}]}},
+    {"configMap": {"name": "kube-root-ca.crt", "items": [{"key": "ca.crt", "path": "ca.crt"}]}},
+]
+assert token_volume["projected"]["defaultMode"] == 0o440
 assert all(v["name"] != "openbao-verify-token" for v in pod["volumes"])
 reader_documents = docs("monitoring")
 reader_pod = one(reader_documents, "Deployment", "openbao-config-reader")["spec"]["template"]["spec"]

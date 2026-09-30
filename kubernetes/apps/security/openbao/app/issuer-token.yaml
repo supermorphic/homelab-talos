@@ -1,0 +1,10 @@
+# Kubernetes generates the credential data. Git owns only this declaration.
+# Do not reference this Secret in ServiceAccount.secrets (legacy auto-token cleanup).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openbao-issuer-token-v1
+  namespace: openbao
+  annotations:
+    kubernetes.io/service-account.name: openbao
+type: kubernetes.io/service-account-token
