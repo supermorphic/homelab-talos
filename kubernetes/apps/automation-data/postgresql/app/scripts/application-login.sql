@@ -419,3 +419,58 @@ GRANT EXECUTE ON FUNCTION platform_operations.register_application_login(text, t
   platform_operations.install_application_credential(text, text, text, uuid, bigint, text),
   platform_operations.complete_application_credential(text, text, uuid, bigint)
   TO automation_data_provisioner;
+
+CREATE OR REPLACE FUNCTION platform_internal.assert_application_login_contract()
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+DECLARE
+  required_function regprocedure;
+BEGIN
+  IF to_regclass('platform_operations.managed_application_logins') IS NULL OR
+     NOT EXISTS (SELECT FROM pg_constraint AS item
+       WHERE item.conrelid =
+         'platform_operations.managed_application_logins'::regclass
+         AND item.contype = 'p' AND
+         pg_get_constraintdef(item.oid) = 'PRIMARY KEY (domain, application)') OR
+     NOT EXISTS (SELECT FROM pg_attribute AS attribute
+       WHERE attribute.attrelid =
+         'platform_operations.managed_application_logins'::regclass
+         AND attribute.attname = 'expected_generation' AND NOT attribute.attisdropped) OR
+     has_table_privilege('public',
+       'platform_operations.managed_application_logins', 'SELECT') OR
+     (SELECT md5(prosrc) FROM pg_proc WHERE oid =
+       'platform_operations.install_application_credential(text,text,text,uuid,bigint,text)'::regprocedure) <>
+       '38f3924185eb006692003eac0cdb3b7e' OR
+     (SELECT md5(prosrc) FROM pg_proc WHERE oid =
+       'platform_operations.complete_application_credential(text,text,uuid,bigint)'::regprocedure) <>
+       'f408aac538f1051fde6d4e3ed11e531f' OR
+     (SELECT tableowner FROM pg_tables
+       WHERE schemaname = 'platform_operations' AND
+         tablename = 'managed_application_logins') <> 'postgres' THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'invalid_application_login_contract';
+  END IF;
+  FOREACH required_function IN ARRAY ARRAY[
+    'platform_operations.register_application_login(text,text,text)'::regprocedure,
+    'platform_operations.read_application_login_state(text,text)'::regprocedure,
+    'platform_operations.validate_application_login(text,text)'::regprocedure,
+    'platform_operations.install_application_credential(text,text,text,uuid,bigint,text)'::regprocedure,
+    'platform_operations.complete_application_credential(text,text,uuid,bigint)'::regprocedure
+  ] LOOP
+    IF NOT has_function_privilege('automation_data_provisioner', required_function,
+          'EXECUTE') OR
+       has_function_privilege('public', required_function, 'EXECUTE') OR
+       (SELECT role.rolname FROM pg_proc AS procedure
+        JOIN pg_roles AS role ON role.oid = procedure.proowner
+        WHERE procedure.oid = required_function) <> 'postgres' THEN
+      RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'invalid_application_function_grant';
+    END IF;
+  END LOOP;
+END;
+$function$;
+REVOKE EXECUTE ON FUNCTION platform_internal.assert_application_login_contract()
+  FROM PUBLIC;
+GRANT SELECT (domain, application, role_name, state, operation_started_at)
+  ON platform_operations.managed_application_logins TO automation_data_exporter;

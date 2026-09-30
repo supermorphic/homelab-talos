@@ -235,16 +235,18 @@ elif [[ "$command_text" == *'FROM pg_database'* ]]; then
     printf '\n'
   done
 elif [[ "$command_text" == *operation_tables* && "$command_text" == *assert_nocodb_access_kind* ]]; then
-  case "${RESTORED_PLATFORM_REVISION:-026-nocodb-v2}" in
+  case "${RESTORED_PLATFORM_REVISION:-026-nocodb-v3}" in
     025-baseline) printf '%s\n' '025-baseline' ;;
-    026-nocodb-v1 | 026-nocodb-v2) printf '%s\n' 'upgraded-candidate' ;;
+    026-nocodb-v1 | 026-nocodb-v2 | 026-nocodb-v3) printf '%s\n' 'upgraded-candidate' ;;
     *) printf '%s\n' 'invalid' ;;
   esac
 elif [[ "$command_text" == *read_platform_revision* ]]; then
   [[ "${ORACLE_FAILURE:-false}" != true ]] || exit 51
-  printf '%s\n' "${RESTORED_PLATFORM_REVISION:-026-nocodb-v2}"
+  printf '%s\n' "${RESTORED_PLATFORM_REVISION:-026-nocodb-v3}"
 elif [[ "$command_text" == *'025-baseline'* && "$command_text" == *'026-nocodb-v1'* ]]; then
-  printf '%s\n' "${RESTORED_PLATFORM_REVISION:-026-nocodb-v2}"
+  printf '%s\n' "${RESTORED_PLATFORM_REVISION:-026-nocodb-v3}"
+elif [[ "$command_text" == *'managed_application_logins'* && "$command_text" == *'validate_application_login'* ]]; then
+  printf '%s\n' "${APPLICATION_VALIDATION_RESULT:-true}"
 elif [[ "$command_text" == *'managed_nocodb_sources'* && "$command_text" == *'validate_nocodb_access'* ]]; then
   printf '%s\n' "${NOCODB_VALIDATION_RESULT:-true}"
 elif [[ "$command_text" == *'managed_domains'* && "$command_text" == *'validate_domain'* ]]; then
@@ -343,8 +345,9 @@ EOF
 
 run_restore() {
   local root="$1" validation_result="${2:-true}" nocodb_validation_result="${3:-true}"
-  local platform_revision="${4:-026-nocodb-v2}" oracle_failure="${5:-false}"
+  local platform_revision="${4:-026-nocodb-v3}" oracle_failure="${5:-false}"
   local permission_mismatch="${6:-false}" permission_dump_failure="${7:-false}"
+  local application_validation_result="${8:-true}"
   local output status=0 command
   command="$(automation_data_restore_job_command)"
   output="$(
@@ -362,6 +365,7 @@ run_restore() {
       RESTORED_REGISTRY_BASE64="$(printf '%s\n' "$registry_body" | base64 | tr -d '\n')" \
       VALIDATION_RESULT="$validation_result" \
       NOCODB_VALIDATION_RESULT="$nocodb_validation_result" \
+      APPLICATION_VALIDATION_RESULT="$application_validation_result" \
       RESTORED_PLATFORM_REVISION="$platform_revision" \
       ORACLE_FAILURE="$oracle_failure" \
       RESTORE_PERMISSION_MISMATCH="$permission_mismatch" \
@@ -385,6 +389,19 @@ create_bundle "$v1_schema_restore/backups" 20260824T003000Z
 run_restore "$v1_schema_restore" true true 026-nocodb-v1
 [[ "$(<"$v1_schema_restore/status")" == '0' ]] ||
   fail 'recognized v1 bundle schema did not restore'
+v2_schema_restore="$(new_case v2-schema-restore)"
+create_bundle "$v2_schema_restore/backups" 20260824T003000Z
+run_restore "$v2_schema_restore" true true 026-nocodb-v2
+[[ "$(<"$v2_schema_restore/status")" == '0' ]] ||
+  fail 'recognized v2 bundle schema did not restore'
+invalid_application_restore="$(new_case invalid-application-restore)"
+create_bundle "$invalid_application_restore/backups" 20260824T003000Z
+run_restore "$invalid_application_restore" true true 026-nocodb-v3 false false false false
+[[ "$(<"$invalid_application_restore/status")" != '0' ]] ||
+  fail 'restored v3 application login with invalid authority was accepted'
+rg -Fq 'restore_failure=application-permission-validation' \
+  "$invalid_application_restore/output" ||
+  fail 'invalid restored application login did not fail its validation stage'
 
 unknown_schema_restore="$(new_case unknown-schema-restore)"
 create_bundle "$unknown_schema_restore/backups" 20260824T003001Z

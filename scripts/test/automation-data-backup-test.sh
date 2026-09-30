@@ -76,7 +76,7 @@ case "$tool" in
         old)
           [[ "$command_text" == *"025-baseline"* ]] || exit 43
           ;;
-        new | v1)
+        new | v1 | v2)
           [[ "$command_text" == *read_platform_revision* ]] || exit 48
           printf 'revision-oracle\n' >>"$FAKE_LOG"
           ;;
@@ -104,7 +104,8 @@ case "$tool" in
       encoded_state="$(printf '%s' "${STATE_SCHEMA:-new}:$generation:$state_marker" | base64 | tr -d '\n')"
       case "${STATE_SCHEMA:-new}" in
         old) captured_revision='025-baseline' ;;
-        new) captured_revision='026-nocodb-v2' ;;
+        new) captured_revision='026-nocodb-v3' ;;
+        v2) captured_revision='026-nocodb-v2' ;;
         v1) captured_revision='026-nocodb-v1' ;;
         *) captured_revision='invalid' ;;
       esac
@@ -235,6 +236,10 @@ v1_schema_case="$(new_case v1-schema)"
 run_backup "$v1_schema_case" '' '' v1
 [[ -s "$v1_schema_case/backups/automation-data-20260827T003000Z/COMPLETE" ]] ||
   fail 'recognized v1 schema did not produce a complete backup during upgrade rollout'
+v2_schema_case="$(new_case v2-schema)"
+run_backup "$v2_schema_case" '' '' v2
+[[ -s "$v2_schema_case/backups/automation-data-20260827T003000Z/COMPLETE" ]] ||
+  fail 'recognized v2 schema did not produce a complete backup during upgrade rollout'
 
 for invalid_schema in unknown partial; do
   invalid_case="$(new_case "$invalid_schema-schema")"
@@ -364,8 +369,12 @@ rg -Fq "platform_operations.publish_backup(:'bundle', :'checksum', :'database_se
   "$status_sql" || fail 'status SQL does not call the fixed publication function'
 rg -Fq "'nocodbSources'" "$extension_sql" ||
   fail 'backup state omits NocoDB source state'
-rg -Fq 'ORDER BY source.domain, source.access_kind' "$extension_sql" ||
-  fail 'NocoDB source backup state lacks stable domain/access ordering'
+rg -Fq 'ORDER BY source.domain, source.pair, source.access_kind' "$extension_sql" ||
+  fail 'NocoDB source backup state lacks stable domain/pair/access ordering'
+rg -Fq 'ORDER BY claim.domain, claim.pair' "$extension_sql" ||
+  fail 'NocoDB operation backup state lacks stable domain/pair ordering'
+rg -Fq 'ORDER BY login.domain, login.application' "$extension_sql" ||
+  fail 'application login backup state lacks stable domain/application ordering'
 rg -Fq "captured.state->'nocodbSources'" "$backup_script" ||
   fail 'backup capture does not require the NocoDB source snapshot'
 ! rg -q 'nocodb.*registry.tsv\|registry.tsv.*nocodb' "$backup_script" ||

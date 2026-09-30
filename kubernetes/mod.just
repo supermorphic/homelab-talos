@@ -129,7 +129,7 @@ automation-data-control-migrate: require-bash
     @scripts/operations/automation-data-control-migrate.sh {{quote(kubeconfig)}}
 
 # Apply the one fixed existing-platform upgrade for the NocoDB extension. Guard:
-# AUTOMATION_DATA_UPGRADE_CONFIRM='upgrade:automation-data:nocodb-v1'.
+# AUTOMATION_DATA_UPGRADE_CONFIRM='upgrade:automation-data:nocodb-v3'.
 automation-data-upgrade: require-bash
     @scripts/upgrade/automation-data.sh {{quote(kubeconfig)}}
 

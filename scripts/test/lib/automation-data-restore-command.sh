@@ -272,7 +272,7 @@ case "$restored_catalog_state" in
       --command='SELECT platform_operations.read_platform_revision();'
     )" || restore_fail platform-revision-oracle
     case "$restored_platform_revision" in
-      026-nocodb-v1 | 026-nocodb-v2) ;;
+      026-nocodb-v1 | 026-nocodb-v2 | 026-nocodb-v3) ;;
       *) restore_fail platform-revision-validation ;;
     esac
     ;;
@@ -309,7 +309,20 @@ WHERE
     jsonb_typeof(captured.state->'generation') = 'number' AND
     jsonb_typeof(captured.state->'registry') = 'array' AND
     jsonb_typeof(captured.state->'nocodbSources') = 'array' AND
-    jsonb_typeof(captured.state->'nocodbSchemaMappings') = 'array');
+    jsonb_typeof(captured.state->'nocodbSchemaMappings') = 'array') OR
+  ('$restored_platform_revision' = '026-nocodb-v3' AND
+    captured.state->>'platformRevision' = '026-nocodb-v3' AND
+    (SELECT array_agg(key ORDER BY key)
+     FROM captured, LATERAL jsonb_object_keys(captured.state) AS key) =
+      ARRAY['applicationLogins', 'generation', 'nocodbOperations',
+        'nocodbSchemaMappings', 'nocodbSources', 'platformRevision',
+        'registry']::text[] AND
+    jsonb_typeof(captured.state->'generation') = 'number' AND
+    jsonb_typeof(captured.state->'registry') = 'array' AND
+    jsonb_typeof(captured.state->'nocodbSources') = 'array' AND
+    jsonb_typeof(captured.state->'nocodbSchemaMappings') = 'array' AND
+    jsonb_typeof(captured.state->'nocodbOperations') = 'array' AND
+    jsonb_typeof(captured.state->'applicationLogins') = 'array');
 ")" || restore_fail platform-state-query
 test "$restored_platform_shape" = "$restored_platform_revision" ||
   restore_fail platform-state-validation
@@ -327,6 +340,27 @@ FROM platform_operations.managed_nocodb_sources AS source
 WHERE source.state = 'ready';
 ")" || restore_fail nocodb-permission-query
     test "$nocodb_permission_contract" = true || restore_fail nocodb-permission-validation
+    ;;
+  026-nocodb-v3)
+    nocodb_permission_contract="$(psql --dbname=automation_data_control --tuples-only --no-align --command="
+SELECT COALESCE(bool_and(
+  (platform_operations.validate_nocodb_access(
+    source.domain, source.pair, source.access_kind
+  )->>'valid')::boolean
+), true)::text
+FROM platform_operations.managed_nocodb_sources AS source
+WHERE source.state = 'ready';
+")" || restore_fail nocodb-permission-query
+    test "$nocodb_permission_contract" = true || restore_fail nocodb-permission-validation
+    application_permission_contract="$(psql --dbname=automation_data_control --tuples-only --no-align --command="
+SELECT COALESCE(bool_and(
+  (platform_operations.validate_application_login(login.domain, login.application)
+    ->>'valid')::boolean
+), true)::text
+FROM platform_operations.managed_application_logins AS login
+WHERE login.state = 'ready';
+")" || restore_fail application-permission-query
+    test "$application_permission_contract" = true || restore_fail application-permission-validation
     ;;
   *) restore_fail platform-revision-validation ;;
 esac

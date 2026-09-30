@@ -2018,11 +2018,22 @@ $function$;
 
 CREATE OR REPLACE FUNCTION platform_operations.capture_backup_state()
 RETURNS jsonb
-LANGUAGE sql
+LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, platform_operations
 AS $function$
-  SELECT jsonb_build_object(
+BEGIN
+  IF EXISTS (SELECT FROM platform_operations.managed_application_logins
+      WHERE state IN ('activating', 'rotating', 'error')) THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'incomplete_application_operation';
+  END IF;
+  IF EXISTS (SELECT FROM platform_operations.nocodb_source_operations
+      WHERE phase <> 'complete') OR
+     EXISTS (SELECT FROM platform_operations.managed_nocodb_sources
+       WHERE state IN ('provisioning', 'waiting_for_source', 'rotating', 'error')) THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'incomplete_nocodb_operation';
+  END IF;
+  RETURN jsonb_build_object(
     'platformRevision', (SELECT revision
       FROM platform_operations.platform_schema_revision WHERE singleton),
     'generation', (SELECT generation FROM platform_operations.platform_generation WHERE singleton),
@@ -2032,16 +2043,27 @@ AS $function$
       '[]'::jsonb
     ),
     'nocodbSources', COALESCE(
-      (SELECT jsonb_agg(to_jsonb(source) ORDER BY source.domain, source.access_kind)
+      (SELECT jsonb_agg(to_jsonb(source) ORDER BY source.domain, source.pair, source.access_kind)
        FROM platform_operations.managed_nocodb_sources AS source),
       '[]'::jsonb
     ),
     'nocodbSchemaMappings', COALESCE(
-      (SELECT jsonb_agg(to_jsonb(mapping) ORDER BY mapping.domain)
+      (SELECT jsonb_agg(to_jsonb(mapping) ORDER BY mapping.domain, mapping.pair)
        FROM platform_operations.managed_nocodb_schema_mappings AS mapping),
+      '[]'::jsonb
+    ),
+    'nocodbOperations', COALESCE(
+      (SELECT jsonb_agg(to_jsonb(claim) ORDER BY claim.domain, claim.pair)
+       FROM platform_operations.nocodb_source_operations AS claim),
+      '[]'::jsonb
+    ),
+    'applicationLogins', COALESCE(
+      (SELECT jsonb_agg(to_jsonb(login) ORDER BY login.domain, login.application)
+       FROM platform_operations.managed_application_logins AS login),
       '[]'::jsonb
     )
   );
+END;
 $function$;
 
 CREATE OR REPLACE FUNCTION platform_internal.assert_nocodb_extension_contract()
@@ -2057,11 +2079,12 @@ BEGIN
   SELECT revision INTO STRICT installed_revision
   FROM platform_operations.platform_schema_revision
   WHERE singleton = true;
-  IF installed_revision <> '026-nocodb-v2' THEN
+  IF installed_revision <> '026-nocodb-v3' THEN
     RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'unknown_platform_revision';
   END IF;
   IF to_regclass('platform_operations.managed_nocodb_sources') IS NULL OR
-     to_regclass('platform_operations.managed_nocodb_schema_mappings') IS NULL THEN
+     to_regclass('platform_operations.managed_nocodb_schema_mappings') IS NULL OR
+     to_regclass('platform_operations.nocodb_source_operations') IS NULL THEN
     RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'incomplete_nocodb_extension';
   END IF;
   FOREACH required_function IN ARRAY ARRAY[
@@ -2075,7 +2098,17 @@ BEGIN
     'platform_operations.record_nocodb_source_ready(text,text,text)'::regprocedure,
     'platform_operations.record_nocodb_source_error(text,text,text,text)'::regprocedure,
     'platform_operations.rotate_nocodb_source_credential(text,text,text)'::regprocedure,
-    'platform_operations.validate_nocodb_access(text,text)'::regprocedure
+    'platform_operations.validate_nocodb_access(text,text)'::regprocedure,
+    'platform_operations.configure_nocodb_pair(text,text,text,text)'::regprocedure,
+    'platform_operations.claim_nocodb_operation(text,text,text,text,uuid)'::regprocedure,
+    'platform_operations.read_nocodb_operation_state(text,text)'::regprocedure,
+    'platform_operations.mark_nocodb_operation_uncertain(text,text,uuid,bigint,text)'::regprocedure,
+    'platform_operations.complete_nocodb_operation(text,text,uuid,bigint)'::regprocedure,
+    'platform_operations.prepare_nocodb_access(text,text)'::regprocedure,
+    'platform_operations.begin_nocodb_source(text,text,text,text,text,uuid,bigint)'::regprocedure,
+    'platform_operations.record_nocodb_source_ready(text,text,text,text,uuid,bigint)'::regprocedure,
+    'platform_operations.rotate_nocodb_source_credential(text,text,text,text,uuid,bigint)'::regprocedure,
+    'platform_operations.validate_nocodb_access(text,text,text)'::regprocedure
   ] LOOP
     IF NOT has_function_privilege('automation_data_provisioner', required_function, 'EXECUTE') OR
       has_function_privilege('public', required_function, 'EXECUTE') THEN
@@ -2106,6 +2139,25 @@ BEGIN
        ]::text[] OR
     has_table_privilege('public', 'platform_operations.managed_nocodb_sources', 'SELECT') OR
     has_table_privilege('public', 'platform_operations.managed_nocodb_schema_mappings', 'SELECT') OR
+    has_table_privilege('public', 'platform_operations.nocodb_source_operations', 'SELECT') OR
+    (SELECT md5(prosrc) FROM pg_proc WHERE oid =
+      'platform_operations.capture_backup_state()'::regprocedure) <>
+      '56f338a80f1846f7009e5164b0a9c037' OR
+    (SELECT md5(prosrc) FROM pg_proc WHERE oid =
+      'platform_operations.claim_nocodb_operation(text,text,text,text,uuid)'::regprocedure) <>
+      '36b7f70753d736171683744ffaf8d1f1' OR
+    (SELECT md5(prosrc) FROM pg_proc WHERE oid =
+      'platform_operations.complete_nocodb_operation(text,text,uuid,bigint)'::regprocedure) <>
+      '259dc1698eddf76399d4680798cc700c' OR
+    NOT EXISTS (SELECT FROM pg_constraint WHERE conrelid =
+      'platform_operations.managed_nocodb_sources'::regclass AND contype = 'p' AND
+      pg_get_constraintdef(oid) = 'PRIMARY KEY (domain, pair, access_kind)') OR
+    NOT EXISTS (SELECT FROM pg_constraint WHERE conrelid =
+      'platform_operations.managed_nocodb_schema_mappings'::regclass AND contype = 'p' AND
+      pg_get_constraintdef(oid) = 'PRIMARY KEY (domain, pair)') OR
+    NOT EXISTS (SELECT FROM pg_constraint WHERE conrelid =
+      'platform_operations.nocodb_source_operations'::regclass AND contype = 'p' AND
+      pg_get_constraintdef(oid) = 'PRIMARY KEY (domain, pair)') OR
     EXISTS (
       SELECT 1
       FROM pg_database AS database
@@ -2120,7 +2172,7 @@ BEGIN
       SELECT 1 FROM pg_tables
       WHERE schemaname = 'platform_operations'
         AND tablename IN ('managed_nocodb_sources', 'managed_nocodb_schema_mappings',
-          'platform_schema_revision')
+          'nocodb_source_operations', 'platform_schema_revision')
         AND tableowner <> 'postgres'
     ) OR
     EXISTS (
@@ -2149,6 +2201,7 @@ DECLARE
   installed_revision text;
 BEGIN
   PERFORM platform_internal.assert_nocodb_extension_contract();
+  PERFORM platform_internal.assert_application_login_contract();
   SELECT revision INTO STRICT installed_revision
   FROM platform_operations.platform_schema_revision
   WHERE singleton = true;
@@ -2228,9 +2281,15 @@ GRANT EXECUTE ON FUNCTION platform_operations.validate_nocodb_access(text, text,
 GRANT EXECUTE ON FUNCTION platform_operations.read_platform_revision() TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.capture_backup_state() TO automation_data_backup;
 GRANT EXECUTE ON FUNCTION platform_operations.read_platform_revision() TO automation_data_backup;
+GRANT SELECT (domain, pair, access_kind, role_name, state, operation_started_at)
+  ON platform_operations.managed_nocodb_sources TO automation_data_exporter;
+GRANT SELECT (domain, pair, phase, operation_started_at)
+  ON platform_operations.nocodb_source_operations TO automation_data_exporter;
+GRANT SELECT (domain, pair)
+  ON platform_operations.managed_nocodb_schema_mappings TO automation_data_exporter;
 
 INSERT INTO platform_operations.platform_schema_revision (singleton, revision)
-VALUES (true, '026-nocodb-v2')
+VALUES (true, '026-nocodb-v3')
 ON CONFLICT (singleton) DO UPDATE SET
   revision = EXCLUDED.revision,
   installed_at = clock_timestamp()

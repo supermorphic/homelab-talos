@@ -83,8 +83,8 @@ fi
 
 source_registry="$fixture/source-registry.json"
 jq -n '{items: [
-  {domain:"automation_data_acceptance",accessKind:"reader",state:"ready",baseId:"base-canary",sourceId:"source-reader",integrationId:"integration-reader",valid:true},
-  {domain:"automation_data_acceptance",accessKind:"operator",state:"ready",baseId:"base-canary",sourceId:"source-operator",integrationId:"integration-operator",valid:true}
+  {domain:"automation_data_acceptance",pair:"default",accessKind:"reader",state:"ready",baseId:"base-canary",sourceId:"source-reader",integrationId:"integration-reader",valid:true},
+  {domain:"automation_data_acceptance",pair:"default",accessKind:"operator",state:"ready",baseId:"base-canary",sourceId:"source-operator",integrationId:"integration-operator",valid:true}
 ]}' >"$source_registry"
 nocodb_restore_validate_source_registry "$source_registry" ||
 	fail 'the complete reader/operator source registry was rejected'
@@ -95,6 +95,17 @@ fi
 jq '.items[0].state = "error"' "$source_registry" >"$fixture/source-registry-error.json"
 if nocodb_restore_validate_source_registry "$fixture/source-registry-error.json"; then
 	fail 'a non-ready retained source was accepted'
+fi
+jq '.items += [
+  {domain:"automation_data_acceptance",pair:"second",accessKind:"reader",state:"ready",baseId:"base-second",sourceId:"source-second-reader",integrationId:"integration-second-reader",valid:true},
+  {domain:"automation_data_acceptance",pair:"second",accessKind:"operator",state:"ready",baseId:"base-second",sourceId:"source-second-operator",integrationId:"integration-second-operator",valid:true}
+]' "$source_registry" >"$fixture/source-registry-two-pairs.json"
+nocodb_restore_validate_source_registry "$fixture/source-registry-two-pairs.json" ||
+  fail 'a second independent source pair was rejected'
+jq '.items[2].baseId = "base-canary"' "$fixture/source-registry-two-pairs.json" \
+  >"$fixture/source-registry-crossed-pair.json"
+if nocodb_restore_validate_source_registry "$fixture/source-registry-crossed-pair.json"; then
+  fail 'a named pair adopted the original base identity'
 fi
 
 run_hash='0123456789ab'

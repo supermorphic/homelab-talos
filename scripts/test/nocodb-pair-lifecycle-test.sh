@@ -40,12 +40,12 @@ for _attempt in {1..60}; do
   if podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
       --tuples-only --no-align --username postgres --dbname automation_data_control \
       --command='SELECT platform_operations.read_platform_revision()' 2>/dev/null \
-      | rg -qx '026-nocodb-v2'; then break; fi
+      | rg -qx '026-nocodb-v3'; then break; fi
   sleep 1
 done
 podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
   --tuples-only --no-align --username postgres --dbname automation_data_control \
-  --command='SELECT platform_operations.read_platform_revision()' | rg -qx '026-nocodb-v2'
+  --command='SELECT platform_operations.read_platform_revision()' | rg -qx '026-nocodb-v3'
 
 cat >"$scratch/setup.sql" <<'SQL'
 \getenv migrator_password FIXTURE_MIGRATOR_PASSWORD

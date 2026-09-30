@@ -76,51 +76,70 @@ try {
 
   const registry = JSON.parse(process.env.SOURCE_REGISTRY);
   const retained = registry.items.filter((item) => item.domain === 'automation_data_acceptance');
-  const registryBaseIds = [...new Set(retained.map((item) => item.baseId))];
-  if (retained.length !== 2 || registryBaseIds.length !== 1 || typeof registryBaseIds[0] !== 'string' || !registryBaseIds[0] ||
+  const pairs = [...new Set(retained.map((item) => item.pair || 'default'))].sort();
+  if (!pairs.includes('default') || retained.length < 2 ||
       retained.some((item) => item.state !== 'ready' || item.valid !== true)) throw new Error('registry_base_mismatch');
   const bases = list((await bounded('/api/v2/meta/bases', {headers})).json);
-  const baseMatches = bases.filter((item) => item?.id === registryBaseIds[0] && item?.title === 'automation_data_acceptance');
-  if (baseMatches.length !== 1) throw new Error('base_contract_failed');
-  const base = baseMatches[0];
-  const workspaceId = base.fk_workspace_id || base.workspace_id;
-  if (typeof workspaceId !== 'string' || !workspaceId) throw new Error('base_workspace_identity_failed');
   const workspaces = list((await bounded('/api/v2/meta/workspaces', {headers})).json);
-  const workspaceMatches = workspaces.filter((item) => item?.id === workspaceId);
-  if (workspaceMatches.length !== 1) throw new Error('workspace_contract_failed');
-  const integrations = list((await bounded(`/api/v2/meta/workspaces/${workspaceId}/integrations`, {headers})).json);
-
-
-  const sources = list((await bounded(`/api/v2/meta/bases/${base.id}/sources`, {headers})).json);
-  const sourceObjects = [];
-  for (const summary of sources) sourceObjects.push((await bounded(`/api/v2/meta/bases/${base.id}/sources/${summary.id}`, {headers})).json);
-  const readers = sourceObjects.filter((item) => item?.alias === 'Read Model');
-  const operators = sourceObjects.filter((item) => item?.alias === 'Operator');
-  if (readers.length !== 1 || operators.length !== 1) throw new Error('managed_source_count_failed');
-  const reader = readers[0];
-  const operator = operators[0];
-  const intrinsicSources = sourceObjects.filter((item) => item?.alias !== 'Read Model' && item?.alias !== 'Operator');
-  if (intrinsicSources.length !== 1) throw new Error('intrinsic_source_count_failed');
-  const intrinsic = intrinsicSources[0];
-  const intrinsicConfigUnset = !Object.hasOwn(intrinsic, 'config') || intrinsic.config === null;
-  if (typeof intrinsic.id !== 'string' || !/^[A-Za-z0-9_-]+$/.test(intrinsic.id) ||
-      intrinsic.base_id !== base.id || intrinsic.fk_workspace_id !== workspaceId || intrinsic.alias !== null ||
-      intrinsic.type !== 'pg' || intrinsic.fk_integration_id !== null || intrinsic.fk_sql_executor_id !== null ||
-      intrinsic.is_local !== true || intrinsic.is_meta !== false || intrinsic.enabled !== true || intrinsic.deleted !== false ||
-      intrinsic.is_encrypted !== true || intrinsic.is_data_readonly !== false || intrinsic.is_schema_readonly !== false ||
-      !intrinsicConfigUnset ||
-      intrinsic.meta !== null || intrinsic.description !== null || intrinsic.order !== 1 ||
-      !Array.isArray(intrinsic.upgraderQueries)) throw new Error('intrinsic_source_contract_failed');
-  const pathOf = (source) => source?.config?.searchPath || source?.config?.search_path;
-  if (!reader || JSON.stringify(pathOf(reader)) !== JSON.stringify(['read_model']) || reader.is_data_readonly !== true || reader.is_schema_readonly !== true) throw new Error('reader_source_failed');
-  if (!operator || JSON.stringify(pathOf(operator)) !== JSON.stringify(['operator']) || operator.is_data_readonly !== false || operator.is_schema_readonly !== true) throw new Error('operator_source_failed');
-
-  for (const [kind, source] of [['reader', reader], ['operator', operator]]) {
-    const matches = retained.filter((item) => item.accessKind === kind);
-    if (matches.length !== 1 || source.id !== matches[0].sourceId || source.fk_integration_id !== matches[0].integrationId) throw new Error('registry_source_mismatch');
-    const integration = integrations.filter((item) => item.id === matches[0].integrationId);
-    if (integration.length !== 1 || integration[0].title !== `automation-data/automation_data_acceptance/${kind}` ||
-        integration[0].type !== 'database' || integration[0].sub_type !== 'pg') throw new Error('registry_integration_mismatch');
+  let base, reader, operator;
+  for (const pair of pairs) {
+    const entries = retained.filter((item) => (item.pair || 'default') === pair);
+    const ids = [...new Set(entries.map((item) => item.baseId))];
+    if (ids.length !== 1 || typeof ids[0] !== 'string' || !ids[0] ||
+        entries.filter((item) => item.accessKind === 'reader').length !== 1 ||
+        entries.filter((item) => item.accessKind === 'operator').length > 1 ||
+        (pair === 'default' && entries.length !== 2)) throw new Error('registry_pair_mismatch');
+    const title = pair === 'default' ? 'automation_data_acceptance' : `automation_data_acceptance/${pair}`;
+    const baseMatches = bases.filter((item) => item?.id === ids[0] && item?.title === title);
+    if (baseMatches.length !== 1) throw new Error('base_contract_failed');
+    const pairBase = baseMatches[0];
+    const workspaceId = pairBase.fk_workspace_id || pairBase.workspace_id;
+    if (typeof workspaceId !== 'string' || !workspaceId ||
+        workspaces.filter((item) => item?.id === workspaceId).length !== 1) throw new Error('workspace_contract_failed');
+    const integrations = list((await bounded(`/api/v2/meta/workspaces/${workspaceId}/integrations`, {headers})).json);
+    const summaries = list((await bounded(`/api/v2/meta/bases/${pairBase.id}/sources`, {headers})).json);
+    const sourceObjects = [];
+    for (const summary of summaries) sourceObjects.push((await bounded(`/api/v2/meta/bases/${pairBase.id}/sources/${summary.id}`, {headers})).json);
+    const intrinsicSources = sourceObjects.filter((item) => item?.alias !== 'Read Model' && item?.alias !== 'Operator');
+    if (intrinsicSources.length !== 1 || sourceObjects.length !== entries.length + 1) throw new Error('managed_source_count_failed');
+    const intrinsic = intrinsicSources[0];
+    const intrinsicConfigUnset = !Object.hasOwn(intrinsic, 'config') || intrinsic.config === null;
+    if (typeof intrinsic.id !== 'string' || !/^[A-Za-z0-9_-]+$/.test(intrinsic.id) ||
+        intrinsic.base_id !== pairBase.id || intrinsic.fk_workspace_id !== workspaceId || intrinsic.alias !== null ||
+        intrinsic.type !== 'pg' || intrinsic.fk_integration_id !== null || intrinsic.fk_sql_executor_id !== null ||
+        intrinsic.is_local !== true || intrinsic.is_meta !== false || intrinsic.enabled !== true || intrinsic.deleted !== false ||
+        intrinsic.is_encrypted !== true || intrinsic.is_data_readonly !== false || intrinsic.is_schema_readonly !== false ||
+        !intrinsicConfigUnset || intrinsic.meta !== null || intrinsic.description !== null || intrinsic.order !== 1 ||
+        !Array.isArray(intrinsic.upgraderQueries)) throw new Error('intrinsic_source_contract_failed');
+    for (const entry of entries) {
+      const alias = entry.accessKind === 'reader' ? 'Read Model' : 'Operator';
+      const matches = sourceObjects.filter((item) => item?.alias === alias);
+      if (matches.length !== 1 || matches[0].id !== entry.sourceId ||
+          matches[0].fk_integration_id !== entry.integrationId) throw new Error('registry_source_mismatch');
+      const source = matches[0];
+      const path = source?.config?.searchPath || source?.config?.search_path;
+      const schema = entry.schema || (entry.accessKind === 'reader' ? 'read_model' : 'operator');
+      if (JSON.stringify(path) !== JSON.stringify([schema]) || source.is_schema_readonly !== true ||
+          source.is_data_readonly !== (entry.accessKind === 'reader')) throw new Error('source_schema_contract_failed');
+      const integration = integrations.filter((item) => item.id === entry.integrationId);
+      const expectedTitle = `automation-data/automation_data_acceptance/${pair === 'default' ? '' : pair + '/'}${entry.accessKind}`;
+      if (integration.length !== 1 || integration[0].title !== expectedTitle ||
+          integration[0].type !== 'database' || integration[0].sub_type !== 'pg') throw new Error('registry_integration_mismatch');
+    }
+    if (pair === 'default') {
+      base = pairBase;
+      reader = sourceObjects.find((item) => item.alias === 'Read Model');
+      operator = sourceObjects.find((item) => item.alias === 'Operator');
+    } else {
+      const pairTables = list((await bounded(`/api/v2/meta/bases/${pairBase.id}/tables`, {headers})).json);
+      if (!pairTables.length || pairTables.some((table) => !entries.some((entry) => entry.sourceId === table.source_id)))
+        throw new Error('named_pair_tables_failed');
+      for (const table of pairTables) {
+        const views = list((await bounded(`/api/v2/meta/tables/${table.id}/views`, {headers})).json);
+        if (!views.length) throw new Error('named_pair_view_failed');
+        await bounded(`/api/v2/tables/${table.id}/records?limit=1`, {headers});
+      }
+    }
   }
 
   const tables = list((await bounded(`/api/v2/meta/bases/${base.id}/tables`, {headers})).json);
@@ -229,24 +248,26 @@ nocodb_restore_validate_source_registry() { # <registry-json>
 	local registry_json="$1"
 	jq -e '
     (.items | type) == "array" and
-    ([.items[] | select(.domain == "automation_data_acceptance")] | length) == 2 and
-    ([.items[] | select(
-      .domain == "automation_data_acceptance" and .accessKind == "reader" and
+    (.items | length) >= 2 and
+    (.items | all(
+      .domain == "automation_data_acceptance" and
+      (.pair | type == "string" and (. == "default" or test("^[a-z][a-z0-9_]{0,23}$"))) and
+      (.accessKind == "reader" or .accessKind == "operator") and
       .state == "ready" and .valid == true and
       (.baseId | type == "string" and length > 0) and
       (.sourceId | type == "string" and length > 0) and
       (.integrationId | type == "string" and length > 0)
-    )] | length) == 1 and
-    ([.items[] | select(
-      .domain == "automation_data_acceptance" and .accessKind == "operator" and
-      .state == "ready" and .valid == true and
-      (.baseId | type == "string" and length > 0) and
-      (.sourceId | type == "string" and length > 0) and
-      (.integrationId | type == "string" and length > 0)
-    )] | length) == 1 and
-    ([.items[] | select(.domain == "automation_data_acceptance") | .baseId] | unique | length) == 1 and
-    ([.items[] | select(.domain == "automation_data_acceptance") | .sourceId] | unique | length) == 2 and
-    ([.items[] | select(.domain == "automation_data_acceptance") | .integrationId] | unique | length) == 2
+    )) and
+    ([.items[] | select(.pair == "default" and .accessKind == "reader")] | length) == 1 and
+    ([.items[] | select(.pair == "default" and .accessKind == "operator")] | length) == 1 and
+    (.items | group_by(.pair) | all(
+      (map(select(.accessKind == "reader")) | length) == 1 and
+      (map(select(.accessKind == "operator")) | length) <= 1 and
+      (map(.baseId) | unique | length) == 1
+    )) and
+    ([.items[].baseId] | unique | length) == ([.items[].pair] | unique | length) and
+    ([.items[].sourceId] | unique | length) == (.items | length) and
+    ([.items[].integrationId] | unique | length) == (.items | length)
   ' "$registry_json" >/dev/null
 }
 

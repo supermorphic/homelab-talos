@@ -57,21 +57,27 @@ expected_metrics=(
   automation_data_postgresql_backup_last_success_timestamp_seconds
   automation_data_postgresql_connections
   automation_data_postgresql_database_size_bytes
+  automation_data_postgresql_oldest_incomplete_optional_operation_age_seconds
   automation_data_postgresql_oldest_incomplete_provisioning_age_seconds
+  automation_data_postgresql_optional_registry_consistent
   automation_data_postgresql_registry_catalog_consistent
   automation_data_postgresql_transactions_total
 )
 [[ "${metrics[*]}" == "${expected_metrics[*]}" ]] ||
-  fail 'SQL Exporter must expose only the four baseline and two platform-health metrics'
+  fail 'SQL Exporter must expose only the four baseline and four platform-health metrics'
 
 dynamic_metrics="$(yq -r '
   [.collectors[].metrics[] |
-    select(.metric_name | test("registry_catalog|oldest_incomplete")) |
+    select(.metric_name | test("registry_catalog|optional_registry|oldest_incomplete")) |
     .metric_name] | sort | join(",")
 ' "$exporter")"
 [[ "$dynamic_metrics" == \
-  'automation_data_postgresql_oldest_incomplete_provisioning_age_seconds,automation_data_postgresql_registry_catalog_consistent' ]] ||
-  fail 'SQL Exporter does not contain exactly the two approved dynamic-platform signals'
+  'automation_data_postgresql_oldest_incomplete_optional_operation_age_seconds,automation_data_postgresql_oldest_incomplete_provisioning_age_seconds,automation_data_postgresql_optional_registry_consistent,automation_data_postgresql_registry_catalog_consistent' ]] ||
+  fail 'SQL Exporter does not contain exactly the four approved dynamic-platform signals'
+[[ "$(yq -r '[.collectors[].metrics[] |
+  select(.metric_name | test("registry_catalog|optional_registry|oldest_incomplete")) |
+  select(has("key_labels"))] | length' "$exporter")" == 0 ]] ||
+  fail 'platform-health metrics must not label individual registrations or operations'
 
 database_label_contract="$(yq -o=json -I=0 '
   [.collectors[].metrics[] |
@@ -93,7 +99,7 @@ dashboard='kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards/au
     select(. == "dashboards/automation-data-postgresql.json")] | length' \
     kubernetes/apps/monitoring/kube-prometheus-stack/config/kustomization.yaml)" == 1 ]] ||
   fail 'the automation-data Grafana dashboard must be packaged exactly once'
-jq -e --argjson expected 13 '
+jq -e --argjson expected 15 '
   .uid == "automation-data-postgresql" and
   (.panels | length) == $expected and
   ([.panels[] | select(.datasource != {"type":"prometheus","uid":"${datasource}"})] | length) == 0
