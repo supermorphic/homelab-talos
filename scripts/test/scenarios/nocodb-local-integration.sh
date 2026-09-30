@@ -1427,6 +1427,53 @@ SQL
 		fail 'named pair creation changed the default pair.'
 }
 
+prove_concurrent_pair_sync() {
+	local first_pid second_pid first_status second_status
+	phase='concurrent-named-pair-webhooks'
+	printf '%s\n' '{"domain":"automation_data_acceptance","pair":"extra","operation":"sync"}' \
+		>"$integration_root/concurrent-pair-body.json"
+	http_request POST "$n8n_url/webhook/automation-data-nocodb-source" source-webhook \
+		"$integration_root/concurrent-pair-body.json" \
+		"$integration_root/concurrent-pair-first.json" &
+	first_pid=$!
+	http_request POST "$n8n_url/webhook/automation-data-nocodb-source" source-webhook \
+		"$integration_root/concurrent-pair-body.json" \
+		"$integration_root/concurrent-pair-second.json" &
+	second_pid=$!
+	set +e
+	wait "$first_pid"
+	first_status=$?
+	wait "$second_pid"
+	second_status=$?
+	set -e
+	[[ "$first_status" == 0 && "$second_status" == 0 ]] ||
+		fail 'concurrent source webhook transport failed.'
+	for response in "$integration_root/concurrent-pair-first.json" \
+		"$integration_root/concurrent-pair-second.json"; do
+		jq -e --slurpfile before "$integration_root/extra-ready.json" '
+			.pair == "extra" and .operation == "sync" and
+			((.ok == true and .reader.state == "ready" and .operator.state == "ready" and
+				.reader.sourceId == $before[0].reader.sourceId and
+				.reader.credentialGeneration == $before[0].reader.credentialGeneration and
+				.operator.sourceId == $before[0].operator.sourceId and
+				.operator.credentialGeneration == $before[0].operator.credentialGeneration) or
+			 (.ok == false and .errorCode == "operation_in_progress" and
+				.activeOperation == "sync"))
+		' "$response" >/dev/null || fail 'concurrent webhook returned an unsafe outcome.'
+	done
+	jq -s -e 'any(.[]; .ok == true)' "$integration_root/concurrent-pair-first.json" \
+		"$integration_root/concurrent-pair-second.json" >/dev/null ||
+		fail 'neither concurrent source webhook completed.'
+	pair_call sync "$integration_root/concurrent-pair-after.json"
+	jq -e --slurpfile before "$integration_root/extra-ready.json" '
+		.reader.sourceId == $before[0].reader.sourceId and
+		.reader.credentialGeneration == $before[0].reader.credentialGeneration and
+		.operator.sourceId == $before[0].operator.sourceId and
+		.operator.credentialGeneration == $before[0].operator.credentialGeneration
+	' "$integration_root/concurrent-pair-after.json" >/dev/null ||
+		fail 'concurrent named pair sync changed a source credential.'
+}
+
 application_authenticates() { # <postgres-container> <password>
 	local container="$1" password="$2" observed host
 	if [[ "$container" == "$postgres_name" ]]; then
@@ -1613,6 +1660,7 @@ prove_targeted_rotations() {
 
 slice_run first true
 prove_named_pair
+prove_concurrent_pair_sync
 prove_application_login
 prove_targeted_rotations
 prove_aged_jobs_rotation_and_restart "$integration_root/source-ready.json"
