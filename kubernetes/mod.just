@@ -64,6 +64,22 @@ nocodb-source-configure domain reader_schema operator_schema="-": require-bash
 nocodb-source-rotate domain access_kind: require-bash
     @scripts/nocodb/source-operation.sh rotate {{quote(domain)}} {{quote(access_kind)}}
 
+# Register one independent source pair without creating consumer schemas or grants.
+nocodb-pair-register domain pair reader_schema operator_schema="-": require-bash
+    @scripts/nocodb/source-operation.sh pair-register {{quote(domain)}} {{quote(pair)}} {{quote(reader_schema)}} {{quote(operator_schema)}}
+
+# Check a registered pair's reviewed PostgreSQL grants without changing NocoDB.
+nocodb-pair-prepare domain pair: require-bash
+    @scripts/nocodb/source-operation.sh pair-prepare {{quote(domain)}} {{quote(pair)}}
+
+# Reconcile only the selected pair through the fixed private webhook.
+nocodb-pair-sync domain pair: require-bash
+    @scripts/nocodb/source-operation.sh pair-sync {{quote(domain)}} {{quote(pair)}}
+
+# Rotate only the selected pair's reader or operator source.
+nocodb-pair-rotate domain pair access_kind: require-bash
+    @scripts/nocodb/source-operation.sh pair-rotate {{quote(domain)}} {{quote(pair)}} {{quote(access_kind)}}
+
 # Run the catalog-coordinated synthetic NocoDB reader/operator acceptance lifecycle.
 # Guard: NOCODB_ACCESS_TEST_CONFIRM='test:nocodb:access'.
 nocodb-access-test: require-bash

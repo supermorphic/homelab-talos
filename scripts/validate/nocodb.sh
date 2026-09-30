@@ -87,6 +87,7 @@ scripts/test/nocodb-manifest-contract-test.sh "$temp_dir/source.yaml" "$temp_dir
 scripts/test/nocodb-workflow-contract-test.sh
 node scripts/test/nocodb-source-response-test.mjs
 node scripts/test/nocodb-schema-mapping-workflow-test.mjs
+node scripts/test/nocodb-pair-workflow-test.mjs
 scripts/test/lib/nocodb-permissions-test.sh
 scripts/test/nocodb-pair-registry-test.sh
 scripts/test/nocodb-pair-lifecycle-test.sh

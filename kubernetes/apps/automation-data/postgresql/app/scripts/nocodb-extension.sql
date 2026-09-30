@@ -332,9 +332,12 @@ BEGIN
        (mapping.operator_schema IS NOT NULL AND NOT EXISTS (
          SELECT FROM platform_operations.managed_nocodb_sources
          WHERE domain = p_domain AND pair = p_pair AND access_kind = 'operator'
-           AND state = 'ready' AND source_id IS NOT NULL AND
-           base_id IS NOT NULL AND integration_id IS NOT NULL AND
-           validated_at IS NOT NULL)) THEN
+           AND ((state = 'ready' AND source_id IS NOT NULL AND
+             base_id IS NOT NULL AND integration_id IS NOT NULL AND
+             validated_at IS NOT NULL) OR
+             (state = 'awaiting_grants' AND source_id IS NULL AND
+             base_id IS NULL AND integration_id IS NULL AND
+             credential_generation = 0)))) THEN
       RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'nocodb_sources_not_ready';
     END IF;
   ELSE
@@ -349,7 +352,10 @@ BEGIN
   IF existing.operation = 'sync' THEN
     IF NOT COALESCE((platform_operations.validate_nocodb_access(
         p_domain, p_pair, 'reader')->>'valid')::boolean, false) OR
-       (mapping.operator_schema IS NOT NULL AND NOT COALESCE(
+       (mapping.operator_schema IS NOT NULL AND EXISTS (
+         SELECT FROM platform_operations.managed_nocodb_sources
+         WHERE domain = p_domain AND pair = p_pair AND access_kind = 'operator'
+           AND state = 'ready') AND NOT COALESCE(
          (platform_operations.validate_nocodb_access(
            p_domain, p_pair, 'operator')->>'valid')::boolean, false)) THEN
       RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'nocodb_source_access_invalid';

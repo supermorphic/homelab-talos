@@ -67,8 +67,8 @@ require(
 normalize = by_name.get("Normalize Source Request", {})
 normalize_code = normalize.get("parameters", {}).get("jsCode", "")
 require(normalize.get("type") == "n8n-nodes-base.code", "Normalize Source Request must be a Code node.")
-allowed_request_fields = {"domain", "operation", "accessKind", "readerSchema", "operatorSchema"}
-allowed_operations = {"configure", "prepare", "sync", "rotate"}
+allowed_request_fields = {"domain", "operation", "pair", "accessKind", "readerSchema", "operatorSchema"}
+allowed_operations = {"configure", "register", "prepare", "sync", "rotate"}
 allowed_access_kinds = {"reader", "operator"}
 for values, label in (
     (allowed_request_fields, "request field"),
@@ -82,7 +82,11 @@ require("Object.keys" in normalize_code and "allowedFields" in normalize_code, "
 require("requestedAccessKind" in normalize_code, "The source workflow must preserve the normalized rotation target separately.")
 
 approved_functions = {
+    "platform_operations.configure_nocodb_pair",
     "platform_operations.configure_nocodb_schema_mapping",
+    "platform_operations.claim_nocodb_operation",
+    "platform_operations.complete_nocodb_operation",
+    "platform_operations.mark_nocodb_operation_uncertain",
     "platform_operations.validate_domain",
     "platform_operations.prepare_nocodb_access",
     "platform_operations.read_nocodb_source_state",
@@ -170,7 +174,7 @@ for function_name in ("read_nocodb_source_state", "prepare_nocodb_access"):
     require(match and "pg_advisory_xact_lock" in match.group(0), f"{function_name} does not retain the domain transaction lock.")
 record_error = by_name.get("Record Source Error", {}).get("parameters", {})
 require(
-    record_error.get("query") == "SELECT platform_operations.record_nocodb_source_error($1, $2, $3, $4) AS result;"
+    record_error.get("query") == "SELECT platform_operations.record_nocodb_source_error($1, $2, $3, $4, $5, $6, $7) AS result;"
     and "sourceOperation" in record_error.get("options", {}).get("queryReplacement", ""),
     "Source errors must persist the exact sync or rotate operation through the fixed interface.",
 )
@@ -248,13 +252,12 @@ for node in http_nodes:
 require(seen_paths == allowed_nocodb_paths, "The source workflow does not use the exact NocoDB endpoint set.")
 
 wait_nodes = [node for node in nodes if node.get("type") == "n8n-nodes-base.wait"]
-require(len(wait_nodes) == 2, "Reader and operator polling each require one Wait node.")
-for node in wait_nodes:
-    parameters = node.get("parameters", {})
-    require(
-        parameters.get("amount") == 5 and parameters.get("unit") == "seconds",
-        f"{node['name']} must wait exactly five seconds.",
-    )
+require(not wait_nodes, "Credential-bearing source operations must not persist Wait state.")
+for name in ("Wait Reader Job", "Wait Operator Job"):
+    node = by_name[name]
+    require(node.get("type") == "n8n-nodes-base.code" and
+            "setTimeout(resolve, 5000)" in node.get("parameters", {}).get("jsCode", ""),
+            f"{name} must poll in memory with the fixed five-second delay.")
 
 for name in ("Evaluate Reader Job", "Evaluate Operator Job"):
     code = by_name.get(name, {}).get("parameters", {}).get("jsCode", "")
@@ -318,9 +321,13 @@ require(
     "Every source workflow executable node must be reachable from the webhook.",
 )
 require(
-    successors("Require Ready Managed Domain") == ["Configure Requested", "Prepare Source Error Response"],
-    "The ready-domain gate must classify prepare before the privileged access function.",
+    successors("Require Ready Managed Domain") == ["Register Requested", "Prepare Source Error Response"],
+    "The ready-domain gate must classify registration before source preparation.",
 )
+require(successors("Register Requested") == ["Register NocoDB Pair", "Configure Requested"],
+        "Named registration must branch before default configuration.")
+require(successors("Register NocoDB Pair") == ["Prepare Registration Response", "Prepare Source Error Response"],
+        "Pair registration must use a bounded response.")
 require(
     successors("Configure Requested") == ["Configure Schema Mapping", "Initial Prepare Requested"],
     "Configuration must branch before ordinary access preparation.",
@@ -349,9 +356,12 @@ require(
     "The validated access plan must route through the prepare-operation branch.",
 )
 require(
-    successors("Prepare Requested") == ["Prepare Access Response", "List Domain Bases"],
-    "Prepare must terminate separately while sync and rotate retain the source lifecycle route.",
+    successors("Prepare Requested") == ["Prepare Access Response", "Claim Source Operation"],
+    "Prepare must terminate separately while sync and rotate acquire a claim.",
 )
+require("List Domain Bases" in reachable("Claim Source Operation") and
+        "Create Domain Base" not in reachable_avoiding("Source Webhook", {"Claim Source Operation"}),
+        "No base creation may bypass the persisted operation claim.")
 require(
     successors("Prepare Access Response") == ["Respond", "Prepare Source Error Response"],
     "The bounded prepare response must share the authenticated webhook response and error paths.",

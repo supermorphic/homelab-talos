@@ -270,4 +270,47 @@ fi
 rg -q 'source_not_ready' "$scratch/rotate-again.err"
 [[ "$(query "SELECT credential_generation FROM platform_operations.managed_nocodb_sources
   WHERE domain = 'claim_fixture' AND pair = 'extra' AND access_kind = 'reader'")" == 2 ]]
+
+# A mapped operator still awaiting reviewed grants does not block a ready reader.
+query "SELECT platform_operations.configure_nocodb_pair(
+  'claim_fixture','pending','pending_read','pending_edit')" >"$scratch/pending-registration.out"
+cat >"$scratch/pending-grants.sql" <<'SQL'
+CREATE SCHEMA pending_read AUTHORIZATION claim_fixture_owner;
+CREATE SCHEMA pending_edit AUTHORIZATION claim_fixture_owner;
+REVOKE ALL ON SCHEMA pending_read, pending_edit FROM PUBLIC;
+SET ROLE claim_fixture_owner;
+CREATE TABLE pending_read.present (id integer PRIMARY KEY);
+RESET ROLE;
+DO $test$
+DECLARE reader_name text := 'nocodb_' || md5('claim_fixture:pending') || '_reader';
+BEGIN
+  EXECUTE format('GRANT CONNECT ON DATABASE claim_fixture TO %I', reader_name);
+  EXECUTE format('GRANT USAGE ON SCHEMA pending_read TO %I', reader_name);
+  EXECUTE format('GRANT SELECT ON pending_read.present TO %I', reader_name);
+  EXECUTE format('ALTER ROLE %I LOGIN', reader_name);
+END;
+$test$;
+SQL
+podman cp "$scratch/pending-grants.sql" "$container:/tmp/pending-grants.sql"
+podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
+  --username postgres --dbname claim_fixture --file /tmp/pending-grants.sql \
+  >"$scratch/pending-grants.out"
+query "INSERT INTO platform_operations.managed_nocodb_sources
+  (domain,pair,access_kind,role_name,base_id,integration_id,source_id,
+   source_create_job_id,state,operation,generation,credential_generation,validated_at)
+  VALUES ('claim_fixture','pending','reader',
+    'nocodb_' || md5('claim_fixture:pending') || '_reader',
+    'pending-base','pending-integration','pending-source','pending-job',
+    'ready','sync',1,1,clock_timestamp())" >"$scratch/pending-source.out"
+[[ "$(query "SELECT platform_operations.prepare_nocodb_access(
+  'claim_fixture','pending')->>'operatorEligible'")" == false ]]
+[[ "$(query "SELECT state FROM platform_operations.managed_nocodb_sources
+  WHERE domain = 'claim_fixture' AND pair = 'pending' AND access_kind = 'operator'")" == awaiting_grants ]]
+pending_id='00000000-0000-4000-8000-000000000105'
+[[ "$(query "SELECT platform_operations.claim_nocodb_operation(
+  'claim_fixture','pending','sync',NULL,'$pending_id'::uuid)->>'canExecute'")" == true ]]
+pending_generation="$(query "SELECT generation FROM platform_operations.nocodb_source_operations
+  WHERE domain = 'claim_fixture' AND pair = 'pending'")"
+[[ "$(query "SELECT platform_operations.complete_nocodb_operation(
+  'claim_fixture','pending','$pending_id'::uuid,$pending_generation)->>'phase'")" == complete ]]
 echo 'NocoDB pair lifecycle PostgreSQL claims passed.'

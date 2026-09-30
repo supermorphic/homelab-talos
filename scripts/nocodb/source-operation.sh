@@ -3,25 +3,27 @@
 set -euo pipefail
 
 usage() {
-  echo 'Usage: source-operation.sh <prepare|sync|rotate> <domain> [reader|operator], or configure <domain> <reader-schema> [operator-schema|-]' >&2
+  echo 'Usage: source-operation.sh <prepare|sync|rotate> <domain> [reader|operator]; configure <domain> <reader-schema> [operator-schema|-]; or pair-register|pair-prepare|pair-sync|pair-rotate <domain> <pair> [schema|access arguments]' >&2
   exit 2
 }
 
-[[ "$#" -ge 2 && "$#" -le 4 ]] || usage
-operation="$1"
+[[ "$#" -ge 2 && "$#" -le 5 ]] || usage
+action="$1"
+operation="$action"
 domain="$2"
-access_kind="${3:-}"
+access_kind=''
+pair=''
 reader_schema=''
 operator_schema=''
-[[ "$operation" == configure || "$#" -le 3 ]] || usage
 
 [[ "$domain" =~ ^[a-z][a-z0-9_]{0,47}$ ]] || {
   echo 'NocoDB source domain must match ^[a-z][a-z0-9_]{0,47}$.' >&2
   exit 2
 }
 
-case "$operation" in
+case "$action" in
   configure)
+    [[ "$#" -ge 3 && "$#" -le 4 ]] || usage
     reader_schema="${3:-}"
     operator_schema="${4:--}"
     for schema in "$reader_schema" "$operator_schema"; do
@@ -39,7 +41,7 @@ case "$operation" in
     }
     ;;
   prepare)
-    [[ -z "$access_kind" ]] || usage
+    [[ "$#" -eq 2 ]] || usage
     expected_confirmation="prepare:nocodb:${domain}"
     [[ "${NOCODB_SOURCE_PREPARE_CONFIRM:-}" == "$expected_confirmation" ]] || {
       echo "Refusing NocoDB access preparation; set NOCODB_SOURCE_PREPARE_CONFIRM='$expected_confirmation'." >&2
@@ -47,7 +49,7 @@ case "$operation" in
     }
     ;;
   sync)
-    [[ -z "$access_kind" ]] || usage
+    [[ "$#" -eq 2 ]] || usage
     expected_confirmation="sync:nocodb:${domain}"
     [[ "${NOCODB_SOURCE_SYNC_CONFIRM:-}" == "$expected_confirmation" ]] || {
       echo "Refusing NocoDB source sync; set NOCODB_SOURCE_SYNC_CONFIRM='$expected_confirmation'." >&2
@@ -55,6 +57,8 @@ case "$operation" in
     }
     ;;
   rotate)
+    [[ "$#" -eq 3 ]] || usage
+    access_kind="$3"
     [[ "$access_kind" == reader || "$access_kind" == operator ]] || {
       echo 'NocoDB source rotation access kind must be reader or operator.' >&2
       exit 2
@@ -62,6 +66,47 @@ case "$operation" in
     expected_confirmation="rotate:nocodb:${domain}:${access_kind}"
     [[ "${NOCODB_SOURCE_ROTATE_CONFIRM:-}" == "$expected_confirmation" ]] || {
       echo "Refusing NocoDB source rotation; set NOCODB_SOURCE_ROTATE_CONFIRM='$expected_confirmation'." >&2
+      exit 1
+    }
+    ;;
+  pair-register)
+    [[ "$#" -eq 5 ]] || usage
+    operation=register
+    pair="$3"
+    reader_schema="$4"
+    operator_schema="$5"
+    [[ "$pair" =~ ^[a-z][a-z0-9_]{0,23}$ && "$pair" != default ]] || usage
+    for schema in "$reader_schema" "$operator_schema"; do
+      [[ "$schema" == '-' && "$schema" == "$operator_schema" ]] && continue
+      [[ "$schema" =~ ^[a-z][a-z0-9_]{0,47}$ && "$schema" != pg_* && "$schema" != platform* &&
+        "$schema" != public && "$schema" != app && "$schema" != read_model &&
+        "$schema" != operator && "$schema" != information_schema ]] || usage
+    done
+    [[ "$reader_schema" != "$operator_schema" ]] || usage
+    expected_confirmation="register:nocodb:${domain}:${pair}:${reader_schema}:${operator_schema}"
+    [[ "${NOCODB_PAIR_REGISTER_CONFIRM:-}" == "$expected_confirmation" ]] || {
+      echo "Refusing NocoDB pair registration; set NOCODB_PAIR_REGISTER_CONFIRM='$expected_confirmation'." >&2
+      exit 1
+    }
+    ;;
+  pair-prepare|pair-sync|pair-rotate)
+    [[ "$#" -eq 3 || ( "$action" == pair-rotate && "$#" -eq 4 ) ]] || usage
+    pair="$3"
+    [[ "$pair" =~ ^[a-z][a-z0-9_]{0,23}$ && "$pair" != default ]] || usage
+    operation="${action#pair-}"
+    if [[ "$operation" == rotate ]]; then
+      [[ "$#" -eq 4 ]] || usage
+      access_kind="$4"
+      [[ "$access_kind" == reader || "$access_kind" == operator ]] || usage
+      expected_confirmation="rotate:nocodb:${domain}:${pair}:${access_kind}"
+      confirmation_variable=NOCODB_PAIR_ROTATE_CONFIRM
+    else
+      [[ "$#" -eq 3 ]] || usage
+      expected_confirmation="${operation}:nocodb:${domain}:${pair}"
+      confirmation_variable="NOCODB_PAIR_${operation^^}_CONFIRM"
+    fi
+    [[ "${!confirmation_variable:-}" == "$expected_confirmation" ]] || {
+      echo "Refusing NocoDB pair ${operation}; set ${confirmation_variable}='$expected_confirmation'." >&2
       exit 1
     }
     ;;
@@ -97,16 +142,22 @@ trap 'rm -rf -- "$temp_dir"' EXIT
 request_body="$temp_dir/request.json"
 curl_config="$temp_dir/request.curl"
 
-if [[ "$operation" == configure ]]; then
+if [[ "$action" == configure ]]; then
   jq -cn --arg domain "$domain" --arg reader "$reader_schema" --arg operator "$operator_schema" \
     '{domain: $domain, operation: "configure", readerSchema: $reader,
       operatorSchema: (if $operator == "-" then null else $operator end)}' >"$request_body"
+elif [[ "$action" == pair-register ]]; then
+  jq -cn --arg domain "$domain" --arg pair "$pair" --arg reader "$reader_schema" --arg operator "$operator_schema" \
+    '{domain: $domain, pair: $pair, operation: "register", readerSchema: $reader,
+      operatorSchema: (if $operator == "-" then null else $operator end)}' >"$request_body"
 elif [[ "$operation" == rotate ]]; then
-  jq -cn --arg domain "$domain" --arg access_kind "$access_kind" \
-    '{domain: $domain, operation: "rotate", accessKind: $access_kind}' >"$request_body"
+  jq -cn --arg domain "$domain" --arg pair "$pair" --arg access_kind "$access_kind" \
+    '{domain: $domain, operation: "rotate", accessKind: $access_kind} +
+      (if $pair == "" then {} else {pair: $pair} end)' >"$request_body"
 else
-  jq -cn --arg domain "$domain" --arg operation "$operation" \
-    '{domain: $domain, operation: $operation}' >"$request_body"
+  jq -cn --arg domain "$domain" --arg pair "$pair" --arg operation "$operation" \
+    '{domain: $domain, operation: $operation} +
+      (if $pair == "" then {} else {pair: $pair} end)' >"$request_body"
 fi
 
 {
@@ -123,7 +174,7 @@ curl_status=$?
 set -e
 [[ "$curl_status" -eq 0 ]] || exit "$curl_status"
 
-if [[ "$operation" == configure ]]; then
+if [[ "$action" == configure ]]; then
   jq -e --arg domain "$domain" --arg reader "$reader_schema" --arg operator "$operator_schema" '
     type == "object" and
     (keys | sort == ["domain", "ok", "operation", "operatorRole", "operatorSchema", "readerRole", "readerSchema", "state"]) and
@@ -135,18 +186,34 @@ if [[ "$operation" == configure ]]; then
     echo 'NocoDB source response did not satisfy the schema mapping contract.' >&2
     exit 1
   }
-elif [[ "$operation" == prepare ]]; then
-  jq -e --arg domain "$domain" '
+elif [[ "$action" == pair-register ]]; then
+  jq -e --arg domain "$domain" --arg pair "$pair" --arg reader "$reader_schema" --arg operator "$operator_schema" '
     type == "object" and
-    (keys | sort == [
-      "domain", "ok", "operation", "operatorEligible", "operatorRequested", "operatorRole",
-      "readerEligible", "readerRole", "state"
-    ]) and
+    (keys | sort == ["domain", "ok", "operation", "operatorRole", "operatorSchema", "pair", "readerRole", "readerSchema", "state"]) and
+    .ok == true and .domain == $domain and .pair == $pair and
+    .operation == "register" and .state == "registered" and
+    .readerSchema == $reader and
+    (.readerRole | type == "string" and test("^nocodb_[a-f0-9]{32}_reader$")) and
+    (if $operator == "-" then .operatorSchema == null and .operatorRole == null
+     else .operatorSchema == $operator and
+       (.operatorRole | type == "string" and test("^nocodb_[a-f0-9]{32}_operator$")) end)
+  ' <<<"$response" >/dev/null || {
+    echo 'NocoDB pair registration response did not satisfy its contract.' >&2
+    exit 1
+  }
+elif [[ "$operation" == prepare ]]; then
+  jq -e --arg domain "$domain" --arg pair "$pair" '
+    type == "object" and
+    (keys | sort == (["domain", "ok", "operation", "operatorEligible", "operatorRequested", "operatorRole",
+      "readerEligible", "readerRole", "state"] + (if $pair == "" then [] else ["pair"] end) | sort)) and
     .ok == true and .domain == $domain and .operation == "prepare" and .state == "prepared" and
-    .readerRole == ($domain + "_reader") and .readerEligible == true and
+    (if $pair == "" then .readerRole == ($domain + "_reader") and .readerEligible == true
+     else .pair == $pair and (.readerRole | type == "string" and test("^nocodb_[a-f0-9]{32}_reader$")) and
+       (.readerEligible | type == "boolean") end) and
     (.operatorRequested | type == "boolean") and (.operatorEligible | type == "boolean") and
     (if .operatorRequested then
-      .operatorRole == ($domain + "_operator")
+      (if $pair == "" then .operatorRole == ($domain + "_operator")
+       else (.operatorRole | type == "string" and test("^nocodb_[a-f0-9]{32}_operator$")) end)
     else
       .operatorRole == null and .operatorEligible == false
     end)
@@ -155,11 +222,13 @@ elif [[ "$operation" == prepare ]]; then
     exit 1
   }
 else
-  jq -e --arg domain "$domain" --arg operation "$operation" '
+  jq -e --arg domain "$domain" --arg pair "$pair" --arg operation "$operation" '
   type == "object" and
-  (keys | sort == ["baseId", "domain", "errorCode", "ok", "operation", "operator", "reader"]) and
+  (keys | sort == (["baseId", "domain", "errorCode", "ok", "operation", "operator", "reader"] +
+    (if $pair == "" then [] else ["pair"] end) | sort)) and
   .ok == true and
   .domain == $domain and
+  (if $pair == "" then true else .pair == $pair end) and
   .operation == $operation and
   (.baseId | type == "string" and length > 0) and
   .errorCode == null and
