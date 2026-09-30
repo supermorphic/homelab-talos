@@ -984,8 +984,35 @@ BEGIN
 END;
 $function$;
 
+CREATE OR REPLACE FUNCTION platform_internal.public_data_privileges_denied(p_database text)
+RETURNS boolean
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+  SELECT platform_internal.query_boolean(p_database, $sql$
+    SELECT NOT EXISTS (
+      SELECT FROM pg_class AS relation
+      JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+      CROSS JOIN LATERAL aclexplode(COALESCE(relation.relacl,
+        acldefault((CASE WHEN relation.relkind = 'S' THEN 'S' ELSE 'r' END)::"char",
+          relation.relowner))) AS acl
+      WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+        AND acl.grantee = 0
+    ) AND NOT EXISTS (
+      SELECT FROM pg_attribute AS attribute
+      JOIN pg_class AS relation ON relation.oid = attribute.attrelid
+      JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+      CROSS JOIN LATERAL aclexplode(attribute.attacl) AS acl
+      WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+        AND acl.grantee = 0
+    )
+  $sql$);
+$function$;
+
 CREATE OR REPLACE FUNCTION platform_internal.validate_nocodb_access_authority(
   p_domain text,
+  p_pair text,
   p_access_kind text,
   p_role_name text,
   p_expect_login boolean
@@ -1009,18 +1036,28 @@ DECLARE
   forbidden_memberships_denied boolean;
   ddl_denied boolean;
   controlled_dml_present boolean;
+  routine_execution_denied boolean;
+  grant_options_denied boolean;
+  public_privileges_denied boolean;
   login_valid boolean;
 BEGIN
   PERFORM platform_internal.assert_domain(p_domain);
   PERFORM platform_internal.assert_nocodb_access_kind(p_access_kind);
+  IF p_pair IS NULL OR (p_pair <> 'default' AND
+      p_pair !~ '^[a-z][a-z0-9_]{0,23}$') THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_nocodb_pair';
+  END IF;
   IF p_role_name IS NULL OR p_role_name = '' THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_nocodb_role';
+  END IF;
+  IF p_role_name <> platform_internal.nocodb_pair_role(p_domain, p_pair, p_access_kind) THEN
     RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_nocodb_role';
   END IF;
   PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
   SELECT * INTO STRICT managed FROM platform_operations.managed_domains WHERE domain = p_domain;
   source.role_name := p_role_name;
   SELECT * INTO mapping FROM platform_operations.managed_nocodb_schema_mappings
-  WHERE domain = p_domain;
+  WHERE domain = p_domain AND pair = p_pair;
   target_schema := CASE p_access_kind
     WHEN 'reader' THEN COALESCE(mapping.reader_schema, 'read_model')
     ELSE COALESCE(mapping.operator_schema, 'operator') END;
@@ -1028,9 +1065,10 @@ BEGIN
     'SELECT has_schema_privilege(%1$L, %2$L, ''USAGE'') AND NOT has_schema_privilege(%1$L, %2$L, ''CREATE'')',
     source.role_name, target_schema));
   object_privileges_valid := CASE p_access_kind
-    WHEN 'reader' THEN platform_internal.query_boolean(managed.database_name, format(
+    WHEN 'reader' THEN CASE WHEN mapping.domain IS NOT NULL THEN true
+      ELSE platform_internal.query_boolean(managed.database_name, format(
       'SELECT COALESCE((SELECT bool_and(has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''SELECT'') AND NOT has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''INSERT'') AND NOT has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''UPDATE'') AND NOT has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''DELETE'') AND NOT has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''TRUNCATE'') AND NOT has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''REFERENCES'') AND NOT has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''TRIGGER'') AND NOT has_any_column_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''INSERT,UPDATE,REFERENCES'')) FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace WHERE namespace.nspname = %2$L AND relation.relkind IN (''r'', ''p'', ''v'', ''m'')), true) AND NOT EXISTS (SELECT FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace WHERE namespace.nspname = %2$L AND relation.relkind = ''S'' AND (has_sequence_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''USAGE'') OR has_sequence_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''SELECT'') OR has_sequence_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''UPDATE'')))',
-      source.role_name, target_schema))
+      source.role_name, target_schema)) END
     WHEN 'operator' THEN platform_internal.query_boolean(managed.database_name, format(
       'SELECT NOT EXISTS (SELECT FROM pg_class AS relation CROSS JOIN LATERAL aclexplode(COALESCE(relation.relacl, acldefault(''r'', relation.relowner))) AS acl WHERE relation.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = %2$L) AND relation.relkind IN (''r'', ''p'', ''v'', ''m'') AND acl.grantee = (SELECT oid FROM pg_roles WHERE rolname = %1$L) AND acl.privilege_type IN (''TRUNCATE'', ''REFERENCES'', ''TRIGGER'')) AND NOT EXISTS (SELECT FROM pg_attribute AS relation_attribute CROSS JOIN LATERAL aclexplode(relation_attribute.attacl) AS acl WHERE relation_attribute.attrelid IN (SELECT oid FROM pg_class WHERE relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = %2$L) AND relkind IN (''r'', ''p'', ''v'', ''m'')) AND relation_attribute.attnum > 0 AND NOT relation_attribute.attisdropped AND acl.grantee = (SELECT oid FROM pg_roles WHERE rolname = %1$L) AND acl.privilege_type = ''REFERENCES'') AND NOT EXISTS (SELECT FROM pg_class AS relation CROSS JOIN LATERAL aclexplode(COALESCE(relation.relacl, acldefault(''S'', relation.relowner))) AS acl WHERE relation.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = %2$L) AND relation.relkind = ''S'' AND acl.grantee = (SELECT oid FROM pg_roles WHERE rolname = %1$L) AND acl.privilege_type NOT IN (''USAGE'', ''SELECT'', ''UPDATE''))',
       source.role_name, target_schema))
@@ -1041,6 +1079,32 @@ BEGIN
         'SELECT NOT EXISTS (SELECT FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace WHERE namespace.nspname = %2$L AND relation.relkind IN (''r'', ''p'', ''v'', ''m'') AND (has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''TRUNCATE'') OR has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''REFERENCES'') OR has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''TRIGGER'') OR has_any_column_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''REFERENCES'')))',
         source.role_name, target_schema)
     );
+  END IF;
+  IF mapping.domain IS NOT NULL AND p_access_kind = 'reader' THEN
+    -- A reviewed custom mapping can expose only its declared presentation objects.
+    object_privileges_valid := platform_internal.query_boolean(managed.database_name,
+      format($sql$
+        SELECT EXISTS (
+          SELECT FROM pg_class AS relation JOIN pg_namespace AS namespace
+            ON namespace.oid = relation.relnamespace
+          WHERE namespace.nspname = %2$L AND relation.relkind IN ('r', 'p', 'v', 'm')
+            AND has_table_privilege(%1$L, relation.oid, 'SELECT')
+        ) AND NOT EXISTS (
+          SELECT FROM pg_class AS relation JOIN pg_namespace AS namespace
+            ON namespace.oid = relation.relnamespace
+          WHERE namespace.nspname = %2$L AND relation.relkind IN ('r', 'p', 'v', 'm')
+            AND (has_table_privilege(%1$L, relation.oid,
+                 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') OR
+                 has_any_column_privilege(%1$L, relation.oid, 'INSERT,UPDATE,REFERENCES'))
+        ) AND NOT EXISTS (
+          SELECT FROM pg_class AS relation JOIN pg_namespace AS namespace
+            ON namespace.oid = relation.relnamespace
+          WHERE namespace.nspname = %2$L
+            AND CASE WHEN relation.relkind = 'S' THEN
+              has_sequence_privilege(%1$L, relation.oid, 'USAGE,SELECT,UPDATE')
+            ELSE false END
+        )
+      $sql$, source.role_name, target_schema));
   END IF;
   default_privileges_valid := CASE p_access_kind
     WHEN 'reader' THEN platform_internal.query_boolean(managed.database_name, format(
@@ -1057,11 +1121,31 @@ BEGIN
         source.role_name)
     );
   END IF;
-  outside_schema_denied := platform_internal.query_boolean(managed.database_name, format(
-    'SELECT NOT EXISTS (SELECT FROM pg_namespace AS namespace WHERE namespace.nspname NOT IN (''pg_catalog'', ''information_schema'', %2$L) AND (has_schema_privilege(%1$L, namespace.nspname, ''USAGE'') OR has_schema_privilege(%1$L, namespace.nspname, ''CREATE''))) AND NOT EXISTS (SELECT FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace WHERE namespace.nspname NOT IN (''pg_catalog'', ''information_schema'', %2$L) AND (has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''SELECT'') OR has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''INSERT'') OR has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''UPDATE'') OR has_table_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''DELETE'') OR has_any_column_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''SELECT,INSERT,UPDATE,REFERENCES''))) AND NOT EXISTS (SELECT FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace WHERE namespace.nspname NOT IN (''pg_catalog'', ''information_schema'', %2$L) AND relation.relkind = ''S'' AND (has_sequence_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''USAGE'') OR has_sequence_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''SELECT'') OR has_sequence_privilege(%1$L, format(''%%I.%%I'', namespace.nspname, relation.relname), ''UPDATE'')))',
-    source.role_name, target_schema));
+  outside_schema_denied := platform_internal.query_boolean(managed.database_name,
+    format($sql$
+      SELECT NOT EXISTS (
+        SELECT FROM pg_namespace AS namespace
+        WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema', %2$L)
+          AND (has_schema_privilege(%1$L, namespace.oid, 'USAGE') OR
+               has_schema_privilege(%1$L, namespace.oid, 'CREATE'))
+      ) AND NOT EXISTS (
+        SELECT FROM pg_class AS relation
+        JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema', %2$L)
+          AND CASE WHEN relation.relkind IN ('r', 'p', 'v', 'm', 'f') THEN
+            has_table_privilege(%1$L, relation.oid,
+              'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') OR
+            has_any_column_privilege(%1$L, relation.oid,
+              'SELECT,INSERT,UPDATE,REFERENCES')
+          WHEN relation.relkind = 'S' THEN
+            has_sequence_privilege(%1$L, relation.oid, 'USAGE,SELECT,UPDATE')
+          ELSE false END
+      )
+    $sql$, source.role_name, target_schema));
   SELECT COALESCE(bool_and(CASE WHEN database.datname = managed.database_name
     THEN has_database_privilege(source.role_name, database.datname, 'CONNECT')
+      AND NOT has_database_privilege(source.role_name, database.datname, 'CREATE')
+      AND NOT has_database_privilege(source.role_name, database.datname, 'TEMP')
     ELSE NOT has_database_privilege(source.role_name, database.datname, 'CONNECT') END), false)
   INTO database_isolation_valid
   FROM pg_database AS database
@@ -1073,8 +1157,53 @@ BEGIN
     WHERE member.member = role.oid OR member.roleid = role.oid)
   INTO forbidden_memberships_denied FROM pg_roles AS role WHERE role.rolname = source.role_name;
   ddl_denied := platform_internal.query_boolean(managed.database_name, format(
-    'SELECT NOT has_schema_privilege(%1$L, %2$L, ''CREATE'') AND NOT EXISTS (SELECT FROM pg_namespace WHERE nspowner = (SELECT oid FROM pg_roles WHERE rolname = %1$L)) AND NOT EXISTS (SELECT FROM pg_class WHERE relowner = (SELECT oid FROM pg_roles WHERE rolname = %1$L))',
+    'SELECT NOT has_schema_privilege(%1$L, %2$L, ''CREATE'') AND NOT EXISTS (SELECT FROM pg_namespace WHERE nspowner = (SELECT oid FROM pg_roles WHERE rolname = %1$L)) AND NOT EXISTS (SELECT FROM pg_class WHERE relowner = (SELECT oid FROM pg_roles WHERE rolname = %1$L)) AND NOT EXISTS (SELECT FROM pg_proc WHERE proowner = (SELECT oid FROM pg_roles WHERE rolname = %1$L))',
     source.role_name, target_schema));
+  routine_execution_denied := platform_internal.query_boolean(managed.database_name,
+    format($sql$
+      SELECT NOT EXISTS (
+        SELECT FROM pg_proc AS routine JOIN pg_namespace AS namespace
+          ON namespace.oid = routine.pronamespace
+        WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+          AND has_function_privilege(%1$L, routine.oid, 'EXECUTE')
+      )
+    $sql$, source.role_name));
+  grant_options_denied := platform_internal.query_boolean(managed.database_name,
+    format($sql$
+      SELECT NOT EXISTS (
+        SELECT FROM pg_database AS database
+        CROSS JOIN LATERAL aclexplode(COALESCE(database.datacl,
+          acldefault('d', database.datdba))) AS acl
+        WHERE acl.grantee = (SELECT oid FROM pg_roles WHERE rolname = %1$L)
+          AND acl.is_grantable
+      ) AND NOT EXISTS (
+        SELECT FROM pg_class AS relation
+        CROSS JOIN LATERAL aclexplode(COALESCE(relation.relacl,
+          acldefault((CASE WHEN relation.relkind = 'S' THEN 'S' ELSE 'r' END)::"char",
+            relation.relowner))) AS acl
+        WHERE acl.grantee = (SELECT oid FROM pg_roles WHERE rolname = %1$L)
+          AND acl.is_grantable
+      ) AND NOT EXISTS (
+        SELECT FROM pg_attribute AS attribute
+        CROSS JOIN LATERAL aclexplode(attribute.attacl) AS acl
+        WHERE acl.grantee = (SELECT oid FROM pg_roles WHERE rolname = %1$L)
+          AND acl.is_grantable
+      ) AND NOT EXISTS (
+        SELECT FROM pg_namespace AS namespace
+        CROSS JOIN LATERAL aclexplode(COALESCE(namespace.nspacl,
+          acldefault('n', namespace.nspowner))) AS acl
+        WHERE acl.grantee = (SELECT oid FROM pg_roles WHERE rolname = %1$L)
+          AND acl.is_grantable
+      ) AND NOT EXISTS (
+        SELECT FROM pg_proc AS routine
+        CROSS JOIN LATERAL aclexplode(COALESCE(routine.proacl,
+          acldefault('f', routine.proowner))) AS acl
+        WHERE acl.grantee = (SELECT oid FROM pg_roles WHERE rolname = %1$L)
+          AND acl.is_grantable
+      )
+    $sql$, source.role_name));
+  public_privileges_denied := platform_internal.public_data_privileges_denied(
+    managed.database_name);
   controlled_dml_present := p_access_kind = 'operator' AND platform_internal.query_boolean(
     managed.database_name, format(
       'SELECT EXISTS (SELECT FROM pg_class AS relation CROSS JOIN LATERAL aclexplode(COALESCE(relation.relacl, acldefault(''r'', relation.relowner))) AS acl WHERE relation.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = %2$L) AND relation.relkind IN (''r'', ''p'', ''v'', ''m'') AND acl.grantee = (SELECT oid FROM pg_roles WHERE rolname = %1$L) AND acl.privilege_type IN (''INSERT'', ''UPDATE'', ''DELETE'')) OR EXISTS (SELECT FROM pg_attribute AS relation_attribute CROSS JOIN LATERAL aclexplode(relation_attribute.attacl) AS acl WHERE relation_attribute.attrelid IN (SELECT oid FROM pg_class WHERE relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = %2$L) AND relkind IN (''r'', ''p'', ''v'', ''m'')) AND relation_attribute.attnum > 0 AND NOT relation_attribute.attisdropped AND acl.grantee = (SELECT oid FROM pg_roles WHERE rolname = %1$L) AND acl.privilege_type IN (''INSERT'', ''UPDATE''))',
@@ -1082,7 +1211,7 @@ BEGIN
   SELECT rolcanlogin INTO login_valid FROM pg_roles WHERE rolname = source.role_name;
   RETURN jsonb_build_object(
     'domain', p_domain, 'accessKind', p_access_kind, 'role', source.role_name,
-    'valid', (CASE WHEN p_expect_login THEN COALESCE(login_valid, false) ELSE NOT login_valid END) AND schema_privileges_valid AND object_privileges_valid AND default_privileges_valid AND outside_schema_denied AND database_isolation_valid AND forbidden_attributes_denied AND forbidden_memberships_denied AND ddl_denied AND (p_access_kind = 'reader' OR controlled_dml_present),
+    'valid', (CASE WHEN p_expect_login THEN COALESCE(login_valid, false) ELSE NOT login_valid END) AND schema_privileges_valid AND object_privileges_valid AND default_privileges_valid AND outside_schema_denied AND database_isolation_valid AND forbidden_attributes_denied AND forbidden_memberships_denied AND ddl_denied AND routine_execution_denied AND grant_options_denied AND public_privileges_denied AND (p_access_kind = 'reader' OR controlled_dml_present),
     'loginValid', COALESCE(login_valid, false),
     'schemaPrivilegesValid', schema_privileges_valid,
     'objectPrivilegesValid', object_privileges_valid,
@@ -1092,8 +1221,50 @@ BEGIN
     'forbiddenAttributesDenied', forbidden_attributes_denied,
     'forbiddenMembershipsDenied', forbidden_memberships_denied,
     'ddlDenied', ddl_denied,
-    'controlledDmlPresent', controlled_dml_present
+    'controlledDmlPresent', controlled_dml_present,
+    'routineExecutionDenied', routine_execution_denied,
+    'grantOptionsDenied', grant_options_denied,
+    'publicPrivilegesDenied', public_privileges_denied
   );
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_internal.validate_nocodb_access_authority(
+  p_domain text, p_access_kind text, p_role_name text, p_expect_login boolean
+)
+RETURNS jsonb
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+  SELECT platform_internal.validate_nocodb_access_authority(
+    p_domain, 'default', p_access_kind, p_role_name, p_expect_login);
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.validate_nocodb_access(
+  p_domain text,
+  p_pair text,
+  p_access_kind text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+DECLARE
+  source platform_operations.managed_nocodb_sources%ROWTYPE;
+BEGIN
+  PERFORM platform_internal.assert_domain(p_domain);
+  PERFORM platform_internal.assert_nocodb_access_kind(p_access_kind);
+  IF p_pair IS NULL OR (p_pair <> 'default' AND
+      p_pair !~ '^[a-z][a-z0-9_]{0,23}$') THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_nocodb_pair';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
+  SELECT * INTO STRICT source FROM platform_operations.managed_nocodb_sources
+    WHERE domain = p_domain AND pair = p_pair AND access_kind = p_access_kind;
+  RETURN platform_internal.validate_nocodb_access_authority(
+    p_domain, p_pair, p_access_kind, source.role_name, true);
 END;
 $function$;
 
@@ -1114,9 +1285,7 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
   SELECT * INTO STRICT source FROM platform_operations.managed_nocodb_sources
   WHERE domain = p_domain AND access_kind = p_access_kind;
-  RETURN platform_internal.validate_nocodb_access_authority(
-    p_domain, p_access_kind, source.role_name, true
-  );
+  RETURN platform_operations.validate_nocodb_access(p_domain, 'default', p_access_kind);
 END;
 $function$;
 
@@ -1268,6 +1437,8 @@ REVOKE ALL ON FUNCTION platform_internal.assert_nocodb_access_kind(text),
   platform_internal.nocodb_pair_role(text, text, text),
   platform_internal.assert_nocodb_identifier(text, text),
   platform_internal.nocodb_source_result(text, text),
+  platform_internal.public_data_privileges_denied(text),
+  platform_internal.validate_nocodb_access_authority(text, text, text, text, boolean),
   platform_internal.validate_nocodb_access_authority(text, text, text, boolean),
   platform_internal.assert_nocodb_extension_contract() FROM PUBLIC;
 REVOKE ALL ON FUNCTION platform_operations.provision_nocodb_metadata(text),
@@ -1281,6 +1452,7 @@ REVOKE ALL ON FUNCTION platform_operations.provision_nocodb_metadata(text),
   platform_operations.record_nocodb_source_ready(text, text, text),
   platform_operations.record_nocodb_source_error(text, text, text, text),
   platform_operations.rotate_nocodb_source_credential(text, text, text),
+  platform_operations.validate_nocodb_access(text, text, text),
   platform_operations.validate_nocodb_access(text, text),
   platform_operations.read_platform_revision() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION platform_operations.read_nocodb_source_state(text, text) FROM PUBLIC;
@@ -1298,6 +1470,7 @@ GRANT EXECUTE ON FUNCTION platform_operations.record_nocodb_source_ready(text, t
 GRANT EXECUTE ON FUNCTION platform_operations.record_nocodb_source_error(text, text, text, text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.rotate_nocodb_source_credential(text, text, text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.validate_nocodb_access(text, text) TO automation_data_provisioner;
+GRANT EXECUTE ON FUNCTION platform_operations.validate_nocodb_access(text, text, text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.read_platform_revision() TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.capture_backup_state() TO automation_data_backup;
 GRANT EXECUTE ON FUNCTION platform_operations.read_platform_revision() TO automation_data_backup;

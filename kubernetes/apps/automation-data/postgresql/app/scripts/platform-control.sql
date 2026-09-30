@@ -112,7 +112,7 @@ BEGIN
     p_domain,
     format(
       $sql$
-      REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+      REVOKE ALL ON SCHEMA public FROM PUBLIC;
       CREATE SCHEMA IF NOT EXISTS app AUTHORIZATION %1$I;
       ALTER SCHEMA app OWNER TO %1$I;
       REVOKE ALL ON SCHEMA app FROM PUBLIC;
@@ -272,7 +272,7 @@ BEGIN
     PERFORM platform_internal.exec_in_database(
       'automation_data_control',
       format(
-        'REVOKE CONNECT ON DATABASE %1$I FROM PUBLIC; GRANT CONNECT ON DATABASE %1$I TO %2$I, %3$I, %4$I; REVOKE CONNECT ON DATABASE automation_data_control FROM %2$I, %3$I, %4$I',
+        'REVOKE CONNECT, TEMP ON DATABASE %1$I FROM PUBLIC; GRANT CONNECT, TEMP ON DATABASE %1$I TO %2$I, %3$I, %4$I; REVOKE CONNECT ON DATABASE automation_data_control FROM %2$I, %3$I, %4$I',
         p_domain,
         owner_name,
         migrator_name,
