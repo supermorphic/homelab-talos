@@ -1,0 +1,84 @@
+{
+  "n8n": {
+    "version": "2.36.7",
+    "tables": {
+      "credentials_entity": {
+        "id": "character varying",
+        "name": "character varying",
+        "type": "character varying",
+        "updatedAt": "timestamp with time zone"
+      },
+      "workflow_entity": {
+        "id": "character varying",
+        "active": "boolean",
+        "activeVersionId": "character varying",
+        "isArchived": "boolean"
+      },
+      "workflow_history": {
+        "versionId": "character varying",
+        "workflowId": "character varying",
+        "nodes": "json"
+      },
+      "workflow_published_version": {
+        "workflowId": "character varying",
+        "publishedVersionId": "character varying"
+      }
+    },
+    "publishedBinding": "workflow_entity.activeVersionId -> workflow_history.versionId, matched by workflowId; active must be true; workflow_published_version cross-check"
+  },
+  "nocodb": {
+    "version": "2026.08.2",
+    "tables": {
+      "workspace": {
+        "id": "character varying",
+        "deleted": "boolean"
+      },
+      "nc_bases_v2": {
+        "id": "character varying",
+        "fk_workspace_id": "character varying",
+        "deleted": "boolean"
+      },
+      "nc_integrations_v2": {
+        "id": "character varying",
+        "fk_workspace_id": "character varying",
+        "type": "character varying",
+        "sub_type": "character varying",
+        "deleted": "boolean",
+        "updated_at": "timestamp with time zone"
+      },
+      "nc_sources_v2": {
+        "id": "character varying",
+        "base_id": "character varying",
+        "fk_workspace_id": "character varying",
+        "fk_integration_id": "character varying",
+        "is_data_readonly": "boolean",
+        "is_schema_readonly": "boolean",
+        "enabled": "boolean",
+        "deleted": "boolean",
+        "is_local": "boolean",
+        "updated_at": "timestamp with time zone"
+      },
+      "nc_users_v2": {
+        "id": "character varying",
+        "is_deleted": "boolean"
+      },
+      "nc_base_users_v2": {
+        "base_id": "character varying",
+        "fk_user_id": "character varying",
+        "roles": "text"
+      },
+      "workspace_user": {
+        "fk_workspace_id": "character varying",
+        "fk_user_id": "character varying",
+        "roles": "character varying",
+        "deleted": "boolean"
+      },
+      "nc_api_tokens": {
+        "id": "integer",
+        "expiry": "character varying",
+        "enabled": "boolean",
+        "updated_at": "timestamp with time zone"
+      }
+    }
+  }
+}
