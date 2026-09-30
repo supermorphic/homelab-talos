@@ -671,7 +671,7 @@ This section records the implementation candidate for
 [issue 491](https://github.com/supermorphic/homelab-talos/issues/491). It extends the
 existing lifecycle without changing existing source identities or grants. The candidate
 passed disposable component and complete isolated recovery acceptance in canonical run
-`20260930T123426Z-3e9477a5273a-operator-2c602404`. That run includes two independently
+`20260930T143422Z-f6abe9c57ed7-operator-4edbc3f4`. That run includes two independently
 scoped pairs, retained saved views, application authentication/rotation, concurrent
 creation, a lost external API response, and foreign-base rejection. Hosted validation,
 deployment, attended browser acceptance, and recorded live recovery are separate gates;

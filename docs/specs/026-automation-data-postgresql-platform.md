@@ -874,7 +874,7 @@ The implementation candidate supports the additional source pairs in
 [specification 028](028-nocodb-operator-ui.md#independently-scoped-source-pairs-issue-491).
 Protected local credential delivery, fixed private CLI transport, v3 upgrade/backup
 compatibility, and isolated restored authentication are implemented. Canonical disposable
-run `20260930T123426Z-3e9477a5273a-operator-2c602404` passed. Hosted validation and
+run `20260930T143422Z-f6abe9c57ed7-operator-4edbc3f4` passed. Hosted validation and
 authorized live upgrade, client installation, browser access, and recorded recovery
 remain separate gates. Existing domain runtime and migration credentials retain their
 current responsibilities; consumer role selection and grants remain consumer-owned.
