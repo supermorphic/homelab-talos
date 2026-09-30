@@ -119,6 +119,253 @@ CREATE TABLE IF NOT EXISTS platform_operations.nocodb_source_operations (
 );
 REVOKE ALL ON platform_operations.nocodb_source_operations FROM PUBLIC;
 
+CREATE OR REPLACE FUNCTION platform_internal.nocodb_operation_result(
+  p_domain text, p_pair text, p_can_execute boolean
+)
+RETURNS jsonb
+LANGUAGE sql
+SET search_path = pg_catalog, platform_operations
+AS $function$
+  SELECT jsonb_build_object(
+    'domain', operation.domain, 'pair', operation.pair,
+    'operationId', operation.operation_id, 'operation', operation.operation,
+    'accessKind', operation.access_kind, 'generation', operation.generation,
+    'phase', operation.phase, 'canExecute', p_can_execute,
+    'operationStartedAt', operation.operation_started_at,
+    'updatedAt', operation.updated_at, 'errorCode', operation.error_code)
+  FROM platform_operations.nocodb_source_operations AS operation
+  WHERE operation.domain = p_domain AND operation.pair = p_pair;
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_internal.assert_nocodb_claim(
+  p_domain text, p_pair text, p_operation text, p_access_kind text,
+  p_operation_id uuid, p_generation bigint
+)
+RETURNS void
+LANGUAGE plpgsql
+SET search_path = pg_catalog, platform_operations
+AS $function$
+DECLARE
+  claimed platform_operations.nocodb_source_operations%ROWTYPE;
+BEGIN
+  IF p_operation_id IS NULL OR p_generation IS NULL THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_nocodb_claim';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
+  SELECT * INTO claimed FROM platform_operations.nocodb_source_operations
+    WHERE domain = p_domain AND pair = p_pair FOR UPDATE;
+  IF NOT FOUND OR claimed.operation_id <> p_operation_id OR
+     claimed.generation <> p_generation OR claimed.phase <> 'active' OR
+     claimed.operation <> p_operation OR
+     (p_operation = 'rotate' AND claimed.access_kind IS DISTINCT FROM p_access_kind) THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'nocodb_claim_stale';
+  END IF;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.claim_nocodb_operation(
+  p_domain text, p_pair text, p_operation text, p_access_kind text,
+  p_operation_id uuid
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+DECLARE
+  existing platform_operations.nocodb_source_operations%ROWTYPE;
+  next_generation bigint;
+BEGIN
+  PERFORM platform_internal.assert_domain(p_domain);
+  IF p_pair IS NULL OR (p_pair <> 'default' AND
+      p_pair !~ '^[a-z][a-z0-9_]{0,23}$') OR
+     p_operation NOT IN ('sync', 'rotate') OR p_operation IS NULL OR
+     (p_operation = 'sync' AND p_access_kind IS NOT NULL) OR
+     (p_operation = 'rotate' AND p_access_kind NOT IN ('reader', 'operator')) OR
+     (p_operation = 'rotate' AND p_access_kind IS NULL) OR
+     p_operation_id IS NULL THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_nocodb_claim';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
+  IF NOT EXISTS (SELECT FROM platform_operations.managed_domains
+      WHERE domain = p_domain AND state = 'ready') OR
+     (p_pair <> 'default' AND NOT EXISTS (
+       SELECT FROM platform_operations.managed_nocodb_schema_mappings
+       WHERE domain = p_domain AND pair = p_pair)) THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'nocodb_pair_not_registered';
+  END IF;
+  SELECT * INTO existing FROM platform_operations.nocodb_source_operations
+    WHERE domain = p_domain AND pair = p_pair FOR UPDATE;
+  IF FOUND THEN
+    IF existing.operation_id = p_operation_id THEN
+      IF existing.operation <> p_operation OR
+         existing.access_kind IS DISTINCT FROM p_access_kind THEN
+        RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'nocodb_claim_target_mismatch';
+      END IF;
+      RETURN platform_internal.nocodb_operation_result(p_domain, p_pair, false);
+    END IF;
+    IF existing.phase <> 'complete' THEN
+      RETURN platform_internal.nocodb_operation_result(p_domain, p_pair, false);
+    END IF;
+  END IF;
+  IF p_operation = 'rotate' AND NOT EXISTS (
+    SELECT FROM platform_operations.managed_nocodb_sources
+    WHERE domain = p_domain AND pair = p_pair AND access_kind = p_access_kind
+      AND state = 'ready' AND source_id IS NOT NULL
+      AND integration_id IS NOT NULL AND base_id IS NOT NULL
+  ) THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'source_not_ready';
+  END IF;
+  next_generation := platform_internal.bump_generation();
+  INSERT INTO platform_operations.nocodb_source_operations (
+    domain, pair, operation_id, operation, access_kind, generation, phase,
+    operation_started_at, updated_at, error_code
+  ) VALUES (
+    p_domain, p_pair, p_operation_id, p_operation, p_access_kind,
+    next_generation, 'active', clock_timestamp(), clock_timestamp(), NULL
+  ) ON CONFLICT (domain, pair) DO UPDATE SET
+    operation_id = EXCLUDED.operation_id, operation = EXCLUDED.operation,
+    access_kind = EXCLUDED.access_kind, generation = EXCLUDED.generation,
+    phase = 'active', operation_started_at = EXCLUDED.operation_started_at,
+    updated_at = EXCLUDED.updated_at, error_code = NULL;
+  RETURN platform_internal.nocodb_operation_result(p_domain, p_pair, true);
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.read_nocodb_operation_state(
+  p_domain text, p_pair text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+BEGIN
+  PERFORM platform_internal.assert_domain(p_domain);
+  IF p_pair IS NULL OR (p_pair <> 'default' AND
+      p_pair !~ '^[a-z][a-z0-9_]{0,23}$') THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_nocodb_pair';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
+  PERFORM 1 FROM platform_operations.managed_domains WHERE domain = p_domain;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION USING ERRCODE = 'P0002', MESSAGE = 'domain_not_found';
+  END IF;
+  RETURN COALESCE(platform_internal.nocodb_operation_result(
+    p_domain, p_pair, false), 'null'::jsonb);
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.mark_nocodb_operation_uncertain(
+  p_domain text, p_pair text, p_operation_id uuid, p_generation bigint,
+  p_error_code text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+DECLARE
+  existing platform_operations.nocodb_source_operations%ROWTYPE;
+BEGIN
+  PERFORM platform_internal.assert_domain(p_domain);
+  IF p_pair IS NULL OR (p_pair <> 'default' AND
+      p_pair !~ '^[a-z][a-z0-9_]{0,23}$') OR
+     p_operation_id IS NULL OR p_generation IS NULL OR
+     p_error_code IS NULL OR p_error_code !~ '^[a-z][a-z0-9_]{0,63}$' THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_nocodb_claim';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
+  SELECT * INTO STRICT existing FROM platform_operations.nocodb_source_operations
+    WHERE domain = p_domain AND pair = p_pair FOR UPDATE;
+  IF existing.operation_id <> p_operation_id OR
+     existing.generation <> p_generation OR existing.phase = 'complete' THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'nocodb_claim_stale';
+  END IF;
+  IF existing.phase <> 'uncertain' OR existing.error_code IS DISTINCT FROM p_error_code THEN
+    UPDATE platform_operations.nocodb_source_operations
+      SET phase = 'uncertain', error_code = p_error_code,
+          updated_at = clock_timestamp()
+      WHERE domain = p_domain AND pair = p_pair;
+    PERFORM platform_internal.bump_generation();
+  END IF;
+  RETURN platform_internal.nocodb_operation_result(p_domain, p_pair, false);
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.complete_nocodb_operation(
+  p_domain text, p_pair text, p_operation_id uuid, p_generation bigint
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+DECLARE
+  existing platform_operations.nocodb_source_operations%ROWTYPE;
+  mapping platform_operations.managed_nocodb_schema_mappings%ROWTYPE;
+BEGIN
+  PERFORM platform_internal.assert_domain(p_domain);
+  IF p_pair IS NULL OR (p_pair <> 'default' AND
+      p_pair !~ '^[a-z][a-z0-9_]{0,23}$') OR
+     p_operation_id IS NULL OR p_generation IS NULL THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_nocodb_claim';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
+  SELECT * INTO STRICT existing FROM platform_operations.nocodb_source_operations
+    WHERE domain = p_domain AND pair = p_pair FOR UPDATE;
+  IF existing.operation_id <> p_operation_id OR
+     existing.generation <> p_generation THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'nocodb_claim_stale';
+  END IF;
+  IF existing.phase = 'complete' THEN
+    RETURN platform_internal.nocodb_operation_result(p_domain, p_pair, false);
+  END IF;
+  SELECT * INTO mapping FROM platform_operations.managed_nocodb_schema_mappings
+    WHERE domain = p_domain AND pair = p_pair;
+  IF existing.operation = 'sync' THEN
+    IF NOT EXISTS (SELECT FROM platform_operations.managed_nocodb_sources
+        WHERE domain = p_domain AND pair = p_pair AND access_kind = 'reader'
+          AND state = 'ready' AND source_id IS NOT NULL AND
+          base_id IS NOT NULL AND integration_id IS NOT NULL AND
+          validated_at IS NOT NULL) OR
+       (mapping.operator_schema IS NOT NULL AND NOT EXISTS (
+         SELECT FROM platform_operations.managed_nocodb_sources
+         WHERE domain = p_domain AND pair = p_pair AND access_kind = 'operator'
+           AND state = 'ready' AND source_id IS NOT NULL AND
+           base_id IS NOT NULL AND integration_id IS NOT NULL AND
+           validated_at IS NOT NULL)) THEN
+      RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'nocodb_sources_not_ready';
+    END IF;
+  ELSE
+    IF NOT EXISTS (SELECT FROM platform_operations.managed_nocodb_sources
+        WHERE domain = p_domain AND pair = p_pair AND
+          access_kind = existing.access_kind AND state = 'ready' AND
+          source_id IS NOT NULL AND base_id IS NOT NULL AND
+          integration_id IS NOT NULL AND validated_at IS NOT NULL) THEN
+      RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'nocodb_source_not_ready';
+    END IF;
+  END IF;
+  IF existing.operation = 'sync' THEN
+    IF NOT COALESCE((platform_operations.validate_nocodb_access(
+        p_domain, p_pair, 'reader')->>'valid')::boolean, false) OR
+       (mapping.operator_schema IS NOT NULL AND NOT COALESCE(
+         (platform_operations.validate_nocodb_access(
+           p_domain, p_pair, 'operator')->>'valid')::boolean, false)) THEN
+      RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'nocodb_source_access_invalid';
+    END IF;
+  ELSIF NOT COALESCE((platform_operations.validate_nocodb_access(
+      p_domain, p_pair, existing.access_kind)->>'valid')::boolean, false) THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'nocodb_source_access_invalid';
+  END IF;
+  UPDATE platform_operations.nocodb_source_operations
+    SET phase = 'complete', updated_at = clock_timestamp(), error_code = NULL
+    WHERE domain = p_domain AND pair = p_pair;
+  PERFORM platform_internal.bump_generation();
+  RETURN platform_internal.nocodb_operation_result(p_domain, p_pair, false);
+END;
+$function$;
+
 CREATE OR REPLACE FUNCTION platform_internal.nocodb_pair_role(
   p_domain text, p_pair text, p_access_kind text
 )
@@ -166,6 +413,7 @@ END;
 $function$;
 CREATE OR REPLACE FUNCTION platform_internal.nocodb_source_result(
   p_domain text,
+  p_pair text,
   p_access_kind text
 )
 RETURNS jsonb
@@ -188,9 +436,45 @@ AS $function$
     'validatedAt', source.validated_at,
     'updatedAt', source.updated_at,
     'errorCode', source.error_code
-  )
+  ) || CASE WHEN source.pair = 'default' THEN '{}'::jsonb
+    ELSE jsonb_build_object('pair', source.pair) END
   FROM platform_operations.managed_nocodb_sources AS source
-  WHERE source.domain = p_domain AND source.access_kind = p_access_kind;
+  WHERE source.domain = p_domain AND source.pair = p_pair AND source.access_kind = p_access_kind;
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_internal.nocodb_source_result(
+  p_domain text, p_access_kind text
+)
+RETURNS jsonb
+LANGUAGE sql
+SET search_path = pg_catalog, platform_operations
+AS $function$
+  SELECT platform_internal.nocodb_source_result(p_domain, 'default', p_access_kind);
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.read_nocodb_source_state(
+  p_domain text, p_pair text, p_access_kind text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+BEGIN
+  PERFORM platform_internal.assert_domain(p_domain);
+  PERFORM platform_internal.assert_nocodb_access_kind(p_access_kind);
+  IF p_pair IS NULL OR (p_pair <> 'default' AND
+      p_pair !~ '^[a-z][a-z0-9_]{0,23}$') THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_nocodb_pair';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
+  PERFORM 1 FROM platform_operations.managed_domains WHERE domain = p_domain FOR KEY SHARE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION USING ERRCODE = 'P0002', MESSAGE = 'domain_not_found';
+  END IF;
+  RETURN COALESCE(platform_internal.nocodb_source_result(
+    p_domain, p_pair, p_access_kind), 'null'::jsonb);
+END;
 $function$;
 
 CREATE OR REPLACE FUNCTION platform_operations.read_nocodb_source_state(
@@ -203,14 +487,7 @@ SECURITY DEFINER
 SET search_path = pg_catalog, platform_operations
 AS $function$
 BEGIN
-  PERFORM platform_internal.assert_domain(p_domain);
-  PERFORM platform_internal.assert_nocodb_access_kind(p_access_kind);
-  PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
-  PERFORM 1 FROM platform_operations.managed_domains WHERE domain = p_domain FOR KEY SHARE;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION USING ERRCODE = 'P0002', MESSAGE = 'domain_not_found';
-  END IF;
-  RETURN COALESCE(platform_internal.nocodb_source_result(p_domain, p_access_kind), 'null'::jsonb);
+  RETURN platform_operations.read_nocodb_source_state(p_domain, 'default', p_access_kind);
 END;
 $function$;
 
@@ -257,21 +534,21 @@ BEGIN
   operator_name := CASE WHEN p_operator_schema IS NULL THEN NULL
     ELSE p_domain || '_operator' END;
   SELECT * INTO mapping FROM platform_operations.managed_nocodb_schema_mappings
-  WHERE domain = p_domain;
+  WHERE domain = p_domain AND pair = 'default';
   IF FOUND THEN
     IF mapping.reader_schema <> p_reader_schema OR
        mapping.operator_schema IS DISTINCT FROM p_operator_schema THEN
       RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'nocodb_schema_mapping_frozen';
     END IF;
     IF EXISTS (SELECT FROM platform_operations.managed_nocodb_sources
-      WHERE domain = p_domain AND (access_kind = 'reader' OR
+      WHERE domain = p_domain AND pair = 'default' AND (access_kind = 'reader' OR
         state <> 'awaiting_grants' OR source_id IS NOT NULL OR
         integration_id IS NOT NULL OR base_id IS NOT NULL)) THEN
       RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'source_already_registered';
     END IF;
   ELSE
     IF EXISTS (SELECT FROM platform_operations.managed_nocodb_sources
-               WHERE domain = p_domain) THEN
+               WHERE domain = p_domain AND pair = 'default') THEN
       RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'source_already_registered';
     END IF;
     IF EXISTS (SELECT FROM pg_roles WHERE rolname IN (reader_name, operator_name)) THEN
@@ -491,12 +768,12 @@ BEGIN
   reader_name := p_domain || '_reader';
   operator_name := p_domain || '_operator';
   SELECT * INTO mapping FROM platform_operations.managed_nocodb_schema_mappings
-  WHERE domain = p_domain;
+  WHERE domain = p_domain AND pair = 'default';
   IF FOUND THEN
     -- Custom grants belong to the domain migration. This path is observational
     -- toward every domain schema, object, and default ACL.
     SELECT * INTO reader_source FROM platform_operations.managed_nocodb_sources
-    WHERE domain = p_domain AND access_kind = 'reader' FOR UPDATE;
+    WHERE domain = p_domain AND pair = 'default' AND access_kind = 'reader' FOR UPDATE;
     reader_expect_login := FOUND AND reader_source.state IN
       ('provisioning', 'waiting_for_source', 'ready', 'rotating');
     IF FOUND AND reader_source.state = 'error' AND
@@ -519,7 +796,7 @@ BEGIN
     operator_requested := mapping.operator_schema IS NOT NULL;
     IF operator_requested THEN
       SELECT * INTO operator_source FROM platform_operations.managed_nocodb_sources
-      WHERE domain = p_domain AND access_kind = 'operator' FOR UPDATE;
+      WHERE domain = p_domain AND pair = 'default' AND access_kind = 'operator' FOR UPDATE;
       operator_source_exists := FOUND;
       operator_expect_login := operator_source_exists AND operator_source.state IN
         ('provisioning', 'waiting_for_source', 'ready', 'rotating');
@@ -552,7 +829,7 @@ BEGIN
           ) VALUES (
             p_domain, 'operator', operator_name, 'awaiting_grants', 'sync',
             next_generation, 0, clock_timestamp(), clock_timestamp(), NULL
-          ) ON CONFLICT (domain, access_kind) DO UPDATE SET
+          ) ON CONFLICT (domain, pair, access_kind) DO UPDATE SET
             state = 'awaiting_grants', operation = 'sync',
             generation = EXCLUDED.generation,
             operation_started_at = EXCLUDED.operation_started_at,
@@ -589,7 +866,7 @@ BEGIN
     );
   END IF;
   SELECT * INTO reader_source FROM platform_operations.managed_nocodb_sources
-  WHERE domain = p_domain AND access_kind = 'reader' FOR UPDATE;
+  WHERE domain = p_domain AND pair = 'default' AND access_kind = 'reader' FOR UPDATE;
   reader_expect_login := FOUND AND reader_source.state IN ('provisioning', 'waiting_for_source', 'ready', 'rotating');
   IF NOT reader_expect_login THEN
     PERFORM platform_internal.exec_in_database(
@@ -623,7 +900,7 @@ BEGIN
       );
     END IF;
     SELECT * INTO operator_source FROM platform_operations.managed_nocodb_sources
-    WHERE domain = p_domain AND access_kind = 'operator' FOR UPDATE;
+    WHERE domain = p_domain AND pair = 'default' AND access_kind = 'operator' FOR UPDATE;
     operator_source_exists := FOUND;
     operator_expect_login := operator_source_exists AND operator_source.state IN ('provisioning', 'waiting_for_source', 'ready', 'rotating');
     IF NOT operator_expect_login THEN
@@ -668,7 +945,7 @@ BEGIN
       ) VALUES (
         p_domain, 'operator', operator_name, 'awaiting_grants', 'sync', next_generation, 0,
         clock_timestamp(), clock_timestamp(), NULL
-      ) ON CONFLICT (domain, access_kind) DO UPDATE SET
+      ) ON CONFLICT (domain, pair, access_kind) DO UPDATE SET
         role_name = EXCLUDED.role_name,
         state = 'awaiting_grants',
         operation = 'sync',
@@ -689,6 +966,105 @@ BEGIN
     'operatorEligible', operator_eligible,
     'operatorSchema', CASE WHEN operator_requested THEN 'operator' ELSE NULL END
   );
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.prepare_nocodb_access(
+  p_domain text, p_pair text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+DECLARE
+  managed platform_operations.managed_domains%ROWTYPE;
+  mapping platform_operations.managed_nocodb_schema_mappings%ROWTYPE;
+  reader_source platform_operations.managed_nocodb_sources%ROWTYPE;
+  operator_source platform_operations.managed_nocodb_sources%ROWTYPE;
+  reader_name text;
+  operator_name text;
+  reader_eligible boolean;
+  operator_eligible boolean := false;
+  reader_login boolean := false;
+  operator_login boolean := false;
+BEGIN
+  IF p_pair = 'default' THEN
+    RETURN platform_operations.prepare_nocodb_access(p_domain);
+  END IF;
+  PERFORM platform_internal.assert_domain(p_domain);
+  IF p_pair IS NULL OR p_pair !~ '^[a-z][a-z0-9_]{0,23}$' THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_nocodb_pair';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
+  SELECT * INTO STRICT managed FROM platform_operations.managed_domains
+    WHERE domain = p_domain;
+  IF managed.state <> 'ready' THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'domain_not_ready';
+  END IF;
+  SELECT * INTO STRICT mapping FROM platform_operations.managed_nocodb_schema_mappings
+    WHERE domain = p_domain AND pair = p_pair;
+  reader_name := platform_internal.nocodb_pair_role(p_domain, p_pair, 'reader');
+  operator_name := CASE WHEN mapping.operator_schema IS NULL THEN NULL ELSE
+    platform_internal.nocodb_pair_role(p_domain, p_pair, 'operator') END;
+  SELECT * INTO reader_source FROM platform_operations.managed_nocodb_sources
+    WHERE domain = p_domain AND pair = p_pair AND access_kind = 'reader';
+  IF FOUND THEN
+    reader_login := reader_source.state IN
+      ('provisioning', 'waiting_for_source', 'ready', 'rotating');
+    IF reader_source.state = 'error' THEN
+      SELECT rolcanlogin INTO reader_login FROM pg_roles WHERE rolname = reader_name;
+    END IF;
+  END IF;
+  reader_eligible := platform_internal.query_boolean(managed.database_name,
+    format('SELECT EXISTS (SELECT FROM pg_namespace WHERE nspname = %L)',
+      mapping.reader_schema));
+  IF reader_eligible THEN
+    reader_eligible := COALESCE((platform_internal.validate_nocodb_access_authority(
+      p_domain, p_pair, 'reader', reader_name, reader_login)->>'valid')::boolean, false);
+  END IF;
+  IF NOT reader_eligible AND reader_source.domain IS NULL THEN
+    INSERT INTO platform_operations.managed_nocodb_sources (
+      domain, pair, access_kind, role_name, state, operation, generation,
+      credential_generation
+    ) VALUES (
+      p_domain, p_pair, 'reader', reader_name, 'awaiting_grants', 'sync',
+      platform_internal.bump_generation(), 0
+    ) ON CONFLICT (domain, pair, access_kind) DO NOTHING;
+  END IF;
+  IF operator_name IS NOT NULL THEN
+    SELECT * INTO operator_source FROM platform_operations.managed_nocodb_sources
+      WHERE domain = p_domain AND pair = p_pair AND access_kind = 'operator';
+    IF FOUND THEN
+      operator_login := operator_source.state IN
+        ('provisioning', 'waiting_for_source', 'ready', 'rotating');
+      IF operator_source.state = 'error' THEN
+        SELECT rolcanlogin INTO operator_login FROM pg_roles WHERE rolname = operator_name;
+      END IF;
+    END IF;
+    operator_eligible := platform_internal.query_boolean(managed.database_name,
+      format('SELECT EXISTS (SELECT FROM pg_namespace WHERE nspname = %L)',
+        mapping.operator_schema));
+    IF operator_eligible THEN
+      operator_eligible := COALESCE((platform_internal.validate_nocodb_access_authority(
+        p_domain, p_pair, 'operator', operator_name, operator_login)->>'valid')::boolean,
+        false);
+    END IF;
+    IF NOT operator_eligible AND operator_source.domain IS NULL THEN
+      INSERT INTO platform_operations.managed_nocodb_sources (
+        domain, pair, access_kind, role_name, state, operation, generation,
+        credential_generation
+      ) VALUES (
+        p_domain, p_pair, 'operator', operator_name, 'awaiting_grants', 'sync',
+        platform_internal.bump_generation(), 0
+      ) ON CONFLICT (domain, pair, access_kind) DO NOTHING;
+    END IF;
+  END IF;
+  RETURN jsonb_build_object(
+    'domain', p_domain, 'pair', p_pair, 'readerRole', reader_name,
+    'readerEligible', reader_eligible, 'readerSchema', mapping.reader_schema,
+    'operatorRequested', operator_name IS NOT NULL, 'operatorRole', operator_name,
+    'operatorEligible', operator_eligible, 'operatorSchema', mapping.operator_schema);
 END;
 $function$;
 
@@ -719,7 +1095,7 @@ BEGIN
   END IF;
   PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
   SELECT * INTO source FROM platform_operations.managed_nocodb_sources
-  WHERE domain = p_domain AND access_kind = p_access_kind FOR UPDATE;
+  WHERE domain = p_domain AND pair = 'default' AND access_kind = p_access_kind FOR UPDATE;
   IF FOUND AND source.state NOT IN ('error', 'awaiting_grants') THEN
     RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'source_transition_invalid';
   END IF;
@@ -748,7 +1124,7 @@ BEGIN
   target_role := p_domain || CASE p_access_kind WHEN 'reader' THEN '_reader' ELSE '_operator' END;
   IF p_access_kind = 'operator' THEN
     SELECT * INTO STRICT reader_source FROM platform_operations.managed_nocodb_sources
-    WHERE domain = p_domain AND access_kind = 'reader';
+    WHERE domain = p_domain AND pair = 'default' AND access_kind = 'reader';
     IF reader_source.base_id <> p_base_id THEN
       RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'operator_base_mismatch';
     END IF;
@@ -760,7 +1136,7 @@ BEGIN
   ) VALUES (
     p_domain, p_access_kind, target_role, p_base_id, 'provisioning', 'sync', next_generation,
     1, clock_timestamp(), clock_timestamp(), NULL
-  ) ON CONFLICT (domain, access_kind) DO UPDATE SET
+  ) ON CONFLICT (domain, pair, access_kind) DO UPDATE SET
     role_name = EXCLUDED.role_name,
     base_id = EXCLUDED.base_id,
     state = 'provisioning', operation = 'sync',
@@ -776,6 +1152,72 @@ BEGIN
       target_role, p_password)
   );
   RETURN result;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.begin_nocodb_source(
+  p_domain text, p_pair text, p_access_kind text, p_base_id text,
+  p_password text, p_operation_id uuid, p_claim_generation bigint
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+DECLARE
+  source platform_operations.managed_nocodb_sources%ROWTYPE;
+  reader_source platform_operations.managed_nocodb_sources%ROWTYPE;
+  prepared jsonb;
+  target_role text;
+  next_generation bigint;
+BEGIN
+  PERFORM platform_internal.assert_domain(p_domain);
+  PERFORM platform_internal.assert_nocodb_access_kind(p_access_kind);
+  PERFORM platform_internal.assert_nocodb_identifier(p_base_id, 'invalid_base_id');
+  IF p_password IS NULL OR length(p_password) < 32 THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_generated_password';
+  END IF;
+  PERFORM platform_internal.assert_nocodb_claim(
+    p_domain, p_pair, 'sync', p_access_kind, p_operation_id, p_claim_generation);
+  SELECT * INTO source FROM platform_operations.managed_nocodb_sources
+    WHERE domain = p_domain AND pair = p_pair AND access_kind = p_access_kind FOR UPDATE;
+  IF FOUND AND (source.state NOT IN ('awaiting_grants', 'error') OR
+      source.credential_generation > 0 OR source.source_id IS NOT NULL OR
+      (source.base_id IS NOT NULL AND source.base_id <> p_base_id)) THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'source_transition_invalid';
+  END IF;
+  prepared := platform_operations.prepare_nocodb_access(p_domain, p_pair);
+  IF NOT COALESCE((prepared->>(CASE WHEN p_access_kind = 'reader'
+      THEN 'readerEligible' ELSE 'operatorEligible' END))::boolean, false) THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'source_access_not_eligible';
+  END IF;
+  IF p_access_kind = 'operator' THEN
+    SELECT * INTO STRICT reader_source FROM platform_operations.managed_nocodb_sources
+      WHERE domain = p_domain AND pair = p_pair AND access_kind = 'reader';
+    IF reader_source.base_id <> p_base_id THEN
+      RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'operator_base_mismatch';
+    END IF;
+  END IF;
+  target_role := platform_internal.nocodb_pair_role(p_domain, p_pair, p_access_kind);
+  next_generation := platform_internal.bump_generation();
+  INSERT INTO platform_operations.managed_nocodb_sources (
+    domain, pair, access_kind, role_name, base_id, state, operation, generation,
+    credential_generation, operation_started_at, updated_at, error_code
+  ) VALUES (
+    p_domain, p_pair, p_access_kind, target_role, p_base_id,
+    'provisioning', 'sync', next_generation, 1,
+    clock_timestamp(), clock_timestamp(), NULL
+  ) ON CONFLICT (domain, pair, access_kind) DO UPDATE SET
+    base_id = EXCLUDED.base_id, state = 'provisioning', operation = 'sync',
+    generation = EXCLUDED.generation,
+    credential_generation = platform_operations.managed_nocodb_sources.credential_generation + 1,
+    operation_started_at = EXCLUDED.operation_started_at,
+    updated_at = EXCLUDED.updated_at, error_code = NULL;
+  PERFORM platform_internal.exec_in_database(
+    'automation_data_control', format(
+      'ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD %L',
+      target_role, p_password));
+  RETURN platform_internal.nocodb_source_result(p_domain, p_pair, p_access_kind);
 END;
 $function$;
 
@@ -798,7 +1240,7 @@ BEGIN
   PERFORM platform_internal.assert_nocodb_identifier(p_integration_id, 'invalid_integration_id');
   PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
   SELECT * INTO STRICT source FROM platform_operations.managed_nocodb_sources
-  WHERE domain = p_domain AND access_kind = p_access_kind FOR UPDATE;
+  WHERE domain = p_domain AND pair = 'default' AND access_kind = p_access_kind FOR UPDATE;
   IF source.state <> 'provisioning' THEN
     RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'source_transition_invalid';
   END IF;
@@ -812,8 +1254,44 @@ BEGIN
   UPDATE platform_operations.managed_nocodb_sources
   SET integration_id = p_integration_id, generation = next_generation,
       updated_at = clock_timestamp(), error_code = NULL
-  WHERE domain = p_domain AND access_kind = p_access_kind;
+  WHERE domain = p_domain AND pair = 'default' AND access_kind = p_access_kind;
   RETURN platform_internal.nocodb_source_result(p_domain, p_access_kind);
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.record_nocodb_integration(
+  p_domain text, p_pair text, p_access_kind text, p_integration_id text,
+  p_operation_id uuid, p_claim_generation bigint
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+DECLARE
+  source platform_operations.managed_nocodb_sources%ROWTYPE;
+  next_generation bigint;
+BEGIN
+  PERFORM platform_internal.assert_domain(p_domain);
+  PERFORM platform_internal.assert_nocodb_access_kind(p_access_kind);
+  PERFORM platform_internal.assert_nocodb_identifier(p_integration_id, 'invalid_integration_id');
+  PERFORM platform_internal.assert_nocodb_claim(
+    p_domain, p_pair, 'sync', p_access_kind, p_operation_id, p_claim_generation);
+  SELECT * INTO STRICT source FROM platform_operations.managed_nocodb_sources
+    WHERE domain = p_domain AND pair = p_pair AND access_kind = p_access_kind FOR UPDATE;
+  IF source.state <> 'provisioning' OR
+     (source.integration_id IS NOT NULL AND source.integration_id <> p_integration_id) THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'source_transition_invalid';
+  END IF;
+  IF source.integration_id = p_integration_id THEN
+    RETURN platform_internal.nocodb_source_result(p_domain, p_pair, p_access_kind);
+  END IF;
+  next_generation := platform_internal.bump_generation();
+  UPDATE platform_operations.managed_nocodb_sources
+    SET integration_id = p_integration_id, generation = next_generation,
+        updated_at = clock_timestamp(), error_code = NULL
+    WHERE domain = p_domain AND pair = p_pair AND access_kind = p_access_kind;
+  RETURN platform_internal.nocodb_source_result(p_domain, p_pair, p_access_kind);
 END;
 $function$;
 
@@ -836,7 +1314,7 @@ BEGIN
   PERFORM platform_internal.assert_nocodb_identifier(p_job_id, 'invalid_source_job_id');
   PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
   SELECT * INTO STRICT source FROM platform_operations.managed_nocodb_sources
-  WHERE domain = p_domain AND access_kind = p_access_kind FOR UPDATE;
+  WHERE domain = p_domain AND pair = 'default' AND access_kind = p_access_kind FOR UPDATE;
   IF source.state = 'waiting_for_source' THEN
     IF source.source_create_job_id = p_job_id THEN
       RETURN platform_internal.nocodb_source_result(p_domain, p_access_kind);
@@ -850,8 +1328,44 @@ BEGIN
   UPDATE platform_operations.managed_nocodb_sources
   SET source_create_job_id = p_job_id, state = 'waiting_for_source',
       generation = next_generation, updated_at = clock_timestamp(), error_code = NULL
-  WHERE domain = p_domain AND access_kind = p_access_kind;
+  WHERE domain = p_domain AND pair = 'default' AND access_kind = p_access_kind;
   RETURN platform_internal.nocodb_source_result(p_domain, p_access_kind);
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.record_nocodb_source_job(
+  p_domain text, p_pair text, p_access_kind text, p_job_id text,
+  p_operation_id uuid, p_claim_generation bigint
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+DECLARE
+  source platform_operations.managed_nocodb_sources%ROWTYPE;
+  next_generation bigint;
+BEGIN
+  PERFORM platform_internal.assert_domain(p_domain);
+  PERFORM platform_internal.assert_nocodb_access_kind(p_access_kind);
+  PERFORM platform_internal.assert_nocodb_identifier(p_job_id, 'invalid_source_job_id');
+  PERFORM platform_internal.assert_nocodb_claim(
+    p_domain, p_pair, 'sync', p_access_kind, p_operation_id, p_claim_generation);
+  SELECT * INTO STRICT source FROM platform_operations.managed_nocodb_sources
+    WHERE domain = p_domain AND pair = p_pair AND access_kind = p_access_kind FOR UPDATE;
+  IF source.state = 'waiting_for_source' AND source.source_create_job_id = p_job_id THEN
+    RETURN platform_internal.nocodb_source_result(p_domain, p_pair, p_access_kind);
+  END IF;
+  IF source.state <> 'provisioning' OR source.integration_id IS NULL OR
+     source.source_create_job_id IS NOT NULL THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'source_transition_invalid';
+  END IF;
+  next_generation := platform_internal.bump_generation();
+  UPDATE platform_operations.managed_nocodb_sources
+    SET source_create_job_id = p_job_id, state = 'waiting_for_source',
+        generation = next_generation, updated_at = clock_timestamp(), error_code = NULL
+    WHERE domain = p_domain AND pair = p_pair AND access_kind = p_access_kind;
+  RETURN platform_internal.nocodb_source_result(p_domain, p_pair, p_access_kind);
 END;
 $function$;
 
@@ -874,7 +1388,7 @@ BEGIN
   PERFORM platform_internal.assert_nocodb_identifier(p_source_id, 'invalid_source_id');
   PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
   SELECT * INTO STRICT source FROM platform_operations.managed_nocodb_sources
-  WHERE domain = p_domain AND access_kind = p_access_kind FOR UPDATE;
+  WHERE domain = p_domain AND pair = 'default' AND access_kind = p_access_kind FOR UPDATE;
   IF source.state = 'ready' THEN
     IF source.source_id = p_source_id THEN
       RETURN platform_internal.nocodb_source_result(p_domain, p_access_kind);
@@ -891,8 +1405,52 @@ BEGIN
   UPDATE platform_operations.managed_nocodb_sources
   SET source_id = p_source_id, state = 'ready', generation = next_generation,
       validated_at = clock_timestamp(), updated_at = clock_timestamp(), error_code = NULL
-  WHERE domain = p_domain AND access_kind = p_access_kind;
+  WHERE domain = p_domain AND pair = 'default' AND access_kind = p_access_kind;
   RETURN platform_internal.nocodb_source_result(p_domain, p_access_kind);
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.record_nocodb_source_ready(
+  p_domain text, p_pair text, p_access_kind text, p_source_id text,
+  p_operation_id uuid, p_claim_generation bigint
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+DECLARE
+  source platform_operations.managed_nocodb_sources%ROWTYPE;
+  next_generation bigint;
+BEGIN
+  PERFORM platform_internal.assert_domain(p_domain);
+  PERFORM platform_internal.assert_nocodb_access_kind(p_access_kind);
+  PERFORM platform_internal.assert_nocodb_identifier(p_source_id, 'invalid_source_id');
+  PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
+  SELECT * INTO STRICT source FROM platform_operations.managed_nocodb_sources
+    WHERE domain = p_domain AND pair = p_pair AND access_kind = p_access_kind FOR UPDATE;
+  PERFORM platform_internal.assert_nocodb_claim(
+    p_domain, p_pair, source.operation, p_access_kind,
+    p_operation_id, p_claim_generation);
+  IF source.state = 'ready' AND source.source_id = p_source_id THEN
+    RETURN platform_internal.nocodb_source_result(p_domain, p_pair, p_access_kind);
+  END IF;
+  IF source.state NOT IN ('waiting_for_source', 'rotating') OR
+     (source.state = 'rotating' AND source.source_id <> p_source_id) OR
+     (source.state = 'waiting_for_source' AND source.source_create_job_id IS NULL) THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'source_transition_invalid';
+  END IF;
+  IF NOT COALESCE((platform_internal.validate_nocodb_access_authority(
+    p_domain, p_pair, p_access_kind, source.role_name, true)->>'valid')::boolean,
+    false) THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'source_access_not_eligible';
+  END IF;
+  next_generation := platform_internal.bump_generation();
+  UPDATE platform_operations.managed_nocodb_sources
+    SET source_id = p_source_id, state = 'ready', generation = next_generation,
+        validated_at = clock_timestamp(), updated_at = clock_timestamp(), error_code = NULL
+    WHERE domain = p_domain AND pair = p_pair AND access_kind = p_access_kind;
+  RETURN platform_internal.nocodb_source_result(p_domain, p_pair, p_access_kind);
 END;
 $function$;
 
@@ -921,7 +1479,7 @@ BEGIN
   END IF;
   PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
   SELECT * INTO STRICT source FROM platform_operations.managed_nocodb_sources
-  WHERE domain = p_domain AND access_kind = p_access_kind FOR UPDATE;
+  WHERE domain = p_domain AND pair = 'default' AND access_kind = p_access_kind FOR UPDATE;
   IF source.state NOT IN ('provisioning', 'waiting_for_source', 'rotating', 'ready', 'error') THEN
     RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'source_transition_invalid';
   END IF;
@@ -929,7 +1487,40 @@ BEGIN
   UPDATE platform_operations.managed_nocodb_sources
   SET state = 'error', operation = p_operation, generation = next_generation,
       updated_at = clock_timestamp(), error_code = p_error_code
-  WHERE domain = p_domain AND access_kind = p_access_kind;
+  WHERE domain = p_domain AND pair = 'default' AND access_kind = p_access_kind;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.record_nocodb_source_error(
+  p_domain text, p_pair text, p_access_kind text, p_operation text,
+  p_error_code text, p_operation_id uuid, p_claim_generation bigint
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+DECLARE
+  source platform_operations.managed_nocodb_sources%ROWTYPE;
+BEGIN
+  PERFORM platform_internal.assert_domain(p_domain);
+  PERFORM platform_internal.assert_nocodb_access_kind(p_access_kind);
+  IF p_operation IS NULL OR p_operation NOT IN ('sync', 'rotate') OR
+     p_error_code IS NULL OR p_error_code !~ '^[a-z][a-z0-9_]{0,63}$' THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_source_error';
+  END IF;
+  PERFORM platform_internal.assert_nocodb_claim(
+    p_domain, p_pair, p_operation, p_access_kind, p_operation_id, p_claim_generation);
+  SELECT * INTO STRICT source FROM platform_operations.managed_nocodb_sources
+    WHERE domain = p_domain AND pair = p_pair AND access_kind = p_access_kind FOR UPDATE;
+  IF source.state NOT IN ('provisioning', 'waiting_for_source', 'rotating', 'ready', 'error') THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'source_transition_invalid';
+  END IF;
+  UPDATE platform_operations.managed_nocodb_sources
+    SET state = 'error', operation = p_operation,
+        generation = platform_internal.bump_generation(),
+        updated_at = clock_timestamp(), error_code = p_error_code
+    WHERE domain = p_domain AND pair = p_pair AND access_kind = p_access_kind;
 END;
 $function$;
 
@@ -955,7 +1546,7 @@ BEGIN
   END IF;
   PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
   SELECT * INTO STRICT source FROM platform_operations.managed_nocodb_sources
-  WHERE domain = p_domain AND access_kind = p_access_kind FOR UPDATE;
+  WHERE domain = p_domain AND pair = 'default' AND access_kind = p_access_kind FOR UPDATE;
   IF source.state NOT IN ('ready', 'error') THEN
     RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'source_not_ready';
   END IF;
@@ -970,7 +1561,7 @@ BEGIN
   SET state = 'rotating', operation = 'rotate', generation = next_generation,
       credential_generation = credential_generation + 1,
       operation_started_at = clock_timestamp(), updated_at = clock_timestamp(), error_code = NULL
-  WHERE domain = p_domain AND access_kind = p_access_kind;
+  WHERE domain = p_domain AND pair = 'default' AND access_kind = p_access_kind;
   result := platform_internal.nocodb_source_result(p_domain, p_access_kind);
   PERFORM platform_internal.exec_in_database(
     'automation_data_control',
@@ -982,6 +1573,145 @@ BEGIN
   );
   RETURN result;
 END;
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.rotate_nocodb_source_credential(
+  p_domain text, p_pair text, p_access_kind text, p_password text,
+  p_operation_id uuid, p_claim_generation bigint
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+DECLARE
+  source platform_operations.managed_nocodb_sources%ROWTYPE;
+  next_generation bigint;
+BEGIN
+  PERFORM platform_internal.assert_domain(p_domain);
+  PERFORM platform_internal.assert_nocodb_access_kind(p_access_kind);
+  IF p_password IS NULL OR length(p_password) < 32 THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_generated_password';
+  END IF;
+  PERFORM platform_internal.assert_nocodb_claim(
+    p_domain, p_pair, 'rotate', p_access_kind, p_operation_id, p_claim_generation);
+  SELECT * INTO STRICT source FROM platform_operations.managed_nocodb_sources
+    WHERE domain = p_domain AND pair = p_pair AND access_kind = p_access_kind FOR UPDATE;
+  IF source.state <> 'ready' OR source.source_id IS NULL OR
+     source.integration_id IS NULL OR source.base_id IS NULL THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'source_not_ready';
+  END IF;
+  next_generation := platform_internal.bump_generation();
+  UPDATE platform_operations.managed_nocodb_sources
+    SET state = 'rotating', operation = 'rotate', generation = next_generation,
+        credential_generation = credential_generation + 1,
+        operation_started_at = clock_timestamp(), updated_at = clock_timestamp(),
+        error_code = NULL
+    WHERE domain = p_domain AND pair = p_pair AND access_kind = p_access_kind;
+  PERFORM platform_internal.exec_in_database(
+    'automation_data_control', format(
+      'ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD %L',
+      source.role_name, p_password));
+  RETURN platform_internal.nocodb_source_result(p_domain, p_pair, p_access_kind);
+END;
+$function$;
+
+-- Compatibility SQL entrypoints remain bound to the active default-pair claim.
+-- The webhook retains its request shape while the workflow obtains a claim first.
+CREATE OR REPLACE FUNCTION platform_operations.begin_nocodb_source(
+  p_domain text, p_access_kind text, p_base_id text, p_password text
+)
+RETURNS jsonb
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+  SELECT platform_operations.begin_nocodb_source(
+    p_domain, 'default', p_access_kind, p_base_id, p_password,
+    (SELECT operation_id FROM platform_operations.nocodb_source_operations
+      WHERE domain = p_domain AND pair = 'default'),
+    (SELECT generation FROM platform_operations.nocodb_source_operations
+      WHERE domain = p_domain AND pair = 'default'));
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.record_nocodb_integration(
+  p_domain text, p_access_kind text, p_integration_id text
+)
+RETURNS jsonb
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+  SELECT platform_operations.record_nocodb_integration(
+    p_domain, 'default', p_access_kind, p_integration_id,
+    (SELECT operation_id FROM platform_operations.nocodb_source_operations
+      WHERE domain = p_domain AND pair = 'default'),
+    (SELECT generation FROM platform_operations.nocodb_source_operations
+      WHERE domain = p_domain AND pair = 'default'));
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.record_nocodb_source_job(
+  p_domain text, p_access_kind text, p_job_id text
+)
+RETURNS jsonb
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+  SELECT platform_operations.record_nocodb_source_job(
+    p_domain, 'default', p_access_kind, p_job_id,
+    (SELECT operation_id FROM platform_operations.nocodb_source_operations
+      WHERE domain = p_domain AND pair = 'default'),
+    (SELECT generation FROM platform_operations.nocodb_source_operations
+      WHERE domain = p_domain AND pair = 'default'));
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.record_nocodb_source_ready(
+  p_domain text, p_access_kind text, p_source_id text
+)
+RETURNS jsonb
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+  SELECT platform_operations.record_nocodb_source_ready(
+    p_domain, 'default', p_access_kind, p_source_id,
+    (SELECT operation_id FROM platform_operations.nocodb_source_operations
+      WHERE domain = p_domain AND pair = 'default'),
+    (SELECT generation FROM platform_operations.nocodb_source_operations
+      WHERE domain = p_domain AND pair = 'default'));
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.record_nocodb_source_error(
+  p_domain text, p_access_kind text, p_operation text, p_error_code text
+)
+RETURNS void
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+  SELECT platform_operations.record_nocodb_source_error(
+    p_domain, 'default', p_access_kind, p_operation, p_error_code,
+    (SELECT operation_id FROM platform_operations.nocodb_source_operations
+      WHERE domain = p_domain AND pair = 'default'),
+    (SELECT generation FROM platform_operations.nocodb_source_operations
+      WHERE domain = p_domain AND pair = 'default'));
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.rotate_nocodb_source_credential(
+  p_domain text, p_access_kind text, p_password text
+)
+RETURNS jsonb
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+  SELECT platform_operations.rotate_nocodb_source_credential(
+    p_domain, 'default', p_access_kind, p_password,
+    (SELECT operation_id FROM platform_operations.nocodb_source_operations
+      WHERE domain = p_domain AND pair = 'default'),
+    (SELECT generation FROM platform_operations.nocodb_source_operations
+      WHERE domain = p_domain AND pair = 'default'));
 $function$;
 
 CREATE OR REPLACE FUNCTION platform_internal.public_data_privileges_denied(p_database text)
@@ -1273,20 +2003,11 @@ CREATE OR REPLACE FUNCTION platform_operations.validate_nocodb_access(
   p_access_kind text
 )
 RETURNS jsonb
-LANGUAGE plpgsql
+LANGUAGE sql
 SECURITY DEFINER
 SET search_path = pg_catalog, platform_operations
 AS $function$
-DECLARE
-  source platform_operations.managed_nocodb_sources%ROWTYPE;
-BEGIN
-  PERFORM platform_internal.assert_domain(p_domain);
-  PERFORM platform_internal.assert_nocodb_access_kind(p_access_kind);
-  PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
-  SELECT * INTO STRICT source FROM platform_operations.managed_nocodb_sources
-  WHERE domain = p_domain AND access_kind = p_access_kind;
-  RETURN platform_operations.validate_nocodb_access(p_domain, 'default', p_access_kind);
-END;
+  SELECT platform_operations.validate_nocodb_access(p_domain, 'default', p_access_kind);
 $function$;
 
 CREATE OR REPLACE FUNCTION platform_operations.capture_backup_state()
@@ -1435,7 +2156,10 @@ REVOKE ALL ON TABLE platform_operations.platform_schema_revision,
   platform_operations.nocodb_source_operations FROM PUBLIC;
 REVOKE ALL ON FUNCTION platform_internal.assert_nocodb_access_kind(text),
   platform_internal.nocodb_pair_role(text, text, text),
+  platform_internal.nocodb_operation_result(text, text, boolean),
+  platform_internal.assert_nocodb_claim(text, text, text, text, uuid, bigint),
   platform_internal.assert_nocodb_identifier(text, text),
+  platform_internal.nocodb_source_result(text, text, text),
   platform_internal.nocodb_source_result(text, text),
   platform_internal.public_data_privileges_denied(text),
   platform_internal.validate_nocodb_access_authority(text, text, text, text, boolean),
@@ -1443,14 +2167,26 @@ REVOKE ALL ON FUNCTION platform_internal.assert_nocodb_access_kind(text),
   platform_internal.assert_nocodb_extension_contract() FROM PUBLIC;
 REVOKE ALL ON FUNCTION platform_operations.provision_nocodb_metadata(text),
   platform_operations.configure_nocodb_pair(text, text, text, text),
+  platform_operations.claim_nocodb_operation(text, text, text, text, uuid),
+  platform_operations.read_nocodb_operation_state(text, text),
+  platform_operations.mark_nocodb_operation_uncertain(text, text, uuid, bigint, text),
+  platform_operations.complete_nocodb_operation(text, text, uuid, bigint),
   platform_operations.configure_nocodb_schema_mapping(text, text, text),
+  platform_operations.prepare_nocodb_access(text, text),
   platform_operations.prepare_nocodb_access(text),
+  platform_operations.read_nocodb_source_state(text, text, text),
   platform_operations.read_nocodb_source_state(text, text),
+  platform_operations.begin_nocodb_source(text, text, text, text, text, uuid, bigint),
   platform_operations.begin_nocodb_source(text, text, text, text),
+  platform_operations.record_nocodb_integration(text, text, text, text, uuid, bigint),
   platform_operations.record_nocodb_integration(text, text, text),
+  platform_operations.record_nocodb_source_job(text, text, text, text, uuid, bigint),
   platform_operations.record_nocodb_source_job(text, text, text),
+  platform_operations.record_nocodb_source_ready(text, text, text, text, uuid, bigint),
   platform_operations.record_nocodb_source_ready(text, text, text),
+  platform_operations.record_nocodb_source_error(text, text, text, text, text, uuid, bigint),
   platform_operations.record_nocodb_source_error(text, text, text, text),
+  platform_operations.rotate_nocodb_source_credential(text, text, text, text, uuid, bigint),
   platform_operations.rotate_nocodb_source_credential(text, text, text),
   platform_operations.validate_nocodb_access(text, text, text),
   platform_operations.validate_nocodb_access(text, text),
@@ -1460,14 +2196,26 @@ REVOKE EXECUTE ON FUNCTION platform_operations.read_nocodb_source_state(text, te
 GRANT EXECUTE ON FUNCTION platform_operations.provision_nocodb_metadata(text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.configure_nocodb_pair(text, text, text, text)
   TO automation_data_provisioner;
+GRANT EXECUTE ON FUNCTION platform_operations.claim_nocodb_operation(text, text, text, text, uuid) TO automation_data_provisioner;
+GRANT EXECUTE ON FUNCTION platform_operations.read_nocodb_operation_state(text, text) TO automation_data_provisioner;
+GRANT EXECUTE ON FUNCTION platform_operations.mark_nocodb_operation_uncertain(text, text, uuid, bigint, text) TO automation_data_provisioner;
+GRANT EXECUTE ON FUNCTION platform_operations.complete_nocodb_operation(text, text, uuid, bigint) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.configure_nocodb_schema_mapping(text, text, text) TO automation_data_provisioner;
+GRANT EXECUTE ON FUNCTION platform_operations.prepare_nocodb_access(text, text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.prepare_nocodb_access(text) TO automation_data_provisioner;
+GRANT EXECUTE ON FUNCTION platform_operations.read_nocodb_source_state(text, text, text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.read_nocodb_source_state(text, text) TO automation_data_provisioner;
+GRANT EXECUTE ON FUNCTION platform_operations.begin_nocodb_source(text, text, text, text, text, uuid, bigint) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.begin_nocodb_source(text, text, text, text) TO automation_data_provisioner;
+GRANT EXECUTE ON FUNCTION platform_operations.record_nocodb_integration(text, text, text, text, uuid, bigint) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.record_nocodb_integration(text, text, text) TO automation_data_provisioner;
+GRANT EXECUTE ON FUNCTION platform_operations.record_nocodb_source_job(text, text, text, text, uuid, bigint) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.record_nocodb_source_job(text, text, text) TO automation_data_provisioner;
+GRANT EXECUTE ON FUNCTION platform_operations.record_nocodb_source_ready(text, text, text, text, uuid, bigint) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.record_nocodb_source_ready(text, text, text) TO automation_data_provisioner;
+GRANT EXECUTE ON FUNCTION platform_operations.record_nocodb_source_error(text, text, text, text, text, uuid, bigint) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.record_nocodb_source_error(text, text, text, text) TO automation_data_provisioner;
+GRANT EXECUTE ON FUNCTION platform_operations.rotate_nocodb_source_credential(text, text, text, text, uuid, bigint) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.rotate_nocodb_source_credential(text, text, text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.validate_nocodb_access(text, text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.validate_nocodb_access(text, text, text) TO automation_data_provisioner;

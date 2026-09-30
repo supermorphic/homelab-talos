@@ -88,6 +88,8 @@ scripts/test/nocodb-workflow-contract-test.sh
 node scripts/test/nocodb-source-response-test.mjs
 node scripts/test/nocodb-schema-mapping-workflow-test.mjs
 scripts/test/lib/nocodb-permissions-test.sh
+scripts/test/nocodb-pair-registry-test.sh
+scripts/test/nocodb-pair-lifecycle-test.sh
 scripts/test/nocodb-source-operation-test.sh
 scripts/test/nocodb-platform-preflight-test.sh
 scripts/test/nocodb-bootstrap-test.sh

@@ -97,6 +97,17 @@ BEGIN
 END;
 $test$;
 
+-- A named pair must not make the default mapping query ambiguous.
+DO $test$
+BEGIN
+  IF platform_operations.configure_nocodb_schema_mapping(
+      'pair_fixture', 'legacy_read', 'legacy_edit')->>'readerRole' <>
+      'pair_fixture_reader' THEN
+    RAISE EXCEPTION 'default mapping was changed by named pair registration';
+  END IF;
+END;
+$test$;
+
 -- An unchanged registration stays idempotent after one of its sources activates.
 DO $test$
 DECLARE
