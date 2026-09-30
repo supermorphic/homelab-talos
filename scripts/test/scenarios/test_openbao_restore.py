@@ -139,6 +139,31 @@ class Client:
 
 
 class RestoredReadbackTests(unittest.TestCase):
+    def test_scratch_probe_retains_status_and_seal_flags_without_body_or_token(self):
+        from scripts.test.scenarios import openbao_restore as scenario
+
+        kube = scenario.ScratchKube(Path("/synthetic/config"), RUN, {}, b"x" * 32)
+        kube.assert_pod = lambda uid: None
+        response = {"status": 200, "body": {
+            "initialized": True, "sealed": True, "cluster_id": MARKER, "token": MARKER}}
+        kube.command = lambda *args, **kwargs: json.dumps(response).encode()
+        kube.http("GET", "sys/seal-status", token=MARKER)
+        self.assertEqual(getattr(kube, "probe", None), {
+            "method": "GET", "status": 200, "initialized": True, "sealed": True})
+        response["status"] = 403
+        kube.http("POST", "auth/homelab-userpass/login/openbao-operator",
+                  payload={"password": MARKER})
+        self.assertEqual(kube.probe, {"method": "POST", "status": 403})
+
+        def fail(*args, **kwargs):
+            raise RuntimeError(MARKER)
+
+        kube.command = fail
+        with self.assertRaises(RuntimeError):
+            kube.http("GET", "sys/seal-status")
+        self.assertEqual(kube.probe, {"method": "GET"})
+        self.assertNotIn(MARKER, json.dumps(kube.probe))
+
     def test_isolated_provider_uses_exact_stored_configuration_and_fails_closed(self):
         from scripts.test.core.test_openbao_apply import StateClient
         from scripts.test.scenarios import openbao_restore as scenario
@@ -326,6 +351,54 @@ class RestoreTests(unittest.TestCase):
                 self.client = Client(self.kube)
                 setattr(self.client, failure, False if failure == "good_config" else 200)
                 self.assertEqual(self.run_drill()["status"], "fail")
+
+    def test_failure_identifies_operation_without_private_exception_or_response(self):
+        for operation, stage in (
+            ("initialize", "initialize-scratch"),
+            ("wait_unsealed", "initial-unseal"),
+            ("force_restore", "force-restore"),
+            ("login_retained", "restored-login"),
+            ("restored_configuration", "restored-configuration"),
+        ):
+            with self.subTest(operation=operation):
+                self.kube = Cluster()
+                self.client = Client(self.kube)
+
+                def fail(*args):
+                    raise RuntimeError(MARKER)
+
+                setattr(self.client, operation, fail)
+                result = self.run_drill()
+                self.assertEqual(result.get("stage"), stage)
+                self.assertEqual(result["cleanup"], "passed")
+                self.assertNotIn(MARKER, json.dumps(result))
+
+    def test_failure_retains_only_fixed_transport_classification(self):
+        from scripts.openbao.configuration import SafeError
+
+        def fail(*args):
+            raise SafeError("timeout")
+
+        self.client.force_restore = fail
+        result = self.run_drill()
+        self.assertEqual(result.get("classification"), "timeout")
+        self.assertEqual(result["cleanup"], "passed")
+
+    def test_failed_report_filters_probe_values_and_extra_fields(self):
+        def fail(*args):
+            raise RuntimeError(MARKER)
+
+        self.client.force_restore = fail
+        for status, expected in ((403, {"status": 403}), (True, {}), (MARKER, {})):
+            self.kube.probe = {
+                "method": "POST", "status": status, "sealed": MARKER,
+                "initialized": True, "body": MARKER, "token": MARKER, "path": MARKER,
+            }
+            self.kube.objects.clear()
+            result = self.run_drill()
+            self.assertEqual(result.get("last_http_probe"), {
+                "method": "POST", "initialized": True, **expected})
+            self.assertNotIn(MARKER, json.dumps(result))
 
     def test_cleanup_failure_is_separate_and_sanitized(self):
         self.kube.fail_cleanup = True
