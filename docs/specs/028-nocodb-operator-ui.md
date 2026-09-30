@@ -767,6 +767,104 @@ candidate evidence. Live upgrade, browser acceptance, and recorded recovery rema
 separately authorized gates. Consumer handoff includes deployed revision, commands,
 returned roles, grant/connection prerequisites, and evidence IDs.
 
+## Credential discovery and source evidence (issue 506)
+
+Status: proposed, not implemented or live-validated. The
+[shared discovery contract](026-automation-data-postgresql-platform.md#task-oriented-credential-discovery-issue-506)
+defines the command, protected local access, bounds, and autonomous helper use. This
+section defines which NocoDB facts support an agent's decision. It does not change source
+permissions, introduce automatic repair, or authorize credential export.
+
+### Credential families and ownership
+
+The canonical discovery section in the operations guide must distinguish these families:
+
+| Family | Purpose and retention | Lifecycle owner and supported access |
+| --- | --- | --- |
+| NocoDB UI accounts | Human authentication and workspace/base membership in NocoDB | Operator-managed UI account lifecycle; not a PostgreSQL connection credential. |
+| Pair reader/operator logins | PostgreSQL access for one registered NocoDB source; encrypted connection material retained by NocoDB | Source provisioner creates/delivers the password transiently; pair/source commands own sync and targeted rotation. Generation by n8n does not mean an n8n credential retains that password. |
+| Domain migrator/runtime logins | Domain DDL or normal n8n processing; corresponding n8n Postgres credentials | Domain provisioner owns provisioning/rotation; an agent migration uses a separately retained protected migrator profile. |
+| Registered application logins | Consumer reads and reviewed functions; protected application profiles | Application lifecycle owns registration, activation, rotation, acknowledgment, and retained client material. Never borrow a source login. |
+| API and webhook tokens | Authenticate automation to application APIs or fixed webhooks; designated n8n credentials and protected caller material | Each workflow/bootstrap owner defines issuance, binding, replacement, and revocation. Inventory references the applicable procedure; it does not retrieve a token. |
+| Platform database credentials | NocoDB metadata, provisioner, backup, exporter, and restricted inventory access | Platform/operator lifecycle and the existing encrypted configuration or n8n binding. Ordinary consumer work does not select these identities. |
+| Encryption/signing and recovery keys | NocoDB connection encryption, n8n credential encryption, signing, SOPS and retained recovery material | Operator recovery procedures; these are not application logins and are never offered as an agent access path. |
+
+Static family definitions explain purpose and procedures; they are not a manually maintained
+credential-instance list. Derive instances and bindings from observed state. Installed workload
+Secret references establish only a configured locator, not the Secret's presence, contents,
+validity, or off-cluster recoverability. UI accounts are represented by opaque IDs and necessary
+membership metadata, excluding email addresses and personal details. Recovery material outside
+the observation boundary is `not_observed`, never inferred present from a healthy deployment.
+If a supported rotation or decommission procedure does not exist, report that it requires a
+separately reviewed operator procedure; do not invent a command or promise self-service support.
+
+### Independent observation and reconciliation
+
+Read platform domains, pair/schema mappings, source rows, operation claims, and application
+registrations separately from observed PostgreSQL roles and NocoDB base/integration/source
+metadata. Read n8n credential IDs/types and published workflow credential bindings through
+the restricted projections, without credential data or node parameters. Distinguish saved
+draft bindings from those used by the published workflow; a matching draft is not runtime
+evidence. Exclude execution history and business records entirely.
+
+NocoDB projections enumerate object IDs, workspace/base relationships, integration type,
+source-to-integration links, edit flags, enabled/deleted state, and bounded update metadata.
+They must not select connection configuration, encrypted payloads, password hashes, tokens,
+or free-form descriptions. A typed provider mapping assigns known purposes; unfamiliar
+objects retain a bounded opaque ID and `unclassified` status rather than echoing arbitrary
+names. Enumerate objects even when the platform has no corresponding row. A well-formed
+title may aid classification but never establishes ownership or authorizes adoption.
+
+Check both registered identities missing their expected observed objects and observed
+objects without registered ownership. Compare global object IDs and full domain/pair/access
+bindings to detect duplicate assignments, cross-pair reuse, wrong bases, and missing n8n
+credentials. Reuse of one runtime credential by multiple intended workflow nodes is not
+itself a duplicate; conflicting identity assignment or ambiguous required node binding is.
+Objects outside managed ownership are classified separately from violations of a managed
+contract. Neither category permits automatic deletion, registry insertion, or adoption.
+
+Allow the pinned application's intrinsic local source under its explicit tested contract;
+it is not an orphan external integration. Registered `awaiting_grants` roles may legitimately
+be NOLOGIN with no integration/source. Conversely, a ready registered source requires its
+exact observed integration, base, source, and matching editing flags. Incomplete creation,
+uncertain claims, and partial rotation remain visible; never call them ready because an
+object with a matching name exists.
+
+Compare source and operation-claim state/generations where the existing lifecycle defines
+a relationship, and compare application registry acknowledgment with protected local binding
+metadata. Report expected and observed values with their evidence source. NocoDB's encrypted
+connection is not inspected to establish a role, schema, password, or credential generation.
+Those facts remain registered intent or last validated lifecycle evidence unless an independent
+non-secret observation supports them. Timestamps are not substitutes for credential generations.
+Metadata consistency does not prove successful login, permission enforcement, password equality,
+or restore success; keep those acceptance results separate.
+
+### Completion, recovery, and validation
+
+Source create/sync/rotate and application activation report the target's metadata readback
+alongside their existing authentication and permission results. An unavailable inventory
+observation cannot erase a successful mutation or authorize another mutation. Recovery retains
+the same operation identity and pending material under existing retry rules.
+
+Attended decommission receipts retain what was removed and what remains. A fresh independent
+enumeration establishes current absence; receipts and registry deletion alone cannot. Report
+unavailable sources and partial removal explicitly. Preserve retained acceptance fixtures until
+their specific removal is authorized. No new decommission mutation API is part of discovery.
+
+Extend synthetic lifecycle and disposable integration tests to include registry-only,
+integration-only, role-only, unclassified, duplicate, wrong-binding, and generation/state
+mismatch cases. Include multiple named pairs, the default pair, intentional multi-node n8n
+credential reuse, unpublished draft bindings, and legitimate intrinsic sources. Create, rotate,
+and attended removal must change current output without editing a credential list. Repeat
+tests with stale/missing observations and hostile strings in all permitted text fields;
+unknown shapes fail closed without returning raw metadata or credential-bearing errors.
+
+The operations guide owns the canonical discovery entry point and links to existing bootstrap,
+source/pair lifecycle, application/migration access, recovery, and attended decommission
+procedures. Issue 507 independently audits installed ownership and lifecycle evidence; issue
+506 supplies the repeatable observation interface and must not claim that an inventory
+snapshot completes that audit.
+
 ## Review triggers
 
 Revisit the architecture when demonstrated requirements call for native attachments,
