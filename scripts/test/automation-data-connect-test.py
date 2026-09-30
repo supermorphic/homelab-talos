@@ -14,7 +14,9 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+import automation_data_access as access
 import automation_data_client as client
+from automation_data_inventory import validate_observation
 
 CONNECT_PATH = Path(__file__).resolve().parents[1] / "operations" / "automation-data-connect.py"
 SPEC = importlib.util.spec_from_file_location("automation_data_connect", CONNECT_PATH)
@@ -229,6 +231,261 @@ class ConnectTest(unittest.TestCase):
         self.assertTrue(process.terminated)
         self.assertTrue((self.directory / "sample" / "interview" / "binding.json").is_file())
         self.assertNotIn("password", output.getvalue())
+
+
+class AutomaticConnectTest(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+        self.root.chmod(0o700)
+        self.config_root = self.root / "homelab" / "automation-data"
+        self.config_root.mkdir(parents=True, mode=0o700)
+        self.app = self.root / "applications"
+        self.migrators = self.root / "migrators"
+        for directory in [self.app, self.migrators]:
+            directory.mkdir(mode=0o700)
+        fixture_spec = importlib.util.spec_from_file_location(
+            "discovery_test_fixtures",
+            Path(__file__).with_name("automation-data-discovery-command-test.py"),
+        )
+        fixture_module = importlib.util.module_from_spec(fixture_spec)
+        fixture_spec.loader.exec_module(fixture_module)
+        self.raw = fixture_module.fixtures()
+        self.role = fixture_module.APP_ROLE
+        self.write(self.config_root / "inventory-auth", "SYNTHETIC_INVENTORY_ONLY")
+        self.write(
+            self.config_root / "access.json",
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "inventoryAuthFile": str(self.config_root / "inventory-auth"),
+                    "applicationProfileRoot": str(self.app),
+                    "migratorProfileRoot": str(self.migrators),
+                }
+            ),
+        )
+        environment = mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(self.root)}, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.fetch = mock.patch.object(
+            access,
+            "fetch_observations",
+            side_effect=lambda *_: [
+                validate_observation(raw, source) for source, raw in self.raw.items()
+            ],
+        )
+        self.fetch.start()
+        self.addCleanup(self.fetch.stop)
+        self.install_application()
+        self.install_migrator()
+
+    def write(self, path, value):
+        path.write_text(value)
+        path.chmod(0o600)
+
+    def service(self, directory, role, passfile, section):
+        self.write(passfile, f"127.0.0.1:15432:sample:{role}:SYNTHETIC_SECRET_ONLY\n")
+        self.write(
+            directory / "service.conf",
+            f"[{section}]\nhost=127.0.0.1\nport=15432\n"
+            f"dbname=sample\nuser={role}\npassfile={passfile}\nsslmode=disable\n",
+        )
+
+    def install_application(self):
+        directory = self.app / "sample" / "interview"
+        directory.mkdir(parents=True, mode=0o700)
+        directory.parent.chmod(0o700)
+        version = directory / "generation-2"
+        version.mkdir(mode=0o700)
+        self.service(
+            directory,
+            self.role,
+            version / "credential.pgpass",
+            f"automation_data_sample_{self.role}",
+        )
+        self.write(
+            directory / "binding.json",
+            json.dumps(
+                {
+                    "domain": "sample",
+                    "database": "sample",
+                    "application": "interview",
+                    "schema": "consumer_schema",
+                    "role": self.role,
+                    "credentialGeneration": 2,
+                    "localPort": 15432,
+                }
+            ),
+        )
+        self.application_directory = directory
+
+    def install_migrator(self):
+        directory = self.migrators / "sample"
+        directory.mkdir(mode=0o700)
+        self.service(
+            directory, "sample_migrator", directory / "credential.pgpass", "retained_migrator"
+        )
+        domain = self.raw["platform"]["objects"][0]
+        self.write(
+            directory / "binding.json",
+            json.dumps(
+                {
+                    "domain": "sample",
+                    "database": "sample",
+                    "role": "sample_migrator",
+                    "credentialId": domain["migratorCredentialId"],
+                    "credentialUpdatedAt": domain["migratorUpdatedAt"],
+                    "localPort": 15432,
+                    "service": "retained_migrator",
+                }
+            ),
+        )
+        self.migrator_directory = directory
+
+    def test_ready_connections_need_no_terminal_or_password_prompt(self):
+        for identity, role in [
+            ("application/interview", self.role),
+            ("migrator", "sample_migrator"),
+        ]:
+            output = io.StringIO()
+            with (
+                mock.patch.object(
+                    command, "private_database_tunnel", return_value=contextlib.nullcontext(15432)
+                ) as tunnel,
+                mock.patch.object(command, "authenticate_candidate") as authenticate,
+                mock.patch.object(command.time, "sleep", side_effect=KeyboardInterrupt),
+                mock.patch("builtins.input", side_effect=AssertionError("prompt forbidden")),
+                mock.patch.object(sys, "stdin", io.StringIO()),
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(command.main(["sample", identity]), 0)
+            tunnel.assert_called_once()
+            self.assertEqual(authenticate.call_args.args[:3], (15432, "sample", role))
+            self.assertNotIn("SYNTHETIC_SECRET", output.getvalue())
+
+    def test_generation_change_after_selection_stops_before_secret_use(self):
+        self.assertTrue(callable(getattr(access, "select_connection_profile", None)))
+        selection = access.select_connection_profile("sample", "application/interview")
+        app = next(o for o in self.raw["platform"]["objects"] if o["kind"] == "application")
+        app["credentialGeneration"] = 3
+        with (
+            mock.patch.object(
+                command,
+                "validate_service_profile",
+                side_effect=AssertionError("secret read forbidden"),
+            ),
+            self.assertRaises(client.PrivateFileError),
+        ):
+            command.selected_profile("sample", "application/interview", 15432, selection)
+
+    def test_profile_replacement_after_selection_stops_before_secret_use(self):
+        self.assertTrue(callable(getattr(access, "select_connection_profile", None)))
+        selection = access.select_connection_profile("sample", "application/interview")
+        path = self.application_directory / "service.conf"
+        replacement = path.with_name("replacement.conf")
+        self.write(replacement, path.read_text())
+        replacement.replace(path)
+        with (
+            mock.patch.object(
+                command,
+                "validate_service_profile",
+                side_effect=AssertionError("secret read forbidden"),
+            ),
+            self.assertRaises(client.PrivateFileError),
+        ):
+            command.selected_profile("sample", "application/interview", 15432, selection)
+
+    def test_pending_and_unavailable_inventory_never_fall_back(self):
+        pending = self.application_directory / "pending"
+        pending.mkdir(mode=0o700)
+        self.write(pending / "operation.json", "{}")
+        for identity in ["application/interview", "migrator"]:
+            if identity == "migrator":
+                self.raw["platform"] = {
+                    "source": "platform",
+                    "status": "unavailable",
+                    "complete": False,
+                }
+            with (
+                mock.patch.object(command, "private_database_tunnel") as tunnel,
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(command.main(["sample", identity]), 1)
+            tunnel.assert_not_called()
+
+    def test_partial_explicit_override_is_an_error(self):
+        self.assertTrue(callable(getattr(access, "select_connection_profile", None)))
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"AUTOMATION_DATA_SERVICE_FILE": str(self.migrator_directory / "service.conf")},
+            ),
+            mock.patch.object(access, "fetch_observations") as fetch,
+            self.assertRaises(client.PrivateFileError),
+        ):
+            access.select_connection_profile("sample", "migrator")
+        fetch.assert_not_called()
+
+    def test_explicit_profile_works_when_inventory_is_unavailable(self):
+        with (
+            mock.patch.dict(
+                os.environ,
+                {
+                    "AUTOMATION_DATA_SERVICE_FILE": str(self.migrator_directory / "service.conf"),
+                    "AUTOMATION_DATA_SERVICE": "retained_migrator",
+                },
+            ),
+            mock.patch.object(
+                access, "fetch_observations", side_effect=AssertionError("discovery forbidden")
+            ),
+        ):
+            self.assertEqual(
+                command.selected_profile("sample", "migrator", 15432)[0], "sample_migrator"
+            )
+
+    def test_wrong_service_and_passfile_target_cannot_authenticate(self):
+        for old, new in [
+            ("dbname=sample", "dbname=other"),
+            (
+                f"passfile={self.migrator_directory / 'credential.pgpass'}",
+                f"passfile={self.application_directory / 'generation-2/credential.pgpass'}",
+            ),
+        ]:
+            service = self.migrator_directory / "service.conf"
+            original = service.read_text()
+            self.write(service, original.replace(old, new))
+            with (
+                mock.patch.object(
+                    command, "private_database_tunnel", return_value=contextlib.nullcontext(15432)
+                ),
+                mock.patch.object(command, "authenticate_candidate") as authenticate,
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(command.main(["sample", "migrator"]), 1)
+            authenticate.assert_not_called()
+            self.write(service, original)
+
+    def test_local_change_during_secret_read_stops_before_authentication(self):
+        original = command.validate_service_profile
+
+        def replace_after_read(*args):
+            result = original(*args)
+            pending = self.application_directory / "pending"
+            pending.mkdir(mode=0o700)
+            self.write(pending / "operation.json", "{}")
+            return result
+
+        with (
+            mock.patch.object(
+                command, "private_database_tunnel", return_value=contextlib.nullcontext(15432)
+            ),
+            mock.patch.object(command, "validate_service_profile", side_effect=replace_after_read),
+            mock.patch.object(command, "authenticate_candidate") as authenticate,
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(command.main(["sample", "application/interview"]), 1)
+        authenticate.assert_not_called()
 
 
 if __name__ == "__main__":

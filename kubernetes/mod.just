@@ -135,6 +135,10 @@ automation-data-connect domain registered_identity: require-bash
 automation-data-credentials *args: require-bash
     @uv run --locked python scripts/operations/automation-data-credentials.py "$@"
 
+# Operator-run: bind an already protected migrator profile to fresh credential metadata.
+automation-data-login-enroll-migrator domain: require-bash
+    @uv run --locked python scripts/operations/automation-data-login.py enroll-migrator {{quote(domain)}}
+
 # Apply reviewed control functions to initialized PostgreSQL after a fresh backup.
 # Operator-run; deactivate provisioning and drain executions before confirmation.
 automation-data-control-migrate: require-bash

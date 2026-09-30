@@ -9,7 +9,7 @@ import re
 import ssl
 import stat
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -26,8 +26,11 @@ from automation_data_inventory import (
     DiscoveryRequest,
     InventoryError,
     SourceObservation,
+    build_inventory,
+    resolve,
     timestamp,
     validate_observation,
+    validate_request,
 )
 
 INVENTORY_HOST = "n8n.lab.supermorphic.com"
@@ -47,6 +50,18 @@ class ProfileMetadata:
     service_file: Path | None = None
     service: str | None = None
     local_port: int | None = None
+    binding: dict | None = None
+    file_signature: tuple | None = None
+    automatic: bool = False
+
+
+def file_signature(paths: list[Path]) -> tuple:
+    """Remember file identity and changes without opening credential contents."""
+    result = []
+    for path in paths:
+        info = safe_path(path).stat()
+        result.append((str(path), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns))
+    return tuple(result)
 
 
 def safe_path(path: Path | str, *, directory: bool = False) -> Path:
@@ -279,7 +294,7 @@ def inspect_profile(config: AccessConfig, identity: dict) -> ProfileMetadata:
             ):
                 return ProfileMetadata("stale")
             generation_path = safe_path(directory / f"generation-{generation}", directory=True)
-            safe_path(generation_path / "credential.pgpass")
+            passfile = safe_path(generation_path / "credential.pgpass")
             service = f"automation_data_{domain}_{identity['role']}"
         else:
             if (
@@ -295,9 +310,72 @@ def inspect_profile(config: AccessConfig, identity: dict) -> ProfileMetadata:
                 r"[A-Za-z][A-Za-z0-9_-]{0,127}", service
             ):
                 return ProfileMetadata("unbound")
-            safe_path(directory / "credential.pgpass")
-        return ProfileMetadata("ready", safe_path(directory / "service.conf"), service, port)
+            passfile = safe_path(directory / "credential.pgpass")
+        service_file = safe_path(directory / "service.conf")
+        return ProfileMetadata(
+            "ready",
+            service_file,
+            service,
+            port,
+            binding,
+            file_signature([binding_file, service_file, passfile]),
+        )
     except FileNotFoundError:
         return ProfileMetadata("missing")
     except (PrivateFileError, InventoryError, KeyError, ValueError, TypeError, OSError):
         return ProfileMetadata("unsafe")
+
+
+def connection_request(domain: str, identity: str) -> DiscoveryRequest:
+    request = DiscoveryRequest(
+        "resolve",
+        domain,
+        "migration" if identity == "migrator" else "application",
+        application=identity[12:] if identity.startswith("application/") else None,
+    )
+    validate_request(request)
+    return request
+
+
+def select_connection_profile(domain: str, identity: str) -> ProfileMetadata:
+    """Select metadata only. Consumer secrets remain private to the connection helper."""
+    request = connection_request(domain, identity)
+    raw_file = os.environ.get("AUTOMATION_DATA_SERVICE_FILE")
+    service = os.environ.get("AUTOMATION_DATA_SERVICE")
+    if raw_file is not None or service is not None:
+        if (
+            not raw_file
+            or not service
+            or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,127}", service)
+        ):
+            raise PrivateFileError("partial_or_invalid_service_override")
+        # Preserve the existing explicit-profile validation contract.
+        return ProfileMetadata("ready", validate_private_file(Path(raw_file)), service)
+    config = load_access_config()
+    inventory = build_inventory(fetch_observations(config, request))
+    preliminary = resolve(request, inventory)
+    if preliminary.identity is None:
+        raise PrivateFileError("automatic_profile_unavailable")
+    profile = inspect_profile(config, preliminary.identity)
+    if resolve(request, inventory, profile).decision != "ready":
+        raise PrivateFileError("automatic_profile_not_ready")
+    return replace(profile, automatic=True)
+
+
+def revalidate_connection_profile(domain: str, identity: str, selected: ProfileMetadata) -> None:
+    """Repeat fresh observation and metadata-only file checks immediately before use."""
+    if selected.automatic and select_connection_profile(domain, identity) != selected:
+        raise PrivateFileError("connection_profile_changed")
+
+
+def assert_profile_unchanged(selected: ProfileMetadata) -> None:
+    if selected.automatic:
+        pending = selected.service_file.parent / "pending"
+        if pending.exists() or pending.is_symlink():
+            raise PrivateFileError("connection_profile_changed")
+        if (
+            selected.file_signature is None
+            or file_signature([Path(signature[0]) for signature in selected.file_signature])
+            != selected.file_signature
+        ):
+            raise PrivateFileError("connection_profile_changed")
