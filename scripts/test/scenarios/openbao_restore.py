@@ -442,6 +442,17 @@ seal "static" {
                     ("configmaps", "kube-root-ca.crt"),
                 }:
                     continue
+                # Cilium creates this Pod child without controller: true. Admit
+                # only the exact endpoint of our current, verified scratch Pod.
+                if (kind == "ciliumendpoints.cilium.io"
+                        and item.get("apiVersion") == "cilium.io/v2"
+                        and item.get("kind") == "CiliumEndpoint"
+                        and meta.get("name") == "scratch-0"
+                        and meta.get("namespace") == self.namespace
+                        and self.pod_uid
+                        and meta.get("ownerReferences") == [{"apiVersion": "v1", "kind": "Pod",
+                            "name": "scratch-0", "uid": self.pod_uid}]):
+                    continue
                 if any(
                     o.get("uid") in known and o.get("controller") is True
                     for o in meta.get("ownerReferences", [])
@@ -474,6 +485,13 @@ seal "static" {
     def cleanup(self, documents, run_id):
         self.cleanup_inventory()
         restore.recheck(self, documents, run_id)
+        # Repeat the full reviewed manifest checks after the confirmation pause,
+        # using the approved UIDs rather than adopting current objects again.
+        for expected in self.created:
+            actual = self.read(expected)
+            restore.owned(expected, actual, run_id)
+            if not guards.contains_source(expected, actual):
+                raise restore.RestoreError()
         self.delete(documents[0])
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
@@ -609,6 +627,68 @@ class ScratchClient:
         self.kube.seal = None
 
 
+def cleanup_target(kube):
+    """Recover ownership metadata only; never reconstruct or retain secret values."""
+    kube.created, kube.extra = [], []
+    documents = restore.documents(kube.run_id, "2.7.0")
+    for expected in documents:
+        actual = kube.read(expected)
+        expected["metadata"]["uid"] = actual["metadata"]["uid"]
+        restore.owned(expected, actual, kube.run_id)
+        if not guards.contains_source(expected, actual):
+            raise restore.RestoreError()
+        kube.created.append(expected)
+    for kind, name in (("Secret", "scratch-seal"), ("ConfigMap", "scratch-config")):
+        expected = {"apiVersion": "v1", "kind": kind, "immutable": True,
+                    "metadata": {"name": name, "namespace": kube.namespace,
+                                 "annotations": {restore.OWNER: kube.run_id}}}
+        actual = kube.read(expected)
+        expected["metadata"]["uid"] = actual["metadata"]["uid"]
+        restore.owned(expected, actual, kube.run_id)
+        if not guards.contains_source(expected, actual):
+            raise restore.RestoreError()
+        kube.created.append(expected)
+        kube.extra.append(expected)
+    kube.pod_uid = kube.json("-n", kube.namespace, "get", "pod", "scratch-0", "-o", "json")["metadata"]["uid"]
+    kube.assert_pod(kube.pod_uid)
+    kube.assert_storage()
+    kube.cleanup_inventory()
+    return documents
+
+
+def cleanup_main(run_id):
+    """Attended retry for a complete retained scratch topology; evidence stays final."""
+    result = {"status": "fail", "cleanup": "not-required", "stage": "preflight"}
+    try:
+        selected = Path(os.environ["OPENBAO_OPERATOR_KUBECONFIG"])
+        if not selected.is_absolute() or not selected.is_file():
+            raise restore.RestoreError()
+        revision = guards.source_revision()
+        guards.require_deployed_revision(selected, revision)
+        kube = ScratchKube(selected, run_id, {}, None)
+        documents = cleanup_target(kube)
+        target = {"objects": [d["metadata"] for d in kube.created], "pod_uid": kube.pod_uid,
+                  "pv_uid": kube.pv_uid, "volume_uid": kube.volume_uid}
+        required = f"cleanup:openbao-restore:{run_id}:{guards.digest(target)}"
+        print("Deletes only the selected run's retained scratch namespace and storage.", flush=True)
+        print("Exact confirmation: " + required, flush=True)
+        if input("Enter exact confirmation: ") != required:
+            raise restore.RestoreError()
+        if guards.source_revision() != revision:
+            raise restore.RestoreError()
+        guards.require_deployed_revision(selected, revision)
+        install_interrupt_handlers()
+        result.update(cleanup="failed", stage="cleanup")
+        # Existing cleanup repeats inventory/storage/UID checks and uses atomic
+        # UID/resourceVersion DELETE preconditions. Do not adopt again after intent.
+        kube.cleanup(documents, run_id)
+        result.update(status="pass", cleanup="passed")
+    except Exception:  # noqa: BLE001 -- Never expose Secret bodies or adapter errors.
+        result["status"] = "fail"
+    print(json.dumps(result, sort_keys=True))
+    return 0 if result["status"] == "pass" else 1
+
+
 def main():
     result = {"status": "fail", "phases": [], "cleanup": "not-required"}
     run_dir = None
@@ -664,4 +744,6 @@ def main():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "cleanup":
+        raise SystemExit(cleanup_main(sys.argv[2]))
     raise SystemExit(main())

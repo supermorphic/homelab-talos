@@ -1212,6 +1212,10 @@ openbao-restore-drill: require-bash
     @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}"
     @TEST_KUBECONFIG="$OPENBAO_OPERATOR_KUBECONFIG" scripts/test/run-catalog-suite.sh test.openbao-restore-drill -- uv run --locked python -m scripts.test.scenarios.openbao_restore
 
+# Attended cleanup retry for one retained isolated restore run; no evidence rewriting.
+openbao-restore-cleanup run_id: require-bash
+    @uv run --locked python -m scripts.test.scenarios.openbao_restore cleanup {{quote(run_id)}}
+
 # Attended real API issuance, denial, and actual expiration acceptance.
 openbao-issuance-test: require-bash
     @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}"

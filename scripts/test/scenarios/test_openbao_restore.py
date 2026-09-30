@@ -204,13 +204,13 @@ class RestoredReadbackTests(unittest.TestCase):
             response = type("Response", (), {"status": status,
                 "read": lambda self, limit, body=body: json.dumps(body).encode()})()
             connection = type("Connection", (), {"request": lambda *a: None,
-                "getresponse": lambda self: response})()
+                "getresponse": lambda self, response=response: response})()
             source = io.TextIOWrapper(io.BytesIO(
                 json.dumps({"method": "GET", "path": path}).encode() + b"\n"))
             output = io.StringIO()
             with (patch("sys.stdin", source), patch("sys.stdout", output),
                   patch("http.client.HTTPConnection", return_value=connection)):
-                exec(scenario.BRIDGE, {})
+                exec(scenario.BRIDGE, {})  # noqa: S102 -- Repository bridge against synthetic transport only.
             self.assertEqual(json.loads(output.getvalue())["body"],
                              {"provider_unavailable": True} if allowed else {})
             self.assertNotIn(MARKER, output.getvalue())
@@ -544,6 +544,129 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(restore.RestoreError):
             cluster.cleanup_inventory()
 
+    def test_cleanup_accepts_only_cilium_endpoint_for_the_current_scratch_pod(self):
+        from scripts.test.scenarios import openbao_restore as scenario
+
+        cluster = scenario.ScratchKube(Path("/synthetic/operator-config"), RUN, {}, b"x" * 32)
+        cluster.pod_uid = "current-scratch-pod"
+        cluster.command = lambda *a, **kw: b"ciliumendpoints.cilium.io\n"
+        # Cilium's real Pod owner shape omits controller and blockOwnerDeletion.
+        endpoint = {"apiVersion": "cilium.io/v2", "kind": "CiliumEndpoint", "metadata": {
+            "name": "scratch-0", "namespace": cluster.namespace, "uid": "endpoint-fixture",
+            "ownerReferences": [{"apiVersion": "v1", "kind": "Pod", "name": "scratch-0",
+                                 "uid": cluster.pod_uid}]}}
+        value = copy.deepcopy(endpoint)
+        cluster.json = lambda *a: {"items": [value]}
+        cluster.cleanup_inventory()
+        for mutation in (
+            lambda m: m["metadata"].update(name="other-pod"),
+            lambda m: m["metadata"].update(namespace="other-namespace"),
+            lambda m: m["metadata"]["ownerReferences"][0].update(uid="previous-scratch-pod"),
+            lambda m: m["metadata"].update(annotations={restore.OWNER: "other-run"}),
+            lambda m: m.update(kind="OtherResource"),
+            lambda m: m.update(apiVersion="other.example/v1"),
+            lambda m: m["metadata"].update(ownerReferences=[]),
+        ):
+            value = copy.deepcopy(endpoint)
+            mutation(value)
+            with self.subTest(metadata=value["metadata"]), self.assertRaises(restore.RestoreError):
+                cluster.cleanup_inventory()
+        value = copy.deepcopy(endpoint)
+        cluster.command = lambda *a, **kw: b"jobs.batch\n"
+        with self.assertRaises(restore.RestoreError):
+            cluster.cleanup_inventory()
+
+    def test_cleanup_retry_reconstructs_only_reviewed_owned_objects(self):
+        from scripts.test.scenarios import openbao_restore as scenario
+
+        cluster = scenario.ScratchKube(Path("/synthetic/operator-config"), RUN, {}, None)
+        actual = {}
+        for document in restore.documents(RUN, "2.7.0"):
+            value = copy.deepcopy(document)
+            value["metadata"]["uid"] = document["kind"] + "-fixture"
+            actual[(document["kind"], document["metadata"]["name"])] = value
+        for kind, name in (("Secret", "scratch-seal"), ("ConfigMap", "scratch-config")):
+            actual[(kind, name)] = {"kind": kind, "apiVersion": "v1", "immutable": True,
+                "metadata": {"name": name, "namespace": cluster.namespace, "uid": name + "-fixture",
+                             "annotations": {restore.OWNER: RUN}}, "data": {"private": MARKER}}
+        cluster.read = lambda d: copy.deepcopy(actual[(d["kind"], d["metadata"]["name"])])
+        cluster.json = lambda *a: {"metadata": {"uid": "current-scratch-pod"}}
+        checks = []
+        cluster.assert_pod = lambda uid: checks.append(("pod", uid))
+        cluster.assert_storage = lambda: checks.append(("storage", None))
+        cluster.cleanup_inventory = lambda: checks.append(("inventory", None))
+        documents = scenario.cleanup_target(cluster)
+        self.assertEqual(len(documents), 5)
+        self.assertEqual(cluster.pod_uid, "current-scratch-pod")
+        self.assertEqual(checks, [("pod", "current-scratch-pod"), ("storage", None), ("inventory", None)])
+        self.assertNotIn(MARKER, json.dumps(cluster.created))
+        actual[("Namespace", cluster.namespace)]["metadata"]["annotations"][restore.OWNER] = "other-run"
+        with self.assertRaises(restore.RestoreError):
+            scenario.cleanup_target(cluster)
+
+    def test_cleanup_retry_refuses_spec_changes_or_nonimmutable_private_objects(self):
+        from scripts.test.scenarios import openbao_restore as scenario
+
+        for changed_kind in ("StatefulSet", "Secret"):
+            with self.subTest(kind=changed_kind):
+                cluster = scenario.ScratchKube(Path("/synthetic/operator-config"), RUN, {}, None)
+                def read(document, changed_kind=changed_kind):
+                    value = copy.deepcopy(document)
+                    value["metadata"]["uid"] = "synthetic-" + document["kind"]
+                    if document["kind"] == changed_kind:
+                        if changed_kind == "StatefulSet":
+                            value["spec"]["template"]["spec"]["automountServiceAccountToken"] = True
+                        else:
+                            value["immutable"] = False
+                    return value
+                cluster.read = read
+                with self.assertRaises(restore.RestoreError):
+                    scenario.cleanup_target(cluster)
+
+    def test_cleanup_retry_requires_bound_confirmation_and_never_rewrites_evidence(self):
+        from scripts.test.scenarios import openbao_restore as scenario
+
+        for correct in (False, True):
+            with self.subTest(confirmation=correct), tempfile.TemporaryDirectory() as temp:
+                config = Path(temp).resolve() / "operator-config"
+                config.write_text("synthetic-config")
+                cluster = scenario.ScratchKube(config, RUN, {}, None)
+                documents = restore.documents(RUN, "2.7.0")
+                for document in documents:
+                    document["metadata"]["uid"] = "synthetic-" + document["kind"]
+                cluster.created = documents
+                cluster.pod_uid = "synthetic-pod"
+                target = {"objects": [d["metadata"] for d in documents], "pod_uid": cluster.pod_uid,
+                          "pv_uid": None, "volume_uid": None}
+                confirmation = f"cleanup:openbao-restore:{RUN}:{scenario.guards.digest(target)}"
+                with patch.dict("os.environ", {"OPENBAO_OPERATOR_KUBECONFIG": str(config)}), patch.object(scenario.guards, "source_revision", return_value="a" * 40), patch.object(scenario.guards, "require_deployed_revision"), patch.object(scenario, "ScratchKube", return_value=cluster), patch.object(scenario, "cleanup_target", return_value=documents), patch("builtins.input", return_value=confirmation if correct else "incorrect"), patch("builtins.print"), patch.object(cluster, "cleanup") as cleanup, patch.object(scenario, "atomic_write_json") as evidence:
+                    self.assertEqual(scenario.cleanup_main(RUN), 0 if correct else 1)
+                self.assertEqual(cleanup.call_count, 1 if correct else 0)
+                evidence.assert_not_called()
+
+    def test_cleanup_rechecks_approved_specs_and_uids_before_deletion(self):
+        from scripts.test.scenarios import openbao_restore as scenario
+
+        for changed in ("spec", "uid"):
+            with self.subTest(changed=changed):
+                cluster = scenario.ScratchKube(Path("/synthetic/operator-config"), RUN, {}, None)
+                documents = restore.documents(RUN, "2.7.0")
+                documents = [d for d in documents if d["kind"] in {"Namespace", "StatefulSet"}]
+                for d in documents:
+                    d["metadata"]["uid"] = "original-" + d["kind"]
+                cluster.created = copy.deepcopy(documents)
+                actual = copy.deepcopy(documents)
+                if changed == "spec":
+                    actual[1]["spec"]["template"]["spec"]["automountServiceAccountToken"] = True
+                else:
+                    actual[1]["metadata"]["uid"] = "replacement-sts"
+                cluster.read = lambda d, actual=actual: next(a for a in actual if a["kind"] == d["kind"])
+                cluster.cleanup_inventory = lambda: None
+                cluster.command = lambda *a, **kw: b""
+                with patch.object(restore, "recheck"), patch.object(cluster, "delete") as delete, self.assertRaises(restore.RestoreError):
+                    cluster.cleanup(documents, RUN)
+                delete.assert_not_called()
+
     def cleanup_storage_fixture(self, pv, volume):
         from scripts.test.scenarios import openbao_restore as scenario
 
@@ -559,6 +682,9 @@ class AdapterTests(unittest.TestCase):
             },
         ]
         cluster.created = documents
+        for document in documents:
+            document["metadata"]["annotations"] = {restore.OWNER: RUN}
+        cluster.read = lambda expected: copy.deepcopy(expected)
         cluster.pv_uid = "original-pv-uid"
         cluster.volume_uid = "original-volume-uid"
         cluster.cleanup_inventory = lambda: None
