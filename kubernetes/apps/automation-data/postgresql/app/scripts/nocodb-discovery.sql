@@ -3,6 +3,52 @@
 BEGIN;
 SET LOCAL lock_timeout = '10s';
 SET LOCAL statement_timeout = '20s';
+DO $shape$
+BEGIN
+  IF current_database() <> 'nocodb' OR session_user <> 'postgres' OR
+    EXISTS (SELECT FROM (VALUES
+      ('public','workspace','id','character varying'),
+      ('public','workspace','deleted','boolean'),
+      ('public','nc_bases_v2','id','character varying'),
+      ('public','nc_bases_v2','fk_workspace_id','character varying'),
+      ('public','nc_bases_v2','deleted','boolean'),
+      ('public','nc_integrations_v2','id','character varying'),
+      ('public','nc_integrations_v2','fk_workspace_id','character varying'),
+      ('public','nc_integrations_v2','type','character varying'),
+      ('public','nc_integrations_v2','sub_type','character varying'),
+      ('public','nc_integrations_v2','deleted','boolean'),
+      ('public','nc_integrations_v2','updated_at','timestamp with time zone'),
+      ('public','nc_sources_v2','id','character varying'),
+      ('public','nc_sources_v2','base_id','character varying'),
+      ('public','nc_sources_v2','fk_workspace_id','character varying'),
+      ('public','nc_sources_v2','fk_integration_id','character varying'),
+      ('public','nc_sources_v2','is_data_readonly','boolean'),
+      ('public','nc_sources_v2','is_schema_readonly','boolean'),
+      ('public','nc_sources_v2','enabled','boolean'),
+      ('public','nc_sources_v2','deleted','boolean'),
+      ('public','nc_sources_v2','is_local','boolean'),
+      ('public','nc_sources_v2','updated_at','timestamp with time zone'),
+      ('public','nc_users_v2','id','character varying'),
+      ('public','nc_users_v2','is_deleted','boolean'),
+      ('public','nc_base_users_v2','base_id','character varying'),
+      ('public','nc_base_users_v2','fk_user_id','character varying'),
+      ('public','nc_base_users_v2','roles','text'),
+      ('public','workspace_user','fk_workspace_id','character varying'),
+      ('public','workspace_user','fk_user_id','character varying'),
+      ('public','workspace_user','roles','character varying'),
+      ('public','workspace_user','deleted','boolean'),
+      ('public','nc_api_tokens','id','integer'),
+      ('public','nc_api_tokens','expiry','character varying'),
+      ('public','nc_api_tokens','enabled','boolean'),
+      ('public','nc_api_tokens','updated_at','timestamp with time zone')
+    ) required(schema_name,table_name,column_name,data_type)
+    WHERE NOT EXISTS (SELECT FROM information_schema.columns c
+      WHERE c.table_schema=required.schema_name AND c.table_name=required.table_name
+        AND c.column_name=required.column_name AND c.data_type=required.data_type)) THEN
+    RAISE EXCEPTION USING MESSAGE='discovery_installation_precondition_failed';
+  END IF;
+END;
+$shape$;
 DO $roles$
 DECLARE identity text;
 BEGIN
@@ -14,7 +60,7 @@ BEGIN
       RAISE EXCEPTION USING MESSAGE='discovery_role_collision';
     END IF;
     IF EXISTS (SELECT FROM pg_catalog.pg_roles r WHERE rolname=identity AND
-      (rolsuper OR rolcreatedb OR rolcreaterole OR rolinherit OR rolreplication OR rolbypassrls)) OR
+      ((rolname='nocodb_inventory_projection' AND rolcanlogin) OR rolsuper OR rolcreatedb OR rolcreaterole OR rolinherit OR rolreplication OR rolbypassrls)) OR
       EXISTS (SELECT FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles r ON r.oid=m.member OR r.oid=m.roleid WHERE r.rolname=identity) THEN
       RAISE EXCEPTION USING MESSAGE='discovery_role_authority_invalid';
     END IF;
@@ -33,6 +79,23 @@ CREATE SCHEMA IF NOT EXISTS platform_discovery AUTHORIZATION nocodb_inventory_pr
 REVOKE ALL ON SCHEMA platform_discovery FROM PUBLIC;
 GRANT USAGE ON SCHEMA platform_discovery TO nocodb_inventory;
 GRANT CONNECT ON DATABASE nocodb TO nocodb_inventory;
+REVOKE CREATE, TEMPORARY ON DATABASE nocodb FROM PUBLIC;
+DO $authority$
+BEGIN
+  IF has_database_privilege('nocodb_inventory', 'nocodb', 'CREATE,TEMPORARY') OR
+    EXISTS (SELECT FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+        AND c.relkind IN ('r','p','v','m','f') AND
+        (has_table_privilege('nocodb_inventory',c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') OR
+         has_any_column_privilege('nocodb_inventory',c.oid,'SELECT,INSERT,UPDATE,REFERENCES'))) OR
+    EXISTS (SELECT FROM pg_catalog.pg_namespace n WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+      AND has_schema_privilege('nocodb_inventory',n.oid,'CREATE')) OR
+    EXISTS (SELECT FROM pg_catalog.pg_proc f JOIN pg_catalog.pg_namespace n ON n.oid=f.pronamespace
+      WHERE n.nspname='platform_operations' AND has_function_privilege('nocodb_inventory',f.oid,'EXECUTE')) THEN
+    RAISE EXCEPTION USING MESSAGE='discovery_role_authority_invalid';
+  END IF;
+END;
+$authority$;
 GRANT USAGE ON SCHEMA public TO nocodb_inventory_projection;
 GRANT SELECT ("id", "deleted") ON public.workspace TO nocodb_inventory_projection;
 GRANT USAGE ON SCHEMA public TO nocodb_inventory_projection;

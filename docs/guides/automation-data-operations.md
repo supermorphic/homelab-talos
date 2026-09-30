@@ -1,5 +1,71 @@
 # Automation-data PostgreSQL operations
 
+## Private credential-discovery installation
+
+Credential discovery uses a dedicated private n8n workflow and three restricted
+PostgreSQL readers. Installation is separately authorized operator administration.
+Routine agents use the inventory header and retained consumer profiles; they do not
+run this installer, read Kubernetes Secrets, or ask for a password during approved work.
+
+After the reviewed source is deployed and NocoDB and n8n have initialized their
+databases, prepare owned private directories outside every checkout. Use 0700
+directories and 0600 regular files without symlinks or hard links. The access directory
+is `$XDG_CONFIG_HOME/homelab/automation-data`, or
+`$HOME/.config/homelab/automation-data` when XDG_CONFIG_HOME is unset. Place this
+non-secret configuration in `access.json`, replacing the marked placeholders:
+
+```json
+{
+  "schemaVersion": 1,
+  "inventoryAuthFile": "/path/to/private/access/inventory-auth",
+  "applicationProfileRoot": "/path/to/private/application-profiles",
+  "migratorProfileRoot": "/path/to/private/migrator-profiles"
+}
+```
+
+`inventoryAuthFile` must select `inventory-auth` in the access directory. Supply the
+attended n8n enrollment API key through its protected `n8n-api-key` file. Do not paste
+it into chat or put it in a command argument. Select the administrative kubeconfig
+already authorized for installation using the existing `kubeconfig` Just variable.
+Set `AUTOMATION_DATA_DISCOVERY_INSTALL_DIRECTORY` to the absolute access directory
+and the execution-intent guard
+`AUTOMATION_DATA_DISCOVERY_INSTALL_CONFIRM=install:automation-data:discovery`, then run:
+
+```sh
+mise exec -- just kube automation-data-discovery-install
+```
+
+The installer verifies deployed source, takes the shared mutation Lease, and creates
+fresh backups on both PostgreSQL servers. It installs the same reviewed SQL used for
+upgrade and recovery, tests reader authentication and permission boundaries, creates
+the four named inventory credentials, binds and publishes the private inventory
+workflow, and verifies its independent metadata readback. It removes only its own
+temporary Jobs, ConfigMaps, and Secrets. Workflow execution persistence is disabled.
+The inventory path is absent from the public webhook route.
+
+Keep the protected `pending/operation.json` and candidate files until installation
+and recovery evidence is accepted. Retry with the same directory and candidates.
+Existing active readers must authenticate with the retained candidate; a rerun never
+changes an existing active reader password. Unrelated fixed-name credentials and
+uncertain API creation results require attended reconciliation. Inspect the retained
+operation and exact identity before choosing the next action; do not delete the receipt
+and repeat creation. Remove the enrollment API-key file when its operator use is done.
+
+For replacement or revocation, deactivate the inventory workflow first and drain its
+executions. Confirm the exact retained credential IDs and reader roles. Revoke only the
+inventory header or selected reader, prepare protected replacement material through
+attended administration, update the corresponding n8n binding and protected local header,
+then repeat inventory acceptance before republishing. These steps require separate
+authorization and are never a routine discovery fallback.
+
+Automation-data backups retain their existing role and control-schema recovery contract.
+n8n backups exclude the derived `platform_discovery` schema: their existing dump format
+does not retain role ownership and grants. After an isolated n8n restore, recreate the
+restricted reader and reapply the reviewed discovery SQL with retained protected material
+before exposing inventory. This also supports older backups that predate discovery.
+Application records are unchanged. Lost enrollment material requires attended replacement;
+discovery does not export n8n passwords or reset credentials to make recovery succeed.
+
 This guide activates and operates the shared PostgreSQL platform used by n8n domain
 workflows. The platform database is separate from n8n's own PostgreSQL database.
 

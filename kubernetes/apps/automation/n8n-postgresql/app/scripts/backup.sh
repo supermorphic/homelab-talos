@@ -14,6 +14,7 @@ temporary_dump="$backup_dir/.n8n-postgresql-$artifact_timestamp-$$.dump.tmp"
 temporary_checksum="$backup_dir/.n8n-postgresql-$artifact_timestamp-$$.dump.sha256.tmp"
 
 pg_dump --format=custom --compress=9 --no-owner --no-privileges \
+  --exclude-schema=platform_discovery \
   --file "$temporary_dump" --dbname "$PGDATABASE"
 pg_restore --file /dev/null "$temporary_dump"
 checksum_line="$(sha256sum "$temporary_dump")"

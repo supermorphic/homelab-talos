@@ -135,6 +135,10 @@ automation-data-connect domain registered_identity: require-bash
 automation-data-control-migrate: require-bash
     @scripts/operations/automation-data-control-migrate.sh {{quote(kubeconfig)}}
 
+# Operator-run one-time discovery installation; never a routine credential fallback.
+automation-data-discovery-install: require-bash
+    @scripts/operations/automation-data-discovery-install.sh {{quote(kubeconfig)}}
+
 # Apply the one fixed existing-platform upgrade for the NocoDB extension. Guard:
 # AUTOMATION_DATA_UPGRADE_CONFIRM='upgrade:automation-data:nocodb-v3'.
 automation-data-upgrade: require-bash

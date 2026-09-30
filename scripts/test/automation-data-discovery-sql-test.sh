@@ -6,7 +6,12 @@ scratch="$(mktemp -d "$PWD/.tmp/discovery-sql.XXXXXX")"
 chmod 700 "$scratch"
 marker="discovery-sql-$$-$RANDOM"
 container="$marker"
+client="$marker-client"
 cleanup() {
+	if podman container exists "$client" >/dev/null 2>&1 &&
+		[[ "$(podman inspect --format '{{ index .Config.Labels "homelab-talos.test-run" }}' "$client")" == "$marker" ]]; then
+		podman rm --force "$client" >/dev/null
+	fi
 	if podman container exists "$container" >/dev/null 2>&1 &&
 		[[ "$(podman inspect --format '{{ index .Config.Labels "homelab-talos.test-run" }}' "$container")" == "$marker" ]]; then
 		podman rm --force "$container" >/dev/null
@@ -26,6 +31,7 @@ cat >"$scratch/postgres.env" <<EOF
 POSTGRES_DB=automation_data_control
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=$(openssl rand -hex 24)
+POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 --auth-local=trust
 PROVISIONER_PASSWORD=$(openssl rand -hex 24)
 BACKUP_PASSWORD=$(openssl rand -hex 24)
 EXPORTER_PASSWORD=$(openssl rand -hex 24)
@@ -84,7 +90,55 @@ query n8n postgres <"$scratch/n8n.sql" >"$scratch/n8n-setup.out"
 query nocodb postgres <"$scratch/nocodb.sql" >"$scratch/nocodb-setup.out"
 query automation_data_control postgres <kubernetes/apps/automation-data/postgresql/app/scripts/credential-discovery.sql >"$scratch/platform-install.out"
 query nocodb postgres <kubernetes/apps/automation-data/postgresql/app/scripts/nocodb-discovery.sql >"$scratch/nocodb-install.out"
+# Unsupported pinned schema must stop before creating the reader or granting access.
+query n8n postgres >/dev/null <<'SQL'
+ALTER TABLE credentials_entity RENAME COLUMN type TO renamed_type;
+SQL
+if query n8n postgres <kubernetes/apps/automation/n8n-postgresql/app/scripts/credential-discovery.sql >"$scratch/schema-install.out" 2>&1; then
+	echo 'Installation accepted an unsupported application schema.' >&2
+	exit 1
+fi
+[[ "$(printf '%s\n' "SELECT count(*) FROM pg_roles WHERE rolname='n8n_inventory';" | query n8n postgres)" == 0 ]]
+query n8n postgres >/dev/null <<'SQL'
+ALTER TABLE credentials_entity RENAME COLUMN renamed_type TO type;
+SQL
 query n8n postgres <kubernetes/apps/automation/n8n-postgresql/app/scripts/credential-discovery.sql >"$scratch/n8n-install.out"
+# Run the production installer entrypoint with SCRAM authentication in the disposable server.
+mkdir "$scratch/client-scripts" "$scratch/candidates"
+cp scripts/lib/automation-data-discovery-reader.sh "$scratch/client-scripts/install-reader.sh"
+cp kubernetes/apps/automation/n8n-postgresql/app/scripts/credential-discovery.sql "$scratch/client-scripts/projection.sql"
+python - "$scratch" <<'PY'
+import sys
+from pathlib import Path
+root=Path(sys.argv[1])
+environment=dict(line.split('=',1) for line in (root/'postgres.env').read_text().splitlines())
+(root/'client.env').write_text('PGPASSWORD='+environment['POSTGRES_PASSWORD']+'\nPGHOST=127.0.0.1\nPGDATABASE=n8n\nPGUSER=postgres\nPGCONNECT_TIMEOUT=5\nDISCOVERY_SOURCE=n8n\nDISCOVERY_READER=n8n_inventory\n')
+(root/'client.env').chmod(0o600)
+(root/'candidates'/'candidate').write_text('synthetic-candidate-'.ljust(48,'x'))
+(root/'candidates'/'candidate').chmod(0o600)
+PY
+install_reader() {
+	podman run --rm --name "$client" --label "homelab-talos.test-run=$marker" --network "container:$container" --env-file "$scratch/client.env" \
+		--volume "$scratch/client-scripts:/scripts:ro" --volume "$scratch/candidates:/candidates:ro" \
+		--entrypoint /bin/sh postgres:17.11-alpine3.24 /scripts/install-reader.sh
+}
+install_reader >"$scratch/reader-install.out" 2>&1
+[[ "$(tail -1 "$scratch/reader-install.out")" == discovery_installation=applied ]]
+install_reader >"$scratch/reader-rerun.out" 2>&1
+[[ "$(tail -1 "$scratch/reader-rerun.out")" == discovery_installation=applied ]]
+cp "$scratch/candidates/candidate" "$scratch/original-candidate"
+python - "$scratch/candidates/candidate" <<'PY'
+import sys
+from pathlib import Path
+Path(sys.argv[1]).write_text('different-synthetic-candidate-'.ljust(48,'x'))
+PY
+if install_reader >"$scratch/wrong-candidate.out" 2>&1; then
+	echo 'Installation changed an active reader instead of requiring retained authentication.' >&2
+	exit 1
+fi
+cp "$scratch/original-candidate" "$scratch/candidates/candidate"
+install_reader >"$scratch/unchanged-reader.out" 2>&1
+[[ "$(tail -1 "$scratch/unchanged-reader.out")" == discovery_installation=applied ]]
 query automation_data_control postgres >/dev/null <<'SQL'
 ALTER ROLE automation_data_inventory LOGIN;
 ALTER ROLE nocodb_inventory LOGIN;
@@ -96,6 +150,7 @@ for target in automation_data_control:automation_data_inventory nocodb:nocodb_in
 	printf '%s\n' "SET search_path=public; SELECT platform_discovery.read_snapshot();" |
 		query "$database" "$reader" >"$scratch/$database-observation.json"
 	for denied in 'SELECT rolpassword FROM pg_authid' 'CREATE ROLE illicit_role' \
+		'CREATE TEMP TABLE illicit_temp(id int)' 'CREATE SCHEMA illicit_schema' \
 		'CREATE TABLE public.illicit_table(id int)' 'SELECT * FROM platform_discovery.objects' \
 		'CREATE FUNCTION platform_discovery.illicit() RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$'; do
 		if printf '%s\n' "$denied" | query "$database" "$reader" >"$scratch/denial.out" 2>&1; then

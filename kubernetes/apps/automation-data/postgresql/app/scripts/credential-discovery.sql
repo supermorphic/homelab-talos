@@ -3,6 +3,65 @@
 BEGIN;
 SET LOCAL lock_timeout = '10s';
 SET LOCAL statement_timeout = '20s';
+DO $shape$
+BEGIN
+  IF current_database() <> 'automation_data_control' OR session_user <> 'postgres' OR
+    EXISTS (SELECT FROM (VALUES
+      ('platform_operations','managed_domains','domain','text'),
+      ('platform_operations','managed_domains','database_name','text'),
+      ('platform_operations','managed_domains','owner_role','text'),
+      ('platform_operations','managed_domains','migrator_role','text'),
+      ('platform_operations','managed_domains','runtime_role','text'),
+      ('platform_operations','managed_domains','state','text'),
+      ('platform_operations','managed_domains','generation','bigint'),
+      ('platform_operations','managed_domains','migrator_credential_id','text'),
+      ('platform_operations','managed_domains','runtime_credential_id','text'),
+      ('platform_operations','managed_domains','migrator_credential_updated_at','timestamp with time zone'),
+      ('platform_operations','managed_domains','runtime_credential_updated_at','timestamp with time zone'),
+      ('platform_operations','managed_domains','updated_at','timestamp with time zone'),
+      ('platform_operations','managed_nocodb_schema_mappings','domain','text'),
+      ('platform_operations','managed_nocodb_schema_mappings','pair','text'),
+      ('platform_operations','managed_nocodb_schema_mappings','reader_schema','text'),
+      ('platform_operations','managed_nocodb_schema_mappings','operator_schema','text'),
+      ('platform_operations','managed_nocodb_sources','domain','text'),
+      ('platform_operations','managed_nocodb_sources','pair','text'),
+      ('platform_operations','managed_nocodb_sources','access_kind','text'),
+      ('platform_operations','managed_nocodb_sources','role_name','text'),
+      ('platform_operations','managed_nocodb_sources','base_id','text'),
+      ('platform_operations','managed_nocodb_sources','integration_id','text'),
+      ('platform_operations','managed_nocodb_sources','source_id','text'),
+      ('platform_operations','managed_nocodb_sources','state','text'),
+      ('platform_operations','managed_nocodb_sources','operation','text'),
+      ('platform_operations','managed_nocodb_sources','generation','bigint'),
+      ('platform_operations','managed_nocodb_sources','credential_generation','bigint'),
+      ('platform_operations','managed_nocodb_sources','updated_at','timestamp with time zone'),
+      ('platform_operations','managed_nocodb_sources','validated_at','timestamp with time zone'),
+      ('platform_operations','managed_nocodb_sources','error_code','text'),
+      ('platform_operations','nocodb_source_operations','domain','text'),
+      ('platform_operations','nocodb_source_operations','pair','text'),
+      ('platform_operations','nocodb_source_operations','operation_id','uuid'),
+      ('platform_operations','nocodb_source_operations','operation','text'),
+      ('platform_operations','nocodb_source_operations','access_kind','text'),
+      ('platform_operations','nocodb_source_operations','generation','bigint'),
+      ('platform_operations','nocodb_source_operations','phase','text'),
+      ('platform_operations','managed_application_logins','domain','text'),
+      ('platform_operations','managed_application_logins','application','text'),
+      ('platform_operations','managed_application_logins','schema_name','text'),
+      ('platform_operations','managed_application_logins','role_name','text'),
+      ('platform_operations','managed_application_logins','state','text'),
+      ('platform_operations','managed_application_logins','operation','text'),
+      ('platform_operations','managed_application_logins','operation_id','uuid'),
+      ('platform_operations','managed_application_logins','credential_generation','bigint'),
+      ('platform_operations','managed_application_logins','updated_at','timestamp with time zone'),
+      ('platform_operations','managed_application_logins','error_code','text')
+    ) required(schema_name,table_name,column_name,data_type)
+    WHERE NOT EXISTS (SELECT FROM information_schema.columns c
+      WHERE c.table_schema=required.schema_name AND c.table_name=required.table_name
+        AND c.column_name=required.column_name AND c.data_type=required.data_type)) THEN
+    RAISE EXCEPTION USING MESSAGE='discovery_installation_precondition_failed';
+  END IF;
+END;
+$shape$;
 DO $roles$
 DECLARE identity text;
 BEGIN
@@ -14,7 +73,7 @@ BEGIN
       RAISE EXCEPTION USING MESSAGE='discovery_role_collision';
     END IF;
     IF EXISTS (SELECT FROM pg_catalog.pg_roles r WHERE rolname=identity AND
-      (rolsuper OR rolcreatedb OR rolcreaterole OR rolinherit OR rolreplication OR rolbypassrls)) OR
+      ((rolname='automation_data_inventory_projection' AND rolcanlogin) OR rolsuper OR rolcreatedb OR rolcreaterole OR rolinherit OR rolreplication OR rolbypassrls)) OR
       EXISTS (SELECT FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles r ON r.oid=m.member OR r.oid=m.roleid WHERE r.rolname=identity) THEN
       RAISE EXCEPTION USING MESSAGE='discovery_role_authority_invalid';
     END IF;
@@ -33,6 +92,23 @@ CREATE SCHEMA IF NOT EXISTS platform_discovery AUTHORIZATION automation_data_inv
 REVOKE ALL ON SCHEMA platform_discovery FROM PUBLIC;
 GRANT USAGE ON SCHEMA platform_discovery TO automation_data_inventory;
 GRANT CONNECT ON DATABASE automation_data_control TO automation_data_inventory;
+REVOKE CREATE, TEMPORARY ON DATABASE automation_data_control FROM PUBLIC;
+DO $authority$
+BEGIN
+  IF has_database_privilege('automation_data_inventory', 'automation_data_control', 'CREATE,TEMPORARY') OR
+    EXISTS (SELECT FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+        AND c.relkind IN ('r','p','v','m','f') AND
+        (has_table_privilege('automation_data_inventory',c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') OR
+         has_any_column_privilege('automation_data_inventory',c.oid,'SELECT,INSERT,UPDATE,REFERENCES'))) OR
+    EXISTS (SELECT FROM pg_catalog.pg_namespace n WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+      AND has_schema_privilege('automation_data_inventory',n.oid,'CREATE')) OR
+    EXISTS (SELECT FROM pg_catalog.pg_proc f JOIN pg_catalog.pg_namespace n ON n.oid=f.pronamespace
+      WHERE n.nspname='platform_operations' AND has_function_privilege('automation_data_inventory',f.oid,'EXECUTE')) THEN
+    RAISE EXCEPTION USING MESSAGE='discovery_role_authority_invalid';
+  END IF;
+END;
+$authority$;
 GRANT USAGE ON SCHEMA platform_operations TO automation_data_inventory_projection;
 GRANT SELECT ("domain", "database_name", "owner_role", "migrator_role", "runtime_role", "state", "generation", "migrator_credential_id", "runtime_credential_id", "migrator_credential_updated_at", "runtime_credential_updated_at", "updated_at") ON platform_operations.managed_domains TO automation_data_inventory_projection;
 GRANT USAGE ON SCHEMA platform_operations TO automation_data_inventory_projection;

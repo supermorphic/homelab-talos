@@ -3,6 +3,31 @@
 BEGIN;
 SET LOCAL lock_timeout = '10s';
 SET LOCAL statement_timeout = '20s';
+DO $shape$
+BEGIN
+  IF current_database() <> 'n8n' OR session_user <> 'postgres' OR
+    EXISTS (SELECT FROM (VALUES
+      ('public','credentials_entity','id','character varying'),
+      ('public','credentials_entity','name','character varying'),
+      ('public','credentials_entity','type','character varying'),
+      ('public','credentials_entity','updatedAt','timestamp with time zone'),
+      ('public','workflow_entity','id','character varying'),
+      ('public','workflow_entity','active','boolean'),
+      ('public','workflow_entity','activeVersionId','character varying'),
+      ('public','workflow_entity','isArchived','boolean'),
+      ('public','workflow_history','versionId','character varying'),
+      ('public','workflow_history','workflowId','character varying'),
+      ('public','workflow_history','nodes','json'),
+      ('public','workflow_published_version','workflowId','character varying'),
+      ('public','workflow_published_version','publishedVersionId','character varying')
+    ) required(schema_name,table_name,column_name,data_type)
+    WHERE NOT EXISTS (SELECT FROM information_schema.columns c
+      WHERE c.table_schema=required.schema_name AND c.table_name=required.table_name
+        AND c.column_name=required.column_name AND c.data_type=required.data_type)) THEN
+    RAISE EXCEPTION USING MESSAGE='discovery_installation_precondition_failed';
+  END IF;
+END;
+$shape$;
 DO $roles$
 DECLARE identity text;
 BEGIN
@@ -14,7 +39,7 @@ BEGIN
       RAISE EXCEPTION USING MESSAGE='discovery_role_collision';
     END IF;
     IF EXISTS (SELECT FROM pg_catalog.pg_roles r WHERE rolname=identity AND
-      (rolsuper OR rolcreatedb OR rolcreaterole OR rolinherit OR rolreplication OR rolbypassrls)) OR
+      ((rolname='n8n_inventory_projection' AND rolcanlogin) OR rolsuper OR rolcreatedb OR rolcreaterole OR rolinherit OR rolreplication OR rolbypassrls)) OR
       EXISTS (SELECT FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles r ON r.oid=m.member OR r.oid=m.roleid WHERE r.rolname=identity) THEN
       RAISE EXCEPTION USING MESSAGE='discovery_role_authority_invalid';
     END IF;
@@ -33,6 +58,23 @@ CREATE SCHEMA IF NOT EXISTS platform_discovery AUTHORIZATION n8n_inventory_proje
 REVOKE ALL ON SCHEMA platform_discovery FROM PUBLIC;
 GRANT USAGE ON SCHEMA platform_discovery TO n8n_inventory;
 GRANT CONNECT ON DATABASE n8n TO n8n_inventory;
+REVOKE CREATE, TEMPORARY ON DATABASE n8n FROM PUBLIC;
+DO $authority$
+BEGIN
+  IF has_database_privilege('n8n_inventory', 'n8n', 'CREATE,TEMPORARY') OR
+    EXISTS (SELECT FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+        AND c.relkind IN ('r','p','v','m','f') AND
+        (has_table_privilege('n8n_inventory',c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') OR
+         has_any_column_privilege('n8n_inventory',c.oid,'SELECT,INSERT,UPDATE,REFERENCES'))) OR
+    EXISTS (SELECT FROM pg_catalog.pg_namespace n WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+      AND has_schema_privilege('n8n_inventory',n.oid,'CREATE')) OR
+    EXISTS (SELECT FROM pg_catalog.pg_proc f JOIN pg_catalog.pg_namespace n ON n.oid=f.pronamespace
+      WHERE n.nspname='platform_operations' AND has_function_privilege('n8n_inventory',f.oid,'EXECUTE')) THEN
+    RAISE EXCEPTION USING MESSAGE='discovery_role_authority_invalid';
+  END IF;
+END;
+$authority$;
 GRANT USAGE ON SCHEMA public TO n8n_inventory_projection;
 GRANT SELECT ("id", "name", "type", "updatedAt") ON public.credentials_entity TO n8n_inventory_projection;
 GRANT USAGE ON SCHEMA public TO n8n_inventory_projection;
@@ -88,4 +130,5 @@ $snapshot$;
 ALTER FUNCTION platform_discovery.read_snapshot() OWNER TO n8n_inventory_projection;
 REVOKE ALL ON FUNCTION platform_discovery.read_snapshot() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION platform_discovery.read_snapshot() TO n8n_inventory;
+REVOKE CONNECT ON DATABASE postgres, template1 FROM PUBLIC;
 COMMIT;
