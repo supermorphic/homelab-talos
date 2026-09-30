@@ -12,4 +12,4 @@ if ! kubectl --kubeconfig "$1" config get-contexts homelab-observer --no-headers
   exit 1
 fi
 
-exec python3 -m scripts.openbao.verify "$1"
+exec uv run --locked python -m scripts.openbao.verify "$1"
