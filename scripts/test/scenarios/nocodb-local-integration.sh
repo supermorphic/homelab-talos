@@ -1439,6 +1439,28 @@ prove_named_pair() {
 	operator_table="$(jq -er --arg source "$operator_source" \
 		'(.list // .data // [])[] | select(.title == "decisions" and .source_id == $source) | .id' \
 		"$integration_root/extra-tables.json")"
+	local group_table link_field
+	group_table="$(jq -er --arg source "$operator_source" \
+		'(.list // .data // [])[] | select(.title == "decision_groups" and .source_id == $source) | .id' \
+		"$integration_root/extra-tables.json")"
+	http_request GET "$nocodb_url/api/v2/meta/tables/$operator_table" nocodb-token - \
+		"$integration_root/extra-operator-meta.json"
+	link_field="$(jq -er --arg parent "$group_table" '
+		[.columns[] | select((.uidt == "Links" or .uidt == "LinkToAnotherRecord") and
+		  .colOptions.type == "bt" and .colOptions.fk_related_model_id == $parent)] |
+		if length == 1 then .[0].id else error("missing reflected foreign-key link") end
+	' "$integration_root/extra-operator-meta.json")"
+	# Exercise the same native relation API used by Community Edition controls.
+	for parent_id in 2 1; do
+		jq -n --argjson id "$parent_id" '[{id:$id}]' >"$integration_root/extra-link-body.json"
+		http_request POST "$nocodb_url/api/v2/tables/$operator_table/links/$link_field/records/491" \
+			nocodb-token "$integration_root/extra-link-body.json" "$integration_root/extra-link-write.json"
+		http_request GET "$nocodb_url/api/v2/tables/$operator_table/links/$link_field/records/491" \
+			nocodb-token - "$integration_root/extra-link-read.json"
+		# A belongs-to link returns the single parent object, not a paginated list.
+		jq -e --arg id "$parent_id" '(.id | tostring) == $id' \
+			"$integration_root/extra-link-read.json" >/dev/null || fail 'native linked-record edit was not retained.'
+	done
 	http_request GET "$nocodb_url/api/v2/meta/tables/$reader_table/views" nocodb-token - \
 		"$integration_root/extra-reader-views.json"
 	http_request GET "$nocodb_url/api/v2/meta/tables/$operator_table/views" nocodb-token - \

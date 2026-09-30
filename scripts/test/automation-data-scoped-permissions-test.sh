@@ -316,4 +316,66 @@ admin_sql "ALTER DEFAULT PRIVILEGES FOR ROLE scoped_fixture_owner IN SCHEMA extr
     'scoped_fixture', 'interview')" >&2
   exit 1
 }
-echo 'Automation-data scoped PostgreSQL permissions passed.'
+# The attended fixture must upgrade its existing table into a usable linked-record
+# surface. Exercise the actual workflow SQL and the restricted operator role.
+stage=linked-record-fixture
+cat >"$scratch/acceptance-setup.sql" <<'SQL'
+\getenv migrator_password FIXTURE_MIGRATOR_PASSWORD
+\getenv runtime_password FIXTURE_RUNTIME_PASSWORD
+SELECT platform_operations.provision_domain('automation_data_acceptance', :'migrator_password', :'runtime_password');
+SELECT platform_operations.record_domain_credentials(
+  'automation_data_acceptance', 'acceptance-migrator', 'acceptance-runtime',
+  '2026-09-01T00:00:00Z'::timestamptz, '2026-09-01T00:00:00Z'::timestamptz);
+SELECT platform_operations.configure_nocodb_pair('automation_data_acceptance', 'extra', 'extra_read', 'extra_edit');
+SELECT platform_operations.register_application_login('automation_data_acceptance', 'interview', 'app');
+SQL
+podman cp "$scratch/acceptance-setup.sql" "$container:/tmp/acceptance-setup.sql"
+podman exec --env-file "$scratch/postgresql.env" "$container" psql --no-psqlrc \
+  --set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_control \
+  --file /tmp/acceptance-setup.sql >"$scratch/acceptance-setup.out"
+acceptance_sql() {
+  podman exec --interactive "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
+    --tuples-only --no-align --username postgres --dbname automation_data_acceptance
+}
+acceptance_sql >"$scratch/acceptance-existing.out" <<'SQL'
+SET ROLE automation_data_acceptance_owner;
+CREATE SCHEMA extra_edit AUTHORIZATION automation_data_acceptance_owner;
+CREATE TABLE extra_edit.decisions (id bigint PRIMARY KEY, decision text NOT NULL);
+INSERT INTO extra_edit.decisions VALUES (1, 'retained-original');
+SQL
+jq -r '.nodes[] | select(.name == "Grant Extended Acceptance Access") | .parameters.query' \
+  kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json >"$scratch/acceptance-grants.sql"
+acceptance_sql <"$scratch/acceptance-grants.sql" >"$scratch/acceptance-grants.out"
+acceptance_sql >"$scratch/acceptance-linked.out" <<'SQL'
+DO $block$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE contype = 'f'
+    AND conrelid = 'extra_edit.decisions'::regclass) THEN
+    RAISE EXCEPTION 'attended fixture has no linked-record foreign key';
+  END IF;
+END $block$;
+SET SESSION AUTHORIZATION nocodb_be4a1bfa3e8e4458ab396a34cb511b9f_operator;
+UPDATE extra_edit.decisions SET group_id = 2, decision = 'retained-review' WHERE id = 491;
+DO $block$ BEGIN
+  IF (SELECT g.label FROM extra_edit.decisions d JOIN extra_edit.decision_groups g
+      ON g.id = d.group_id WHERE d.id = 491) IS DISTINCT FROM 'second' THEN
+    RAISE EXCEPTION 'operator linked-record update/read failed';
+  END IF;
+  BEGIN
+    UPDATE extra_edit.decisions SET group_id = 999 WHERE id = 491;
+    RAISE EXCEPTION 'missing parent was accepted';
+  EXCEPTION WHEN foreign_key_violation THEN NULL;
+  END;
+END $block$;
+SQL
+acceptance_sql <"$scratch/acceptance-grants.sql" >"$scratch/acceptance-repeat.out"
+acceptance_sql >"$scratch/acceptance-retained.out" <<'SQL'
+DO $block$ BEGIN
+  IF (SELECT decision FROM extra_edit.decisions WHERE id = 1) IS DISTINCT FROM 'retained-original'
+    OR (SELECT decision FROM extra_edit.decisions WHERE id = 491) IS DISTINCT FROM 'retained-review'
+    OR (SELECT group_id FROM extra_edit.decisions WHERE id = 491) IS DISTINCT FROM 2::bigint
+    OR (SELECT count(*) FROM extra_edit.decision_groups) <> 2 THEN
+    RAISE EXCEPTION 'repeated fixture setup changed retained records';
+  END IF;
+END $block$;
+SQL
+echo 'Automation-data scoped PostgreSQL permissions and linked-record fixture passed.'
