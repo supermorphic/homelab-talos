@@ -63,6 +63,15 @@ SELECT platform_operations.provision_domain('v3_fixture', :'migrator_password', 
 SELECT platform_operations.record_domain_credentials('v3_fixture', 'synthetic-migrator',
   'synthetic-runtime', '2026-09-01T00:00:00Z'::timestamptz,
   '2026-09-01T00:00:00Z'::timestamptz);
+SELECT platform_operations.provision_domain('v3_partial', :'migrator_password', :'runtime_password');
+SELECT platform_operations.record_operation_error('v3_partial', 'acceptance_backup_error');
+GRANT TEMP ON DATABASE v3_partial TO PUBLIC;
+SELECT platform_internal.exec_in_database('v3_partial', 'GRANT ALL ON SCHEMA public TO PUBLIC');
+SELECT platform_operations.provision_domain('v3_missing_ready', :'migrator_password', :'runtime_password');
+SELECT platform_operations.record_domain_credentials('v3_missing_ready', 'synthetic-missing-migrator',
+  'synthetic-missing-runtime', '2026-09-01T00:00:00Z'::timestamptz,
+  '2026-09-01T00:00:00Z'::timestamptz);
+DROP DATABASE v3_missing_ready;
 CREATE ROLE v3_fixture_reader LOGIN NOINHERIT PASSWORD :'source_password';
 INSERT INTO platform_operations.managed_nocodb_sources
   (domain, access_kind, role_name, base_id, integration_id, source_id,
@@ -96,11 +105,36 @@ rg -q 'incomplete_platform_operation' "$scratch/incomplete-v2-upgrade.err"
 [[ "$(query 'SELECT platform_operations.read_platform_revision()')" == 026-nocodb-v2 ]]
 query "UPDATE platform_operations.managed_nocodb_sources SET state = 'ready'
   WHERE domain = 'v3_fixture' AND access_kind = 'reader'" >/dev/null
+stage=missing-previously-ready-domain
+if podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
+    --username postgres --dbname automation_data_control \
+    --file /candidate/upgrade-nocodb.sql >"$scratch/missing-ready-upgrade.out" \
+    2>"$scratch/missing-ready-upgrade.err"; then
+  echo 'v3 upgrade accepted a missing previously ready database.' >&2
+  exit 1
+fi
+rg -q 'database "v3_missing_ready" does not exist' "$scratch/missing-ready-upgrade.err"
+[[ "$(query 'SELECT platform_operations.read_platform_revision()')" == 026-nocodb-v2 ]]
+query "DELETE FROM platform_operations.managed_domains WHERE domain = 'v3_missing_ready'" >/dev/null
+stage=retained-unmaterialized-domain
+query "INSERT INTO platform_operations.managed_domains
+  (domain,database_name,owner_role,migrator_role,runtime_role,state,generation,error_code)
+  VALUES ('v3_never_ready','v3_never_ready','v3_never_ready_owner',
+    'v3_never_ready_migrator','v3_never_ready_runtime','error',
+    platform_internal.bump_generation(),'acceptance_backup_error')" >/dev/null
+query "SELECT to_jsonb(managed)::text FROM platform_operations.managed_domains managed
+  WHERE domain = 'v3_never_ready'" >"$scratch/never-ready-before.json"
+[[ "$(query "SELECT count(*) FROM pg_database WHERE datname = 'v3_never_ready'")" == 0 ]]
+[[ "$(query "SELECT has_database_privilege('v3_fixture_reader', 'v3_partial', 'TEMP')")" == t ]]
 stage=upgrade
 podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
   --username postgres --dbname automation_data_control \
   --file /candidate/upgrade-nocodb.sql >"$scratch/upgrade.out"
 [[ "$(query 'SELECT platform_operations.read_platform_revision()')" == 026-nocodb-v3 ]]
+query "SELECT to_jsonb(managed)::text FROM platform_operations.managed_domains managed
+  WHERE domain = 'v3_never_ready'" >"$scratch/never-ready-after.json"
+cmp -s "$scratch/never-ready-before.json" "$scratch/never-ready-after.json"
+[[ "$(query "SELECT count(*) FROM pg_database WHERE datname = 'v3_never_ready'")" == 0 ]]
 query "SELECT (to_jsonb(source) - 'pair')::text FROM platform_operations.managed_nocodb_sources AS source
   WHERE domain = 'v3_fixture' AND pair = 'default' AND access_kind = 'reader'" \
   >"$scratch/source-after.json"
@@ -112,6 +146,11 @@ cmp -s "$scratch/verifier-before" "$scratch/verifier-after"
 [[ "$(query "SELECT has_database_privilege('v3_fixture_reader', 'v3_fixture', 'TEMP')")" == f ]]
 [[ "$(podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
   --tuples-only --no-align --username postgres --dbname v3_fixture \
+  --command="SELECT has_schema_privilege('v3_fixture_reader', 'public', 'CREATE')")" == f ]]
+[[ "$(query "SELECT has_reached_ready FROM platform_operations.managed_domains WHERE domain = 'v3_partial'")" == f ]]
+[[ "$(query "SELECT has_database_privilege('v3_fixture_reader', 'v3_partial', 'TEMP')")" == f ]]
+[[ "$(podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
+  --tuples-only --no-align --username postgres --dbname v3_partial \
   --command="SELECT has_schema_privilege('v3_fixture_reader', 'public', 'CREATE')")" == f ]]
 
 stage=backup-state
