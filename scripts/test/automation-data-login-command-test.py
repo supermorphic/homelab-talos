@@ -10,8 +10,10 @@ import os
 import stat
 import sys
 import tempfile
+import threading
 import unittest
 import urllib.error
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest import mock
 
@@ -188,11 +190,43 @@ class LoginCommandTest(unittest.TestCase):
             raise urllib.error.HTTPError(command.WEBHOOK, 500, SENTINEL, {}, io.BytesIO(
                 SENTINEL.encode()))
 
-        with mock.patch.object(command.urllib.request, "urlopen", side_effect=reject), \
+        with mock.patch.object(command.WEBHOOK_OPENER, "open", side_effect=reject), \
                 self.assertRaises(command.RequestError) as raised:
             REAL_SEND_REQUEST({"domain": "sample", "operation": "login-validate",
                                "application": "interview"})
         self.assertNotIn(SENTINEL, str(raised.exception))
+
+    def test_redirect_never_sends_a_second_authenticated_request(self):
+        requests = []
+
+        class Redirect(BaseHTTPRequestHandler):
+            def do_POST(self):
+                requests.append(self.path)
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                self.send_response(302)
+                self.send_header("Location", "/other")
+                self.end_headers()
+
+            def do_GET(self):
+                requests.append(self.path)
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"ok":true}')
+
+            def log_message(self, *_args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Redirect)
+        self.addCleanup(server.server_close)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.shutdown)
+        url = f"http://127.0.0.1:{server.server_port}/start"
+        with mock.patch.object(command, "WEBHOOK", url), \
+                mock.patch.dict(os.environ, {"AUTOMATION_DATA_PROVISIONING_URL": url}), \
+                self.assertRaises(command.RequestError):
+            REAL_SEND_REQUEST({"domain": "sample", "operation": "login-validate"})
+        self.assertEqual(requests, ["/start"])
 
     def test_inherited_pg_variables_cannot_redirect(self):
         fake_connection = mock.MagicMock()

@@ -152,6 +152,16 @@ assert.throws(() => invoke('Prepare Reader Integration', {list: [
   {id: 'foreign-integration', title: integration.payload.title}]}, integrationLookup));
 
 for (const kind of ['Reader', 'Operator']) {
+  const partial = nodes.get(`${kind} Error Rotation`).parameters.conditions.conditions;
+  const acceptsPartialState = state => partial.every(condition => {
+    const values = {state, registryOperation: 'rotate', operation: 'rotate', requestedAccessKind: kind.toLowerCase()};
+    const left = new Function('$json', `return ${condition.leftValue.slice(3, -2)};`)(values);
+    if (condition.operator.type === 'boolean') return left === true;
+    return left === condition.rightValue;
+  });
+  assert.equal(acceptsPartialState('rotating'), true, `${kind} partial retry must bypass old-credential probe`);
+  assert.equal(acceptsPartialState('error'), true);
+  assert.equal(acceptsPartialState('ready'), false);
   const node = nodes.get(`Rotate ${kind} Credential`);
   assert.equal(node.parameters.query,
     'SELECT platform_operations.rotate_nocodb_source_credential($1, $2, $3, $4, $5, $6) AS result;');

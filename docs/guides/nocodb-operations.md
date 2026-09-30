@@ -599,8 +599,8 @@ workflows. Do not broaden a NocoDB login to work around an application problem.
   a replacement token.
 - A failed targeted rotation keeps `operation=rotate` and exact retained identities.
   PostgreSQL and NocoDB credentials may temporarily differ. Verify the base,
-  integration, and source IDs, then retry only the same
-  [targeted rotation](#6-rotate-one-source-login). Ordinary sync and rotation of the
+  integration, and source IDs, then use the same target's
+  [attended retry](#targeted-rotation-and-attended-retry). Ordinary sync and rotation of the
   other access kind remain blocked while this error is recorded.
 - A missing or unreadable `NC_CONNECTION_ENCRYPT_KEY` is a hard stop for ordinary
   recovery; prepare a separately reviewed recovery design.

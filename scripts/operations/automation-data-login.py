@@ -42,6 +42,16 @@ class PendingMaterialMissing(PrivateFileError):
     """A retained operation is incomplete and cannot be retried as-is."""
 
 
+class RejectRedirects(urllib.request.HTTPRedirectHandler):
+    """Keep the credential-bearing request at its exact configured destination."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+WEBHOOK_OPENER = urllib.request.build_opener(RejectRedirects())
+
+
 def send_request(payload: dict) -> dict:
     """Call only the fixed private webhook with verified TLS and bounded output."""
     token = os.environ.get("AUTOMATION_DATA_PROVISIONING_TOKEN", "")
@@ -54,7 +64,7 @@ def send_request(payload: dict) -> dict:
         "X-Automation-Data-Provisioning": token,
     })
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with WEBHOOK_OPENER.open(request, timeout=20) as response:
             content = response.read(65537)
         if len(content) > 65536:
             raise RequestError("response_too_large")

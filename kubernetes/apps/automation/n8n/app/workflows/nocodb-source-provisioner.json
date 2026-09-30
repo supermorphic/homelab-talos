@@ -2262,11 +2262,12 @@
           },
           "conditions": [
             {
-              "leftValue": "={{ $json.state }}",
-              "rightValue": "error",
+              "leftValue": "={{ ['rotating', 'error'].includes($json.state) && $json.registryOperation === 'rotate' }}",
+              "rightValue": "",
               "operator": {
-                "type": "string",
-                "operation": "equals"
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
               }
             },
             {
@@ -2502,11 +2503,12 @@
           },
           "conditions": [
             {
-              "leftValue": "={{ $json.state }}",
-              "rightValue": "error",
+              "leftValue": "={{ ['rotating', 'error'].includes($json.state) && $json.registryOperation === 'rotate' }}",
+              "rightValue": "",
               "operator": {
-                "type": "string",
-                "operation": "equals"
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
               }
             },
             {
