@@ -179,6 +179,7 @@ contracts:
       - scripts/openbao/__init__.py
       - scripts/openbao/apply.py
       - scripts/openbao/bootstrap.py
+      - scripts/openbao/backup_retrieve.py
       - scripts/openbao/client.py
       - scripts/openbao/configuration.py
       - scripts/openbao/drift.py
@@ -204,6 +205,7 @@ contracts:
       - scripts/test/core/fixtures/openbao-2.7-read-responses.json
       - scripts/test/core/test_openbao_apply.py
       - scripts/test/core/test_openbao_bootstrap.py
+      - scripts/test/core/test_openbao_backup_retrieve.py
       - scripts/test/core/test_openbao_finalize.py
       - scripts/test/core/test_openbao_operator.py
       - scripts/test/core/test_openbao_restart.py
@@ -236,6 +238,7 @@ contracts:
       - catalog:validation.openbao
       - python:scripts/test/core/test_openbao_apply.py
       - python:scripts/test/core/test_openbao_bootstrap.py
+      - python:scripts/test/core/test_openbao_backup_retrieve.py
       - python:scripts/test/core/test_openbao_finalize.py
       - python:scripts/test/core/test_openbao_operator.py
       - python:scripts/test/core/test_openbao_restart.py
