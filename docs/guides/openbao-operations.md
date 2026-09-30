@@ -151,6 +151,11 @@ the operator password only through its private prompts. Require both restore and
 cleanup to pass. The drill uses isolated scratch resources; a production outage or
 production storage replacement needs a separate recovery plan.
 
+If cleanup failed, stop before another drill. After reviewing the failure and
+its correction, run `mise exec -- just kube openbao-restore-cleanup <failed-run-id>`
+with the explicit operator kubeconfig and review its exact confirmation. Require
+cleanup to pass, then record a fresh drill. The old report remains unchanged.
+
 ### 6. Activate through Git
 
 After acceptance, review and merge the private route, monitoring, and Gatus enrollment
