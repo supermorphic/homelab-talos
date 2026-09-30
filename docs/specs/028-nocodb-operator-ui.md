@@ -762,7 +762,12 @@ Unchanged sync preserves credentials, generations, and durable NocoDB identities
 Metadata refresh remains the supported additive refresh procedure followed by scoped
 sync and identity verification. Rotation changes only the selected pair/access kind.
 Partial rotation retains its claim and identities; ordinary sync cannot repair it by
-generating another password. Explicit retry is bound to that same target.
+generating another password. Explicit retry is attended and binds the same target to
+the retained `quiescedOperationId`. Before confirming retry, the operator establishes
+that the previous workflow has ended and its NocoDB requests have completed or been
+cancelled. A timeout or elapsed wait alone does not establish this condition. If the
+external outcome remains in flight or unknown, retry remains blocked. The SQL claim
+checks the exact predecessor ID and rejects an active claim or a different target.
 
 ### Effective authority and withheld objects
 

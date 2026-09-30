@@ -165,7 +165,7 @@ $function$;
 
 CREATE OR REPLACE FUNCTION platform_operations.claim_nocodb_operation(
   p_domain text, p_pair text, p_operation text, p_access_kind text,
-  p_operation_id uuid, p_explicit_retry boolean
+  p_operation_id uuid, p_quiesced_operation_id uuid
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -174,6 +174,7 @@ SET search_path = pg_catalog, platform_operations
 AS $function$
 DECLARE
   existing platform_operations.nocodb_source_operations%ROWTYPE;
+  explicit_retry boolean := p_quiesced_operation_id IS NOT NULL;
   next_generation bigint;
 BEGIN
   PERFORM platform_internal.assert_domain(p_domain);
@@ -183,8 +184,8 @@ BEGIN
      (p_operation = 'sync' AND p_access_kind IS NOT NULL) OR
      (p_operation = 'rotate' AND p_access_kind NOT IN ('reader', 'operator')) OR
      (p_operation = 'rotate' AND p_access_kind IS NULL) OR
-     p_operation_id IS NULL OR p_explicit_retry IS NULL OR
-     (p_explicit_retry AND p_operation <> 'rotate') THEN
+     p_operation_id IS NULL OR
+     (explicit_retry AND p_operation <> 'rotate') THEN
     RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_nocodb_claim';
   END IF;
   PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
@@ -205,10 +206,11 @@ BEGIN
       END IF;
       RETURN platform_internal.nocodb_operation_result(p_domain, p_pair, false);
     END IF;
-    IF existing.phase <> 'complete' AND NOT p_explicit_retry THEN
+    IF existing.phase <> 'complete' AND NOT explicit_retry THEN
       RETURN platform_internal.nocodb_operation_result(p_domain, p_pair, false);
     END IF;
-    IF p_explicit_retry AND (existing.phase <> 'uncertain' OR
+    IF explicit_retry AND (existing.operation_id <> p_quiesced_operation_id OR
+        existing.phase <> 'uncertain' OR
         existing.operation <> 'rotate' OR
         existing.access_kind IS DISTINCT FROM p_access_kind OR
         NOT EXISTS (
@@ -220,13 +222,13 @@ BEGIN
             source.integration_id IS NOT NULL AND source.base_id IS NOT NULL)) THEN
       RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'nocodb_retry_not_eligible';
     END IF;
-  ELSIF p_explicit_retry THEN
+  ELSIF explicit_retry THEN
     RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'nocodb_retry_not_eligible';
   END IF;
   IF p_operation = 'rotate' AND NOT EXISTS (
     SELECT FROM platform_operations.managed_nocodb_sources
     WHERE domain = p_domain AND pair = p_pair AND access_kind = p_access_kind
-      AND (state = 'ready' OR (p_explicit_retry AND state IN ('rotating', 'error')))
+      AND (state = 'ready' OR (explicit_retry AND state IN ('rotating', 'error')))
       AND source_id IS NOT NULL
       AND integration_id IS NOT NULL AND base_id IS NOT NULL
   ) THEN
@@ -258,7 +260,7 @@ SECURITY DEFINER
 SET search_path = pg_catalog, platform_operations
 AS $function$
   SELECT platform_operations.claim_nocodb_operation(
-    p_domain, p_pair, p_operation, p_access_kind, p_operation_id, false);
+    p_domain, p_pair, p_operation, p_access_kind, p_operation_id, NULL::uuid);
 $function$;
 
 CREATE OR REPLACE FUNCTION platform_operations.read_nocodb_operation_state(
@@ -2133,7 +2135,7 @@ BEGIN
     'platform_operations.validate_nocodb_access(text,text)'::regprocedure,
     'platform_operations.configure_nocodb_pair(text,text,text,text)'::regprocedure,
     'platform_operations.claim_nocodb_operation(text,text,text,text,uuid)'::regprocedure,
-    'platform_operations.claim_nocodb_operation(text,text,text,text,uuid,boolean)'::regprocedure,
+    'platform_operations.claim_nocodb_operation(text,text,text,text,uuid,uuid)'::regprocedure,
     'platform_operations.read_nocodb_operation_state(text,text)'::regprocedure,
     'platform_operations.mark_nocodb_operation_uncertain(text,text,uuid,bigint,text)'::regprocedure,
     'platform_operations.complete_nocodb_operation(text,text,uuid,bigint)'::regprocedure,
@@ -2177,8 +2179,8 @@ BEGIN
       'platform_operations.capture_backup_state()'::regprocedure) <>
       '56f338a80f1846f7009e5164b0a9c037' OR
     (SELECT md5(prosrc) FROM pg_proc WHERE oid =
-      'platform_operations.claim_nocodb_operation(text,text,text,text,uuid,boolean)'::regprocedure) <>
-      '568798abb0d458d603bd2f47a288c3f2' OR
+      'platform_operations.claim_nocodb_operation(text,text,text,text,uuid,uuid)'::regprocedure) <>
+      '1a5e81572c73cdf366b3bb2abd984681' OR
     (SELECT md5(prosrc) FROM pg_proc WHERE oid =
       'platform_operations.complete_nocodb_operation(text,text,uuid,bigint)'::regprocedure) <>
       '259dc1698eddf76399d4680798cc700c' OR
@@ -2260,7 +2262,7 @@ REVOKE ALL ON FUNCTION platform_internal.assert_nocodb_access_kind(text),
 REVOKE ALL ON FUNCTION platform_operations.provision_nocodb_metadata(text),
   platform_operations.configure_nocodb_pair(text, text, text, text),
   platform_operations.claim_nocodb_operation(text, text, text, text, uuid),
-  platform_operations.claim_nocodb_operation(text, text, text, text, uuid, boolean),
+  platform_operations.claim_nocodb_operation(text, text, text, text, uuid, uuid),
   platform_operations.read_nocodb_operation_state(text, text),
   platform_operations.mark_nocodb_operation_uncertain(text, text, uuid, bigint, text),
   platform_operations.complete_nocodb_operation(text, text, uuid, bigint),
@@ -2290,7 +2292,7 @@ GRANT EXECUTE ON FUNCTION platform_operations.provision_nocodb_metadata(text) TO
 GRANT EXECUTE ON FUNCTION platform_operations.configure_nocodb_pair(text, text, text, text)
   TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.claim_nocodb_operation(text, text, text, text, uuid) TO automation_data_provisioner;
-GRANT EXECUTE ON FUNCTION platform_operations.claim_nocodb_operation(text, text, text, text, uuid, boolean) TO automation_data_provisioner;
+GRANT EXECUTE ON FUNCTION platform_operations.claim_nocodb_operation(text, text, text, text, uuid, uuid) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.read_nocodb_operation_state(text, text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.mark_nocodb_operation_uncertain(text, text, uuid, bigint, text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.complete_nocodb_operation(text, text, uuid, bigint) TO automation_data_provisioner;

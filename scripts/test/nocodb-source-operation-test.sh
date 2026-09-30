@@ -115,6 +115,8 @@ run_operation() { # <prepare|sync|rotate> <domain> [kind] [confirmation|-] [toke
   local supplied_token="${5:-$token}" response="${6:-$valid_sync_response}" curl_exit="${7:-0}"
   local -a args=("$operation" "$domain")
   [[ -z "$kind" ]] || args+=("$kind")
+  local recovery_id="${8:-}"
+  [[ -z "$recovery_id" ]] || args+=("$recovery_id")
   : >"$event_log"
   set +e
   if [[ "$operation" == prepare ]]; then
@@ -153,14 +155,14 @@ run_operation() { # <prepare|sync|rotate> <domain> [kind] [confirmation|-] [toke
     local confirmation_variable="NOCODB_SOURCE_${operation^^}_CONFIRM"
     if [[ "$confirmation" == '-' ]]; then
       OUT="$(PATH="$stub_bin:$linux_bin:$PATH" \
-        NOCODB_SOURCE_OPERATION_EXPECTED_BODY="$(jq -cn --arg domain "$domain" --arg kind "$kind" --arg operation "$operation" '{domain: $domain, operation: $operation, accessKind: $kind}')" \
+        NOCODB_SOURCE_OPERATION_EXPECTED_BODY="$(jq -cn --arg domain "$domain" --arg kind "$kind" --arg operation "$operation" --arg recovery "$recovery_id" '{domain: $domain, operation: $operation, accessKind: $kind} + (if $recovery == "" then {} else {quiescedOperationId:$recovery} end)')" \
         NOCODB_SOURCE_OPERATION_RESPONSE="$response" \
         NOCODB_SOURCE_OPERATION_CURL_EXIT="$curl_exit" \
         NOCODB_SOURCE_PROVISIONING_HEADER="$supplied_token" \
         env -u "$confirmation_variable" "$command" "${args[@]}" 2>&1)"
     else
       OUT="$(PATH="$stub_bin:$linux_bin:$PATH" \
-        NOCODB_SOURCE_OPERATION_EXPECTED_BODY="$(jq -cn --arg domain "$domain" --arg kind "$kind" --arg operation "$operation" '{domain: $domain, operation: $operation, accessKind: $kind}')" \
+        NOCODB_SOURCE_OPERATION_EXPECTED_BODY="$(jq -cn --arg domain "$domain" --arg kind "$kind" --arg operation "$operation" --arg recovery "$recovery_id" '{domain: $domain, operation: $operation, accessKind: $kind} + (if $recovery == "" then {} else {quiescedOperationId:$recovery} end)')" \
         NOCODB_SOURCE_OPERATION_RESPONSE="$response" \
         NOCODB_SOURCE_OPERATION_CURL_EXIT="$curl_exit" \
         NOCODB_SOURCE_PROVISIONING_HEADER="$supplied_token" \
@@ -238,16 +240,22 @@ assert_status 0
 
 case_name='named pair retry requires its own target confirmation'
 run_pair pair-retry NOCODB_PAIR_RETRY_CONFIRM \
-  'retry:nocodb:domain_one:interviews:reader' \
-  '{"domain":"domain_one","pair":"interviews","operation":"retry","accessKind":"reader"}' \
-  "$pair_rotate_response" reader
+  'retry:nocodb:domain_one:interviews:reader:00000000-0000-4000-8000-000000000493:quiesced' \
+  '{"domain":"domain_one","pair":"interviews","operation":"retry","accessKind":"reader","quiescedOperationId":"00000000-0000-4000-8000-000000000493"}' \
+  "$pair_rotate_response" reader 00000000-0000-4000-8000-000000000493
 assert_status 0
 assert_no_secret_output
 run_pair pair-retry NOCODB_PAIR_RETRY_CONFIRM \
-  'retry:nocodb:domain_one:interviews:operator' \
-  '{"domain":"domain_one","pair":"interviews","operation":"retry","accessKind":"reader"}' \
-  "$pair_rotate_response" reader
+  'retry:nocodb:domain_one:interviews:operator:00000000-0000-4000-8000-000000000493:quiesced' \
+  '{"domain":"domain_one","pair":"interviews","operation":"retry","accessKind":"reader","quiescedOperationId":"00000000-0000-4000-8000-000000000493"}' \
+  "$pair_rotate_response" reader 00000000-0000-4000-8000-000000000493
 assert_status 1
+assert_no_request
+
+case_name='retry without a quiesced operation cannot issue a request'
+run_pair pair-retry NOCODB_PAIR_RETRY_CONFIRM \
+  'retry:nocodb:domain_one:interviews:reader' '{}' "$pair_rotate_response" reader
+assert_status 2
 assert_no_request
 
 case_name='a reserved default pair cannot use the named command'
@@ -362,12 +370,12 @@ assert_status 0
 assert_no_secret_output
 
 case_name='default retry has a separate exact confirmation and selected source'
-run_operation retry domain_one operator 'retry:nocodb:domain_one:operator' \
-  "$token" "$valid_rotate_response"
+run_operation retry domain_one operator 'retry:nocodb:domain_one:operator:00000000-0000-4000-8000-000000000493:quiesced' \
+  "$token" "$valid_rotate_response" 0 00000000-0000-4000-8000-000000000493
 assert_status 0
 assert_no_secret_output
 run_operation retry domain_one operator 'retry:nocodb:domain_one:reader' \
-  "$token" "$valid_rotate_response"
+  "$token" "$valid_rotate_response" 0 00000000-0000-4000-8000-000000000493
 assert_status 1
 assert_no_request
 

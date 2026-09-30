@@ -80,6 +80,13 @@ nocodb-pair-sync domain pair: require-bash
 nocodb-pair-rotate domain pair access_kind: require-bash
     @scripts/nocodb/source-operation.sh pair-rotate {{quote(domain)}} {{quote(pair)}} {{quote(access_kind)}}
 
+# Attended rotation recovery, after the previous workflow and external requests end.
+nocodb-source-retry domain access_kind quiesced_operation_id: require-bash
+    @scripts/nocodb/source-operation.sh retry {{quote(domain)}} {{quote(access_kind)}} {{quote(quiesced_operation_id)}}
+
+nocodb-pair-retry domain pair access_kind quiesced_operation_id: require-bash
+    @scripts/nocodb/source-operation.sh pair-retry {{quote(domain)}} {{quote(pair)}} {{quote(access_kind)}} {{quote(quiesced_operation_id)}}
+
 # Run the catalog-coordinated synthetic NocoDB reader/operator acceptance lifecycle.
 # Guard: NOCODB_ACCESS_TEST_CONFIRM='test:nocodb:access'.
 nocodb-access-test: require-bash

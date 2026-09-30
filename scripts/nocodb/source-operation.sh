@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo 'Usage: source-operation.sh <prepare|sync|rotate|retry> <domain> [reader|operator]; configure <domain> <reader-schema> [operator-schema|-]; or pair-register|pair-prepare|pair-sync|pair-rotate|pair-retry <domain> <pair> [schema|access arguments]' >&2
+  echo 'Usage: source-operation.sh <prepare|sync|rotate> <domain> [reader|operator]; retry <domain> <reader|operator> <quiesced-operation-id>; configure <domain> <reader-schema> [operator-schema|-]; or pair-register|pair-prepare|pair-sync|pair-rotate|pair-retry <domain> <pair> [schema|access arguments] [quiesced-operation-id]' >&2
   exit 2
 }
 
@@ -15,6 +15,13 @@ access_kind=''
 pair=''
 reader_schema=''
 operator_schema=''
+quiesced_operation_id=''
+
+require_quiesced_operation() {
+  quiesced_operation_id="$1"
+  [[ "$quiesced_operation_id" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]] || usage
+  expected_confirmation="${expected_confirmation}:${quiesced_operation_id}:quiesced"
+}
 
 [[ "$domain" =~ ^[a-z][a-z0-9_]{0,47}$ ]] || {
   echo 'NocoDB source domain must match ^[a-z][a-z0-9_]{0,47}$.' >&2
@@ -57,13 +64,14 @@ case "$action" in
     }
     ;;
   rotate|retry)
-    [[ "$#" -eq 3 ]] || usage
+    [[ ( "$operation" == rotate && "$#" -eq 3 ) || ( "$operation" == retry && "$#" -eq 4 ) ]] || usage
     access_kind="$3"
     [[ "$access_kind" == reader || "$access_kind" == operator ]] || {
       echo 'NocoDB source rotation access kind must be reader or operator.' >&2
       exit 2
     }
     expected_confirmation="${operation}:nocodb:${domain}:${access_kind}"
+    if [[ "$operation" == retry ]]; then require_quiesced_operation "$4"; fi
     confirmation_variable="NOCODB_SOURCE_${operation^^}_CONFIRM"
     [[ "${!confirmation_variable:-}" == "$expected_confirmation" ]] || {
       echo "Refusing NocoDB source ${operation}; set ${confirmation_variable}='$expected_confirmation'." >&2
@@ -91,15 +99,16 @@ case "$action" in
     }
     ;;
   pair-prepare|pair-sync|pair-rotate|pair-retry)
-    [[ "$#" -eq 3 || ( ( "$action" == pair-rotate || "$action" == pair-retry ) && "$#" -eq 4 ) ]] || usage
+    [[ "$#" -eq 3 || ( "$action" == pair-rotate && "$#" -eq 4 ) || ( "$action" == pair-retry && "$#" -eq 5 ) ]] || usage
     pair="$3"
     [[ "$pair" =~ ^[a-z][a-z0-9_]{0,23}$ && "$pair" != default ]] || usage
     operation="${action#pair-}"
     if [[ "$operation" == rotate || "$operation" == retry ]]; then
-      [[ "$#" -eq 4 ]] || usage
+      [[ ( "$operation" == rotate && "$#" -eq 4 ) || ( "$operation" == retry && "$#" -eq 5 ) ]] || usage
       access_kind="$4"
       [[ "$access_kind" == reader || "$access_kind" == operator ]] || usage
       expected_confirmation="${operation}:nocodb:${domain}:${pair}:${access_kind}"
+      if [[ "$operation" == retry ]]; then require_quiesced_operation "$5"; fi
       confirmation_variable="NOCODB_PAIR_${operation^^}_CONFIRM"
     else
       [[ "$#" -eq 3 ]] || usage
@@ -154,8 +163,10 @@ elif [[ "$action" == pair-register ]]; then
 elif [[ "$operation" == rotate || "$operation" == retry ]]; then
   jq -cn --arg domain "$domain" --arg pair "$pair" --arg access_kind "$access_kind" \
     --arg operation "$operation" \
+    --arg quiesced "$quiesced_operation_id" \
     '{domain: $domain, operation: $operation, accessKind: $access_kind} +
-      (if $pair == "" then {} else {pair: $pair} end)' >"$request_body"
+      (if $pair == "" then {} else {pair: $pair} end) +
+      (if $quiesced == "" then {} else {quiescedOperationId: $quiesced} end)' >"$request_body"
 else
   jq -cn --arg domain "$domain" --arg pair "$pair" --arg operation "$operation" \
     '{domain: $domain, operation: $operation} +

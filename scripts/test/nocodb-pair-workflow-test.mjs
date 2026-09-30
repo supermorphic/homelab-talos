@@ -32,10 +32,15 @@ const named = invoke('Normalize Source Request', {body: {
 assert.equal(named.pair, 'interviews');
 assert.equal(named.accessKind, 'reader');
 assert.equal(named.requestedAccessKind, 'reader');
+assert.throws(() => invoke('Normalize Source Request', {body: {
+  domain: 'sample', pair: 'interviews', operation: 'retry', accessKind: 'operator'}}),
+  /quiesced_operation_required/);
+const previousOperation = '00000000-0000-4000-8000-000000000493';
 const retry = invoke('Normalize Source Request', {body: {
-  domain: 'sample', pair: 'interviews', operation: 'retry', accessKind: 'operator'}});
+  domain: 'sample', pair: 'interviews', operation: 'retry', accessKind: 'operator',
+  quiescedOperationId: previousOperation}});
 assert.equal(retry.operation, 'rotate');
-assert.equal(retry.explicitRetry, true);
+assert.equal(retry.quiescedOperationId, previousOperation);
 assert.equal(retry.requestedAccessKind, 'operator');
 assert.throws(() => invoke('Normalize Source Request', {body: {
   domain: 'sample', pair: 'interviews', operation: 'retry'}}));
@@ -55,7 +60,7 @@ assert.equal(nodes.get('Prepare NocoDB Access').parameters.query,
 assert.equal(nodes.get('Claim Source Operation').parameters.query,
   'SELECT platform_operations.claim_nocodb_operation($1, $2, $3, $4, gen_random_uuid(), $5) AS result;');
 assert.match(nodes.get('Claim Source Operation').parameters.options.queryReplacement,
-  /\$json\.explicitRetry === true/);
+  /\$json\.quiescedOperationId \|\| null/);
 assert.equal(nodes.get('Mark Claim Uncertain').parameters.query,
   'SELECT platform_operations.mark_nocodb_operation_uncertain($1, $2, $3, $4, $5) AS result;');
 for (const mutation of ['Create Domain Base', 'Create Reader Integration',

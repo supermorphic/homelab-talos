@@ -275,7 +275,7 @@ rg -q 'source_not_ready' "$scratch/rotate-again.err"
 # Only an uncertain claim permits a new explicit retry for the same target.
 retry_id='00000000-0000-4000-8000-000000000106'
 if query "SELECT platform_operations.claim_nocodb_operation(
-  'claim_fixture','extra','rotate','reader','$retry_id'::uuid,true)" \
+  'claim_fixture','extra','rotate','reader','$retry_id'::uuid,'$rotate_id'::uuid)" \
   >"$scratch/early-retry.out" 2>"$scratch/early-retry.err"; then
   echo 'A live rotation claim permitted premature retry.' >&2
   exit 1
@@ -287,7 +287,7 @@ rotate_generation="$(query "SELECT generation FROM platform_operations.nocodb_so
   'claim_fixture','extra','$rotate_id'::uuid,$rotate_generation,
   'external_response_unknown')->>'phase'")" == uncertain ]]
 if query "SELECT platform_operations.claim_nocodb_operation(
-  'claim_fixture','extra','rotate','operator','$retry_id'::uuid,true)" \
+  'claim_fixture','extra','rotate','operator','$retry_id'::uuid,'$rotate_id'::uuid)" \
   >"$scratch/wrong-target-retry.out" 2>"$scratch/wrong-target-retry.err"; then
   echo 'An uncertain rotation permitted retry of a different source.' >&2
   exit 1
@@ -295,8 +295,15 @@ fi
 rg -q 'nocodb_retry_not_eligible' "$scratch/wrong-target-retry.err"
 [[ "$(query "SELECT platform_operations.claim_nocodb_operation(
   'claim_fixture','extra','rotate','reader','$retry_id'::uuid)->>'canExecute'")" == false ]]
+if query "SELECT platform_operations.claim_nocodb_operation(
+  'claim_fixture','extra','rotate','reader','$retry_id'::uuid,'$first_id'::uuid)" \
+  >"$scratch/stale-recovery.out" 2>"$scratch/stale-recovery.err"; then
+  echo 'Recovery attestation for a stale operation was accepted.' >&2
+  exit 1
+fi
+rg -q 'nocodb_retry_not_eligible' "$scratch/stale-recovery.err"
 [[ "$(query "SELECT platform_operations.claim_nocodb_operation(
-  'claim_fixture','extra','rotate','reader','$retry_id'::uuid,true)->>'canExecute'")" == true ]]
+  'claim_fixture','extra','rotate','reader','$retry_id'::uuid,'$rotate_id'::uuid)->>'canExecute'")" == true ]]
 retry_generation="$(query "SELECT generation FROM platform_operations.nocodb_source_operations
   WHERE domain = 'claim_fixture' AND pair = 'extra'")"
 if query "SELECT platform_operations.rotate_nocodb_source_credential(
