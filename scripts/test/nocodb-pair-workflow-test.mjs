@@ -5,9 +5,13 @@ import { readFileSync } from 'node:fs';
 const graph = JSON.parse(readFileSync(
   'kubernetes/apps/automation/n8n/app/workflows/nocodb-source-provisioner.json', 'utf8'));
 const nodes = new Map(graph.nodes.map(node => [node.name, node]));
-const invoke = (name, json, context = {}) => new Function('$json', '$', '$input',
-  nodes.get(name).parameters.jsCode)(json, key => ({ first: () => {
+const invoke = (name, json, context = {}, errorBranch = false) => new Function('$json', '$', '$input',
+  nodes.get(name).parameters.jsCode)(json, key => ({ first: branch => {
     if (!(key in context)) throw Error('node not executed');
+    // n8n selects the connecting output by default. On an error path, the
+    // normalized request is on output 0, while output 1 contains the error.
+    if (errorBranch && key === 'Normalize Source Request' && branch !== 0)
+      return {json: {error: 'upstream_error'}};
     return { json: context[key] };
   } }), {all: () => []})[0].json;
 
@@ -35,6 +39,12 @@ assert.equal(retry.explicitRetry, true);
 assert.equal(retry.requestedAccessKind, 'operator');
 assert.throws(() => invoke('Normalize Source Request', {body: {
   domain: 'sample', pair: 'interviews', operation: 'retry'}}));
+const failedPair = invoke('Prepare Source Error Response', {error: 'bounded_failure'},
+  {'Normalize Source Request': {domain: 'sample', pair: 'interviews', operation: 'sync'}}, true);
+assert.equal(failedPair.ok, false);
+assert.equal(failedPair.domain, 'sample');
+assert.equal(failedPair.pair, 'interviews');
+assert.equal(failedPair.operation, 'sync');
 
 assert.equal(graph.connections['Register Requested'].main[0][0].node,
   'Register NocoDB Pair');

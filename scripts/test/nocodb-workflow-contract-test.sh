@@ -94,7 +94,6 @@ approved_functions = {
     "platform_operations.record_nocodb_integration",
     "platform_operations.record_nocodb_source_job",
     "platform_operations.record_nocodb_source_ready",
-    "platform_operations.record_nocodb_source_error",
     "platform_operations.rotate_nocodb_source_credential",
     "platform_operations.validate_nocodb_access",
 }
@@ -186,9 +185,9 @@ for function_name in ("read_nocodb_source_state", "prepare_nocodb_access"):
     require(match and "pg_advisory_xact_lock" in match.group(0), f"{function_name} does not retain the domain transaction lock.")
 record_error = by_name.get("Record Source Error", {}).get("parameters", {})
 require(
-    record_error.get("query") == "SELECT platform_operations.record_nocodb_source_error($1, $2, $3, $4, $5, $6, $7) AS result;"
-    and "sourceOperation" in record_error.get("options", {}).get("queryReplacement", ""),
-    "Source errors must persist the exact sync or rotate operation through the fixed interface.",
+    record_error.get("query") == "SELECT platform_operations.mark_nocodb_operation_uncertain($1, $2, $3, $4, $5) AS result;"
+    and "$json.errorCode" in record_error.get("options", {}).get("queryReplacement", ""),
+    "Source errors must preserve the claimed operation as uncertain.",
 )
 
 host = "http://nocodb.automation-data.svc.cluster.local:8080"
@@ -692,7 +691,7 @@ for (const [label, request, context, expected] of [
   ['non-target reader work', { operation: 'rotate', requestedAccessKind: 'operator' }, { ...sourceContext, accessKind: 'reader' }, 'sync'],
   ['initial sync', { operation: 'sync' }, { ...sourceContext, accessKind: 'reader' }, 'sync'],
 ]) {
-  const preparedError = execute('Prepare Source Error', context, { 'Normalize Source Request': request })[0].json;
+  const preparedError = execute('Prepare Source Error', {...context, ...request})[0].json;
   if (preparedError.sourceOperation !== expected) throw new Error(`${label} persisted the wrong source operation`);
 }
 const unique = execute('Discover Reader Source', {

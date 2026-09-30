@@ -2775,7 +2775,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const context = $json.domain ? $json : {};\nconst request = $('Normalize Source Request').first().json;\nconst sourceOperation = request.operation === 'rotate' && request.requestedAccessKind === context.accessKind ? 'rotate' : 'sync';\nreturn [{ json: { ...context, sourceOperation, errorCode: context.errorCode || 'source_operation_failed' } }];"
+        "jsCode": "const context = $json.domain ? $json : {};\nconst sourceOperation = context.operation === 'rotate' && context.requestedAccessKind === context.accessKind ? 'rotate' : 'sync';\nreturn [{ json: { ...context, sourceOperation, errorCode: context.errorCode || 'source_operation_failed' } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -2790,9 +2790,9 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT platform_operations.record_nocodb_source_error($1, $2, $3, $4, $5, $6, $7) AS result;",
+        "query": "SELECT platform_operations.mark_nocodb_operation_uncertain($1, $2, $3, $4, $5) AS result;",
         "options": {
-          "queryReplacement": "={{ [$json.domain, $('Normalize Source Request').first().json.pair || 'default', $json.accessKind, $json.sourceOperation, $json.errorCode, $('Claim Source Operation').first().json.result.operationId, $('Claim Source Operation').first().json.result.generation] }}"
+          "queryReplacement": "={{ [$json.domain, $json.pair || 'default', $('Claim Source Operation').first(0).json.result.operationId, $('Claim Source Operation').first(0).json.result.generation, $json.errorCode] }}"
         }
       },
       "type": "n8n-nodes-base.postgres",
@@ -2807,7 +2807,7 @@
     },
     {
       "parameters": {
-        "jsCode": "let context = $json.domain ? $json : {};\ntry { const recorded = $('Prepare Source Error').first().json; if (recorded?.domain) context = recorded; } catch {}\nreturn [{ json: { ok: false, domain: context.domain || null, accessKind: context.accessKind || null, errorCode: context.errorCode || 'source_operation_failed' } }];"
+        "jsCode": "let context = $json.result && typeof $json.result === 'object' ? $json.result : ($json.domain ? $json : {});\nlet request = {};\ntry { request = $('Normalize Source Request').first(0).json || {}; } catch {}\ntry { const recorded = $('Prepare Source Error').first(0).json; if (recorded?.domain) context = recorded; } catch {}\nconst pair = context.pair || request.pair;\nreturn [{ json: { ok: false, domain: context.domain || request.domain || null, ...(pair ? {pair} : {}), operation: context.operation || request.operation || null, accessKind: context.accessKind || request.requestedAccessKind || null, errorCode: context.errorCode || 'source_operation_failed' } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -3097,7 +3097,7 @@
         "operation": "executeQuery",
         "query": "SELECT platform_operations.mark_nocodb_operation_uncertain($1, $2, $3, $4, $5) AS result;",
         "options": {
-          "queryReplacement": "={{ [$('Normalize Source Request').first().json.domain, $('Normalize Source Request').first().json.pair || 'default', $('Claim Source Operation').first().json.result.operationId, $('Claim Source Operation').first().json.result.generation, 'external_response_unknown'] }}"
+          "queryReplacement": "={{ [$('Normalize Source Request').first(0).json.domain, $('Normalize Source Request').first(0).json.pair || 'default', $('Claim Source Operation').first(0).json.result.operationId, $('Claim Source Operation').first(0).json.result.generation, 'external_response_unknown'] }}"
         }
       },
       "type": "n8n-nodes-base.postgres",
@@ -3347,7 +3347,7 @@
         ],
         [
           {
-            "node": "Prepare Source Error Response",
+            "node": "Mark Claim Uncertain",
             "type": "main",
             "index": 0
           }
