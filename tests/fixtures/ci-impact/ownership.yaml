@@ -151,6 +151,7 @@ contracts:
       - kubernetes/apps/security/openbao/app/ciliumnetworkpolicy.yaml
       - kubernetes/apps/security/openbao/app/helmrelease.yaml
       - kubernetes/apps/security/openbao/app/helmrepository.yaml
+      - kubernetes/apps/security/openbao/app/issuer-token.yaml
       - kubernetes/apps/security/openbao/app/kustomization.yaml
       - kubernetes/apps/security/openbao/app/openbao-seal.sops.yaml
       - kubernetes/apps/security/openbao/app/pdb.yaml
@@ -183,6 +184,8 @@ contracts:
       - scripts/openbao/drift.py
       - scripts/openbao/guards.py
       - scripts/openbao/issuance.py
+      - scripts/openbao/issuer.py
+      - scripts/openbao/issuer_rollout.py
       - scripts/openbao/lock.sh
       - scripts/openbao/maintenance.py
       - scripts/openbao/manifests.py
@@ -207,6 +210,8 @@ contracts:
       - scripts/test/core/test_openbao_catalog.py
       - scripts/test/core/test_openbao_client.py
       - scripts/test/core/test_openbao_drift.py
+      - scripts/test/core/test_openbao_issuer.py
+      - scripts/test/core/test_openbao_issuer_rollout.py
       - scripts/test/core/test_openbao_manifests.py
       - scripts/test/core/test_openbao_pinned_contract.py
       - scripts/test/core/test_openbao_reset.py
@@ -237,6 +242,8 @@ contracts:
       - python:scripts/test/core/test_openbao_catalog.py
       - python:scripts/test/core/test_openbao_client.py
       - python:scripts/test/core/test_openbao_drift.py
+      - python:scripts/test/core/test_openbao_issuer.py
+      - python:scripts/test/core/test_openbao_issuer_rollout.py
       - python:scripts/test/core/test_openbao_manifests.py
       - python:scripts/test/core/test_openbao_reset.py
       - python:scripts/test/core/test_openbao_secrets.py
