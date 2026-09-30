@@ -665,12 +665,17 @@ sources that do not depend on historical job retention.
 | NocoDB-specific object storage | It adds a storage platform without a demonstrated requirement; workflows already own their files. |
 | Native manifests instead of the supported chart | They duplicate maintained workload conventions without reducing the required repository integration. |
 
-## Proposed extension: independently scoped source pairs (issue 491)
+## Independently scoped source pairs (issue 491)
 
-This section is a proposed design for
-[issue 491](https://github.com/supermorphic/homelab-talos/issues/491), pending operator
-review and implementation. Earlier sections describe the existing lifecycle. This
-proposal extends that lifecycle without changing existing source identities or grants.
+This section records the implementation candidate for
+[issue 491](https://github.com/supermorphic/homelab-talos/issues/491). It extends the
+existing lifecycle without changing existing source identities or grants. The candidate
+passed disposable component and complete isolated recovery acceptance in canonical run
+`20260930T123426Z-3e9477a5273a-operator-2c602404`. That run includes two independently
+scoped pairs, retained saved views, application authentication/rotation, concurrent
+creation, a lost external API response, and foreign-base rejection. Hosted validation,
+deployment, attended browser acceptance, and recorded live recovery are separate gates;
+this evidence does not establish a production upgrade or consumer completion.
 
 ### Consumer requirement and ownership
 
@@ -792,7 +797,7 @@ operations. Synthetic platform tests must independently prove denial for withhel
 tables and functions in the same schema, as well as denial across pairs.
 
 The separate application-login lifecycle and CLI connection procedure are proposed in
-[specification 026](026-automation-data-postgresql-platform.md#proposed-extension-registered-application-logins-issue-491).
+[specification 026](026-automation-data-postgresql-platform.md#registered-application-logins-issue-491).
 
 ### Upgrade, backup, and acceptance
 

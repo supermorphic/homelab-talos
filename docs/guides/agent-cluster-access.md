@@ -159,6 +159,10 @@ and `AUTOMATION_DATA_SERVICE` to the explicit protected local profile before run
 the command. The helper checks the profile, scoped context, named permission, Pod
 identity, and authenticated database role; interruption closes only its own tunnel.
 It does not grant permission to query private records or run consumer migrations.
+Application activation/rotation uses this same named tunnel to prove the retained
+candidate credential before profile installation. Follow the
+[protected credential procedure](automation-data-operations.md#registered-application-logins-and-private-cli-access);
+missing migration credentials require separately authorized recovery.
 
 `mise exec -- just kube openbao-verify` uses `homelab-observer` for Kubernetes reads
 and the existing Prometheus route for sanitized configuration observations. A separate

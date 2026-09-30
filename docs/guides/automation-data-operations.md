@@ -279,13 +279,17 @@ Run from deployed `main` after a complete, healthy pre-upgrade automation-data
 logical backup is available:
 
 ```bash
-AUTOMATION_DATA_UPGRADE_CONFIRM='upgrade:automation-data:nocodb-v2' \
+AUTOMATION_DATA_UPGRADE_CONFIRM='upgrade:automation-data:nocodb-v3' \
   mise exec -- just kube automation-data-upgrade
 ```
 
 Wait for the command to succeed. It upgrades the installed NocoDB platform
-extension, preserves existing source identities, and makes custom schema mappings
-available.
+extension, preserves existing source identities, and adds named source pairs,
+durable operation claims, and registered application logins. Reconcile the reviewed
+backup-capable code first, require a complete pre-upgrade bundle, and pause provisioning
+while the operator runs the upgrade. An unresolved source or login transition blocks
+the upgrade. Import and publish the reviewed workflows afterward, preserving their
+existing protected credential bindings and disabled execution-data persistence.
 
 After success, create and verify a fresh complete automation-data logical backup
 before continuing with NocoDB bootstrap or source changes. If the command reports
@@ -361,6 +365,120 @@ bindings and execution-data settings, and publish it. Run the standalone provisi
 acceptance, wait for new backups of both systems, and run the full-chain restore drill.
 Finish with `mise exec -- just kube automation-data-verify`. On failure, keep provisioning
 paused and retain the backup while classifying the failed step.
+
+## Registered application logins and private CLI access
+
+The v3 candidate supports a separate application identity in an existing ready domain.
+It does not deliver NocoDB passwords or broaden the domain runtime credential.
+Career Ops #197 needs both this CLI connection path and the in-cluster NocoDB pair.
+Consumer schemas, grants, fixed integration functions, migration guards, role selection,
+and application acceptance remain in the consumer repository.
+
+### Register, grant, and activate
+
+1. Register a synthetic `interview` login bound to `sample.app`:
+
+   ```bash
+   AUTOMATION_DATA_LOGIN_REGISTER_CONFIRM='register:automation-data:sample:interview:app' \
+     mise exec -- just kube automation-data-login-register sample interview app
+   ```
+
+   Supply the existing private provisioner token through
+   `AUTOMATION_DATA_PROVISIONING_TOKEN` using approved private handling. The fixed URL
+   is `https://n8n.lab.supermorphic.com/webhook/automation-data-provision`;
+   `AUTOMATION_DATA_PROVISIONING_URL`, if set, must match it exactly. The returned role
+   is `app_<md5(domain + ':' + application)>_integration`, initially `NOLOGIN`.
+
+2. Use the distinct migrator and consumer-reviewed migrations to grant `CONNECT`,
+   schema `USAGE`, intended reads, and `EXECUTE` only on approved fixed functions.
+   The integration role receives no direct DML, ownership, role membership, or schema
+   creation. Consumer review must establish safe function semantics and definer
+   authority. Revoke unintended `PUBLIC` access; the platform validates effective
+   permissions and rejects authority outside the registered schema/database.
+
+3. Bootstrap scoped credentials and select an absolute private directory outside
+   every checkout. It must be owned by the current user with mode `0700`:
+
+   ```bash
+   mise exec -- just talos kubeconfig
+   export AUTOMATION_DATA_LOGIN_DIRECTORY=/ABSOLUTE/PRIVATE/PATH/application-logins
+   AUTOMATION_DATA_LOGIN_ACTIVATE_CONFIRM='activate:automation-data:sample:interview' \
+     mise exec -- just kube automation-data-login-activate sample interview
+   mise exec -- just kube automation-data-login-validate sample interview
+   ```
+
+   Activation durably saves a random candidate and operation record before submitting
+   it. It authenticates through the fixed tunnel, acknowledges the server generation,
+   then installs the protected profile. It returns only role/generation metadata and
+   the `serviceFile` path. A bounded failure retains the candidate for explicit retry
+   of the same command, operation ID, and password.
+
+### Protected files and connection
+
+Under `<directory>/<domain>/<application>/`, retain:
+
+| Path | Purpose |
+| --- | --- |
+| `pending/candidate.pgpass` | Candidate password retained across ambiguous failure. |
+| `pending/operation.json` | Non-secret target, operation ID, expected generation, local phase. |
+| `generation-<n>/credential.pgpass` | Versioned active credential. |
+| `generation-<n>/service.conf`, `binding.json` | Versioned target and registry binding. |
+| `service.conf`, `binding.json` | Selected profile and binding after acknowledgment. |
+
+Files are owned regular files with mode `0600`; directories use `0700`. The helper
+rejects symlinks, unsafe ownership/modes, mismatched targets, inline profile passwords,
+and inherited `PG*` connection settings. Preserve older generations and recovery
+material in approved private storage. Missing candidate material requires a separately
+confirmed new rotation; ordinary retry does not generate a replacement password.
+
+Select the returned profile and its section, `automation_data_<domain>_<returned-role>`:
+
+```bash
+export AUTOMATION_DATA_SERVICE_FILE=/ABSOLUTE/PRIVATE/PATH/application-logins/sample/interview/service.conf
+export AUTOMATION_DATA_SERVICE='automation_data_sample_<returned-role>'
+mise exec -- just kube automation-data-connect sample application/interview
+```
+
+The helper runs in the foreground. It binds only `127.0.0.1:15432` to port `5432` on
+`automation-data-postgresql-0`, verifies the database and session role, and ends when
+interrupted, the child exits, or the Pod changes. `AUTOMATION_DATA_LOCAL_PORT` can select
+another local port from 1024–65535; use the same value during activation and connection.
+`AUTOMATION_DATA_KUBECONFIG`, if set, must contain the approved scoped contexts; the
+default is this worktree's `.kube/config`. It never falls back to administrative access.
+
+In another terminal, select the same service/pass profile in the consumer CLI.
+Career Ops uses `CAREER_EVIDENCE_SERVICE_FILE` and `CAREER_EVIDENCE_SERVICE` for status,
+validation, and private export. Its role-selection changes and scoped function
+acceptance belong to issue 197; this platform candidate does not establish that the
+current consumer CLI accepts the new identity. No general SQL shell or query argument
+is supplied by the connection helper.
+
+### Rotation, migration prerequisites, and recovery
+
+```bash
+AUTOMATION_DATA_LOGIN_ROTATE_CONFIRM='rotate:automation-data:sample:interview' \
+  mise exec -- just kube automation-data-login-rotate sample interview
+```
+
+Rotation changes only this application credential. It preserves the prior active
+profile until authentication and server acknowledgment succeed. An ambiguous result
+keeps recovery material; retry the same command from the same protected directory.
+Do not delete `pending/` to force a new operation.
+
+Migration uses `automation-data-connect <domain> migrator` with an explicitly selected,
+operator-retained service/pass profile for `<domain>_migrator`. The helper does not
+retrieve that password from n8n. An unavailable migrator credential is a separate
+operator prerequisite. Do not rotate it automatically during onboarding. If recovery
+is needed, obtain separate authorization for the existing targeted domain migrator
+rotation, verify its exact n8n credential binding and current backup, run that guarded
+lifecycle, and arrange protected delivery before using the consumer migration runner.
+
+Complete v3 bundles retain all pair mappings, source states, operation claims, login
+registrations, roles/verifiers, and NocoDB metadata. Client credentials remain a separate
+recovery root. The local fixture restores both pairs, saved views, and a retained
+application credential against an isolated PostgreSQL instance. Live upgrade, named
+pair/browser access, client installation, and recorded restore acceptance remain later
+authorized steps.
 
 ## Destructive administration
 

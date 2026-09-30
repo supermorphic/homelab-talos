@@ -868,12 +868,16 @@ Adding drop operations to the ordinary provisioning workflow would turn input mi
 or workflow misuse into destructive cluster-wide actions. Decommissioning remains a
 separate attended administrative boundary under the destructive-operation invariant.
 
-## Proposed extension: registered application logins (issue 491)
+## Registered application logins (issue 491)
 
-This proposal supports the additional source pairs in
-[specification 028](028-nocodb-operator-ui.md#proposed-extension-independently-scoped-source-pairs-issue-491).
-It is pending design review and implementation. Existing domain runtime and migration
-credentials retain their current responsibilities.
+The implementation candidate supports the additional source pairs in
+[specification 028](028-nocodb-operator-ui.md#independently-scoped-source-pairs-issue-491).
+Protected local credential delivery, fixed private CLI transport, v3 upgrade/backup
+compatibility, and isolated restored authentication are implemented. Canonical disposable
+run `20260930T123426Z-3e9477a5273a-operator-2c602404` passed. Hosted validation and
+authorized live upgrade, client installation, browser access, and recorded recovery
+remain separate gates. Existing domain runtime and migration credentials retain their
+current responsibilities; consumer role selection and grants remain consumer-owned.
 
 ### Required consumers
 
@@ -938,8 +942,9 @@ or repository artifacts. Return only non-secret identity and generation metadata
 Persist a local operation record beside the protected candidate file. The server binds
 the request to the selected login, operation ID, and expected prior generation.
 Retries of the same operation reapply the same retained candidate and cannot affect
-another generation. After private authentication and identity read-back succeed, write
-the service/pass profile atomically and mark the operation complete. Retain a candidate
+another generation. After private authentication and identity read-back succeed,
+acknowledge the server generation, then install the service/pass profile and binding
+through atomic file replacements. Retain a candidate
 after ambiguous failure for explicit recovery; never overwrite it with a new generated
 password during ordinary retry. Missing retained material requires an explicit new
 rotation, with fresh target validation and confirmation.

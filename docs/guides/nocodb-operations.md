@@ -88,6 +88,10 @@ Retain these materials outside the cluster:
 - access to complete automation-data logical bundles; and
 - the operator account and private n8n access needed for attended administration.
 
+For registered application logins, also retain the protected client credential
+directory described in [automation-data operations](automation-data-operations.md#registered-application-logins-and-private-cli-access).
+The database backup holds the verifier, not a recoverable plaintext client password.
+
 The automation-data logical bundle preserves the `nocodb` metadata database, the source
 registry, optional role definitions, role password verifiers, operator decisions, and
 durable artifact metadata and references. Workflow or storage owners retain and recover
@@ -600,6 +604,96 @@ workflows. Do not broaden a NocoDB login to work around an application problem.
   other access kind remain blocked while this error is recorded.
 - A missing or unreadable `NC_CONNECTION_ENCRYPT_KEY` is a hard stop for ordinary
   recovery; prepare a separately reviewed recovery design.
+
+## Add an independent source pair
+
+This requires the deployed v3 control extension and reviewed workflow revision.
+Issue 491's candidate does not authorize production registration, grants, or rotation.
+Use the existing ready domain; do not create another domain alias for its database.
+The following names are synthetic.
+
+1. Register immutable schema mappings and capture the returned `readerRole` and
+   `operatorRole`. Registration creates restricted `NOLOGIN` grant targets:
+
+   ```bash
+   NOCODB_PAIR_REGISTER_CONFIRM='register:nocodb:sample:extra:extra_read:extra_edit' \
+     mise exec -- just kube nocodb-pair-register sample extra extra_read extra_edit
+   ```
+
+   A pair matches `^[a-z][a-z0-9_]{0,23}$`; `default` is reserved for existing
+   domain-only calls. Reader/operator schemas must differ. Use `-` in the operator
+   argument for a reader-only pair. Roles are returned as
+   `nocodb_<md5(domain + ':' + pair)>_reader` and its `_operator` sibling.
+
+2. Apply consumer-reviewed migrations through a separate migrator credential.
+   Grant each returned role `CONNECT` to the domain database, `USAGE` on its mapped
+   schema, and only the intended object permissions. Grant reader `SELECT` on
+   presentation objects and operator only the approved native editing permissions.
+   Withhold bookkeeping tables and privileged functions, even inside those schemas.
+   The platform supplies no application tables or automatic consumer grants.
+
+3. Prepare and inspect eligibility before sync:
+
+   ```bash
+   NOCODB_PAIR_PREPARE_CONFIRM='prepare:nocodb:sample:extra' \
+     mise exec -- just kube nocodb-pair-prepare sample extra
+   NOCODB_PAIR_SYNC_CONFIRM='sync:nocodb:sample:extra' \
+     mise exec -- just kube nocodb-pair-sync sample extra
+   ```
+
+   Preparation validates effective privileges. Sync creates the named base
+   `sample--extra`, separate integrations, and the asynchronous sources. It rejects
+   unrelated objects with matching titles. Preserve returned base, integration, and
+   source IDs. Pending or failed responses do not establish readiness.
+
+4. Repeat sync to validate the same identities and credentials. For new columns or
+   tables, use the supported NocoDB metadata refresh described under routine
+   operation, then sync. Adding a pair or refreshing it preserves the default pair,
+   other pairs, their credential generations, and saved views.
+
+5. Register the separate application login using the
+   [private CLI procedure](automation-data-operations.md#registered-application-logins-and-private-cli-access).
+   Consumer acceptance must still prove ordinary Community Edition fields and linked
+   records, application reads/writes, stale-revision rejection, and private export.
+
+### Targeted rotation and attended retry
+
+Rotate one source after verifying its current identity:
+
+```bash
+NOCODB_PAIR_ROTATE_CONFIRM='rotate:nocodb:sample:extra:reader' \
+  mise exec -- just kube nocodb-pair-rotate sample extra reader
+```
+
+This preserves source IDs and changes only the selected credential. Domain-only
+`nocodb-source-prepare`, `nocodb-source-sync`, and `nocodb-source-rotate` retain their
+existing meaning for the default pair.
+
+A partial rotation retains its operation claim and source identities. Ordinary sync
+cannot generate a replacement password. Retry requires attended confirmation that the
+previous workflow has ended and its NocoDB requests have completed or been cancelled.
+A timeout, a stopped client, or elapsed time alone is insufficient. If this condition
+cannot be established through authorized administration, retain the claim and stop.
+
+Use the exact retained operation ID from bounded diagnostics; never invent one:
+
+```bash
+# Synthetic ID: substitute the retained, confirmed-quiescent operation ID.
+NOCODB_PAIR_RETRY_CONFIRM='retry:nocodb:sample:extra:reader:00000000-0000-4000-8000-000000000493:quiesced' \
+  mise exec -- just kube nocodb-pair-retry sample extra reader \
+    00000000-0000-4000-8000-000000000493
+```
+
+For the default pair, use `nocodb-source-retry <domain> <access-kind> <operation-id>`
+and `NOCODB_SOURCE_RETRY_CONFIRM='retry:nocodb:<domain>:<access-kind>:<operation-id>:quiesced'`.
+The authenticated retry request carries `quiescedOperationId`; SQL rejects a stale ID,
+active claim, different target, or missing durable source identity. This confirmation
+is an execution guard; it does not grant authority for live credential mutation.
+
+Lost create responses remain an observation or attended reconciliation case. Do not
+clear registry rows, create replacement objects, or replay a create because its job
+history is missing. The disposable fixture proves that concurrent sync and observation
+preserve the accepted source and credential generation after a lost API response.
 
 ## Destructive administration
 
