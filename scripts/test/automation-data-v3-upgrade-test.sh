@@ -48,10 +48,12 @@ query() {
     --command="$1"
 }
 for _attempt in {1..60}; do
-  if query 'SELECT platform_operations.read_platform_revision()' 2>/dev/null \
+  if podman exec "$container" sh -eu -c 'grep -qx postgres /proc/1/comm' >/dev/null 2>&1 &&
+      query 'SELECT platform_operations.read_platform_revision()' 2>/dev/null \
       | rg -qx '026-nocodb-v2'; then break; fi
   sleep 1
 done
+podman exec "$container" sh -eu -c 'grep -qx postgres /proc/1/comm'
 [[ "$(query 'SELECT platform_operations.read_platform_revision()')" == 026-nocodb-v2 ]]
 cat >"$scratch/setup.sql" <<'SQL'
 \getenv migrator_password FIXTURE_MIGRATOR_PASSWORD

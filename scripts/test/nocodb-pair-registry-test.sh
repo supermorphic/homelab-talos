@@ -37,9 +37,11 @@ podman run --detach --name "$container" --label "homelab-talos.test-run=$marker"
   --volume "$scripts/init-platform.sh:/docker-entrypoint-initdb.d/00-init-platform.sh:ro" \
   postgres:17.11-alpine3.24 >"$scratch/container-id"
 for _attempt in {1..60}; do
-  if podman exec "$container" pg_isready --username postgres >/dev/null 2>&1; then break; fi
+  if podman exec "$container" sh -eu -c 'grep -qx postgres /proc/1/comm' >/dev/null 2>&1 &&
+      podman exec "$container" pg_isready --username postgres >/dev/null 2>&1; then break; fi
   sleep 1
 done
+podman exec "$container" sh -eu -c 'grep -qx postgres /proc/1/comm'
 podman exec "$container" pg_isready --username postgres >/dev/null
 
 cat >"$scratch/assertions.sql" <<'SQL'
