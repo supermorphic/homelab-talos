@@ -717,7 +717,7 @@ New pairs require explicit grants and receive no automatic grants on future obje
 
 ### NocoDB organization and command contract
 
-Give each additional pair its own base, titled `<domain>/<pair>`, with a reader source
+Give each additional pair its own base, titled `<domain>--<pair>`, with a reader source
 and optional operator source. This preserves the original base and provides a separate
 place for the additional surface's tables and saved views. A shared base would couple
 source naming and presentation across independently registered surfaces. A separate

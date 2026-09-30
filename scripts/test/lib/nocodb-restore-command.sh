@@ -89,7 +89,7 @@ try {
         entries.filter((item) => item.accessKind === 'reader').length !== 1 ||
         entries.filter((item) => item.accessKind === 'operator').length > 1 ||
         (pair === 'default' && entries.length !== 2)) throw new Error('registry_pair_mismatch');
-    const title = pair === 'default' ? 'automation_data_acceptance' : `automation_data_acceptance/${pair}`;
+    const title = pair === 'default' ? 'automation_data_acceptance' : `automation_data_acceptance--${pair}`;
     const baseMatches = bases.filter((item) => item?.id === ids[0] && item?.title === title);
     if (baseMatches.length !== 1) throw new Error('base_contract_failed');
     const pairBase = baseMatches[0];

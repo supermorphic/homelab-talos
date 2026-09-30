@@ -90,14 +90,14 @@ const baseContext = {'Keep Source Claim': claimed,
 const newBase = invoke('Resolve Domain Base', {list: []}, baseContext);
 assert.equal(newBase.createBase, true);
 assert.throws(() => invoke('Resolve Domain Base', {list: [
-  {id: 'foreign-base', title: 'sample/interviews', fk_workspace_id: 'workspace'}]}, baseContext));
+  {id: 'foreign-base', title: 'sample--interviews', fk_workspace_id: 'workspace'}]}, baseContext));
 const retainedContext = {...baseContext,
   'Read Base Registry': {result: {baseId: 'retained-base'}}};
 const existingBase = invoke('Resolve Domain Base', {list: [
-  {id: 'retained-base', title: 'sample/interviews', fk_workspace_id: 'workspace'}]}, retainedContext);
+  {id: 'retained-base', title: 'sample--interviews', fk_workspace_id: 'workspace'}]}, retainedContext);
 assert.equal(existingBase.baseId, 'retained-base');
 assert.throws(() => invoke('Resolve Domain Base', {list: [
-  {id: 'foreign-base', title: 'sample/interviews', fk_workspace_id: 'workspace'}]}, retainedContext));
+  {id: 'foreign-base', title: 'sample--interviews', fk_workspace_id: 'workspace'}]}, retainedContext));
 const observedClaim = invoke('Keep Source Claim', {result: {...claim, canExecute: false}},
   {'Keep Access Plan': context});
 assert.equal(observedClaim.observeOnly, true);
@@ -110,7 +110,7 @@ assert.deepEqual(graph.connections['Claim Executable'].main[1].map(edge => edge.
 assert.throws(() => invoke('Resolve Domain Base', {list: []},
   {...baseContext, 'Keep Source Claim': observedClaim}));
 const observedBase = invoke('Resolve Domain Base', {list: [
-  {id: 'retained-base', title: 'sample/interviews', fk_workspace_id: 'workspace'}]},
+  {id: 'retained-base', title: 'sample--interviews', fk_workspace_id: 'workspace'}]},
   {...retainedContext, 'Keep Source Claim': observedClaim});
 assert.equal(observedBase.observeOnly, true);
 const sourceContext = {...observedBase, accessKind: 'reader', alias: 'Read Model',
