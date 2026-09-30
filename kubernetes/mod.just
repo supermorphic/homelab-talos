@@ -1180,3 +1180,7 @@ openbao-ha-test: require-bash
 # Attended standby-first replacement after a reviewed Git image update and fresh snapshot.
 openbao-upgrade: require-bash
     @scripts/operations/openbao-upgrade.sh
+
+# Attended issuer mount adoption with quorum guards and final issuance proof.
+openbao-issuer-rollout: require-bash
+    @uv run --locked python -m scripts.openbao.issuer_rollout

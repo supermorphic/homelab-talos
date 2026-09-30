@@ -56,10 +56,12 @@ server:
       secret: {secretName: openbao-seal, defaultMode: 0440}
     - name: kubernetes-api-token
       projected:
+        defaultMode: 0440
         sources:
-          - serviceAccountToken:
-              path: token
-              expirationSeconds: 600
+          - secret:
+              name: openbao-issuer-token-v1
+              items:
+                - {key: token, path: token}
           - configMap:
               name: kube-root-ca.crt
               items:

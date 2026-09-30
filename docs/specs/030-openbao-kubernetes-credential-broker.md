@@ -12,8 +12,9 @@ The prerequisite, server, acceptance, and backup Flux units reconcile through Gi
 The private route and monitoring are active. Source and CI results are candidate
 evidence only; issue 449 remains open pending sustained issuance and retained,
 passing live acceptance. Readiness and configuration verification do not establish
-that the Kubernetes issuer credential remains usable across token rotation; see
-the known upstream limitation below.
+that the Kubernetes issuer credential remains usable over time. The approved
+stable-issuer workaround below requires an attended rollout and fresh acceptance
+before it can be called deployed and validated.
 
 Deploy OpenBao inside the Talos cluster to issue short-lived credentials for
 pre-existing Kubernetes ServiceAccounts. Git and Flux own every ServiceAccount,
@@ -89,15 +90,16 @@ The server values must explicitly configure:
 - non-root execution, no privilege escalation, and dropped Linux capabilities;
 - `disable_mlock = true` for integrated Raft, without granting `IPC_LOCK`;
 - disabled injector, CSI provider, chart snapshot agent, authentication-delegator
-  binding, Kubernetes service registration, and permanent ServiceAccount token
-  Secret creation.
+  binding, Kubernetes service registration, and chart-generated ServiceAccount
+  token Secret creation.
 
 Use a Git-owned server ServiceAccount. Omit chart-generated pod-registration RBAC
 and active/standby label-based routing. A Service selects Ready servers; OpenBao
 handles forwarding to the leader. A headless Service provides peer discovery.
-The current source mounts the projected, rotating Kubernetes API token needed by
-the issuer. Its compatibility limitation is recorded below; a different issuer
-credential requires a reviewed source and recovery-policy change.
+The server mounts a manually declared, Kubernetes-generated ServiceAccount token
+Secret for its issuer identity. The chart must not generate another credential.
+Automatic ServiceAccount token mounting remains disabled. See the stable-issuer
+contract below for the reason and lifecycle.
 
 Start with requests of 100m CPU and 256 MiB memory per server, and limits of one
 CPU and 1 GiB memory. These are provisional reservations, not measured capacity.
@@ -336,7 +338,7 @@ In-cluster backup and acceptance jobs authenticate using projected Kubernetes
 JWTs with a dedicated OpenBao audience and a ten-minute lifetime. Use OpenBao's
 JWT method with the Kubernetes provider, bound issuer, exact namespace and
 ServiceAccount subject, and the dedicated audience. It discovers verification
-keys using the server's ordinary projected identity. This avoids granting
+keys using the server's mounted Kubernetes identity. This avoids granting
 `TokenReview` or `SubjectAccessReview` permissions to the issuer.
 The bound issuer follows the cluster's advertised service-account issuer,
 which currently matches the Talos API endpoint. It is distinct from the
@@ -471,8 +473,9 @@ The acceptance boundary consists of:
 
 The API audience is the Talos control-plane endpoint in `talos/talconfig.yaml`,
 matching the running API servers' `--api-audiences` flag. The Kubernetes service
-DNS name is a transport address, not that authentication audience. The probe's
-projected issuer token and the issued credential must use the API audience.
+DNS name is a transport address, not that authentication audience. Issued consumer
+credentials must use the API audience. The issuer probe mounts the same stable
+ServiceAccount token Secret as the servers and proves its actual API identity.
 
 Do not grant wildcard token creation, ServiceAccount management, RBAC management,
 impersonation, binding, escalation, or Secret reads to the issuer. The server's
@@ -523,26 +526,68 @@ or replacement of an issued consumer token. Ordinary `openbao-config-apply`
 skips unchanged objects, so a no-difference apply is not this repair. A successful
 refresh is temporary and must not be reported as sustained recovery.
 
-The operator rejected custom server images. No fixed official release or
-documented automatic client-refresh setting was identified during this review.
-A supported Kubernetes alternative is a
+The operator rejected custom server images and approved a stable issuer credential
+with short-lived consumer credentials. No fixed official release or documented
+automatic client-refresh setting was identified during this review. Use a
 [manually created ServiceAccount token Secret](https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/#manually-create-a-long-lived-api-token-for-a-serviceaccount)
-for the existing issuer identity. This token does not expire automatically;
-Kubernetes recommends bounded tokens where possible. Using it would require a
-reviewed mount change and explicit revocation/rotation handling. Preserve the
-named TokenRequest RBAC, issuer/consumer separation, and consumer expiry. This
-alternative is not deployed or validated by this documentation change.
+for the existing issuer identity. Kubernetes recommends bounded tokens where
+possible; this is an explicit compatibility exception for the server issuer.
+Retain the official image, named TokenRequest RBAC, issuer/consumer separation,
+and ten-minute default and maximum consumer lifetime. Backup, reader, and
+acceptance workloads keep their bounded projected authentication tokens.
 
-Keeping the issuer credential short-lived with the affected official image would
-instead require a recurring, narrowly authorized backend refresh. That introduces
-a configuration writer and its scheduling, authentication, and failure-monitoring
-requirements, departing from the current operator-owned configuration model.
-Neither workaround changes the ten-minute consumer credential requirement. Select
-and review the issuer workaround separately; do not weaken consumer expiry to
-work around an issuer-cache failure.
+### Stable issuer credential lifecycle
 
-Retain the official image and do not add periodic privileged configuration writes
-or pod restarts to conceal this limitation. Revisit projected issuer tokens when
+Git owns the `openbao-issuer-token-v1` Secret declaration and its annotation binding
+it to ServiceAccount `openbao`. The Kubernetes token controller generates its data;
+Git contains no token value. Mount only its `token` key and the Kubernetes root CA,
+read-only, with mode `0440` and the server's filesystem group. The Secret must not
+appear in `ServiceAccount.secrets`: that would classify it as an automatically
+generated legacy token subject to idle-token cleanup. See
+[Kubernetes ServiceAccount token administration](https://kubernetes.io/docs/reference/access-authn-authz/service-accounts-admin/).
+
+The token has no automatic expiry. Deleting its Secret or ServiceAccount, replacing
+the ServiceAccount identity, or retiring the signing verification key can invalidate
+it. Its longer lifetime is an accepted tradeoff: cluster-admin and Secret-read
+compromise remain inside the accepted cluster trust boundary, and the existing
+Kubernetes Secret encryption-at-rest posture applies. No new RBAC authority is
+granted. Agents still cannot read this Secret or exec into OpenBao servers. Only
+the attended acceptance/maintenance probe temporarily mounts the same credential;
+it emits bounded claims and API results, never credential bytes.
+
+The StatefulSet remains `OnDelete`. After the reviewed Git source reconciles, the
+attended `openbao-issuer-rollout` command verifies the new credential, then replaces
+pending standbys and the leader sequentially using the existing eviction, quorum,
+Raft catch-up, ownership, and disruption-Lease checks. It accepts only the reviewed
+template with unchanged images and persistent claims; only the old issuer volume
+may differ. It can resume a partially completed rollout after a new confirmation.
+The repair does not require working old issuance as a precondition. A passing
+result requires working issuance and matching configuration afterward; a member
+recovery failure stops further replacement. This is operational maintenance, not
+an HA test or a production storage restore.
+
+For planned credential rotation, add a new numbered Secret generation and update
+the reviewed mount in Git. Keep the old Secret until all servers have adopted the
+new generation and acceptance passes, then retire it through Git. Do not replace
+token bytes in place: a cached client would continue using the old value. Treat
+unexpected Secret/ServiceAccount deletion or signing-key retirement as attended
+credential recovery. Suspected compromise requires an operator-approved containment
+and revocation decision; availability is not a reason to keep a compromised token.
+After Kubernetes recovery or signing-key replacement, publish a new Secret
+generation for the restored/current ServiceAccount and run the guarded rollout,
+even if Flux recreated the previous Secret name. The issuer token is not an independent
+recovery root and is not restored from an OpenBao Raft snapshot.
+
+Acceptance must prove that the mounted issuer token has no expiry claim, belongs
+to the selected Secret generation, and authenticates as the expected ServiceAccount.
+Retain the real positive and negative API authorization checks. After an issued
+consumer expires and the API rejects it, request another consumer credential and
+prove its access and denials, with unchanged server process identities. This tests
+sustained issuance without relaxing consumer expiry. It cannot promise immunity
+from infrastructure failure, revocation, or future upstream changes.
+
+Do not add periodic privileged configuration writes or pod restarts. Revisit
+projected issuer tokens when
 an official fix is available. Acceptance of that fix must prove issuance after
 the original issuer token expires, without restarting servers or rewriting their
 configuration. Ordinary readiness and configuration-drift checks remain useful

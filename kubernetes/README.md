@@ -19,8 +19,9 @@ explicit exceptions.
 - Split controllers from their dependent custom resources. Express ordering with
   Flux `dependsOn`, readiness waiting, and health checks rather than directory
   order or numeric waves.
-- Store Secret manifests as `*.sops.yaml`. Encrypt `data` and `stringData`; keep
-  metadata reviewable. Never commit plaintext Secret values or an age identity.
+- Store Secrets with operator-supplied values as `*.sops.yaml`. Encrypt `data` and
+  `stringData`; keep metadata reviewable. Controller-populated Secret declarations
+  may omit both fields and remain plaintext. Never commit plaintext Secret values or an age identity.
   See the [SOPS guide](../docs/guides/sops-secret-operations.md).
 
 ## Bootstrap exceptions and network invariants
