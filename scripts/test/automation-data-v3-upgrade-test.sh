@@ -153,6 +153,42 @@ cmp -s "$scratch/verifier-before" "$scratch/verifier-after"
   --tuples-only --no-align --username postgres --dbname v3_partial \
   --command="SELECT has_schema_privilege('v3_fixture_reader', 'public', 'CREATE')")" == f ]]
 
+stage=installed-v3-validator-reconciliation
+validator_signature='platform_internal.validate_nocodb_access_authority(text,text,text,text,boolean)'
+candidate_validator="$(query "SELECT md5(prosrc) FROM pg_proc WHERE oid = '$validator_signature'::regprocedure")"
+python3 - <<'PY' >"$scratch/prior-v3-validator.sql"
+import subprocess
+source = subprocess.check_output(['git', 'show',
+    'd6e07c5:kubernetes/apps/automation-data/postgresql/app/scripts/nocodb-extension.sql'], text=True)
+start = source.index('CREATE OR REPLACE FUNCTION platform_internal.validate_nocodb_access_authority(')
+end = source.index('\n$function$;', start) + len('\n$function$;')
+print(source[start:end])
+PY
+podman cp "$scratch/prior-v3-validator.sql" "$container:/tmp/prior-v3-validator.sql"
+podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
+  --username postgres --dbname automation_data_control \
+  --file /tmp/prior-v3-validator.sql >"$scratch/prior-v3-validator.out"
+[[ "$(query "SELECT md5(prosrc) FROM pg_proc WHERE oid = '$validator_signature'::regprocedure")" != "$candidate_validator" ]]
+before_reconcile="$(query 'SELECT installed_at FROM platform_operations.platform_schema_revision WHERE singleton')"
+podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
+  --username postgres --dbname automation_data_control \
+  --file /candidate/upgrade-nocodb.sql >"$scratch/reconcile-v3.out"
+[[ "$(query "SELECT md5(prosrc) FROM pg_proc WHERE oid = '$validator_signature'::regprocedure")" == "$candidate_validator" ]] || {
+  echo 'Guarded upgrade did not reconcile the existing v3 validator.' >&2
+  exit 1
+}
+after_reconcile="$(query 'SELECT installed_at FROM platform_operations.platform_schema_revision WHERE singleton')"
+[[ "$before_reconcile" != "$after_reconcile" ]]
+podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
+  --username postgres --dbname automation_data_control \
+  --file /candidate/upgrade-nocodb.sql >"$scratch/reconcile-repeat.out"
+[[ "$(query 'SELECT installed_at FROM platform_operations.platform_schema_revision WHERE singleton')" == "$after_reconcile" ]]
+query "SELECT (to_jsonb(source) - 'pair')::text FROM platform_operations.managed_nocodb_sources AS source
+  WHERE domain = 'v3_fixture' AND pair = 'default' AND access_kind = 'reader'" >"$scratch/source-reconciled.json"
+cmp -s "$scratch/source-before.json" "$scratch/source-reconciled.json"
+query "SELECT rolpassword FROM pg_authid WHERE rolname = 'v3_fixture_reader'" >"$scratch/verifier-reconciled"
+cmp -s "$scratch/verifier-before" "$scratch/verifier-reconciled"
+
 stage=backup-state
 query "SELECT platform_operations.configure_nocodb_pair(
   'v3_fixture','second','second_read',NULL)" >/dev/null

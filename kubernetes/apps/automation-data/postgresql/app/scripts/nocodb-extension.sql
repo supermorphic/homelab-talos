@@ -1935,6 +1935,7 @@ BEGIN
         SELECT FROM pg_proc AS routine JOIN pg_namespace AS namespace
           ON namespace.oid = routine.pronamespace
         WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+          AND has_schema_privilege(%1$L, namespace.oid, 'USAGE')
           AND has_function_privilege(%1$L, routine.oid, 'EXECUTE')
       )
     $sql$, source.role_name));

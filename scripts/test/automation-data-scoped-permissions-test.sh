@@ -182,6 +182,21 @@ assert_denied "$app_role" 'CREATE TEMP TABLE unwanted (id integer)'
 assert_denied "$app_role" 'SET ROLE scoped_fixture_owner'
 assert_denied "$app_role" 'CREATE TABLE extra_read.unwanted (id integer)'
 
+# Existing presentation views may call a function in a schema the reader cannot
+# address directly. EXECUTE alone must not be mistaken for direct callable access.
+podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
+  --username postgres --dbname scoped_fixture --command="
+SET ROLE scoped_fixture_owner;
+CREATE FUNCTION app.presentation_label() RETURNS text LANGUAGE sql SECURITY DEFINER
+  SET search_path = pg_catalog AS 'SELECT ''view-only''::text';
+REVOKE ALL ON FUNCTION app.presentation_label() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.presentation_label() TO \"$reader_role\";
+CREATE VIEW extra_read.derived AS SELECT app.presentation_label() AS label;
+GRANT SELECT ON extra_read.derived TO \"$reader_role\";
+" >"$scratch/view-function.out"
+run_as "$reader_role" 'SELECT label FROM extra_read.derived' | rg -qx 'view-only'
+assert_denied "$reader_role" 'SELECT app.presentation_label()'
+
 reader_authority="$(podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
   --tuples-only --no-align --username postgres --dbname automation_data_control \
   --command="SELECT platform_internal.validate_nocodb_access_authority(
