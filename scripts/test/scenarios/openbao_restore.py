@@ -89,6 +89,7 @@ class ScratchKube:
         self.volume_uid = None
         self.cleanup_stage = "inspect-owned-resources"
         self.cleanup_resource = None
+        self.probe = {}
 
     def command(self, *args, input_bytes=None):
         return guards.command(
@@ -228,6 +229,10 @@ seal "static" {
         return pod
 
     def http(self, method, path, *, payload=None, token=None, data=None):
+        # Clear the previous response before any transport/ownership check fails.
+        self.probe = {}
+        if method in {"GET", "POST", "LIST"}:
+            self.probe["method"] = method
         self.assert_pod(self.pod_uid)
         if (
             method not in {"GET", "LIST", "POST"}
@@ -256,6 +261,13 @@ seal "static" {
                 input_bytes=wire,
             )
         )
+        status = response["status"]
+        if type(status) is int and 100 <= status <= 599:
+            self.probe["status"] = status
+        if path == "sys/seal-status" and isinstance(response["body"], dict):
+            for field in ("initialized", "sealed"):
+                if type(response["body"].get(field)) is bool:
+                    self.probe[field] = response["body"][field]
         return response["status"], response["body"]
 
     def assert_storage(self):

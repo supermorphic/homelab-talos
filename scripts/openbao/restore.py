@@ -12,7 +12,7 @@ from pathlib import Path
 
 import yaml
 
-from .configuration import strict_json
+from .configuration import SafeError, strict_json
 from .drift import FIELDS
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -190,6 +190,7 @@ def run(snapshot_path, metadata, run_id, client, kube):
     result = {"status": "fail", "phases": [], "cleanup": "not-required"}
     created = []
     mutation_started = False
+    stage = "snapshot-validation"
     try:
         ns = namespace(run_id)
         validate_snapshot(snapshot_path, metadata, kube.recovery_metadata)
@@ -198,6 +199,7 @@ def run(snapshot_path, metadata, run_id, client, kube):
             result["status"] = "refused"
             return result
         result["phases"].append("snapshot-validated")
+        stage = "create-scratch"
         for document in documents(run_id, metadata["openbao_version"]):
             if document["kind"] == "StatefulSet":
                 kube.provision_private(ns, run_id)
@@ -212,41 +214,79 @@ def run(snapshot_path, metadata, run_id, client, kube):
                 owned(expected, live, run_id)
                 if live.get("spec") != document["spec"]:
                     raise RestoreError()
+        stage = "wait-scratch-pod"
         pod_uid = kube.wait_pod(ns)
+        stage = "bind-scratch"
         client.bind(ns, pod_uid)
+        stage = "initial-isolation"
         isolated(kube, run_id, pod_uid)
         recheck(kube, created, run_id)
         result["phases"].append("isolated")
+        stage = "initial-state"
         if client.state().get("initialized") is not False:
             raise RestoreError()
+        stage = "initialize-scratch"
         client.initialize()  # Exactly once; no response-lost retry.
+        stage = "initial-unseal"
         healthy(client, metadata["openbao_version"])
+        stage = "restore-preflight"
         data = validate_snapshot(snapshot_path, metadata, kube.recovery_metadata)
         isolated(kube, run_id, pod_uid)
         recheck(kube, created, run_id)  # Immediately before the sole force write.
+        stage = "force-restore"
         client.force_restore(data)
         del data
+        stage = "restored-login"
         client.login_retained()
+        stage = "restored-unseal"
         cluster_id = healthy(client, metadata["openbao_version"])
+        stage = "restored-isolation"
         isolated(kube, run_id, pod_uid)
-        if client.restored_configuration() is not True or client.issuance_denied() is not True:
+        stage = "restored-configuration"
+        if client.restored_configuration() is not True:
+            raise RestoreError()
+        stage = "restored-issuance-denial"
+        if client.issuance_denied() is not True:
             raise RestoreError()
         result["phases"].append("restored")
+        stage = "restart-preflight"
         recheck(kube, created, run_id)
+        stage = "restart-scratch"
         next_uid = kube.restart(ns, run_id, pod_uid)
         if not next_uid or next_uid == pod_uid:
             raise RestoreError()
+        stage = "bind-restarted-scratch"
         client.bind(ns, next_uid)
+        stage = "restarted-login"
         client.login_retained()
+        stage = "restarted-unseal"
         if healthy(client, metadata["openbao_version"]) != cluster_id:
             raise RestoreError()
+        stage = "restarted-isolation"
         isolated(kube, run_id, next_uid)
-        if client.restored_configuration() is not True or client.issuance_denied() is not True:
+        stage = "restarted-configuration"
+        if client.restored_configuration() is not True:
+            raise RestoreError()
+        stage = "restarted-issuance-denial"
+        if client.issuance_denied() is not True:
             raise RestoreError()
         result["phases"].append("restart-verified")
         result["status"] = "pass"
-    except Exception:  # noqa: BLE001 -- Credential-bearing adapters cannot render exceptions.
+    except Exception as error:  # noqa: BLE001 -- Never render credential-bearing exceptions.
         result["status"] = "fail"
+        result["stage"] = stage
+        if isinstance(error, SafeError) and str(error) in SafeError._CODES:
+            result["classification"] = str(error)
+        # Last HTTP call, which may precede a subsequent non-HTTP check.
+        # The adapter records only these scalars, never paths or response bodies.
+        probe = getattr(kube, "probe", {})
+        if isinstance(probe, dict) and probe.get("method") in {"GET", "POST", "LIST"}:
+            result["last_http_probe"] = {"method": probe["method"]}
+            if type(probe.get("status")) is int and 100 <= probe["status"] <= 599:
+                result["last_http_probe"]["status"] = probe["status"]
+            for field in ("initialized", "sealed"):
+                if type(probe.get(field)) is bool:
+                    result["last_http_probe"][field] = probe[field]
     finally:
         try:
             client.close()
