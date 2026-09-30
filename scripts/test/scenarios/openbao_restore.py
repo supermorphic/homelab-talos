@@ -45,6 +45,10 @@ try:
             and args["path"] == "auth/homelab-jwt/config"
             and json.loads(data) == {"errors": [EXPECTED_PROVIDER_ERROR]}):
         body = {"provider_unavailable": True}
+    if (response.status == 400 and args["method"] == "POST"
+            and args["path"] == "auth/homelab-userpass/login/openbao-operator"
+            and json.loads(data) == {"errors": ["invalid username or password"]}):
+        body = {"authentication_failed": True}
     print(json.dumps({"status": response.status, "body": body}))
 except Exception:
     sys.exit(1)
@@ -533,6 +537,7 @@ class ScratchClient:
         self.kube = kube
         self.password = password
         self.token = None
+        self.password_correction_used = False
 
     def bind(self, namespace, pod_uid):
         if namespace != self.kube.namespace:
@@ -587,9 +592,24 @@ class ScratchClient:
 
     def login_retained(self):
         self.wait_unsealed()
-        body = self.api(
-            "POST", "auth/homelab-userpass/login/openbao-operator", {"password": self.password}
-        )
+        self.token = None
+        while True:
+            status, body = self.kube.http(
+                "POST", "auth/homelab-userpass/login/openbao-operator",
+                payload={"password": self.password}, token=None,
+            )
+            if status == 200:
+                break
+            if status != 400 or body != {"authentication_failed": True}:
+                raise restore.RestoreError()
+            if self.password_correction_used:
+                raise guards.SafeError("authentication-failed")
+            self.password_correction_used = True
+            self.password = private_prompt(
+                "Password rejected. Re-enter the operator password retained with this snapshot: "
+            )
+            if not self.password:
+                raise guards.SafeError("authentication-failed")
         self.token = body["auth"]["client_token"]
         if not isinstance(self.token, str) or not self.token:
             raise restore.RestoreError()

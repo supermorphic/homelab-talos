@@ -139,6 +139,74 @@ class Client:
 
 
 class RestoredReadbackTests(unittest.TestCase):
+    def test_rejected_snapshot_password_can_be_corrected_once_without_restore_retry(self):
+        from scripts.test.scenarios import openbao_restore as scenario
+
+        calls = []
+        responses = iter([(400, {"authentication_failed": True}),
+                          (200, {"auth": {"client_token": MARKER}}),
+                          (400, {"authentication_failed": True})])
+
+        def http(method, path, **kwargs):
+            calls.append((method, path, kwargs))
+            return next(responses)
+
+        client = scenario.ScratchClient(type("Kube", (), {"http": staticmethod(http)})(),
+                                        "synthetic-mistyped-password")
+        client.wait_unsealed = lambda: None
+        with patch.object(scenario, "private_prompt", return_value="synthetic-correct-password") as prompt:
+            client.login_retained()
+            self.assertEqual(client.token, MARKER)
+            self.assertEqual(client.password, "synthetic-correct-password")
+            with self.assertRaises(scenario.guards.SafeError) as raised:
+                client.login_retained()
+            self.assertEqual(str(raised.exception), "authentication-failed")
+            self.assertEqual(prompt.call_count, 1)
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(all(method == "POST" and path ==
+                            "auth/homelab-userpass/login/openbao-operator"
+                            and kwargs.get("token") is None for method, path, kwargs in calls))
+
+    def test_password_correction_requires_exact_rejection_and_nonempty_input(self):
+        from scripts.test.scenarios import openbao_restore as scenario
+
+        for status, body in ((400, {}), (403, {"authentication_failed": True}),
+                             (500, {"authentication_failed": True})):
+            kube = type("Kube", (), {"http": lambda *a, status=status, body=body, **kw: (status, body)})()
+            client = scenario.ScratchClient(kube, MARKER)
+            client.wait_unsealed = lambda: None
+            with patch.object(scenario, "private_prompt") as prompt, self.assertRaises(restore.RestoreError):
+                client.login_retained()
+            prompt.assert_not_called()
+        kube = type("Kube", (), {"http": lambda *a, **kw: (400, {"authentication_failed": True})})()
+        client = scenario.ScratchClient(kube, MARKER)
+        client.wait_unsealed = lambda: None
+        with patch.object(scenario, "private_prompt", return_value=""), self.assertRaises(scenario.guards.SafeError):
+            client.login_retained()
+
+    def test_bridge_sanitizes_only_exact_userpass_rejection(self):
+        from scripts.test.scenarios import openbao_restore as scenario
+
+        login = "auth/homelab-userpass/login/openbao-operator"
+        for status, errors, method, path, expected in (
+            (400, ["invalid username or password"], "POST", login, {"authentication_failed": True}),
+            (400, [MARKER], "POST", login, {}),
+            (400, ["invalid username or password"], "GET", login, {}),
+            (400, ["invalid username or password"], "POST", "sys/init", {}),
+            (403, ["invalid username or password"], "POST", login, {}),
+        ):
+            response = type("Response", (), {"status": status,
+                "read": lambda self, limit, errors=errors: json.dumps({"errors": errors}).encode()})()
+            connection = type("Connection", (), {"request": lambda *a: None,
+                "getresponse": lambda self, response=response: response})()
+            source = io.TextIOWrapper(io.BytesIO(
+                json.dumps({"method": method, "path": path}).encode() + b"\n"))
+            output = io.StringIO()
+            with patch("sys.stdin", source), patch("sys.stdout", output), patch("http.client.HTTPConnection", return_value=connection):
+                exec(scenario.BRIDGE, {})  # noqa: S102 -- Synthetic transport only.
+            self.assertEqual(json.loads(output.getvalue())["body"], expected)
+            self.assertNotIn(MARKER, output.getvalue())
+
     def test_scratch_probe_retains_status_and_seal_flags_without_body_or_token(self):
         from scripts.test.scenarios import openbao_restore as scenario
 
