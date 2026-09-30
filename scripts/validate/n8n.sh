@@ -945,7 +945,7 @@ done
 }
 [[ "$(yq -r '[.configMapGenerator[].name] | sort | join(",")' \
   "$postgresql_kustomization")" == \
-  'n8n-postgresql-backup,n8n-postgresql-init,n8n-postgresql-sql-exporter' ]] || {
+  'n8n-postgresql-backup,n8n-postgresql-discovery,n8n-postgresql-init,n8n-postgresql-sql-exporter' ]] || {
   echo 'The PostgreSQL app must render init, backup, and SQL Exporter ConfigMaps.' >&2
   exit 1
 }
@@ -1263,7 +1263,7 @@ for resource in ciliumnetworkpolicy.yaml helmrelease.yaml httproute.yaml ocirepo
     exit 1
   }
 done
-expected_n8n_configmaps='[{"files":["values.yaml=values.yaml"],"name":"n8n-values"},{"files":["automation-data-provisioner.json=workflows/automation-data-provisioner.json","automation-data-canary.json=workflows/automation-data-canary.json","nocodb-acceptance-domain.json=workflows/nocodb-acceptance-domain.json","nocodb-source-provisioner.json=workflows/nocodb-source-provisioner.json","platform-canary.json=workflows/platform-canary.json","platform-workflow-failure.json=workflows/platform-workflow-failure.json"],"name":"n8n-workflow-templates"}]'
+expected_n8n_configmaps='[{"files":["values.yaml=values.yaml"],"name":"n8n-values"},{"files":["automation-data-credential-inventory.json=workflows/automation-data-credential-inventory.json","automation-data-provisioner.json=workflows/automation-data-provisioner.json","automation-data-canary.json=workflows/automation-data-canary.json","nocodb-acceptance-domain.json=workflows/nocodb-acceptance-domain.json","nocodb-source-provisioner.json=workflows/nocodb-source-provisioner.json","platform-canary.json=workflows/platform-canary.json","platform-workflow-failure.json=workflows/platform-workflow-failure.json"],"name":"n8n-workflow-templates"}]'
 actual_n8n_configmaps="$(yq -o=json -I=0 '
   [.configMapGenerator[] | {"files": .files, "name": .name}] | sort_by(.name)
 ' "$n8n_kustomization")"

@@ -91,6 +91,15 @@ class PublicWebhookRouteTests(unittest.TestCase):
         self.assertEqual(process.returncode, 1, process.stderr)
         self.assertIn("exactly one complete HTTPRoute contract", process.stderr)
 
+    def test_private_inventory_path_is_rejected_on_public_gateway(self):
+        changed = copy.deepcopy(self.route)
+        changed["spec"]["rules"][0]["matches"].append(
+            {"path": {"type": "Exact", "value": "/webhook/automation-data-credential-inventory"}}
+        )
+        self.write("approved.json", changed)
+        process = self.run_validator()
+        self.assertEqual(process.returncode, 1, process.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
