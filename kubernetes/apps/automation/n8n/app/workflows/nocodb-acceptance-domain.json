@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## Synthetic acceptance setup\n\nImport this inactive template through the private n8n editor. Bind **automation-data/automation_data_acceptance/migrator** to **Create Acceptance Structure**, **Grant Acceptance Access**, **Clear Reader Negative Residue**, **Cleanup Unexpected Reader Insert**, **Clear Feedback Residue**, and **Cleanup Feedback Fact**. Bind **automation-data/automation_data_acceptance/runtime** to **Publish Initial Feedback Fact**, **Consume Feedback Before Refresh**, **Refresh Feedback Fact**, and **Consume Feedback After Refresh**. Bind **NocoDB Operator API** to every HTTP Request node and **NocoDB Acceptance Header** to **Acceptance Webhook**. Run structure, source sync, grants, source sync, probe, then feedback. Keep execution persistence disabled. NocoDB receives neither PostgreSQL credential.",
+        "content": "## Synthetic acceptance setup\n\nImport this inactive template through the private n8n editor. Bind **automation-data/automation_data_acceptance/migrator** to **Create Acceptance Structure**, **Grant Acceptance Access**, **Clear Reader Negative Residue**, **Cleanup Unexpected Reader Insert**, **Clear Feedback Residue**, and **Cleanup Feedback Fact**. Bind **automation-data/automation_data_acceptance/runtime** to **Publish Initial Feedback Fact**, **Consume Feedback Before Refresh**, **Refresh Feedback Fact**, and **Consume Feedback After Refresh**. Bind **NocoDB Operator API** to every HTTP Request node and **NocoDB Acceptance Header** to **Acceptance Webhook**. Run structure, source sync, grants, source sync, probe, then feedback. Keep execution persistence disabled. NocoDB receives neither PostgreSQL credential.\nBind **Grant Extended Acceptance Access** and **Cleanup Extended Acceptance** to automation-data/automation_data_acceptance/migrator. These guarded actions use only fixed synthetic schemas, objects, and hashed roles.\n",
         "height": 380,
         "width": 540
       },
@@ -35,7 +35,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['operation', 'runId']);\nif (Object.keys(body).some((key) => !allowedFields.has(key)) || Object.keys(body).length !== 2) throw new Error('unexpected_request_field');\nconst { operation, runId } = body;\nif (!['structure', 'grants', 'probe', 'cleanup', 'feedback'].includes(operation)) throw new Error('invalid_operation');\nif (typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(runId)) throw new Error('invalid_run_id');\nif (['recovery-canary-v1', 'recovery-canary-v2'].includes(runId)) throw new Error('reserved_run_id');\nreturn [{ json: { operation, runId } }];"
+        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['operation', 'runId']);\nif (Object.keys(body).some((key) => !allowedFields.has(key)) || Object.keys(body).length !== 2) throw new Error('unexpected_request_field');\nconst { operation, runId } = body;\nif (!['structure', 'grants', 'probe', 'cleanup', 'feedback', 'extensions', 'extensions-cleanup'].includes(operation)) throw new Error('invalid_operation');\nif (typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(runId)) throw new Error('invalid_run_id');\nif (['recovery-canary-v1', 'recovery-canary-v2'].includes(runId)) throw new Error('reserved_run_id');\nreturn [{ json: { operation, runId } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -165,6 +165,52 @@
               },
               "renameOutput": true,
               "outputKey": "feedback"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.operation }}",
+                    "rightValue": "extensions",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "extensions"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.operation }}",
+                    "rightValue": "extensions-cleanup",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "extensions-cleanup"
             }
           ]
         },
@@ -409,7 +455,10 @@
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1320, 300],
+      "position": [
+        1320,
+        300
+      ],
       "id": "20000000-0000-4000-8000-000000000051",
       "name": "Get Acceptance Base Share",
       "onError": "continueErrorOutput"
@@ -420,7 +469,10 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1440, 300],
+      "position": [
+        1440,
+        300
+      ],
       "id": "20000000-0000-4000-8000-000000000052",
       "name": "Require Acceptance Base Private",
       "onError": "continueErrorOutput"
@@ -435,7 +487,10 @@
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1560, 300],
+      "position": [
+        1560,
+        300
+      ],
       "id": "20000000-0000-4000-8000-000000000053",
       "name": "Get Reader Shared Views",
       "onError": "continueErrorOutput"
@@ -446,7 +501,10 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1680, 300],
+      "position": [
+        1680,
+        300
+      ],
       "id": "20000000-0000-4000-8000-000000000054",
       "name": "Require Reader Shares Empty",
       "onError": "continueErrorOutput"
@@ -461,7 +519,10 @@
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1800, 300],
+      "position": [
+        1800,
+        300
+      ],
       "id": "20000000-0000-4000-8000-000000000055",
       "name": "Get Operator Shared Views",
       "onError": "continueErrorOutput"
@@ -472,7 +533,10 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1920, 300],
+      "position": [
+        1920,
+        300
+      ],
       "id": "20000000-0000-4000-8000-000000000056",
       "name": "Require Operator Shares Empty",
       "onError": "continueErrorOutput"
@@ -878,22 +942,43 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1680, 500],
+      "position": [
+        1680,
+        500
+      ],
       "id": "20000000-0000-4000-8000-000000000036",
       "name": "Initialize Cleanup"
     },
     {
       "parameters": {
         "conditions": {
-          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2},
-          "conditions": [{"leftValue": "={{ $json.hasRows }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true", "singleValue": true}}],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.hasRows }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
           "combinator": "and"
         },
         "options": {}
       },
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [2160, 500],
+      "position": [
+        2160,
+        500
+      ],
       "id": "20000000-0000-4000-8000-000000000037",
       "name": "Cleanup Rows Present"
     },
@@ -904,15 +989,33 @@
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendQuery": true,
-        "queryParameters": {"parameters": [
-          {"name": "where", "value": "={{ '(run_id,eq,' + encodeURIComponent($json.runId) + ')' }}"},
-          {"name": "limit", "value": "1"}
-        ]},
-        "options": {"response": {"response": {"fullResponse": true, "neverError": false}}}
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "where",
+              "value": "={{ '(run_id,eq,' + encodeURIComponent($json.runId) + ')' }}"
+            },
+            {
+              "name": "limit",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": false
+            }
+          }
+        }
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2400, 500],
+      "position": [
+        2400,
+        500
+      ],
       "id": "20000000-0000-4000-8000-000000000038",
       "name": "Confirm Cleanup Absence",
       "onError": "continueErrorOutput"
@@ -923,7 +1026,10 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2640, 500],
+      "position": [
+        2640,
+        500
+      ],
       "id": "20000000-0000-4000-8000-000000000039",
       "name": "Require Cleanup Absent",
       "onError": "continueErrorOutput"
@@ -935,12 +1041,29 @@
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendQuery": true,
-        "queryParameters": {"parameters": [{"name": "limit", "value": "1"}]},
-        "options": {"response": {"response": {"fullResponse": true, "neverError": false}}}
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "limit",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": false
+            }
+          }
+        }
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1680, -100],
+      "position": [
+        1680,
+        -100
+      ],
       "id": "20000000-0000-4000-8000-000000000040",
       "name": "Read Acceptance Facts",
       "onError": "continueErrorOutput"
@@ -951,7 +1074,10 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1920, -100],
+      "position": [
+        1920,
+        -100
+      ],
       "id": "20000000-0000-4000-8000-000000000041",
       "name": "Require Reader Facts Read",
       "onError": "continueErrorOutput"
@@ -962,7 +1088,10 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [3840, 140],
+      "position": [
+        3840,
+        140
+      ],
       "id": "20000000-0000-4000-8000-000000000042",
       "name": "Prepare Reader Negative Probe",
       "onError": "continueErrorOutput"
@@ -971,11 +1100,16 @@
       "parameters": {
         "operation": "executeQuery",
         "query": "BEGIN;\nSET LOCAL ROLE automation_data_acceptance_owner;\nDELETE FROM app.acceptance_fact WHERE id = $1 AND fact = $2;\nCOMMIT;",
-        "options": {"queryReplacement": "={{ [$json.readerProbeId, $json.readerProbeFact] }}"}
+        "options": {
+          "queryReplacement": "={{ [$json.readerProbeId, $json.readerProbeFact] }}"
+        }
       },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
-      "position": [4080, 140],
+      "position": [
+        4080,
+        140
+      ],
       "id": "20000000-0000-4000-8000-000000000043",
       "name": "Clear Reader Negative Residue",
       "onError": "continueErrorOutput"
@@ -983,15 +1117,33 @@
     {
       "parameters": {
         "conditions": {
-          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2},
-          "conditions": [{"leftValue": "={{ $json.readerInsertDenied }}", "rightValue": true, "operator": {"type": "boolean", "operation": "true", "singleValue": true}}],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.readerInsertDenied }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
           "combinator": "and"
         },
         "options": {}
       },
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [4560, 140],
+      "position": [
+        4560,
+        140
+      ],
       "id": "20000000-0000-4000-8000-000000000044",
       "name": "Reader Insert Denied"
     },
@@ -999,11 +1151,16 @@
       "parameters": {
         "operation": "executeQuery",
         "query": "BEGIN;\nSET LOCAL ROLE automation_data_acceptance_owner;\nDELETE FROM app.acceptance_fact WHERE id = $1 AND fact = $2;\nCOMMIT;",
-        "options": {"queryReplacement": "={{ [$json.readerProbeId, $json.readerProbeFact] }}"}
+        "options": {
+          "queryReplacement": "={{ [$json.readerProbeId, $json.readerProbeFact] }}"
+        }
       },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
-      "position": [4800, 220],
+      "position": [
+        4800,
+        220
+      ],
       "id": "20000000-0000-4000-8000-000000000045",
       "name": "Cleanup Unexpected Reader Insert",
       "onError": "continueErrorOutput"
@@ -1014,7 +1171,10 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [5040, 220],
+      "position": [
+        5040,
+        220
+      ],
       "id": "20000000-0000-4000-8000-000000000046",
       "name": "Fail Unexpected Reader Insert",
       "onError": "continueErrorOutput"
@@ -1029,7 +1189,10 @@
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [4800, 40],
+      "position": [
+        4800,
+        40
+      ],
       "id": "20000000-0000-4000-8000-000000000057",
       "name": "Get Recovery Saved View",
       "onError": "continueErrorOutput"
@@ -1040,7 +1203,10 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [5040, 40],
+      "position": [
+        5040,
+        40
+      ],
       "id": "20000000-0000-4000-8000-000000000058",
       "name": "Require Recovery Saved View",
       "onError": "continueErrorOutput"
@@ -1623,6 +1789,68 @@
       "id": "20000000-0000-4000-8000-000000000103",
       "name": "Require Cleanup Fact",
       "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "BEGIN;\nSET LOCAL ROLE automation_data_acceptance_owner;\nCREATE SCHEMA IF NOT EXISTS extra_read AUTHORIZATION automation_data_acceptance_owner;\nCREATE SCHEMA IF NOT EXISTS extra_edit AUTHORIZATION automation_data_acceptance_owner;\nREVOKE ALL ON SCHEMA extra_read, extra_edit FROM PUBLIC;\nCREATE TABLE IF NOT EXISTS extra_read.visible_facts (id bigint PRIMARY KEY, fact text NOT NULL);\nINSERT INTO extra_read.visible_facts VALUES (1, 'named-reader') ON CONFLICT DO NOTHING;\nCREATE TABLE IF NOT EXISTS extra_read.withheld_bookkeeping (id bigint PRIMARY KEY, detail text NOT NULL);\nINSERT INTO extra_read.withheld_bookkeeping VALUES (1, 'withheld') ON CONFLICT DO NOTHING;\nCREATE TABLE IF NOT EXISTS extra_edit.decisions (id bigint PRIMARY KEY, decision text NOT NULL);\nINSERT INTO extra_edit.decisions VALUES (1, 'pending') ON CONFLICT DO NOTHING;\nGRANT CONNECT ON DATABASE automation_data_acceptance TO \"nocodb_be4a1bfa3e8e4458ab396a34cb511b9f_reader\", \"nocodb_be4a1bfa3e8e4458ab396a34cb511b9f_operator\";\nGRANT USAGE ON SCHEMA extra_read TO \"nocodb_be4a1bfa3e8e4458ab396a34cb511b9f_reader\";\nGRANT SELECT ON extra_read.visible_facts TO \"nocodb_be4a1bfa3e8e4458ab396a34cb511b9f_reader\";\nGRANT USAGE ON SCHEMA extra_edit TO \"nocodb_be4a1bfa3e8e4458ab396a34cb511b9f_operator\";\nGRANT SELECT, INSERT, UPDATE, DELETE ON extra_edit.decisions TO \"nocodb_be4a1bfa3e8e4458ab396a34cb511b9f_operator\";\nCREATE TABLE IF NOT EXISTS app.integration_facts (id bigint PRIMARY KEY, fact text NOT NULL);\nCREATE TABLE IF NOT EXISTS app.withheld_bookkeeping (id bigint PRIMARY KEY, detail text NOT NULL);\nINSERT INTO app.withheld_bookkeeping VALUES (1, 'private') ON CONFLICT DO NOTHING;\nCREATE OR REPLACE FUNCTION app.record_integration_fact(bigint,text) RETURNS void LANGUAGE sql\n  SECURITY DEFINER SET search_path = pg_catalog, app\n  AS 'INSERT INTO app.integration_facts(id,fact) VALUES ($1,$2)\n      ON CONFLICT (id) DO UPDATE SET fact = EXCLUDED.fact';\nREVOKE ALL ON FUNCTION app.record_integration_fact(bigint,text) FROM PUBLIC;\nCREATE OR REPLACE FUNCTION app.withheld_admin() RETURNS bigint LANGUAGE sql\n  SECURITY DEFINER SET search_path = pg_catalog, app\n  AS 'SELECT count(*) FROM app.withheld_bookkeeping';\nREVOKE ALL ON FUNCTION app.withheld_admin() FROM PUBLIC;\nGRANT CONNECT ON DATABASE automation_data_acceptance TO \"app_615fdb4405179d440872ca3edc72e3df_integration\";\nGRANT USAGE ON SCHEMA app TO \"app_615fdb4405179d440872ca3edc72e3df_integration\";\nGRANT SELECT ON app.integration_facts TO \"app_615fdb4405179d440872ca3edc72e3df_integration\";\nGRANT EXECUTE ON FUNCTION app.record_integration_fact(bigint,text) TO \"app_615fdb4405179d440872ca3edc72e3df_integration\";\nCOMMIT;\nSELECT current_user AS \"credentialRole\";",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        600
+      ],
+      "id": "20000000-0000-4000-8000-000000000090",
+      "name": "Grant Extended Acceptance Access",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Normalize Acceptance Request').first().json;\nif ($json.credentialRole !== 'automation_data_acceptance_migrator') throw new Error('acceptance_migrator_binding_invalid');\nreturn [{ json: { ok: true, operation: request.operation, runId: request.runId, domain: 'automation_data_acceptance', extensionsReady: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        600
+      ],
+      "id": "20000000-0000-4000-8000-000000000092",
+      "name": "Grant Extended Acceptance Access Result",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "BEGIN;\nSET LOCAL ROLE automation_data_acceptance_owner;\nDELETE FROM app.integration_facts WHERE id = ('x' || substr(md5($1),1,15))::bit(60)::bigint AND fact = 'acceptance:' || $1;\nCOMMIT;\nSELECT current_user AS \"credentialRole\", NOT EXISTS (SELECT 1 FROM app.integration_facts WHERE id = ('x' || substr(md5($1),1,15))::bit(60)::bigint AND fact = 'acceptance:' || $1) AS \"cleanupComplete\";",
+        "options": {
+          "queryReplacement": "={{ [$json.runId] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        800
+      ],
+      "id": "20000000-0000-4000-8000-000000000091",
+      "name": "Cleanup Extended Acceptance",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "if ($json.cleanupComplete !== true) throw new Error('application_cleanup_incomplete');\nconst request = $('Normalize Acceptance Request').first().json;\nif ($json.credentialRole !== 'automation_data_acceptance_migrator') throw new Error('acceptance_migrator_binding_invalid');\nreturn [{ json: { ok: true, operation: request.operation, runId: request.runId, domain: 'automation_data_acceptance', extensionsReady: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        800
+      ],
+      "id": "20000000-0000-4000-8000-000000000093",
+      "name": "Cleanup Extended Acceptance Result",
+      "onError": "continueErrorOutput"
     }
   ],
   "pinData": {},
@@ -1689,6 +1917,20 @@
         [
           {
             "node": "List Acceptance Bases",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Grant Extended Acceptance Access",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Cleanup Extended Acceptance",
             "type": "main",
             "index": 0
           }
@@ -3104,6 +3346,78 @@
       ]
     },
     "Prepare Feedback Response": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Grant Extended Acceptance Access": {
+      "main": [
+        [
+          {
+            "node": "Grant Extended Acceptance Access Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Grant Extended Acceptance Access Result": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cleanup Extended Acceptance": {
+      "main": [
+        [
+          {
+            "node": "Cleanup Extended Acceptance Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Acceptance Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cleanup Extended Acceptance Result": {
       "main": [
         [
           {

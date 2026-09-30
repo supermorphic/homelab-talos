@@ -59,12 +59,28 @@ usage() {
 }
 
 case "$#" in
-	0) preflight_only=false; cleanup_test=false; output_safety_test=false ;;
+0)
+	preflight_only=false
+	cleanup_test=false
+	output_safety_test=false
+	;;
 	1)
 		case "$1" in
-			--preflight) preflight_only=true; cleanup_test=false; output_safety_test=false ;;
-			--cleanup-test) preflight_only=false; cleanup_test=true; output_safety_test=false ;;
-			--output-safety-test) preflight_only=false; cleanup_test=false; output_safety_test=true ;;
+	--preflight)
+		preflight_only=true
+		cleanup_test=false
+		output_safety_test=false
+		;;
+	--cleanup-test)
+		preflight_only=false
+		cleanup_test=true
+		output_safety_test=false
+		;;
+	--output-safety-test)
+		preflight_only=false
+		cleanup_test=false
+		output_safety_test=true
+		;;
 			*) usage ;;
 		esac
 		;;
@@ -120,7 +136,7 @@ for image in "$postgres_image" "$n8n_image" "$nocodb_image"; do
 done
 
 network="$run_marker-network"
-containers=("$run_marker-postgres" "$run_marker-nocodb" "$run_marker-n8n" \
+containers=("$run_marker-postgres" "$run_marker-nocodb" "$run_marker-n8n"
 	"$run_marker-restore-postgres" "$run_marker-restore-nocodb" "$run_marker-auth-probe")
 volumes=("$run_marker-postgres-data" "$run_marker-n8n-data" "$run_marker-restore-postgres-data")
 
@@ -525,7 +541,7 @@ bind_workflow() { # <source> <output> <postgres-id> <postgres-name> <http-id> <h
 	local source="$1" output="$2" pg_id="$3" pg_name="$4" http_id="$5" http_name="$6" webhook_id="$7" webhook_name="$8"
 	local runtime_id="${9:-}" runtime_name="${10:-}"
 	local runtime_nodes='["Publish Initial Feedback Fact","Consume Feedback Before Refresh","Refresh Feedback Fact","Consume Feedback After Refresh"]'
-	local migrator_nodes='["Create Acceptance Structure","Grant Acceptance Access","Clear Reader Negative Residue","Cleanup Unexpected Reader Insert","Clear Feedback Residue","Cleanup Feedback Fact"]'
+	local migrator_nodes='["Create Acceptance Structure","Grant Acceptance Access","Clear Reader Negative Residue","Cleanup Unexpected Reader Insert","Clear Feedback Residue","Cleanup Feedback Fact","Grant Extended Acceptance Access","Cleanup Extended Acceptance"]'
 	jq --arg pg_id "$pg_id" --arg pg_name "$pg_name" --arg http_id "$http_id" --arg http_name "$http_name" \
 		--arg webhook_id "$webhook_id" --arg webhook_name "$webhook_name" \
 		--arg runtime_id "$runtime_id" --arg runtime_name "$runtime_name" \
@@ -669,13 +685,13 @@ pair_call() { # <register|prepare|sync|rotate|retry> <output> [access-kind]
 			confirmation_name=NOCODB_PAIR_REGISTER_CONFIRM
 			confirmation_value="register:nocodb:$domain:$pair:extra_read:extra_edit"
 			;;
-		prepare|sync)
+	prepare | sync)
 			body="$(jq -cn --arg domain "$domain" --arg pair "$pair" --arg operation "$operation" \
 				'{domain:$domain,pair:$pair,operation:$operation}')"
 			confirmation_name="NOCODB_PAIR_${operation^^}_CONFIRM"
 			confirmation_value="$operation:nocodb:$domain:$pair"
 			;;
-		rotate|retry)
+	rotate | retry)
 			[[ "$access_kind" == reader || "$access_kind" == operator ]] || fail 'invalid pair rotation target.'
 			body="$(jq -cn --arg domain "$domain" --arg pair "$pair" --arg access_kind "$access_kind" \
 				--arg operation "$operation" \
@@ -740,12 +756,12 @@ http_request GET "$n8n_url/api/v1/workflows/$acceptance_workflow_id" n8n-key - \
 	"$integration_root/imported-acceptance-workflow.json"
 jq -e --arg migrator "$migrator_credential_id" --arg runtime "$runtime_credential_id" '
 	(if type == "array" and length == 1 then .[0] else . end) as $workflow |
-	([$workflow.nodes[] | select(.type == "n8n-nodes-base.postgres" and .credentials.postgres.id == $migrator)] | length) == 6 and
+	([$workflow.nodes[] | select(.type == "n8n-nodes-base.postgres" and .credentials.postgres.id == $migrator)] | length) == 8 and
 	([$workflow.nodes[] | select(.type == "n8n-nodes-base.postgres" and .credentials.postgres.id == $runtime)] | length) == 4 and
 	([$workflow.nodes[] | select(.type == "n8n-nodes-base.postgres" and
 		(.credentials.postgres.id != $migrator and .credentials.postgres.id != $runtime))] | length) == 0
 ' "$integration_root/imported-acceptance-workflow.json" >/dev/null ||
-	fail 'n8n did not retain the exact six-migrator/four-runtime acceptance credential binding.'
+	fail 'n8n did not retain the exact eight-migrator/four-runtime acceptance credential binding.'
 
 prove_aged_jobs_rotation_and_restart() { # <ready source response>
 	local ready_response="$1" reader_job_id operator_job_id completed_count absent_count base_id
@@ -1178,6 +1194,17 @@ prove_logical_restore() { # <ready-source-response> <probe-response>
 		--set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_control --command \
 		"SELECT (platform_operations.validate_application_login('automation_data_acceptance','interview')->>'valid')::boolean;" |
 		rg -qx t || fail 'restored application privilege validation failed.'
+	phase='restored-retained-application-contract'
+	uv run --locked python scripts/test/lib/automation-data-application-acceptance.py \
+		disposable-command "$run_id" "$integration_root/restored-app-probe.sh"
+	"$podman_bin" run --rm --name "$auth_probe_name" \
+		--label "homelab-talos.test-run=$run_marker" --network "$network" \
+		--volume "$application_credential_file:/credentials/pgpass:ro" \
+		--volume "$integration_root/restored-app-probe.sh:/probe.sh:ro" \
+		"$postgres_image" /bin/sh /probe.sh >"$integration_root/restored-app-probe.log" 2>/dev/null ||
+		fail 'retained application restore write/read and real privilege denials failed.'
+	[[ "$(cat "$integration_root/restored-app-probe.log")" == application_acceptance=passed ]] ||
+		fail 'retained application restore probe omitted bounded evidence.'
 	http_request GET "$restore_url/api/v2/meta/bases/$(jq -er '.baseId' "$ready_before")/sources" nocodb-token - \
 		"$integration_root/restore-sources.json"
 	jq -e --slurpfile before "$ready_before" '
@@ -1362,26 +1389,13 @@ prove_named_pair() {
 		fail 'named pair was eligible before its consumer-reviewed grants.'
 
 	phase='named-pair-migrator-grants'
-	cat >"$integration_root/extra-grants.sql" <<SQL
-SET SESSION AUTHORIZATION automation_data_acceptance_migrator;
-SET ROLE automation_data_acceptance_owner;
-CREATE SCHEMA extra_read AUTHORIZATION automation_data_acceptance_owner;
-CREATE SCHEMA extra_edit AUTHORIZATION automation_data_acceptance_owner;
-CREATE TABLE extra_read.visible_facts (id bigint PRIMARY KEY, fact text NOT NULL);
-INSERT INTO extra_read.visible_facts VALUES (1, 'named-reader');
-CREATE TABLE extra_read.withheld_bookkeeping (id bigint PRIMARY KEY, detail text NOT NULL);
-INSERT INTO extra_read.withheld_bookkeeping VALUES (1, 'withheld');
-CREATE TABLE extra_edit.decisions (id bigint PRIMARY KEY, decision text NOT NULL);
-INSERT INTO extra_edit.decisions VALUES (1, 'pending');
-GRANT CONNECT ON DATABASE automation_data_acceptance TO "$reader_role", "$operator_role";
-GRANT USAGE ON SCHEMA extra_read TO "$reader_role";
-GRANT SELECT ON extra_read.visible_facts TO "$reader_role";
-GRANT USAGE ON SCHEMA extra_edit TO "$operator_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON extra_edit.decisions TO "$operator_role";
-SQL
-	"$podman_bin" exec --interactive "$postgres_name" psql --no-psqlrc \
-		--set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_acceptance \
-		<"$integration_root/extra-grants.sql" >/dev/null || fail 'named pair migrator grants failed.'
+	local body
+	body="$(jq -cn '{domain:"automation_data_acceptance",operation:"login-register",application:"interview",schema:"app"}')"
+	webhook_call automation-data-provision provision-webhook "$body" "$integration_root/application-registration.json"
+	application_role="$(jq -er '.role' "$integration_root/application-registration.json")"
+	acceptance_call extensions "$run_id" "$integration_root/extensions-grants.json"
+	jq -e '.ok == true and .extensionsReady == true' "$integration_root/extensions-grants.json" >/dev/null ||
+		fail 'fixed extended acceptance grants failed.'
 	pair_call prepare "$integration_root/extra-prepared.json"
 	jq -e '.readerEligible == true and .operatorEligible == true and
 		.operatorRequested == true' "$integration_root/extra-prepared.json" >/dev/null ||
@@ -1525,30 +1539,6 @@ prove_application_login() {
 	application_role="$(jq -er '.role' "$integration_root/application-registration.json")"
 	[[ "$application_role" =~ ^app_[a-f0-9]{32}_integration$ ]] ||
 		fail 'application login role was malformed.'
-	cat >"$integration_root/application-grants.sql" <<SQL
-SET SESSION AUTHORIZATION automation_data_acceptance_migrator;
-SET ROLE automation_data_acceptance_owner;
-CREATE TABLE app.integration_facts (id bigint PRIMARY KEY, fact text NOT NULL);
-INSERT INTO app.integration_facts VALUES (1, 'original');
-CREATE TABLE app.withheld_bookkeeping (id bigint PRIMARY KEY, detail text NOT NULL);
-INSERT INTO app.withheld_bookkeeping VALUES (1, 'private');
-CREATE FUNCTION app.record_integration_fact(bigint,text) RETURNS void LANGUAGE sql
-  SECURITY DEFINER SET search_path = pg_catalog, app
-  AS 'INSERT INTO app.integration_facts(id,fact) VALUES (\$1,\$2)
-      ON CONFLICT (id) DO UPDATE SET fact = EXCLUDED.fact';
-REVOKE ALL ON FUNCTION app.record_integration_fact(bigint,text) FROM PUBLIC;
-CREATE FUNCTION app.withheld_admin() RETURNS bigint LANGUAGE sql
-  SECURITY DEFINER SET search_path = pg_catalog, app
-  AS 'SELECT count(*) FROM app.withheld_bookkeeping';
-REVOKE ALL ON FUNCTION app.withheld_admin() FROM PUBLIC;
-GRANT CONNECT ON DATABASE automation_data_acceptance TO "$application_role";
-GRANT USAGE ON SCHEMA app TO "$application_role";
-GRANT SELECT ON app.integration_facts TO "$application_role";
-GRANT EXECUTE ON FUNCTION app.record_integration_fact(bigint,text) TO "$application_role";
-SQL
-	"$podman_bin" exec --interactive "$postgres_name" psql --no-psqlrc \
-		--set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_acceptance \
-		<"$integration_root/application-grants.sql" >/dev/null || fail 'application migrator grants failed.'
 	body="$(jq -cn --arg domain "$domain" --arg application "$application" \
 		'{domain:$domain,operation:"login-validate",application:$application}')"
 	webhook_call automation-data-provision provision-webhook "$body" \
@@ -1603,6 +1593,18 @@ SQL
 		--command 'SELECT app.withheld_admin();' >/dev/null 2>&1; then
 		fail 'application login executed the withheld privileged routine.'
 	fi
+	phase='extended-fixture-current-run-cleanup'
+	"$podman_bin" exec "$postgres_name" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
+		--username postgres --dbname automation_data_acceptance --command \
+		"SELECT app.record_integration_fact(('x'||substr(md5('$run_id'),1,15))::bit(60)::bigint, 'acceptance:$run_id');" >/dev/null
+	acceptance_call extensions-cleanup "$run_id" "$integration_root/extensions-cleanup.json"
+	jq -e '.ok == true and .extensionsReady == true' "$integration_root/extensions-cleanup.json" >/dev/null ||
+		fail 'fixed current-run application cleanup failed.'
+	"$podman_bin" exec "$postgres_name" psql --no-psqlrc --tuples-only --no-align \
+		--set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_acceptance --command \
+		"SELECT NOT EXISTS (SELECT FROM app.integration_facts WHERE id = ('x'||substr(md5('$run_id'),1,15))::bit(60)::bigint) AND EXISTS (SELECT FROM app.integration_facts WHERE id=2 AND fact='created');" | \
+		rg -qx t || fail 'application cleanup removed another fixture or retained the current run.'
+
 }
 
 prove_targeted_rotations() {
@@ -1711,6 +1713,15 @@ prove_partial_rotation_retry() {
 		.errorCode == "operation_in_progress"' \
 		"$integration_root/partial-ordinary-sync.json" >/dev/null ||
 		fail 'ordinary sync tried to repair an uncertain partial rotation.'
+	phase='close-stale-integration-sessions'
+	"$podman_bin" restart --time 1 "$nocodb_name" >/dev/null
+	wait_http "$nocodb_url/api/v1/health" 'NocoDB before partial rotation retry' '.message == "OK"'
+	webhook_call automation-data-nocodb-source source-webhook \
+		'{"domain":"automation_data_acceptance","pair":"extra","operation":"status"}' \
+		"$integration_root/partial-operation-status.json"
+	jq -e --arg id "$claim_id" '.ok == true and .claim.operationId == $id and .claim.phase == "uncertain" and .claim.operation == "rotate" and .claim.accessKind == "operator"' \
+		"$integration_root/partial-operation-status.json" >/dev/null ||
+		fail 'supported status did not expose the exact uncertain rotation ID.'
 	phase='explicit-partial-rotation-retry'
 	pair_call retry "$integration_root/extra-retry-ready.json" operator "$claim_id"
 	jq -e --slurpfile before "$integration_root/extra-ready.json" '

@@ -766,6 +766,11 @@ adopted or deleted. Default-pair behavior must pass the same concurrency regress
 Unchanged sync preserves credentials, generations, and durable NocoDB identities.
 Metadata refresh remains the supported additive refresh procedure followed by scoped
 sync and identity verification. Rotation changes only the selected pair/access kind.
+The read-only `nocodb-source-status <domain>` and
+`nocodb-pair-status <domain> <pair>` commands expose the retained claim ID, phase,
+operation, access kind, and generation through the fixed authenticated webhook.
+They do not grant retry authority or establish quiescence.
+
 Partial rotation retains its claim and identities; ordinary sync cannot repair it by
 generating another password. Explicit retry is attended and binds the same target to
 the retained `quiescedOperationId`. Before confirming retry, the operator establishes
@@ -826,6 +831,16 @@ evidence includes:
 - native Community Edition table and linked-record editing on synthetic objects;
 - protected credential handling and fixed private CLI connectivity, including negative
   cases for incorrect targets and accidental credential output.
+
+The existing attended access and restore suites preserve their baseline contracts.
+Select `NOCODB_ACCESS_EXTENSION_CONFIRM=test:nocodb:access:source-pairs-v3` and
+`NOCODB_RESTORE_EXTENSION_CONFIRM=restore:nocodb:source-pairs-v3` to record the
+additional contract. The access extension installs only fixed synthetic fixtures,
+retains default source identities, and checks named-pair rotation and a separate
+application credential through the private tunnel. The restore extension uses the
+retained protected application credential in an isolated client Job, proves its
+fixed writes/reads and actual PostgreSQL privilege denials, and cleans up its temporary
+Secret and Job. Baseline results explicitly state that this extension was not selected.
 
 Local checks and hosted merge validation do not establish live acceptance. Record
 authorized live access, browser, and isolated restore evidence through the existing

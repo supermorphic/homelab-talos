@@ -21,6 +21,15 @@ expected_confirmation='test:nocodb:access'
   exit 1
 }
 
+extension_enabled=false
+if [[ -n "${NOCODB_ACCESS_EXTENSION_CONFIRM:-}" ]]; then
+  [[ "${NOCODB_ACCESS_EXTENSION_CONFIRM}" == 'test:nocodb:access:source-pairs-v3' ]] || {
+    echo 'Refusing source-pair extension confirmation: expected test:nocodb:access:source-pairs-v3.' >&2
+    exit 1
+  }
+  extension_enabled=true
+fi
+
 kubeconfig="$1"
 run_dir="${HOMELAB_TEST_RUN_DIR:-}"
 [[ -f "$kubeconfig" ]] || {
@@ -47,6 +56,7 @@ source_token="${NOCODB_SOURCE_PROVISIONING_TOKEN:-}"
 acceptance_token="${NOCODB_ACCEPTANCE_TOKEN:-}"
 acceptance_binding_confirm="${NOCODB_ACCEPTANCE_BINDING_CONFIRM:-}"
 acceptance_cleanup_armed=false
+extension_cleanup_armed=false
 
 [[ "$provisioning_url" == 'https://n8n.lab.supermorphic.com/webhook/automation-data-provision' ]] || {
   echo 'AUTOMATION_DATA_PROVISIONING_URL must be the exact private provisioning webhook URL.' >&2
@@ -69,10 +79,15 @@ for token_name in provisioning_token source_token acceptance_token; do
 done
 
 require_deployed_source 'NocoDB access acceptance' \
+  scripts/test/lib/automation-data-application-acceptance.py \
   scripts/test/scenarios/nocodb-access.sh \
   kubernetes/apps/automation/n8n/app/workflows/automation-data-provisioner.json \
   kubernetes/apps/automation/n8n/app/workflows/nocodb-source-provisioner.json \
   kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json
+
+if [[ "$extension_enabled" == true ]]; then
+  uv run --locked python scripts/test/lib/automation-data-application-acceptance.py check-root
+fi
 
 umask 077
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-nocodb-access.XXXXXX")"
@@ -172,6 +187,10 @@ cleanup() {
     :
   else
     cleanup_ok=false
+  fi
+  if [[ "$extension_cleanup_armed" == true ]]; then
+    acceptance_request extensions-cleanup "$temp_dir/extensions-cleanup.json" &&
+      jq -e '.ok == true and .extensionsReady == true' "$temp_dir/extensions-cleanup.json" >/dev/null || cleanup_ok=false
   fi
   rm -rf -- "$temp_dir" || cleanup_ok=false
   [[ ! -e "$temp_dir" ]] || cleanup_ok=false
@@ -595,14 +614,10 @@ rotation_stable_signature() {
     (.operator | {sourceId,integrationId,sourceCreateJobId})
   ]' "$1"
 }
-[[ "$(rotation_stable_signature "$rotated_source")" == \
-  "$(rotation_stable_signature "$unchanged_sync")" ]] &&
-  [[ "$(jq -r '.reader.credentialGeneration' "$rotated_source")" == \
-    "$(jq -r '.reader.credentialGeneration' "$unchanged_sync")" ]] &&
-  [[ "$(jq -r '.operator.credentialGeneration' "$rotated_source")" -eq \
-    "$(( $(jq -r '.operator.credentialGeneration' "$unchanged_sync") + 1 ))" ]] &&
-  [[ "$(jq -r '.operator.generation' "$rotated_source")" -gt \
-    "$(jq -r '.operator.generation' "$unchanged_sync")" ]] || {
+[[ "$(rotation_stable_signature "$rotated_source")" == "$(rotation_stable_signature "$unchanged_sync")" ]] &&
+  [[ "$(jq -r '.reader.credentialGeneration' "$rotated_source")" == "$(jq -r '.reader.credentialGeneration' "$unchanged_sync")" ]] &&
+  [[ "$(jq -r '.operator.credentialGeneration' "$rotated_source")" -eq "$(($(jq -r '.operator.credentialGeneration' "$unchanged_sync") + 1))" ]] &&
+  [[ "$(jq -r '.operator.generation' "$rotated_source")" -gt "$(jq -r '.operator.generation' "$unchanged_sync")" ]] || {
   echo 'Rotation did not change only the operator credential generation.' >&2
   exit 1
 }
@@ -623,5 +638,57 @@ jq -e '.beforeRotation == .afterRotation' "$canary_evidence" >/dev/null || {
   exit 1
 }
 
-write_phase assertion passed 'the fixed NocoDB access contract passed'
+if [[ "$extension_enabled" == true ]]; then
+  pair_request() { # <operation> <response> [access-kind]
+    local operation="$1" response="$2" kind="${3:-}" body="$temp_dir/pair-request.json"
+    verify_lease || return
+    jq -n --arg operation "$operation" --arg kind "$kind" '
+      {domain:"automation_data_acceptance",pair:"extra",operation:$operation} +
+      (if $operation == "register" then {readerSchema:"extra_read",operatorSchema:"extra_edit"}
+       elif $operation == "rotate" then {accessKind:$kind} else {} end)
+    ' >"$body"
+    http_request "pair-$operation" "$source_url" source "$body" "$response" 200
+    jq -e '.ok == true and .domain == "automation_data_acceptance" and .pair == "extra"' "$response" >/dev/null
+  }
+  login_command() {
+    verify_lease || return
+    AUTOMATION_DATA_KUBECONFIG="$kubeconfig" uv run --locked python scripts/operations/automation-data-login.py "$@"
+  }
+  pair_request register "$temp_dir/pair-register.json"
+  AUTOMATION_DATA_LOGIN_REGISTER_CONFIRM='register:automation-data:automation_data_acceptance:interview:app' login_command register automation_data_acceptance interview app >"$temp_dir/login-register.json"
+  extension_cleanup_armed=true
+  acceptance_request extensions "$temp_dir/extensions.json"
+  jq -e '.ok == true and .extensionsReady == true' "$temp_dir/extensions.json" >/dev/null
+  pair_request prepare "$temp_dir/pair-prepare.json"
+  jq -e '.readerEligible == true and .operatorEligible == true' "$temp_dir/pair-prepare.json" >/dev/null
+  pair_request sync "$temp_dir/pair-ready.json"
+  validate_ready_source "$temp_dir/pair-ready.json" reader "$(jq -r '.reader.sourceCreateJobState // "null"' "$temp_dir/pair-ready.json")"
+  validate_ready_source "$temp_dir/pair-ready.json" operator "$(jq -r '.operator.sourceCreateJobState // "null"' "$temp_dir/pair-ready.json")"
+  pair_request sync "$temp_dir/pair-repeat.json"
+  [[ "$(stable_source_signature "$temp_dir/pair-ready.json")" == "$(stable_source_signature "$temp_dir/pair-repeat.json")" ]]
+  pair_request rotate "$temp_dir/pair-rotated.json" operator
+  validate_ready_source "$temp_dir/pair-rotated.json" reader null
+  validate_ready_source "$temp_dir/pair-rotated.json" operator null
+  [[ "$(rotation_stable_signature "$temp_dir/pair-repeat.json")" == "$(rotation_stable_signature "$temp_dir/pair-rotated.json")" ]]
+  [[ "$(jq -r '.operator.credentialGeneration' "$temp_dir/pair-rotated.json")" -eq "$(($(jq -r '.operator.credentialGeneration' "$temp_dir/pair-repeat.json") + 1))" ]]
+  source_request sync "$temp_dir/default-after-extension.json"
+  [[ "$(stable_source_signature "$rotated_source")" == "$(stable_source_signature "$temp_dir/default-after-extension.json")" ]]
+  login_command validate automation_data_acceptance interview >"$temp_dir/login-before.json"
+  case "$(jq -r '.state' "$temp_dir/login-before.json")" in
+  ready) ;; # Retain the existing protected credential across repeated attended runs.
+  awaiting_grants | activating)
+    AUTOMATION_DATA_LOGIN_ACTIVATE_CONFIRM='activate:automation-data:automation_data_acceptance:interview' login_command activate automation_data_acceptance interview >"$temp_dir/login-activate.json"
+    ;;
+  *)
+    echo 'The synthetic application login needs attended recovery before acceptance.' >&2
+    exit 1
+    ;;
+  esac
+  verify_lease
+  uv run --locked python scripts/test/lib/automation-data-application-acceptance.py live "$kubeconfig" "$run_id" >"$temp_dir/application-probe.log"
+  [[ "$(cat "$temp_dir/application-probe.log")" == application_acceptance=passed ]]
+  write_phase assertion passed 'default and named source pairs, targeted rotation, retained sibling identities, application authentication, fixed function writes and PostgreSQL privilege denials passed'
+else
+  write_phase assertion passed 'the fixed default-pair NocoDB access contract passed; source-pair/application extension was not selected'
+fi
 echo 'NocoDB attended access acceptance passed; cleanup will remove only current-run rows.'

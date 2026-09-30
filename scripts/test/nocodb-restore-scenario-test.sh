@@ -153,6 +153,10 @@ if [[ "$args" == *' logs job/'* ]]; then
 	job="$(printf '%s\n' "$@" | awk '/^job\// {print; exit}')"
 	if [[ "$job" == *-preflight ]]; then
 		printf '%s\n' 'selected_bundle=automation-data-20260904T023000Z'
+	elif [[ "$job" == *-app-probe ]]; then
+		if [[ "${NOCODB_RESTORE_VOLUME_CASE:-}" == extension-probe-failure ]]; then
+			printf '%s\n' application_acceptance=failed
+		else printf '%s\n' application_acceptance=passed; fi
 	elif [[ "$job" == *-load ]]; then
 		printf '%s\n' \
 			'selected_bundle=automation-data-20260904T023000Z' \
@@ -196,6 +200,9 @@ if [[ "$args" == *' create --filename '* ]]; then
 		job_name="$(yq ea -r 'select(.kind == "Job") | .metadata.name' "$manifest")"
 		if [[ "$job_name" == *-request ]]; then
 			printf '%s\n' create-request >>"$events"
+		elif [[ "$job_name" == *-app-probe ]]; then
+			printf '%s\n' create-application-probe >>"$events"
+			yq -o=json '.' "$manifest" | jq -e '.spec.template.metadata.labels."homelab-talos/role" == "restore" and .spec.template.spec.automountServiceAccountToken == false' >/dev/null
 		elif [[ "$job_name" == *-preflight ]]; then
 			printf '%s\n' create-preflight >>"$events"
 		else
@@ -212,6 +219,7 @@ if [[ "$args" == *' create --filename '* ]]; then
 	while IFS=$'\t' read -r kind name; do
 		case "$kind" in
 			PersistentVolumeClaim) target="pvc/$name" ;;
+			Secret) target="secret/$name" ;;
 			Service) target="service/$name" ;;
 			StatefulSet) target="statefulset/$name" ;;
 			Job) target="job/$name" ;;
@@ -225,7 +233,7 @@ if [[ "$args" == *' create --filename '* ]]; then
 fi
 
 if [[ "$args" == *' delete '* ]]; then
-	target="$(printf '%s\n' "$@" | awk '/^(job|deployment|service|statefulset|pvc|ciliumnetworkpolicy|persistentvolume|volumes\.longhorn\.io)\// {print; exit}')"
+	target="$(printf '%s\n' "$@" | awk '/^(job|secret|deployment|service|statefulset|pvc|ciliumnetworkpolicy|persistentvolume|volumes\.longhorn\.io)\// {print; exit}')"
 	if [[ "${NOCODB_RESTORE_VOLUME_CASE:-}" == cleanup-failure && "$target" == deployment/* ]]; then
 		printf 'cleanup-delete-failed %s\n' "$target" >>"$events"
 		exit 1
@@ -236,7 +244,7 @@ if [[ "$args" == *' delete '* ]]; then
 fi
 
 if [[ "$args" == *' get '* && "$args" == *' --ignore-not-found '* ]]; then
-	target="$(printf '%s\n' "$@" | awk '/^(job|deployment|service|statefulset|pvc|ciliumnetworkpolicy|persistentvolume|volumes\.longhorn\.io)\// {print; exit}')"
+	target="$(printf '%s\n' "$@" | awk '/^(job|secret|deployment|service|statefulset|pvc|ciliumnetworkpolicy|persistentvolume|volumes\.longhorn\.io)\// {print; exit}')"
 	if created "$target" && ! deleted "$target"; then
 		jq -n --arg run_hash "${NOCODB_RESTORE_RUN_HASH:?}" '{
         kind:"Fixture",metadata:{labels:{"homelab-talos/test":"nocodb-restore-drill","homelab-talos/run-id":$run_hash}}
@@ -251,6 +259,28 @@ EOF
 
 chmod +x "$fixture/bin/kubectl" "$fixture/bin/sleep"
 
+NOCODB_RESTORE_REAL_UV="$(command -v uv)"
+export NOCODB_RESTORE_REAL_UV
+cat >"$fixture/bin/uv" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1 $2 $3 $4" == 'run --locked python scripts/test/lib/automation-data-application-acceptance.py' ]] || exit 64
+case "$5" in
+  check-profile) exit 0 ;;
+  restore-manifests)
+    exec "$NOCODB_RESTORE_REAL_UV" run --locked python - "$6" "$7" "$8" <<'PYCODE'
+import runpy, sys
+from pathlib import Path
+module=runpy.run_path('scripts/test/lib/automation-data-application-acceptance.py')
+module['write_restore_manifests'](Path(sys.argv[1]),sys.argv[2],sys.argv[3],
+                                'invented_password_for_fixture_only_0123456789')
+PYCODE
+    ;;
+  *) exit 65 ;;
+esac
+EOF
+chmod 700 "$fixture/bin/uv"
+
 failures=0
 record_failure() {
 	echo "NocoDB restore scenario test failed: $*" >&2
@@ -261,7 +291,8 @@ event_line() { rg -n -m1 -F "$1" "$2" | cut -d: -f1; }
 
 run_case() { # <case>
 	local case_name="$1" state run_id run_hash status
-	local confirmation='restore:nocodb:metadata'
+	local confirmation='restore:nocodb:metadata' extension_confirmation=''
+	[[ "$case_name" != extension-* ]] || extension_confirmation='restore:nocodb:source-pairs-v3'
 	[[ "$case_name" != wrong-confirmation ]] || confirmation='restore:nocodb'
 	state="$fixture/$case_name"
 	run_id="20260905T010000Z-restore-$case_name"
@@ -275,10 +306,17 @@ run_case() { # <case>
 	if [[ "$case_name" == invalid-registry ]]; then
 		source_registry_base64="$(printf '%s' '{"items":[]}' | base64 | tr -d '\n')"
 	fi
+	if [[ "$case_name" == extension-* ]]; then
+		source_registry_base64="$(printf '%s' "$source_registry_base64" | base64 --decode | jq -c '.items += [
+      {domain:"automation_data_acceptance",pair:"extra",accessKind:"reader",schema:"extra_read",state:"ready",baseId:"base-extra",sourceId:"extra-reader",integrationId:"extra-reader-integration",valid:true},
+      {domain:"automation_data_acceptance",pair:"extra",accessKind:"operator",schema:"extra_edit",state:"ready",baseId:"base-extra",sourceId:"extra-operator",integrationId:"extra-operator-integration",valid:true}
+    ]' | base64 | tr -d '\n')"
+	fi
 	set +e
 	PATH="$fixture/bin:$PATH" \
 		HOMELAB_TEST_RUN_DIR="$state/$run_id" TEST_RUN_ID="$run_id" \
 		TEST_CAMPAIGN_LEASE_HOLDER="$run_id" NOCODB_RESTORE_CONFIRM="$confirmation" \
+		NOCODB_RESTORE_EXTENSION_CONFIRM="$extension_confirmation" \
 		NOCODB_RESTORE_FIXTURE_STATE="$state" NOCODB_RESTORE_VOLUME_CASE="$case_name" \
 		NOCODB_RESTORE_RUN_HASH="$run_hash" \
 		NOCODB_RESTORE_BACKUP_CONFIGMAP="$backup_configmap" \
@@ -368,6 +406,21 @@ rg -q '^cleanup-delete-failed deployment/' "$state/events.log" ||
 	record_failure 'cleanup-failure did not exercise the run-owned Deployment deletion'
 [[ "$(jq -r '.status' "$state"/*/cleanup.json)" == failed ]] ||
 	record_failure 'cleanup failure was not recorded as a failed phase'
+
+for extension_case in extension-valid extension-probe-failure; do
+  IFS=$'\t' read -r case_name status state < <(run_case "$extension_case")
+  if [[ "$extension_case" == extension-valid ]]; then
+    [[ "$status" -eq 0 ]] || record_failure "source-pair extension exited $status: $(tail -n 1 "$state/stderr.log")"
+    jq -e '.status=="passed" and (.reason | contains("retained application authentication"))' "$state/20260905T010000Z-restore-$case_name/assertion.json" >/dev/null || record_failure 'extension assertion omitted real-client contract'
+  else
+    [[ "$status" -ne 0 ]] || record_failure 'failed application probe published success'
+    jq -e '.status=="failed"' "$state/20260905T010000Z-restore-$case_name/assertion.json" >/dev/null || record_failure 'application failure omitted failed assertion'
+  fi
+  rg -Fxq create-application-probe "$state/events.log" || record_failure 'extension did not create isolated application Job'
+  rg -q '^delete secret/nc-restore-.*-app-credential$' "$state/events.log" || record_failure 'extension retained credential Secret after cleanup'
+  rg -q '^delete job/nc-restore-.*-app-probe$' "$state/events.log" || record_failure 'extension retained application probe after cleanup'
+  jq -e '.status=="passed"' "$state/20260905T010000Z-restore-$case_name/cleanup.json" >/dev/null || record_failure 'extension resource cleanup failed'
+done
 
 [[ "$failures" -eq 0 ]] || exit 1
 echo 'NocoDB restore scenario tests passed.'

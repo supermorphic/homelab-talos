@@ -1231,6 +1231,8 @@ require(
 )
 
 migrator_names = {
+    "Grant Extended Acceptance Access",
+    "Cleanup Extended Acceptance",
     "Create Acceptance Structure",
     "Grant Acceptance Access",
     "Clear Reader Negative Residue",
@@ -1248,7 +1250,7 @@ postgres_nodes = [node for node in nodes if node.get("type") == "n8n-nodes-base.
 require({node["name"] for node in postgres_nodes} == migrator_names | runtime_names, "Acceptance PostgreSQL node set is not exact.")
 for node in postgres_nodes:
     query = node.get("parameters", {}).get("query", "")
-    require("{{$json" not in query and "EXECUTE " not in query.upper(), f"{node['name']} contains dynamic SQL.")
+    require("{{$json" not in query and not re.search(r"\bEXECUTE\s+(?!ON\b)", query.upper()), f"{node['name']} contains dynamic SQL.")
     require(not node.get("credentials"), f"{node['name']} embeds a credential ID.")
     if node["name"] in migrator_names:
         require(
@@ -1422,6 +1424,7 @@ require(
     ordered_outputs("Select Acceptance Operation") == [
         ["Create Acceptance Structure"], ["Grant Acceptance Access"],
         ["List Acceptance Bases"], ["List Acceptance Bases"], ["List Acceptance Bases"],
+        ["Grant Extended Acceptance Access"], ["Cleanup Extended Acceptance"],
     ],
     "Acceptance operation routing is not exact.",
 )
@@ -1493,6 +1496,7 @@ response_predecessors = {
 }
 require(
     response_predecessors == {
+        "Grant Extended Acceptance Access Result", "Cleanup Extended Acceptance Result",
         "Structure Result", "Grant Result", "Require Cleanup Fact", "Prepare Acceptance Response",
         "Prepare Feedback Response", "Prepare Acceptance Error Response",
     },

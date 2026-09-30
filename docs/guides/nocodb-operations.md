@@ -462,7 +462,7 @@ In n8n, bind the generated credentials to these exact PostgreSQL nodes:
 
 | Credential | Nodes |
 | --- | --- |
-| `automation-data/automation_data_acceptance/migrator` | **Create Acceptance Structure**, **Grant Acceptance Access**, **Clear Reader Negative Residue**, **Cleanup Unexpected Reader Insert**, **Clear Feedback Residue**, **Cleanup Feedback Fact** |
+| `automation-data/automation_data_acceptance/migrator` | **Create Acceptance Structure**, **Grant Acceptance Access**, **Clear Reader Negative Residue**, **Cleanup Unexpected Reader Insert**, **Clear Feedback Residue**, **Cleanup Feedback Fact**, **Grant Extended Acceptance Access**, **Cleanup Extended Acceptance** |
 | `automation-data/automation_data_acceptance/runtime` | **Publish Initial Feedback Fact**, **Consume Feedback Before Refresh**, **Refresh Feedback Fact**, **Consume Feedback After Refresh** |
 
 The migrator nodes perform only reviewed DDL, grants, and bounded residue cleanup. The
@@ -561,6 +561,49 @@ isolation, and cleanup behavior.
 **Expected result:** Restored metadata, source identities, PostgreSQL grants, saved view,
 operator decision, and artifact metadata/reference pass; the isolated restored database
 publishes a fresh logical bundle; and all run-owned resources are absent after cleanup.
+
+### 11. Record acceptance for additional pairs and application logins
+
+After deploying v3 and binding the two extended migrator nodes listed above, select the
+source-pair extension for issue 491. The baseline commands still cover the original pair;
+a baseline result does not prove the new application credential contract.
+
+Create a private credential directory outside the checkout, with mode `0700`, and set
+`AUTOMATION_DATA_LOGIN_DIRECTORY` to its absolute path. Keep it for rotation and recovery.
+Use the approved scoped kubeconfig and the endpoint, token, and binding inputs from step 7.
+The extension registers only the synthetic domain's `extra` pair (`extra_read`/`extra_edit`)
+and its separate `interview` application login in `app`. It installs fixed synthetic grants,
+synchronizes and rotates only the named operator, checks retained default identities, and
+probes the application through the private PostgreSQL tunnel. It verifies permitted function
+writes and reads, and PostgreSQL denials for withheld tables/functions, direct table writes,
+cross-pair reads, and assuming the owner role. Repeated runs retain the application credential;
+a ready login requires its existing protected profile.
+
+With explicit authority for this attended synthetic mutation, record the extended run:
+
+```bash
+NOCODB_ACCESS_TEST_CONFIRM='test:nocodb:access' \
+NOCODB_ACCESS_EXTENSION_CONFIRM='test:nocodb:access:source-pairs-v3' \
+  mise exec -- just test record test.nocodb-access
+```
+
+Complete the separate attended Community Edition browser checks for ordinary fields,
+linked records, and saved views. Take a fresh complete backup after the extended access
+run, retaining the selected application credential. Select a bundle that contains both
+pairs and that credential generation, then record the isolated restore:
+
+```bash
+NOCODB_RESTORE_CONFIRM='restore:nocodb:metadata' \
+NOCODB_RESTORE_EXTENSION_CONFIRM='restore:nocodb:source-pairs-v3' \
+  mise exec -- just test record test.nocodb-restore-drill
+```
+
+The extension authenticates with the retained application credential in a separate client
+Job after the isolated network policy passes independent validation. It checks the same
+positive operations and actual PostgreSQL denial codes. It creates a run-owned temporary
+credential Secret, uses only the isolated database Service, and verifies removal of the
+Secret and Job during cleanup. Private credential manifests remain outside test reports.
+Catalog validation of application grants alone is not authenticated recovery evidence.
 
 ## Routine operation
 
@@ -675,7 +718,17 @@ previous workflow has ended and its NocoDB requests have completed or been cance
 A timeout, a stopped client, or elapsed time alone is insufficient. If this condition
 cannot be established through authorized administration, retain the claim and stop.
 
-Use the exact retained operation ID from bounded diagnostics; never invent one:
+Read the retained operation without changing sources or credentials:
+
+```bash
+mise exec -- just kube nocodb-pair-status sample extra
+# For the original pair: mise exec -- just kube nocodb-source-status sample
+```
+
+The bounded response contains `claim.operationId`, `phase`, operation, access kind,
+and generation, or a null claim when no operation was retained. A phase of `uncertain`
+is not proof that previous external requests have ended. After independently establishing
+quiescence, use the exact retained operation ID; never invent one:
 
 ```bash
 # Synthetic ID: substitute the retained, confirmed-quiescent operation ID.

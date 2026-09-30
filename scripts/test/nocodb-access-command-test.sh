@@ -139,7 +139,16 @@ case "$url" in
   https://n8n.lab.supermorphic.com/webhook/automation-data-nocodb-source)
     rg -Fxq "header = \"Authorization: Bearer ${NOCODB_ACCESS_SOURCE_TOKEN:?}\"" "$config" || exit 72
     operation="$(jq -r '.operation' "$body_path")"
-    if [[ "$operation" == sync ]]; then
+    if [[ "$(jq -r '.pair // empty' "$body_path")" == extra ]]; then
+      event="pair-$operation"
+      case "$operation" in
+        register) jq -e '. == {domain:"automation_data_acceptance",pair:"extra",operation:"register",readerSchema:"extra_read",operatorSchema:"extra_edit"}' "$body_path" >/dev/null || exit 73 ;;
+        prepare|sync) jq -e --arg op "$operation" '. == {domain:"automation_data_acceptance",pair:"extra",operation:$op}' "$body_path" >/dev/null || exit 73 ;;
+        rotate) jq -e '. == {domain:"automation_data_acceptance",pair:"extra",operation:"rotate",accessKind:"operator"}' "$body_path" >/dev/null || exit 73 ;;
+        *) exit 75 ;;
+      esac
+      response="$event.json"
+    elif [[ "$operation" == sync ]]; then
       sync_number="$(($(rg -c '^source-sync$' "${NOCODB_ACCESS_EVENT_LOG:?}" || true) + 1))"
       event='source-sync'
       case "${NOCODB_ACCESS_START_STATE:-initial}:$sync_number" in
@@ -150,7 +159,10 @@ case "$url" in
         retained:1) response='source-sync-retained.json' ;;
         retained:2) response='source-sync-retained.json' ;;
         partial:1) response='source-sync-partial.json' ;;
-        *) response="source-sync-${sync_number}.json" ;;
+        *)
+          if [[ "$sync_number" -gt 3 ]]; then response='source-rotate.json'
+          else response="source-sync-${sync_number}.json"; fi
+          ;;
       esac
       jq -e '. == {domain: "automation_data_acceptance", operation: "sync"}' "$body_path" >/dev/null || exit 73
     elif [[ "$operation" == rotate ]]; then
@@ -167,7 +179,7 @@ case "$url" in
     jq -e --arg operation "$operation" --arg run_id "${TEST_RUN_ID:?}" \
       '. == {operation: $operation, runId: $run_id}' "$body_path" >/dev/null || exit 77
     case "$operation" in
-      structure|grants|cleanup|feedback) event="acceptance-${operation}"; response="acceptance-${operation}.json" ;;
+      structure|grants|cleanup|feedback|extensions|extensions-cleanup) event="acceptance-${operation}"; response="acceptance-${operation}.json" ;;
       probe)
         probe_number="$(($(rg -c '^acceptance-probe$' "${NOCODB_ACCESS_EVENT_LOG:?}" || true) + 1))"
         event='acceptance-probe'
@@ -313,7 +325,10 @@ case_name=''
 OUT=''
 STATUS=0
 run_dir=''
-fail() { echo "FAIL [$case_name]: $1" >&2; exit 1; }
+fail() {
+  echo "FAIL [$case_name]: $1" >&2
+  exit 1
+}
 file_mode() { nocodb_test_mode "$1"; }
 
 run_scenario() { # [confirmation|-] [bad-runtime-kind] [signup-status] [oversize-event] [lose-lease-on-cleanup] [omit-binding-confirm] [binding-confirm] [start-state]
@@ -414,7 +429,7 @@ run_scenario test:nocodb:access
 assert_status 0
 expected_order=$'kubectl\nkubectl\nkubectl\nkubectl\nprovision\nkubectl\nacceptance-structure\nkubectl\nsource-sync\nkubectl\nacceptance-grants\nkubectl\nsource-sync\nkubectl\nsignup-denial\nkubectl\nacceptance-probe\nkubectl\nacceptance-feedback\nkubectl\nsource-sync\nkubectl\nsource-rotate\nkubectl\nacceptance-probe\nkubectl\nacceptance-cleanup'
 [[ "$(cat "$fixture/events.log")" == "$expected_order" ]] || fail "unexpected lifecycle order: $(tr '\n' ' ' <"$fixture/events.log")"
-yq -e '.status == "passed" and .reason == "the fixed NocoDB access contract passed"' "$run_dir/assertion.json" >/dev/null || fail 'assertion evidence is not passed'
+yq -e '.status == "passed" and .reason == "the fixed default-pair NocoDB access contract passed; source-pair/application extension was not selected"' "$run_dir/assertion.json" >/dev/null || fail 'assertion evidence is not passed'
 yq -e '.status == "passed" and .reason == "current-run rows were removed; domain, base, sources, and reserved record canary were retained"' "$run_dir/cleanup.json" >/dev/null || fail 'cleanup evidence is not passed'
 yq -e '.status == "not-required"' "$run_dir/recovery.json" >/dev/null || fail 'recovery evidence is not separate'
 jq -e '
@@ -645,3 +660,62 @@ jq -e '
 ' <<<"$entry_json" >/dev/null || fail 'catalog metadata does not preserve the attended mutation contract'
 
 echo 'NocoDB access command tests passed.'
+
+# The real database/function oracle is exercised by the disposable component suite.
+# This stub covers the attended shell sequencing and failure cleanup separately.
+cat >"$fixture/bin/uv" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1 $2 $3" == 'run --locked python' ]] || exit 64
+case "$4:$5" in
+  scripts/test/lib/automation-data-application-acceptance.py:check-root) event=app-profile-check ;;
+  scripts/test/lib/automation-data-application-acceptance.py:live)
+    [[ "$7" == "$TEST_RUN_ID" ]] || exit 65
+    event=app-auth-probe
+    [[ "${NOCODB_ACCESS_FAKE_APP_PROBE_FAIL:-false}" != true ]] || exit 1
+    echo application_acceptance=passed
+    ;;
+  scripts/operations/automation-data-login.py:register)
+    [[ "$6:$7:$8" == 'automation_data_acceptance:interview:app' ]] || exit 66
+    [[ "$AUTOMATION_DATA_LOGIN_REGISTER_CONFIRM" == 'register:automation-data:automation_data_acceptance:interview:app' ]] || exit 67
+    event=app-register
+    echo '{"state":"awaiting_grants"}'
+    ;;
+  scripts/operations/automation-data-login.py:validate)
+    [[ "$6:$7" == 'automation_data_acceptance:interview' ]] || exit 66
+    event=app-validate
+    echo '{"state":"ready","valid":true,"credentialGeneration":1}'
+    ;;
+  *) exit 68 ;;
+esac
+printf '%s\n' "$event" >>"${NOCODB_ACCESS_EVENT_LOG:?}"
+EOF
+chmod 700 "$fixture/bin/uv"
+for op in extensions extensions-cleanup; do
+  jq -n --arg op "$op" --arg run "$run_id" \
+    '{ok:true,domain:"automation_data_acceptance",operation:$op,runId:$run,extensionsReady:true}' \
+    >"$fixture/responses/acceptance-$op.json"
+done
+jq -n '{ok:true,domain:"automation_data_acceptance",pair:"extra",operation:"register"}' >"$fixture/responses/pair-register.json"
+jq -n '{ok:true,domain:"automation_data_acceptance",pair:"extra",operation:"prepare",readerEligible:true,operatorEligible:true}' >"$fixture/responses/pair-prepare.json"
+jq '.pair="extra" | .baseId="extra-base" | .reader.sourceId="extra-reader" | .operator.sourceId="extra-operator"' \
+  "$fixture/responses/source-sync-retained.json" >"$fixture/responses/pair-sync.json"
+jq '.operation="rotate" | .operator.credentialGeneration += 1 | .operator.generation += 1' \
+  "$fixture/responses/pair-sync.json" >"$fixture/responses/pair-rotate.json"
+export NOCODB_ACCESS_EXTENSION_CONFIRM='test:nocodb:access:source-pairs-v3'
+case_name='guarded extension retains default sources and probes the separate application'
+run_scenario test:nocodb:access
+assert_status 0
+for expected in pair-register acceptance-extensions pair-prepare pair-sync pair-rotate app-register app-validate app-auth-probe acceptance-extensions-cleanup; do
+  rg -Fxq "$expected" "$fixture/events.log" || fail "missing extension phase $expected"
+done
+jq -e '.status=="passed" and (.reason | contains("named source pairs"))' "$run_dir/assertion.json" >/dev/null
+assert_no_secret_output
+case_name='application probe failure does not publish passed extension evidence'
+export NOCODB_ACCESS_FAKE_APP_PROBE_FAIL=true
+run_scenario test:nocodb:access
+assert_status 1
+jq -e '.status=="failed"' "$run_dir/assertion.json" >/dev/null
+rg -Fxq acceptance-extensions-cleanup "$fixture/events.log" || fail 'failed application probe missed current-run cleanup'
+assert_no_secret_output
+unset NOCODB_ACCESS_EXTENSION_CONFIRM NOCODB_ACCESS_FAKE_APP_PROBE_FAIL

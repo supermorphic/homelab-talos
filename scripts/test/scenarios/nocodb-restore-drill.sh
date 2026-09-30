@@ -27,6 +27,15 @@ expected_confirmation='restore:nocodb:metadata'
 	exit 1
 }
 
+extension_enabled=false
+if [[ -n "${NOCODB_RESTORE_EXTENSION_CONFIRM:-}" ]]; then
+	[[ "${NOCODB_RESTORE_EXTENSION_CONFIRM}" == 'restore:nocodb:source-pairs-v3' ]] || {
+		echo 'Refusing source-pair extension confirmation: expected restore:nocodb:source-pairs-v3.' >&2
+		exit 1
+	}
+	extension_enabled=true
+fi
+
 kubeconfig="$1"
 run_dir="${HOMELAB_TEST_RUN_DIR:-}"
 [[ -f "$kubeconfig" ]] || {
@@ -55,10 +64,16 @@ preflight_job="$prefix-preflight"
 app="$prefix-nocodb"
 app_service="$prefix-nocodb"
 request_job="$prefix-request"
+application_probe_job="$prefix-app-probe"
+application_probe_secret="$prefix-app-credential"
 policy="$prefix-policy"
 backup_configmap=''
 kc=(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace")
 kcluster=(kubectl --kubeconfig "$kubeconfig")
+
+if [[ "$extension_enabled" == true ]]; then
+	uv run --locked python scripts/test/lib/automation-data-application-acceptance.py check-profile
+fi
 
 umask 077
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-nocodb-restore.XXXXXX")"
@@ -397,13 +412,13 @@ cleanup() {
 	set +e
 	verify_lease || cleanup_ok=false
 	if [[ "$cleanup_ok" == true ]]; then
-		for target in "job/$request_job" "deployment/$app" "service/$app_service" \
+		for target in "job/$application_probe_job" "secret/$application_probe_secret" "job/$request_job" "deployment/$app" "service/$app_service" \
 			"job/$restore_job" "job/$preflight_job" "statefulset/$database" "service/$database_service" \
 			"pvc/$database_pvc" "ciliumnetworkpolicy/$policy"; do
 			delete_owned "$namespace" "$target" || cleanup_ok=false
 		done
 	fi
-	for target in "job/$request_job" "deployment/$app" "service/$app_service" \
+	for target in "job/$application_probe_job" "secret/$application_probe_secret" "job/$request_job" "deployment/$app" "service/$app_service" \
 		"job/$restore_job" "job/$preflight_job" "statefulset/$database" "service/$database_service" \
 		"pvc/$database_pvc" "ciliumnetworkpolicy/$policy"; do
 		resource_absent "$namespace" "$target" || cleanup_ok=false
@@ -433,7 +448,7 @@ route_targets_service "$app_service" "$routes" && {
 	exit 1
 }
 
-for target in "job/$request_job" "deployment/$app" "service/$app_service" \
+for target in "job/$application_probe_job" "secret/$application_probe_secret" "job/$request_job" "deployment/$app" "service/$app_service" \
 	"job/$restore_job" "job/$preflight_job" "statefulset/$database" "service/$database_service" \
 	"pvc/$database_pvc" "ciliumnetworkpolicy/$policy"; do
 	resource_absent "$namespace" "$target" || {
@@ -555,6 +570,26 @@ nocodb_restore_validate_isolation "$app_manifest" "$live_policy" \
 	exit 1
 }
 
+if [[ "$extension_enabled" == true ]]; then
+	jq -e '
+    [.items[] | select(.pair == "extra" and .state == "ready" and .valid == true)] as $extra |
+    ($extra | length) == 2 and ($extra | map(.accessKind) | sort) == ["operator","reader"] and
+    ([$extra[] | [.accessKind,.schema]] | sort) == [["operator","extra_edit"],["reader","extra_read"]]
+  ' "$temp_dir/source-registry.json" >/dev/null || {
+		echo 'The selected backup does not retain the complete synthetic named pair.' >&2
+		exit 1
+	}
+	# The independent policy check above restricts role=restore to this run's database.
+	# Retained credentials are placed only in a run-owned ephemeral Secret outside reports.
+	uv run --locked python scripts/test/lib/automation-data-application-acceptance.py restore-manifests "$temp_dir" "$run_hash" "$run_id"
+	create_owned_manifests "$namespace" "$temp_dir/application-probe.yaml"
+	wait_for_job_terminal "$application_probe_job" 180 5 "${kc[@]}"
+	[[ "$("${kc[@]}" logs "job/$application_probe_job" --tail=1)" == application_acceptance=passed ]] || {
+		echo 'The isolated application credential probe omitted bounded acceptance evidence.' >&2
+		exit 1
+	}
+fi
+
 verify_lease
 create_owned_manifests "$namespace" "$app_manifest"
 "${kc[@]}" rollout status "deployment/$app" --timeout=20m >/dev/null
@@ -576,7 +611,7 @@ wait_for_job_terminal "$request_job" 600 5 "${kc[@]}"
 }
 
 RUN_HASH="$run_hash" SELECTED_BUNDLE="$selected_bundle" \
-	POST_RECOVERY_BUNDLE="$post_recovery_bundle" \
+	POST_RECOVERY_BUNDLE="$post_recovery_bundle" EXTENSION_VALIDATED="$extension_enabled" \
 	yq --null-input --output-format json '{
     "runHash":strenv(RUN_HASH),
     "selectedAutomationDataBundle":strenv(SELECTED_BUNDLE),
@@ -585,7 +620,12 @@ RUN_HASH="$run_hash" SELECTED_BUNDLE="$selected_bundle" \
     "networkPolicyIndependentlyValidated":true,
     "workspaceBaseViewSourcesAndRecordsValidated":true,
     "postRecoveryBundle":strenv(POST_RECOVERY_BUNDLE),
-    "productionMutation":false
+    "productionMutation":false,
+    "retainedApplicationCredentialValidated":(strenv(EXTENSION_VALIDATED) == "true")
   }' >"$run_dir/diagnostics/nocodb-restore-evidence.json"
-write_phase assertion passed 'isolated NocoDB metadata, encrypted sources, privilege denials, saved view, record references, and fresh backup passed'
+if [[ "$extension_enabled" == true ]]; then
+	write_phase assertion passed 'isolated default/named NocoDB pairs, saved state, fresh backup and retained application authentication, fixed writes/reads and PostgreSQL denials passed'
+else
+	write_phase assertion passed 'isolated NocoDB metadata, encrypted sources, privilege denials, saved view, record references, and fresh backup passed; application credential extension was not selected'
+fi
 echo "NocoDB metadata restore drill passed with $selected_bundle; cleanup will remove all run-owned resources."
