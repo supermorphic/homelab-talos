@@ -126,8 +126,16 @@ Run the restore drill after a material snapshot, seal-generation, or recovery-wo
 change, and before accepting a selected backup as recoverable. Production OpenBao must
 be healthy for the isolation checks. Select `raft.snap` with
 its sibling `metadata.json` in operator-private storage. Match the recovery record's
-seal ID and generation to retained seal material. From clean deployed `main`, set the
-non-secret selectors and run:
+seal ID and generation to retained seal material.
+
+To retrieve a completed backup into private local storage, set
+`OPENBAO_OPERATOR_KUBECONFIG` and `OPENBAO_BACKUP_JOB` to the selected completed Job,
+then run `mise exec -- just kube openbao-backup-retrieve`. Review its destination and
+exact confirmation. A passing result means the snapshot and sibling metadata were
+copied and validated, and the temporary reader was removed. The default destination
+is `~/.local/share/homelab-recovery/openbao/snapshots/<job-name>/`; it never overwrites
+an existing directory. Use that directory's `raft.snap` below. From clean deployed
+`main`, set the non-secret selectors and run:
 
 ```sh
 export OPENBAO_OPERATOR_KUBECONFIG='/absolute/private/operator-kubeconfig'

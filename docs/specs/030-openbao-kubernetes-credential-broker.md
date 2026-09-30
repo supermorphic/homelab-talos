@@ -660,6 +660,14 @@ daily schedule targets approximately 24 hours of data loss; missed jobs or
 transfers increase that interval and must alert. Measure recovery duration in the
 restore drill before making an RTO claim.
 
+The operator-owned `just kube openbao-backup-retrieve` selects one snapshot by a
+completed backup Job's time window rather than the moving `latest` pointer. It uses
+an owned, temporary, network-isolated reader on the backup Job's node with only a
+read-only backup PVC mount, no mounted identity, and the existing pinned backup
+image. It validates the local pair with the restore validator, refuses overwrite,
+and removes only its owned Pod and policy. It does not access server files, seal
+material, Kubernetes Secrets, or OpenBao APIs.
+
 `mise exec -- just kube openbao-restore-drill` is an attended, registered test.
 It selects an exact retained snapshot and associated recovery material, binds
 confirmation to the snapshot checksum and run ID, and creates a unique isolated

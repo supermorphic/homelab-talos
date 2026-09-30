@@ -1162,6 +1162,10 @@ openbao-verify: require-bash
 openbao-config-apply: require-bash
     @uv run --locked python -m scripts.openbao.operator config-apply
 
+# Retrieve one completed backup into private operator storage, then remove the reader.
+openbao-backup-retrieve: require-bash
+    @uv run --locked python -m scripts.openbao.backup_retrieve
+
 # Attended isolated snapshot restore; explicit operator identity, exact per-run confirmation.
 openbao-restore-drill: require-bash
     @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}"
