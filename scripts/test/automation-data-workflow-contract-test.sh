@@ -62,7 +62,9 @@ normalize_code = normalize.get("parameters", {}).get("jsCode", "")
 allowed_fields_match = re.search(r"allowedFields\s*=\s*new Set\(\[([^]]+)\]\)", normalize_code)
 require(allowed_fields_match is not None, "Normalize Request must declare its request fields.")
 allowed_fields = re.findall(r"['\"]([^'\"]+)['\"]", allowed_fields_match.group(1))
-require(allowed_fields == ["domain", "operation", "credential"], "The request field set is not exact.")
+require(allowed_fields == ["domain", "operation", "credential", "application", "schema",
+                           "operationId", "expectedGeneration", "credentialGeneration", "password"],
+        "The request field set is not exact.")
 for literal in ("domain", "operation", "credential", "provision", "reconcile", "rotate", "validate"):
     require(re.search(rf"['\"]{literal}['\"]", normalize_code), f"Normalize Request must declare {literal!r}.")
 require("^[a-z][a-z0-9_]{0,47}$" in normalize_code, "Normalize Request must enforce the domain grammar.")
@@ -72,7 +74,10 @@ operation_switch = by_name.get("Select Operation", {})
 require(operation_switch.get("type") == "n8n-nodes-base.switch", "Select Operation must be a Switch node.")
 rules = operation_switch.get("parameters", {}).get("rules", {}).get("values", [])
 operations = sorted(rule.get("conditions", {}).get("conditions", [{}])[0].get("rightValue") for rule in rules)
-require(operations == ["provision", "reconcile", "rotate", "validate"], "The workflow operation set is not exact.")
+require(operations == sorted(["provision", "reconcile", "rotate", "validate",
+                              "login-register", "login-activate", "login-validate",
+                              "login-rotate", "login-complete"]),
+        "The workflow operation set is not exact.")
 
 approved_functions = {
     "platform_operations.provision_domain",
@@ -81,6 +86,10 @@ approved_functions = {
     "platform_operations.rotate_domain_credential",
     "platform_operations.record_operation_error",
     "platform_operations.validate_domain",
+    "platform_operations.register_application_login",
+    "platform_operations.read_application_login_state",
+    "platform_operations.install_application_credential",
+    "platform_operations.complete_application_credential",
 }
 seen_functions = set()
 postgres_nodes = [node for node in nodes if node.get("type") == "n8n-nodes-base.postgres"]

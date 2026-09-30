@@ -15,6 +15,7 @@ configMapGenerator:
     files:
       - init-platform.sh=scripts/init-platform.sh
       - nocodb-extension.sql=scripts/nocodb-extension.sql
+      - application-login.sql=scripts/application-login.sql
       - nocodb-metadata.sql=scripts/nocodb-metadata.sql
       - platform-control.sql=scripts/platform-control.sql
       - domain-validation.sql=scripts/domain-validation.sql
@@ -26,6 +27,7 @@ configMapGenerator:
   - name: automation-data-postgresql-upgrade
     files:
       - nocodb-extension.sql=scripts/nocodb-extension.sql
+      - application-login.sql=scripts/application-login.sql
       - nocodb-metadata.sql=scripts/nocodb-metadata.sql
       - upgrade-nocodb.sql=scripts/upgrade-nocodb.sql
       - domain-validation.sql=scripts/domain-validation.sql

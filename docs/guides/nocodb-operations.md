@@ -4,6 +4,13 @@ This guide stages and operates the private NocoDB interface for selected
 automation-data PostgreSQL domains. NocoDB is an optional operator interface. PostgreSQL
 remains the authority boundary, and n8n remains the workflow and bulk-change boundary.
 
+Use your existing NocoDB administrator login to browse all provisioned bases, their
+exposed tables, and saved views. Switching bases does not require switching accounts.
+Reader/operator source credentials are managed behind those bases. An application
+login is a PostgreSQL credential for an agent or CLI/application client; Playwright
+browser access uses NocoDB UI authentication instead. Tables withheld by database
+grants or absent from the configured sources remain outside the UI.
+
 The activation change sets the NocoDB Flux Kustomization to `spec.suspend: false`
 and enrolls Homepage, Gatus, alerts, and recurring verification together. On 2026-09-09,
 the operator completed bootstrap, source provisioning, access acceptance, and the browser
@@ -87,6 +94,10 @@ Retain these materials outside the cluster:
 - the exact `NC_CONNECTION_ENCRYPT_KEY` stored in the encrypted NocoDB Secret;
 - access to complete automation-data logical bundles; and
 - the operator account and private n8n access needed for attended administration.
+
+For registered application logins, also retain the protected client credential
+directory described in [automation-data operations](automation-data-operations.md#registered-application-logins-and-private-cli-access).
+The database backup holds the verifier, not a recoverable plaintext client password.
 
 The automation-data logical bundle preserves the `nocodb` metadata database, the source
 registry, optional role definitions, role password verifiers, operator decisions, and
@@ -458,7 +469,7 @@ In n8n, bind the generated credentials to these exact PostgreSQL nodes:
 
 | Credential | Nodes |
 | --- | --- |
-| `automation-data/automation_data_acceptance/migrator` | **Create Acceptance Structure**, **Grant Acceptance Access**, **Clear Reader Negative Residue**, **Cleanup Unexpected Reader Insert**, **Clear Feedback Residue**, **Cleanup Feedback Fact** |
+| `automation-data/automation_data_acceptance/migrator` | **Create Acceptance Structure**, **Grant Acceptance Access**, **Clear Reader Negative Residue**, **Cleanup Unexpected Reader Insert**, **Clear Feedback Residue**, **Cleanup Feedback Fact**, **Grant Extended Acceptance Access**, **Cleanup Extended Acceptance** |
 | `automation-data/automation_data_acceptance/runtime` | **Publish Initial Feedback Fact**, **Consume Feedback Before Refresh**, **Refresh Feedback Fact**, **Consume Feedback After Refresh** |
 
 The migrator nodes perform only reviewed DDL, grants, and bounded residue cleanup. The
@@ -558,6 +569,43 @@ isolation, and cleanup behavior.
 operator decision, and artifact metadata/reference pass; the isolated restored database
 publishes a fresh logical bundle; and all run-owned resources are absent after cleanup.
 
+### 11. Record acceptance for additional pairs and application logins
+
+After deploying v3 and binding the two extended migrator nodes above, use the scoped
+kubeconfig and endpoint/token/binding inputs from step 7. Create an owned `0700` private
+directory outside the checkout and set `AUTOMATION_DATA_LOGIN_DIRECTORY` to its absolute
+path. Retain it: a ready application login requires its existing profile on later runs.
+Baseline acceptance does not cover this extension.
+
+With authority for the attended synthetic mutation, record access:
+
+```bash
+NOCODB_ACCESS_TEST_CONFIRM='test:nocodb:access' \
+NOCODB_ACCESS_EXTENSION_CONFIRM='test:nocodb:access:source-pairs-v3' \
+  mise exec -- just test record test.nocodb-access
+```
+
+This creates only the synthetic domain's `extra` pair (`extra_read`/`extra_edit`) and
+`interview` application login (`app`) with fixed grants. It preserves default identities,
+rotates the named operator, and tests application function writes/reads through the private
+tunnel. Actual PostgreSQL denials cover withheld tables/functions, direct writes, cross-pair
+reads, and owner-role assumption; repeated runs retain the application credential.
+
+Complete the Community Edition browser checks for fields, linked records, and saved views
+across both bases using the same human administrator account. Take a fresh complete backup
+containing both pairs and the retained application's credential generation, then record restore:
+
+```bash
+NOCODB_RESTORE_CONFIRM='restore:nocodb:metadata' \
+NOCODB_RESTORE_EXTENSION_CONFIRM='restore:nocodb:source-pairs-v3' \
+  mise exec -- just test record test.nocodb-restore-drill
+```
+
+After independent network-isolation validation, a client Job authenticates with that retained
+credential against only the isolated Service and repeats the positive/denial probes. Cleanup
+proves removal of its temporary Secret and Job; credential manifests stay outside reports.
+Grant inspection alone is not authenticated recovery evidence.
+
 ## Routine operation
 
 For normal work:
@@ -595,11 +643,91 @@ workflows. Do not broaden a NocoDB login to work around an application problem.
   a replacement token.
 - A failed targeted rotation keeps `operation=rotate` and exact retained identities.
   PostgreSQL and NocoDB credentials may temporarily differ. Verify the base,
-  integration, and source IDs, then retry only the same
-  [targeted rotation](#6-rotate-one-source-login). Ordinary sync and rotation of the
+  integration, and source IDs, then use the same target's
+  [attended retry](#targeted-rotation-and-attended-retry). Ordinary sync and rotation of the
   other access kind remain blocked while this error is recorded.
 - A missing or unreadable `NC_CONNECTION_ENCRYPT_KEY` is a hard stop for ordinary
   recovery; prepare a separately reviewed recovery design.
+
+## Add an independent source pair
+
+Use an existing ready domain after the v3 control extension and reviewed workflow are
+deployed. Production registration, grants, and rotation require their own authority.
+The following names are synthetic; see the [pair contract](../specs/028-nocodb-operator-ui.md#pair-identity-and-compatibility)
+for naming and schema restrictions.
+
+1. Register the immutable mapping and retain the returned `readerRole`/`operatorRole`.
+   Use `-` for the operator schema when the pair is read-only:
+
+   ```bash
+   NOCODB_PAIR_REGISTER_CONFIRM='register:nocodb:sample:extra:extra_read:extra_edit' \
+     mise exec -- just kube nocodb-pair-register sample extra extra_read extra_edit
+   ```
+
+2. Through the separate migrator, grant each returned `NOLOGIN` role database `CONNECT`,
+   mapped-schema `USAGE`, and only intended object permissions: reader SELECT and operator
+   approved native editing. Withhold bookkeeping tables and privileged functions. Consumer
+   migrations create the schemas and grants; the platform supplies neither automatically.
+
+3. Prepare, inspect eligibility, then sync:
+
+   ```bash
+   NOCODB_PAIR_PREPARE_CONFIRM='prepare:nocodb:sample:extra' \
+     mise exec -- just kube nocodb-pair-prepare sample extra
+   NOCODB_PAIR_SYNC_CONFIRM='sync:nocodb:sample:extra' \
+     mise exec -- just kube nocodb-pair-sync sample extra
+   ```
+
+   Sync creates base `sample--extra`, integrations, and asynchronous sources, refusing
+   unrelated matching titles. Retain returned IDs and require readiness. Repeated sync
+   must preserve identities, credentials, generations, and saved views for all pairs.
+
+4. After additive DDL, [refresh metadata](#refresh-metadata-after-reviewed-additive-ddl)
+   and run this pair's sync. Register an agent/application credential through the
+   [private CLI procedure](automation-data-operations.md#registered-application-logins-and-private-cli-access)
+   when needed. Consumer acceptance still owns fields/linked records, application
+   operations, stale-revision rejection, and private export.
+
+### Targeted rotation and attended retry
+
+Verify the selected source identity, then rotate only its credential:
+
+```bash
+NOCODB_PAIR_ROTATE_CONFIRM='rotate:nocodb:sample:extra:reader' \
+  mise exec -- just kube nocodb-pair-rotate sample extra reader
+```
+
+Source IDs remain unchanged. Existing domain-only prepare/sync/rotate commands still
+select `default`. For partial rotation, read the retained claim without changing it:
+
+```bash
+mise exec -- just kube nocodb-pair-status sample extra
+# Original pair: mise exec -- just kube nocodb-source-status sample
+```
+
+Status returns `claim.operationId`, phase, operation, access kind, and generation, or
+null. Before retry, independently establish that the previous workflow ended and its
+NocoDB requests completed or were cancelled. An `uncertain` phase, timeout, stopped
+client, or elapsed wait is insufficient. If the outcome remains unknown, retain the
+claim and stop; ordinary sync cannot replace the password.
+
+With live mutation authority and the exact confirmed-quiescent predecessor ID:
+
+```bash
+# Synthetic ID: replace with the retained operation ID.
+NOCODB_PAIR_RETRY_CONFIRM='retry:nocodb:sample:extra:reader:00000000-0000-4000-8000-000000000493:quiesced' \
+  mise exec -- just kube nocodb-pair-retry sample extra reader \
+    00000000-0000-4000-8000-000000000493
+```
+
+For `default`, use `nocodb-source-retry <domain> <access-kind> <operation-id>` with
+`NOCODB_SOURCE_RETRY_CONFIRM='retry:nocodb:<domain>:<access-kind>:<operation-id>:quiesced'`.
+The request binds `quiescedOperationId`; stale IDs, active claims, wrong targets, or
+missing durable source identities are rejected. Confirmation guards execution, not authority.
+
+Lost create responses require observation or attended reconciliation. Never clear registry
+rows or recreate objects because job history is missing; preserve the accepted source and
+credential generation.
 
 ## Destructive administration
 

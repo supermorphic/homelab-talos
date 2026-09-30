@@ -259,6 +259,13 @@ and workspace creation and reads the settings back. Provisioning creates no publ
 or view links. Telemetry and support chat are disabled, and the application URL matches
 the private route.
 
+The human operator keeps one NocoDB administrator account across the provisioned bases,
+their exposed tables, and saved views. Source pairs use PostgreSQL credentials behind
+those bases; they do not create additional human UI accounts. Registered application
+logins are PostgreSQL credentials for agents and CLI/application clients. Browser
+automation authenticates through NocoDB's UI account separately. Database grants and
+source registration determine which tables the UI exposes, including for its administrator.
+
 SOPS-managed configuration supplies metadata credentials, authentication material, the
 retained connection encryption key, bootstrap administrator credentials, and fixed
 webhook authentication. Plaintext values must not appear in output, command arguments,
@@ -664,6 +671,100 @@ sources that do not depend on historical job retention.
 | Multiple replicas or Redis | Current operator demand does not justify distributed application and queue complexity. |
 | NocoDB-specific object storage | It adds a storage platform without a demonstrated requirement; workflows already own their files. |
 | Native manifests instead of the supported chart | They duplicate maintained workload conventions without reducing the required repository integration. |
+
+## Independently scoped source pairs (issue 491)
+
+[Issue 491](https://github.com/supermorphic/homelab-talos/issues/491) supports multiple
+reader/operator pairs in one managed database. [Career Ops #197](https://github.com/supermorphic/career-ops/issues/197)
+is the first consumer and owns schemas, grants, migrations, integration functions, and
+application acceptance. Its agent CLI uses a separate
+[application database login](026-automation-data-postgresql-platform.md#registered-application-logins-issue-491).
+Worker deployment is independent and belongs to [#483](https://github.com/supermorphic/homelab-talos/issues/483).
+
+### Pair identity and compatibility
+
+| Contract | Behavior |
+| --- | --- |
+| Registry identity | Sources use `(domain, pair, access_kind)`; mappings use `(domain, pair)`. |
+| Existing pairs | Upgrade rows to reserved `default` without changing timestamps, roles, explicit grants, passwords, generations, IDs, views, or schemas. Domain-only calls retain their response shape. |
+| Named pairs | Names match `^[a-z][a-z0-9_]{0,23}$`, excluding `default`, in an existing ready domain. |
+| Schema mapping | Explicit reader and optional distinct operator schema; existing naming rules apply. No schema reuse across pairs, including implicit default schemas. |
+| Registration | Identical requests are idempotent; changed mappings, unrelated existing roles, and collisions are refused. |
+| Role names | `nocodb_<md5(domain + ':' + pair)>_reader` and `_operator`; validate full binding and global uniqueness. The digest is only an identifier. |
+| Initial access | Registration creates `NOLOGIN` grant targets. Consumer migrations supply schemas and explicit grants, including future objects; prepare checks eligibility and sync activates eligible roles. |
+| Presentation | Each named pair has base `<domain>--<pair>`, a reader source, and optional operator source. Separate bases preserve independent tables/views without aliasing the managed database. |
+
+The reader establishes the pair's base ID. Integration titles include domain, pair, and
+access kind; default names remain unchanged. Title matches never authorize adoption of
+unrelated bases, integrations, or sources.
+
+### Commands and operation claims
+
+The [operator guide](../guides/nocodb-operations.md#add-an-independent-source-pair) owns
+register/prepare/sync/rotate/status/retry commands and confirmations. The existing
+private webhook accepts optional `pair`; named responses include it. Registration alone
+accepts schema names. Other operations select registered identities; none accepts arbitrary
+hosts, databases, SQL, or grants. Mutation confirmations bind the full target and operation.
+
+Carry pair identity through all functions, workflow branches, readiness checks, and
+responses. Registration/collision checks use the domain lock. A persistent claim binds
+domain, pair, operation, access kind, and generation across external API calls; competing
+callers observe it, and state writes reject stale completions. Resume only that claim. Retain creation job IDs
+and known object IDs. Unknown outcomes require observation or attended reconciliation:
+never recreate, adopt, or delete an ambiguous object because a wait expired.
+
+Unchanged sync preserves credentials, generations, and IDs. Additive metadata refresh
+uses the supported UI procedure followed by scoped sync. Rotation affects only the
+selected pair/access kind. Read-only status returns the retained claim ID, phase,
+operation, access kind, and generation; it grants no retry authority.
+
+Partial rotation retains its claim and identities. Retry binds the same target to its
+exact `quiescedOperationId` and requires attended confirmation that the previous workflow
+ended and external requests completed or were cancelled. Elapsed time alone is insufficient;
+unknown/in-flight outcomes stay blocked. SQL rejects an active claim, wrong predecessor,
+or different target. Ordinary sync cannot generate a replacement password. Default pairs
+must pass the same concurrency and recovery tests.
+
+### Effective authority
+
+Validate table/column grants, grant options, sequences, inherited/PUBLIC access, default
+privileges, routine execution, ownership, role membership, and database isolation before
+activation and during sync/rotation.
+
+- Preserve the standard default reader contract. Explicitly mapped readers need at least
+  one usable presentation object and may read a subset of their schema.
+- Operators need an eligible editing surface with only explicit SELECT/controlled DML
+  within their schema. Neither role needs access to bookkeeping or other withheld objects.
+- Source logins cannot execute application routines directly or gain ownership, role
+  assumption, DDL, grant options, or another database's authority. Routine checks distinguish
+  application routines from the reviewed system-function baseline. Consumer-owned triggers
+  and their application tests govern effects of permitted writes.
+
+The platform enforces an authority ceiling. Consumers define the exact object/operation
+allowlist; real PostgreSQL tests must prove same-schema withheld-table/function and
+cross-pair denials.
+
+### Upgrade, recovery, and acceptance
+
+The guarded additive revision `026-nocodb-v3` recognizes baseline/v1/v2 states and rejects
+unknown state. Fresh initialization and upgrade share definitions and validate installed
+function contracts. Deploy backup compatibility first. Complete bundles capture every
+mapping, source, claim, application registration, role/verifier, and NocoDB metadata;
+consistency checks cover changes to all of them. Retain prior-format recovery without
+rewriting captured bundles, and take a fresh complete backup after upgrade and acceptance.
+
+Required evidence covers unchanged default credentials/IDs/views through upgrade and
+registration; real privilege checks; concurrent and interrupted creation; additive refresh;
+selected rotation and partial recovery; both pairs' isolated restore with retained views;
+authenticated application recovery; Community Edition field/linked-record editing; and
+protected CLI credentials and transport, including negative cases.
+
+Use the [extended attended access and restore procedure](../guides/nocodb-operations.md#11-record-acceptance-for-additional-pairs-and-application-logins).
+Baseline runs explicitly identify omitted extension coverage. Disposable component and
+isolated recovery run `20260930T143422Z-f6abe9c57ed7-operator-4edbc3f4` passed; this is
+candidate evidence. Live upgrade, browser acceptance, and recorded recovery remain
+separately authorized gates. Consumer handoff includes deployed revision, commands,
+returned roles, grant/connection prerequisites, and evidence IDs.
 
 ## Review triggers
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Apply the fixed NocoDB schema-mapping revision to the accepted automation-data platform.
+# Apply the fixed multi-credential revision to the accepted automation-data platform.
 set -euo pipefail
 set +x
 
@@ -10,8 +10,8 @@ set +x
 
 kubeconfig="$1"
 expected_origin='https://github.com/supermorphic/homelab-talos.git'
-expected_confirmation='upgrade:automation-data:nocodb-v2'
-expected_revision='026-nocodb-v2'
+expected_confirmation='upgrade:automation-data:nocodb-v3'
+expected_revision='026-nocodb-v3'
 job_name=''
 namespace='automation-data'
 job_cleanup_pending=false
@@ -201,7 +201,7 @@ render_expected_upgrade_configmap() { # <output-json>
     [.[] | select(
       .kind == "ConfigMap" and .metadata.namespace == "automation-data" and
       (.metadata.name | test("^automation-data-postgresql-upgrade-[a-z0-9]+$")) and
-      ((.data | keys | sort) == ["domain-validation.sql", "nocodb-extension.sql", "nocodb-metadata.sql", "upgrade-nocodb.sql"])
+      ((.data | keys | sort) == ["application-login.sql", "domain-validation.sql", "nocodb-extension.sql", "nocodb-metadata.sql", "upgrade-nocodb.sql"])
     )] | if length == 1 then .[0] else error("expected one rendered upgrade ConfigMap") end
   ' "$package_json" >"$output"
 }

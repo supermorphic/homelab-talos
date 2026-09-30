@@ -19,7 +19,7 @@ SELECT (to_regclass('platform_operations.platform_schema_revision') IS NULL)
 \if :first_install
   \set apply_upgrade true
 \else
-  SELECT revision <> '026-nocodb-v2' AS apply_upgrade
+  SELECT revision <> '026-nocodb-v3' AS apply_upgrade
   FROM platform_operations.platform_schema_revision WHERE singleton \gset
 \endif
 
@@ -35,7 +35,7 @@ BEGIN
     EXECUTE 'SELECT CASE WHEN count(*) = 1 THEN min(revision) ELSE NULL END FROM platform_operations.platform_schema_revision'
       INTO recorded_revision;
     IF recorded_revision IS NULL OR
-       recorded_revision NOT IN ('026-nocodb-v1', '026-nocodb-v2') THEN
+       recorded_revision NOT IN ('026-nocodb-v1', '026-nocodb-v2', '026-nocodb-v3') THEN
       RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'unknown_platform_revision';
     END IF;
     IF recorded_revision = '026-nocodb-v1' AND
@@ -46,6 +46,18 @@ BEGIN
       RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'incomplete_nocodb_extension';
     END IF;
     PERFORM platform_operations.read_platform_revision();
+    IF EXISTS (SELECT FROM platform_operations.managed_nocodb_sources
+        WHERE state IN ('provisioning', 'waiting_for_source', 'rotating', 'error')) THEN
+      RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'incomplete_platform_operation';
+    END IF;
+    IF recorded_revision = '026-nocodb-v3' THEN
+      IF EXISTS (SELECT FROM platform_operations.nocodb_source_operations
+          WHERE phase <> 'complete') OR
+         EXISTS (SELECT FROM platform_operations.managed_application_logins
+           WHERE state IN ('activating', 'rotating', 'error')) THEN
+        RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'incomplete_platform_operation';
+      END IF;
+    END IF;
     RETURN;
   END IF;
 
@@ -107,9 +119,30 @@ $validation$;
 
 \if :apply_upgrade
   \ir nocodb-extension.sql
+  \ir application-login.sql
+  -- Existing databases predate the explicit TEMP and public-schema boundary.
+  -- The remote schema REVOKE is monotonic, even if this control transaction aborts.
+  DO $backfill$
+  DECLARE
+    managed record;
+  BEGIN
+    FOR managed IN SELECT database_name, owner_role, migrator_role, runtime_role
+      FROM platform_operations.managed_domains ORDER BY domain LOOP
+      EXECUTE format(
+        'REVOKE TEMP ON DATABASE %1$I FROM PUBLIC; GRANT TEMP ON DATABASE %1$I TO %2$I, %3$I, %4$I',
+        managed.database_name, managed.owner_role, managed.migrator_role,
+        managed.runtime_role
+      );
+      PERFORM platform_internal.exec_in_database(
+        managed.database_name, 'REVOKE ALL ON SCHEMA public FROM PUBLIC'
+      );
+    END LOOP;
+  END;
+  $backfill$;
 \endif
 
 SELECT platform_internal.assert_nocodb_extension_contract();
+SELECT platform_internal.assert_application_login_contract();
 -- Reconcile reviewed metadata and validator functions on installed v1 and fresh installs.
 -- Keep the schema/backup format revision; advance backup freshness only on change.
 SELECT md5(string_agg(prosrc, '' ORDER BY proname)) AS previous_function_bodies FROM pg_proc

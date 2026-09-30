@@ -279,13 +279,17 @@ Run from deployed `main` after a complete, healthy pre-upgrade automation-data
 logical backup is available:
 
 ```bash
-AUTOMATION_DATA_UPGRADE_CONFIRM='upgrade:automation-data:nocodb-v2' \
+AUTOMATION_DATA_UPGRADE_CONFIRM='upgrade:automation-data:nocodb-v3' \
   mise exec -- just kube automation-data-upgrade
 ```
 
 Wait for the command to succeed. It upgrades the installed NocoDB platform
-extension, preserves existing source identities, and makes custom schema mappings
-available.
+extension, preserves existing source identities, and adds named source pairs,
+durable operation claims, and registered application logins. Reconcile the reviewed
+backup-capable code first, require a complete pre-upgrade bundle, and pause provisioning
+while the operator runs the upgrade. An unresolved source or login transition blocks
+the upgrade. Import and publish the reviewed workflows afterward, preserving their
+existing protected credential bindings and disabled execution-data persistence.
 
 After success, create and verify a fresh complete automation-data logical backup
 before continuing with NocoDB bootstrap or source changes. If the command reports
@@ -361,6 +365,98 @@ bindings and execution-data settings, and publish it. Run the standalone provisi
 acceptance, wait for new backups of both systems, and run the full-chain restore drill.
 Finish with `mise exec -- just kube automation-data-verify`. On failure, keep provisioning
 paused and retain the backup while classifying the failed step.
+
+## Registered application logins and private CLI access
+
+After deploying v3, register a PostgreSQL identity for agent/application reads and fixed
+functions in a ready domain. Consumers own schemas, grants, migrations, CLI role selection,
+and acceptance; see the [authority contract](../specs/026-automation-data-postgresql-platform.md#registration-and-authority).
+NocoDB source credentials and human UI accounts have separate responsibilities.
+
+### Register, grant, and activate
+
+1. Supply `AUTOMATION_DATA_PROVISIONING_TOKEN` through approved private handling.
+   `AUTOMATION_DATA_PROVISIONING_URL`, if set, must equal the fixed endpoint
+   `https://n8n.lab.supermorphic.com/webhook/automation-data-provision`. Register the
+   synthetic `sample.app` target and retain its returned role:
+
+   ```bash
+   AUTOMATION_DATA_LOGIN_REGISTER_CONFIRM='register:automation-data:sample:interview:app' \
+     mise exec -- just kube automation-data-login-register sample interview app
+   ```
+
+2. Through the distinct migrator, grant that `NOLOGIN` role database `CONNECT`, schema
+   `USAGE`, intended reads, and `EXECUTE` on reviewed functions. Review function/definer
+   authority and unintended PUBLIC grants. No direct DML, ownership, role membership,
+   or schema creation is allowed; effective permissions must remain within the target.
+
+3. Create an owned `0700` directory outside every checkout, then activate and validate:
+
+   ```bash
+   mise exec -- just talos kubeconfig
+   export AUTOMATION_DATA_LOGIN_DIRECTORY=/ABSOLUTE/PRIVATE/PATH/application-logins
+   AUTOMATION_DATA_LOGIN_ACTIVATE_CONFIRM='activate:automation-data:sample:interview' \
+     mise exec -- just kube automation-data-login-activate sample interview
+   mise exec -- just kube automation-data-login-validate sample interview
+   ```
+
+   Activation saves the candidate/operation before submission, authenticates through
+   the fixed tunnel, acknowledges the generation, and installs the profile. Output is
+   limited to role/generation metadata and `serviceFile`. Ambiguous failure retains the
+   same candidate and operation for retry.
+
+### Protected files and connection
+
+Retain `<directory>/<domain>/<application>/` in approved private storage:
+
+| Path | Purpose |
+| --- | --- |
+| `pending/candidate.pgpass`, `pending/operation.json` | Candidate and target/operation/generation/phase needed for retry. |
+| `generation-<n>/` | Versioned `credential.pgpass`, `service.conf`, and `binding.json`. |
+| Top-level `service.conf`, `binding.json` | Selected profile and binding after acknowledgment. |
+
+Use owned regular `0600` files and `0700` directories, preserving older generations.
+The helper rejects symlinks, unsafe modes/ownership, mismatched targets, inline profile
+passwords, and inherited `PG*` settings. Select the returned profile and service section:
+
+```bash
+export AUTOMATION_DATA_SERVICE_FILE=/ABSOLUTE/PRIVATE/PATH/application-logins/sample/interview/service.conf
+export AUTOMATION_DATA_SERVICE='automation_data_sample_<returned-role>'
+mise exec -- just kube automation-data-connect sample application/interview
+```
+
+The foreground helper binds `127.0.0.1:15432` to port `5432` on
+`automation-data-postgresql-0` and verifies database/session identity. It closes when
+interrupted, its child exits, or the Pod changes. `AUTOMATION_DATA_LOCAL_PORT` may select
+1024–65535; use the same port for activation and connection. `AUTOMATION_DATA_KUBECONFIG`
+defaults to this worktree's `.kube/config` and must contain the approved scoped contexts;
+there is no administrative fallback or SQL/query argument.
+
+In another terminal, give the consumer CLI the same profile. Career Ops uses
+`CAREER_EVIDENCE_SERVICE_FILE` and `CAREER_EVIDENCE_SERVICE`; issue 197 must update its
+role selection and prove reads/functions/export before claiming consumer acceptance.
+
+### Rotation, migration prerequisites, and recovery
+
+```bash
+AUTOMATION_DATA_LOGIN_ROTATE_CONFIRM='rotate:automation-data:sample:interview' \
+  mise exec -- just kube automation-data-login-rotate sample interview
+```
+
+Rotation affects only this login and retains the active profile until authentication
+and acknowledgment succeed. Retry ambiguous activation/rotation with the same command
+and directory; never delete `pending/` to force a new operation. Missing candidate
+material requires a separately confirmed new rotation.
+
+Migration uses `automation-data-connect <domain> migrator` with an explicitly selected,
+operator-retained profile for `<domain>_migrator`. Missing credentials require separate
+authorization for the existing targeted domain rotation: verify the backup and exact
+n8n binding, run the guarded lifecycle, then arrange protected delivery. Onboarding
+never retrieves the password from n8n or rotates it automatically.
+
+Keep client credentials alongside the other [recovery roots](../runbooks/platform-disaster-recovery.md#nocodb-metadata-recovery):
+backups retain verifiers, not recoverable client passwords. Live upgrade, credential
+installation, browser access, and recorded restore require their own authorization.
 
 ## Destructive administration
 

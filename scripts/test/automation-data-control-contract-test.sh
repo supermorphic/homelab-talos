@@ -143,7 +143,7 @@ init_config_contract="$(yq ea -r '
     (.data."platform-control.sql" | length > 0)] | join("|")
 ' "$temp_dir/postgresql.yaml")"
 [[ "$init_config_contract" == \
-  'domain-validation.sql,init-platform.sh,migrate-control.sh,nocodb-extension.sql,nocodb-metadata.sql,platform-control.sql|true|true|true|true' ]] || \
+  'application-login.sql,domain-validation.sql,init-platform.sh,migrate-control.sh,nocodb-extension.sql,nocodb-metadata.sql,platform-control.sql|true|true|true|true' ]] || \
   fail 'rendered init ConfigMap does not contain all executable platform sources'
 
 init_mount_contract="$(yq ea -r '
@@ -152,7 +152,7 @@ init_mount_contract="$(yq ea -r '
   [.volumeMounts[] | select(.name == "init") |
     [.mountPath, .subPath, .readOnly] | join("|")] | sort | .[]
 ' "$temp_dir/postgresql.yaml")"
-[[ "$init_mount_contract" == $'/docker-entrypoint-initdb.d/00-init-platform.sh|init-platform.sh|true\n/scripts/domain-validation.sql|domain-validation.sql|true\n/scripts/nocodb-extension.sql|nocodb-extension.sql|true\n/scripts/nocodb-metadata.sql|nocodb-metadata.sql|true\n/scripts/platform-control.sql|platform-control.sql|true' ]] ||
+[[ "$init_mount_contract" == $'/docker-entrypoint-initdb.d/00-init-platform.sh|init-platform.sh|true\n/scripts/application-login.sql|application-login.sql|true\n/scripts/domain-validation.sql|domain-validation.sql|true\n/scripts/nocodb-extension.sql|nocodb-extension.sql|true\n/scripts/nocodb-metadata.sql|nocodb-metadata.sql|true\n/scripts/platform-control.sql|platform-control.sql|true' ]] ||
   fail 'PostgreSQL does not mount every fixed fresh-initialization source'
 
 [[ "$(yq -r '.spec.suspend' "$postgresql_ks")" == false ]] || \
@@ -173,7 +173,7 @@ rg -Fq 'CREATE TABLE IF NOT EXISTS platform_operations.managed_nocodb_schema_map
   fail 'NocoDB schema mapping registry is missing'
 ! rg -Fq 'managed_nocodb_domains' "$control_sql" ||
   fail 'removed NocoDB domain registry remains present'
-expected_functions=$'platform_operations.begin_nocodb_source\nplatform_operations.capture_backup_state\nplatform_operations.configure_nocodb_schema_mapping\nplatform_operations.prepare_nocodb_access\nplatform_operations.provision_domain\nplatform_operations.provision_nocodb_metadata\nplatform_operations.publish_backup\nplatform_operations.read_nocodb_source_state\nplatform_operations.read_platform_revision\nplatform_operations.reconcile_domain\nplatform_operations.record_domain_credentials\nplatform_operations.record_nocodb_integration\nplatform_operations.record_nocodb_source_error\nplatform_operations.record_nocodb_source_job\nplatform_operations.record_nocodb_source_ready\nplatform_operations.record_operation_error\nplatform_operations.rotate_domain_credential\nplatform_operations.rotate_nocodb_source_credential\nplatform_operations.validate_domain\nplatform_operations.validate_nocodb_access'
+expected_functions=$'platform_operations.begin_nocodb_source\nplatform_operations.capture_backup_state\nplatform_operations.claim_nocodb_operation\nplatform_operations.complete_nocodb_operation\nplatform_operations.configure_nocodb_pair\nplatform_operations.configure_nocodb_schema_mapping\nplatform_operations.mark_nocodb_operation_uncertain\nplatform_operations.prepare_nocodb_access\nplatform_operations.provision_domain\nplatform_operations.provision_nocodb_metadata\nplatform_operations.publish_backup\nplatform_operations.read_nocodb_operation_state\nplatform_operations.read_nocodb_source_state\nplatform_operations.read_platform_revision\nplatform_operations.reconcile_domain\nplatform_operations.record_domain_credentials\nplatform_operations.record_nocodb_integration\nplatform_operations.record_nocodb_source_error\nplatform_operations.record_nocodb_source_job\nplatform_operations.record_nocodb_source_ready\nplatform_operations.record_operation_error\nplatform_operations.rotate_domain_credential\nplatform_operations.rotate_nocodb_source_credential\nplatform_operations.validate_domain\nplatform_operations.validate_nocodb_access'
 [[ "$(printf '%s\n' "${declared_functions[@]}")" == "$expected_functions" ]] || \
   fail 'platform control SQL exposes an unexpected function set'
 for state in awaiting_grants provisioning waiting_for_source ready rotating error; do
@@ -184,6 +184,8 @@ for schema in read_model operator; do
 done
 
 nocodb_functions=(
+  claim_nocodb_operation complete_nocodb_operation mark_nocodb_operation_uncertain
+  read_nocodb_operation_state
   provision_nocodb_metadata configure_nocodb_schema_mapping prepare_nocodb_access
   read_nocodb_source_state begin_nocodb_source
   record_nocodb_integration record_nocodb_source_job record_nocodb_source_ready
@@ -273,11 +275,11 @@ rg -Fq "RAISE EXCEPTION USING ERRCODE = 'P0002', MESSAGE = 'domain_not_found';" 
   fail 'NocoDB source-state reader does not reject an unknown managed domain'
 managed_domain_line="$(rg -n -F 'PERFORM 1 FROM platform_operations.managed_domains WHERE domain = p_domain FOR KEY SHARE;' \
   <<<"$read_nocodb_source_state_function" | cut -d: -f1)"
-null_result_line="$(rg -n -F "RETURN COALESCE(platform_internal.nocodb_source_result(p_domain, p_access_kind), 'null'::jsonb);" \
+null_result_line="$(rg -n -F 'RETURN COALESCE(platform_internal.nocodb_source_result(' \
   <<<"$read_nocodb_source_state_function" | cut -d: -f1)"
 [[ -n "$managed_domain_line" && -n "$null_result_line" && "$managed_domain_line" -lt "$null_result_line" ]] ||
   fail 'NocoDB source-state reader can return JSON null before proving the managed domain'
-rg -Fq "RETURN COALESCE(platform_internal.nocodb_source_result(p_domain, p_access_kind), 'null'::jsonb);" \
+rg -Fq "p_domain, p_pair, p_access_kind), 'null'::jsonb);" \
   <<<"$read_nocodb_source_state_function" ||
   fail 'NocoDB source-state reader does not return the fixed registry result or JSON null'
 ! rg -q 'EXECUTE[[:space:]]+.*p_|format[[:space:]]*\(' <<<"$read_nocodb_source_state_function" ||
@@ -292,11 +294,15 @@ done
   fail 'NocoDB source-state reader result exposes secret material'
 rg -Fq 'REVOKE EXECUTE ON FUNCTION platform_operations.read_nocodb_source_state(text, text) FROM PUBLIC;' \
   "$control_sql" || fail 'NocoDB source-state reader does not revoke PUBLIC execute'
-read_source_state_grants="$(rg -F 'GRANT EXECUTE ON FUNCTION platform_operations.read_nocodb_source_state(text, text)' "$control_sql")"
+read_source_state_grants="$(rg -x -F 'GRANT EXECUTE ON FUNCTION platform_operations.read_nocodb_source_state(text, text) TO automation_data_provisioner;' "$control_sql")"
 [[ "$read_source_state_grants" == 'GRANT EXECUTE ON FUNCTION platform_operations.read_nocodb_source_state(text, text) TO automation_data_provisioner;' ]] ||
   fail 'NocoDB source-state reader execute grant is not provisioner-exclusive'
 
-begin_nocodb_source_function="$(sed -n "/^CREATE OR REPLACE FUNCTION platform_operations.begin_nocodb_source(/,/^\$function\$;/p" "$control_sql")"
+begin_nocodb_source_function="$(awk '
+  /^CREATE OR REPLACE FUNCTION platform_operations.begin_nocodb_source\(/ { capture = 1 }
+  capture { print }
+  capture && /^\$function\$;/ { exit }
+' "$control_sql")"
 rg -Fq 'prepared := platform_operations.prepare_nocodb_access(p_domain);' <<<"$begin_nocodb_source_function" ||
   fail 'NocoDB source begin does not inspect prepared eligibility'
 rg -Fq "source.state = 'error' AND source.operation <> 'sync'" <<<"$begin_nocodb_source_function" ||
@@ -386,7 +392,7 @@ for validation_field in valid loginValid schemaPrivilegesValid objectPrivilegesV
   rg -Fq "'$validation_field'" <<<"$prelogin_authority_function" ||
     fail "NocoDB pre-login authority validator omits $validation_field"
 done
-[[ "$(rg -Fc 'platform_internal.validate_nocodb_access_authority(' <<<"$prepare_nocodb_access_function")" == 4 ]] ||
+[[ "$(rg -Fc 'platform_internal.validate_nocodb_access_authority(' <<<"$prepare_nocodb_access_function")" == 6 ]] ||
   fail 'NocoDB prepare does not gate both access roles in both schema modes'
 rg -Fq 'has_table_privilege' <<<"$prelogin_authority_function" ||
   fail 'NocoDB authority validation does not use effective table privileges'

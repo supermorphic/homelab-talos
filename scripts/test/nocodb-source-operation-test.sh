@@ -115,6 +115,8 @@ run_operation() { # <prepare|sync|rotate> <domain> [kind] [confirmation|-] [toke
   local supplied_token="${5:-$token}" response="${6:-$valid_sync_response}" curl_exit="${7:-0}"
   local -a args=("$operation" "$domain")
   [[ -z "$kind" ]] || args+=("$kind")
+  local recovery_id="${8:-}"
+  [[ -z "$recovery_id" ]] || args+=("$recovery_id")
   : >"$event_log"
   set +e
   if [[ "$operation" == prepare ]]; then
@@ -150,20 +152,21 @@ run_operation() { # <prepare|sync|rotate> <domain> [kind] [confirmation|-] [toke
         NOCODB_SOURCE_SYNC_CONFIRM="$confirmation" "$command" "${args[@]}" 2>&1)"
     fi
   else
+    local confirmation_variable="NOCODB_SOURCE_${operation^^}_CONFIRM"
     if [[ "$confirmation" == '-' ]]; then
       OUT="$(PATH="$stub_bin:$linux_bin:$PATH" \
-        NOCODB_SOURCE_OPERATION_EXPECTED_BODY="$(jq -cn --arg domain "$domain" --arg kind "$kind" '{domain: $domain, operation: "rotate", accessKind: $kind}')" \
+        NOCODB_SOURCE_OPERATION_EXPECTED_BODY="$(jq -cn --arg domain "$domain" --arg kind "$kind" --arg operation "$operation" --arg recovery "$recovery_id" '{domain: $domain, operation: $operation, accessKind: $kind} + (if $recovery == "" then {} else {quiescedOperationId:$recovery} end)')" \
         NOCODB_SOURCE_OPERATION_RESPONSE="$response" \
         NOCODB_SOURCE_OPERATION_CURL_EXIT="$curl_exit" \
         NOCODB_SOURCE_PROVISIONING_HEADER="$supplied_token" \
-        env -u NOCODB_SOURCE_ROTATE_CONFIRM "$command" "${args[@]}" 2>&1)"
+        env -u "$confirmation_variable" "$command" "${args[@]}" 2>&1)"
     else
       OUT="$(PATH="$stub_bin:$linux_bin:$PATH" \
-        NOCODB_SOURCE_OPERATION_EXPECTED_BODY="$(jq -cn --arg domain "$domain" --arg kind "$kind" '{domain: $domain, operation: "rotate", accessKind: $kind}')" \
+        NOCODB_SOURCE_OPERATION_EXPECTED_BODY="$(jq -cn --arg domain "$domain" --arg kind "$kind" --arg operation "$operation" --arg recovery "$recovery_id" '{domain: $domain, operation: $operation, accessKind: $kind} + (if $recovery == "" then {} else {quiescedOperationId:$recovery} end)')" \
         NOCODB_SOURCE_OPERATION_RESPONSE="$response" \
         NOCODB_SOURCE_OPERATION_CURL_EXIT="$curl_exit" \
         NOCODB_SOURCE_PROVISIONING_HEADER="$supplied_token" \
-        NOCODB_SOURCE_ROTATE_CONFIRM="$confirmation" "$command" "${args[@]}" 2>&1)"
+        env "$confirmation_variable=$confirmation" "$command" "${args[@]}" 2>&1)"
     fi
   fi
   STATUS=$?
@@ -186,6 +189,95 @@ valid_sync_response="$(jq -cn --argjson reader_validation "$reader_validation" -
 }')"
 valid_rotate_response="$(jq -c '.operation = "rotate" | .operator.generation = 2 | .operator.credentialGeneration = 2' <<<"$valid_sync_response")"
 valid_prepare_response='{"ok":true,"domain":"domain_one","operation":"prepare","state":"prepared","readerRole":"domain_one_reader","readerEligible":true,"operatorRequested":true,"operatorRole":"domain_one_operator","operatorEligible":false}'
+
+pair_hash="$(printf 'domain_one:interviews' | md5sum | cut -d' ' -f1)"
+pair_register_response="$(jq -cn --arg hash "$pair_hash" '{ok:true,domain:"domain_one",pair:"interviews",operation:"register",state:"registered",readerSchema:"extra_read",operatorSchema:"extra_edit",readerRole:("nocodb_"+$hash+"_reader"),operatorRole:("nocodb_"+$hash+"_operator")}')"
+pair_prepare_response="$(jq -cn --arg hash "$pair_hash" '{ok:true,domain:"domain_one",pair:"interviews",operation:"prepare",state:"prepared",readerRole:("nocodb_"+$hash+"_reader"),readerEligible:false,operatorRequested:true,operatorRole:("nocodb_"+$hash+"_operator"),operatorEligible:false}')"
+pair_sync_response="$(jq -c '.pair = "interviews"' <<<"$valid_sync_response")"
+pair_rotate_response="$(jq -c '.pair = "interviews" | .operation = "rotate" | .reader.generation = 2 | .reader.credentialGeneration = 2' <<<"$valid_sync_response")"
+run_pair() { # <action> <confirmation variable> <confirmation> <expected body> <response> [extra args]
+  local action="$1" confirmation_variable="$2" confirmation="$3" expected_body="$4" response="$5"
+  shift 5
+  : >"$event_log"
+  set +e
+  OUT="$(PATH="$stub_bin:$linux_bin:$PATH" \
+    NOCODB_SOURCE_OPERATION_EXPECTED_BODY="$expected_body" \
+    NOCODB_SOURCE_OPERATION_RESPONSE="$response" \
+    NOCODB_SOURCE_PROVISIONING_HEADER="$token" \
+    env "$confirmation_variable=$confirmation" "$command" "$action" domain_one interviews "$@" 2>&1)"
+  STATUS=$?
+  set -e
+}
+
+case_name='named pair registration sends only its selected mapping'
+run_pair pair-register NOCODB_PAIR_REGISTER_CONFIRM \
+  'register:nocodb:domain_one:interviews:extra_read:extra_edit' \
+  '{"domain":"domain_one","pair":"interviews","operation":"register","readerSchema":"extra_read","operatorSchema":"extra_edit"}' \
+  "$pair_register_response" extra_read extra_edit
+assert_status 0
+assert_no_secret_output
+
+case_name='named pair prepare reports pending reviewed grants'
+run_pair pair-prepare NOCODB_PAIR_PREPARE_CONFIRM \
+  'prepare:nocodb:domain_one:interviews' \
+  '{"domain":"domain_one","pair":"interviews","operation":"prepare"}' \
+  "$pair_prepare_response"
+assert_status 0
+
+case_name='named pair sync binds the selected pair'
+run_pair pair-sync NOCODB_PAIR_SYNC_CONFIRM \
+  'sync:nocodb:domain_one:interviews' \
+  '{"domain":"domain_one","pair":"interviews","operation":"sync"}' \
+  "$pair_sync_response"
+assert_status 0
+
+case_name='named pair rotation binds its reader target'
+run_pair pair-rotate NOCODB_PAIR_ROTATE_CONFIRM \
+  'rotate:nocodb:domain_one:interviews:reader' \
+  '{"domain":"domain_one","pair":"interviews","operation":"rotate","accessKind":"reader"}' \
+  "$pair_rotate_response" reader
+assert_status 0
+
+case_name='named pair retry requires its own target confirmation'
+run_pair pair-retry NOCODB_PAIR_RETRY_CONFIRM \
+  'retry:nocodb:domain_one:interviews:reader:00000000-0000-4000-8000-000000000493:quiesced' \
+  '{"domain":"domain_one","pair":"interviews","operation":"retry","accessKind":"reader","quiescedOperationId":"00000000-0000-4000-8000-000000000493"}' \
+  "$pair_rotate_response" reader 00000000-0000-4000-8000-000000000493
+assert_status 0
+assert_no_secret_output
+run_pair pair-retry NOCODB_PAIR_RETRY_CONFIRM \
+  'retry:nocodb:domain_one:interviews:operator:00000000-0000-4000-8000-000000000493:quiesced' \
+  '{"domain":"domain_one","pair":"interviews","operation":"retry","accessKind":"reader","quiescedOperationId":"00000000-0000-4000-8000-000000000493"}' \
+  "$pair_rotate_response" reader 00000000-0000-4000-8000-000000000493
+assert_status 1
+assert_no_request
+
+case_name='retry without a quiesced operation cannot issue a request'
+run_pair pair-retry NOCODB_PAIR_RETRY_CONFIRM \
+  'retry:nocodb:domain_one:interviews:reader' '{}' "$pair_rotate_response" reader
+assert_status 2
+assert_no_request
+
+case_name='a reserved default pair cannot use the named command'
+: >"$event_log"
+set +e
+OUT="$(PATH="$stub_bin:$linux_bin:$PATH" "$command" pair-sync domain_one default 2>&1)"
+STATUS=$?
+set -e
+assert_status 2
+assert_no_request
+
+case_name='named pair sync requires its exact confirmation'
+: >"$event_log"
+set +e
+OUT="$(PATH="$stub_bin:$linux_bin:$PATH" \
+  NOCODB_SOURCE_PROVISIONING_HEADER="$token" \
+  env -u NOCODB_PAIR_SYNC_CONFIRM "$command" pair-sync domain_one interviews 2>&1)"
+STATUS=$?
+set -e
+assert_status 1
+assert_contains "NOCODB_PAIR_SYNC_CONFIRM='sync:nocodb:domain_one:interviews'"
+assert_no_request
 
 case_name='prepare requires an exact confirmation before deployed-source checks'
 run_operation prepare domain_one '' - "$token" "$valid_prepare_response"
@@ -277,6 +369,16 @@ assert_status 0
 [[ "$(jq -cS . <<<"$OUT")" == "$(jq -cS . <<<"$valid_rotate_response")" ]] || fail 'rotate did not return the bounded webhook response unchanged'
 assert_no_secret_output
 
+case_name='default retry has a separate exact confirmation and selected source'
+run_operation retry domain_one operator 'retry:nocodb:domain_one:operator:00000000-0000-4000-8000-000000000493:quiesced' \
+  "$token" "$valid_rotate_response" 0 00000000-0000-4000-8000-000000000493
+assert_status 0
+assert_no_secret_output
+run_operation retry domain_one operator 'retry:nocodb:domain_one:reader' \
+  "$token" "$valid_rotate_response" 0 00000000-0000-4000-8000-000000000493
+assert_status 1
+assert_no_request
+
 case_name='the Just sync recipe preserves the guarded command contract'
 : >"$event_log"
 set +e
@@ -363,3 +465,11 @@ assert_contains 'response did not satisfy the source lifecycle contract'
 assert_no_secret_output
 
 echo 'NocoDB source operation command tests passed.'
+
+case_name='observational named-pair status exposes the bounded retained claim'
+OUT="$(PATH="$stub_bin:$linux_bin:$PATH" \
+  NOCODB_SOURCE_OPERATION_EXPECTED_BODY='{"domain":"domain_one","pair":"extra","operation":"status"}' \
+  NOCODB_SOURCE_OPERATION_RESPONSE='{"ok":true,"domain":"domain_one","pair":"extra","operation":"status","claim":{"operationId":"00000000-0000-4000-8000-000000000491","phase":"uncertain","operation":"rotate","accessKind":"operator","generation":2}}' \
+  NOCODB_SOURCE_PROVISIONING_HEADER="$token" "$command" pair-status domain_one extra)"
+jq -e '.claim.operationId == "00000000-0000-4000-8000-000000000491" and .claim.phase == "uncertain"' <<<"$OUT" >/dev/null
+assert_no_secret_output

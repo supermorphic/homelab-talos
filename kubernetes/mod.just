@@ -64,6 +64,29 @@ nocodb-source-configure domain reader_schema operator_schema="-": require-bash
 nocodb-source-rotate domain access_kind: require-bash
     @scripts/nocodb/source-operation.sh rotate {{quote(domain)}} {{quote(access_kind)}}
 
+# Register one independent source pair without creating consumer schemas or grants.
+nocodb-pair-register domain pair reader_schema operator_schema="-": require-bash
+    @scripts/nocodb/source-operation.sh pair-register {{quote(domain)}} {{quote(pair)}} {{quote(reader_schema)}} {{quote(operator_schema)}}
+
+# Check a registered pair's reviewed PostgreSQL grants without changing NocoDB.
+nocodb-pair-prepare domain pair: require-bash
+    @scripts/nocodb/source-operation.sh pair-prepare {{quote(domain)}} {{quote(pair)}}
+
+# Reconcile only the selected pair through the fixed private webhook.
+nocodb-pair-sync domain pair: require-bash
+    @scripts/nocodb/source-operation.sh pair-sync {{quote(domain)}} {{quote(pair)}}
+
+# Rotate only the selected pair's reader or operator source.
+nocodb-pair-rotate domain pair access_kind: require-bash
+    @scripts/nocodb/source-operation.sh pair-rotate {{quote(domain)}} {{quote(pair)}} {{quote(access_kind)}}
+
+# Attended rotation recovery, after the previous workflow and external requests end.
+nocodb-source-retry domain access_kind quiesced_operation_id: require-bash
+    @scripts/nocodb/source-operation.sh retry {{quote(domain)}} {{quote(access_kind)}} {{quote(quiesced_operation_id)}}
+
+nocodb-pair-retry domain pair access_kind quiesced_operation_id: require-bash
+    @scripts/nocodb/source-operation.sh pair-retry {{quote(domain)}} {{quote(pair)}} {{quote(access_kind)}} {{quote(quiesced_operation_id)}}
+
 # Run the catalog-coordinated synthetic NocoDB reader/operator acceptance lifecycle.
 # Guard: NOCODB_ACCESS_TEST_CONFIRM='test:nocodb:access'.
 nocodb-access-test: require-bash
@@ -89,13 +112,31 @@ n8n-validate: require-bash
 automation-data-validate: require-bash
     @scripts/validate/automation-data.sh
 
+# Register or manage a separately scoped application login through the private provisioner.
+# The Python command owns exact confirmations and protected local credential files.
+automation-data-login-register domain application schema: require-bash
+    @uv run --locked python scripts/operations/automation-data-login.py register {{quote(domain)}} {{quote(application)}} {{quote(schema)}}
+
+automation-data-login-activate domain application: require-bash
+    @uv run --locked python scripts/operations/automation-data-login.py activate {{quote(domain)}} {{quote(application)}}
+
+automation-data-login-validate domain application: require-bash
+    @uv run --locked python scripts/operations/automation-data-login.py validate {{quote(domain)}} {{quote(application)}}
+
+automation-data-login-rotate domain application: require-bash
+    @uv run --locked python scripts/operations/automation-data-login.py rotate {{quote(domain)}} {{quote(application)}}
+
+# Keep one fixed Pod tunnel open for a protected application or migrator CLI profile.
+automation-data-connect domain registered_identity: require-bash
+    @uv run --locked python scripts/operations/automation-data-connect.py {{quote(domain)}} {{quote(registered_identity)}}
+
 # Apply reviewed control functions to initialized PostgreSQL after a fresh backup.
 # Operator-run; deactivate provisioning and drain executions before confirmation.
 automation-data-control-migrate: require-bash
     @scripts/operations/automation-data-control-migrate.sh {{quote(kubeconfig)}}
 
 # Apply the one fixed existing-platform upgrade for the NocoDB extension. Guard:
-# AUTOMATION_DATA_UPGRADE_CONFIRM='upgrade:automation-data:nocodb-v1'.
+# AUTOMATION_DATA_UPGRADE_CONFIRM='upgrade:automation-data:nocodb-v3'.
 automation-data-upgrade: require-bash
     @scripts/upgrade/automation-data.sh {{quote(kubeconfig)}}
 
@@ -1188,3 +1229,10 @@ openbao-upgrade: require-bash
 # Attended issuer mount adoption with quorum guards and final issuance proof.
 openbao-issuer-rollout: require-bash
     @uv run --locked python -m scripts.openbao.issuer_rollout
+
+# Read the retained operation ID and phase without changing sources or credentials.
+nocodb-source-status domain: require-bash
+    @scripts/nocodb/source-operation.sh status {{quote(domain)}}
+
+nocodb-pair-status domain pair: require-bash
+    @scripts/nocodb/source-operation.sh pair-status {{quote(domain)}} {{quote(pair)}}

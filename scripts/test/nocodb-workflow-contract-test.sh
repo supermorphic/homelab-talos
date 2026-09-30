@@ -67,8 +67,8 @@ require(
 normalize = by_name.get("Normalize Source Request", {})
 normalize_code = normalize.get("parameters", {}).get("jsCode", "")
 require(normalize.get("type") == "n8n-nodes-base.code", "Normalize Source Request must be a Code node.")
-allowed_request_fields = {"domain", "operation", "accessKind", "readerSchema", "operatorSchema"}
-allowed_operations = {"configure", "prepare", "sync", "rotate"}
+allowed_request_fields = {"domain", "operation", "pair", "accessKind", "readerSchema", "operatorSchema"}
+allowed_operations = {"configure", "register", "prepare", "sync", "rotate"}
 allowed_access_kinds = {"reader", "operator"}
 for values, label in (
     (allowed_request_fields, "request field"),
@@ -82,7 +82,12 @@ require("Object.keys" in normalize_code and "allowedFields" in normalize_code, "
 require("requestedAccessKind" in normalize_code, "The source workflow must preserve the normalized rotation target separately.")
 
 approved_functions = {
+    "platform_operations.read_nocodb_operation_state",
+    "platform_operations.configure_nocodb_pair",
     "platform_operations.configure_nocodb_schema_mapping",
+    "platform_operations.claim_nocodb_operation",
+    "platform_operations.complete_nocodb_operation",
+    "platform_operations.mark_nocodb_operation_uncertain",
     "platform_operations.validate_domain",
     "platform_operations.prepare_nocodb_access",
     "platform_operations.read_nocodb_source_state",
@@ -90,7 +95,6 @@ approved_functions = {
     "platform_operations.record_nocodb_integration",
     "platform_operations.record_nocodb_source_job",
     "platform_operations.record_nocodb_source_ready",
-    "platform_operations.record_nocodb_source_error",
     "platform_operations.rotate_nocodb_source_credential",
     "platform_operations.validate_nocodb_access",
 }
@@ -151,6 +155,18 @@ for node in postgres_nodes:
             },
             "Prepare Unregistered Access must bind one domain and keep the atomic query in a transaction.",
         )
+    elif node["name"] in ("Record Reader Ready", "Record Operator Ready"):
+        require(
+            query == "SELECT CASE WHEN $7::boolean THEN platform_operations.read_nocodb_source_state($1, $2, $3) ELSE platform_operations.record_nocodb_source_ready($1, $2, $3, $4, $5, $6) END AS result;"
+            and calls == {
+                "platform_operations.read_nocodb_source_state",
+                "platform_operations.record_nocodb_source_ready",
+            }
+            and parameters.get("options", {}).get("queryReplacement", "").endswith(
+                "$json.state === 'ready'] }}"
+            ),
+            f"{node['name']} must observe ready sources without another transition.",
+        )
     else:
         require(
             len(calls) == 1
@@ -170,9 +186,9 @@ for function_name in ("read_nocodb_source_state", "prepare_nocodb_access"):
     require(match and "pg_advisory_xact_lock" in match.group(0), f"{function_name} does not retain the domain transaction lock.")
 record_error = by_name.get("Record Source Error", {}).get("parameters", {})
 require(
-    record_error.get("query") == "SELECT platform_operations.record_nocodb_source_error($1, $2, $3, $4) AS result;"
-    and "sourceOperation" in record_error.get("options", {}).get("queryReplacement", ""),
-    "Source errors must persist the exact sync or rotate operation through the fixed interface.",
+    record_error.get("query") == "SELECT platform_operations.mark_nocodb_operation_uncertain($1, $2, $3, $4, $5) AS result;"
+    and "$json.errorCode" in record_error.get("options", {}).get("queryReplacement", ""),
+    "Source errors must preserve the claimed operation as uncertain.",
 )
 
 host = "http://nocodb.automation-data.svc.cluster.local:8080"
@@ -248,13 +264,12 @@ for node in http_nodes:
 require(seen_paths == allowed_nocodb_paths, "The source workflow does not use the exact NocoDB endpoint set.")
 
 wait_nodes = [node for node in nodes if node.get("type") == "n8n-nodes-base.wait"]
-require(len(wait_nodes) == 2, "Reader and operator polling each require one Wait node.")
-for node in wait_nodes:
-    parameters = node.get("parameters", {})
-    require(
-        parameters.get("amount") == 5 and parameters.get("unit") == "seconds",
-        f"{node['name']} must wait exactly five seconds.",
-    )
+require(not wait_nodes, "Credential-bearing source operations must not persist Wait state.")
+for name in ("Wait Reader Job", "Wait Operator Job"):
+    node = by_name[name]
+    require(node.get("type") == "n8n-nodes-base.code" and
+            "setTimeout(resolve, 5000)" in node.get("parameters", {}).get("jsCode", ""),
+            f"{name} must poll in memory with the fixed five-second delay.")
 
 for name in ("Evaluate Reader Job", "Evaluate Operator Job"):
     code = by_name.get(name, {}).get("parameters", {}).get("jsCode", "")
@@ -318,9 +333,13 @@ require(
     "Every source workflow executable node must be reachable from the webhook.",
 )
 require(
-    successors("Require Ready Managed Domain") == ["Configure Requested", "Prepare Source Error Response"],
-    "The ready-domain gate must classify prepare before the privileged access function.",
+    successors("Require Ready Managed Domain") == ["Register Requested", "Prepare Source Error Response"],
+    "The ready-domain gate must classify registration before source preparation.",
 )
+require(successors("Register Requested") == ["Register NocoDB Pair", "Configure Requested"],
+        "Named registration must branch before default configuration.")
+require(successors("Register NocoDB Pair") == ["Prepare Registration Response", "Prepare Source Error Response"],
+        "Pair registration must use a bounded response.")
 require(
     successors("Configure Requested") == ["Configure Schema Mapping", "Initial Prepare Requested"],
     "Configuration must branch before ordinary access preparation.",
@@ -349,9 +368,12 @@ require(
     "The validated access plan must route through the prepare-operation branch.",
 )
 require(
-    successors("Prepare Requested") == ["Prepare Access Response", "List Domain Bases"],
-    "Prepare must terminate separately while sync and rotate retain the source lifecycle route.",
+    successors("Prepare Requested") == ["Prepare Access Response", "Claim Source Operation"],
+    "Prepare must terminate separately while sync and rotate acquire a claim.",
 )
+require("List Domain Bases" in reachable("Claim Source Operation") and
+        "Create Domain Base" not in reachable_avoiding("Source Webhook", {"Claim Source Operation"}),
+        "No base creation may bypass the persisted operation claim.")
 require(
     successors("Prepare Access Response") == ["Respond", "Prepare Source Error Response"],
     "The bounded prepare response must share the authenticated webhook response and error paths.",
@@ -670,7 +692,7 @@ for (const [label, request, context, expected] of [
   ['non-target reader work', { operation: 'rotate', requestedAccessKind: 'operator' }, { ...sourceContext, accessKind: 'reader' }, 'sync'],
   ['initial sync', { operation: 'sync' }, { ...sourceContext, accessKind: 'reader' }, 'sync'],
 ]) {
-  const preparedError = execute('Prepare Source Error', context, { 'Normalize Source Request': request })[0].json;
+  const preparedError = execute('Prepare Source Error', {...context, ...request})[0].json;
   if (preparedError.sourceOperation !== expected) throw new Error(`${label} persisted the wrong source operation`);
 }
 const unique = execute('Discover Reader Source', {
@@ -1209,6 +1231,8 @@ require(
 )
 
 migrator_names = {
+    "Grant Extended Acceptance Access",
+    "Cleanup Extended Acceptance",
     "Create Acceptance Structure",
     "Grant Acceptance Access",
     "Clear Reader Negative Residue",
@@ -1226,7 +1250,7 @@ postgres_nodes = [node for node in nodes if node.get("type") == "n8n-nodes-base.
 require({node["name"] for node in postgres_nodes} == migrator_names | runtime_names, "Acceptance PostgreSQL node set is not exact.")
 for node in postgres_nodes:
     query = node.get("parameters", {}).get("query", "")
-    require("{{$json" not in query and "EXECUTE " not in query.upper(), f"{node['name']} contains dynamic SQL.")
+    require("{{$json" not in query and not re.search(r"\bEXECUTE\s+(?!ON\b)", query.upper()), f"{node['name']} contains dynamic SQL.")
     require(not node.get("credentials"), f"{node['name']} embeds a credential ID.")
     if node["name"] in migrator_names:
         require(
@@ -1400,6 +1424,7 @@ require(
     ordered_outputs("Select Acceptance Operation") == [
         ["Create Acceptance Structure"], ["Grant Acceptance Access"],
         ["List Acceptance Bases"], ["List Acceptance Bases"], ["List Acceptance Bases"],
+        ["Grant Extended Acceptance Access"], ["Cleanup Extended Acceptance"],
     ],
     "Acceptance operation routing is not exact.",
 )
@@ -1471,6 +1496,7 @@ response_predecessors = {
 }
 require(
     response_predecessors == {
+        "Grant Extended Acceptance Access Result", "Cleanup Extended Acceptance Result",
         "Structure Result", "Grant Result", "Require Cleanup Fact", "Prepare Acceptance Response",
         "Prepare Feedback Response", "Prepare Acceptance Error Response",
     },

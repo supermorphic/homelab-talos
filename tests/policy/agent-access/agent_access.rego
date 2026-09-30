@@ -14,6 +14,8 @@ publisher_role_names := {
 	"homelab-report-publisher-test-reports",
 }
 
+connection_role_names := {"homelab-automation-data-connect"}
+
 publisher_role_namespace(role_name) := trim_prefix(role_name, "homelab-report-publisher-")
 
 expected_document_names := {
@@ -24,8 +26,8 @@ expected_document_names := {
 		"homelab-observer-extra",
 	},
 	"Lease": {"homelab-test-report-publish-lock"},
-	"Role": publisher_role_names,
-	"RoleBinding": publisher_role_names | diagnostic_role_names,
+	"Role": publisher_role_names | connection_role_names,
+	"RoleBinding": ((publisher_role_names | diagnostic_role_names) | connection_role_names),
 	"ServiceAccount": {"homelab-observer", "homelab-diagnostic", "homelab-report-publisher"},
 }
 
@@ -176,6 +178,22 @@ allowed_publisher_rule("homelab-report-publisher-flux-system", rule) if {
 	rule_matches_named(rule, {"source.toolkit.fluxcd.io"}, {"gitrepositories"}, {"flux-system"}, {"get"})
 }
 
+connection_role_rule_is_exact(rule) if {
+	rule_matches_named(
+		rule, {""}, {"pods/portforward"},
+		{"automation-data-postgresql-0"}, {"create"},
+	)
+}
+
+connection_binding_is_exact(document) if {
+	metadata_namespace(document) == "automation-data"
+	object.get(document, "roleRef", {}) == {
+		"apiGroup": "rbac.authorization.k8s.io",
+		"kind": "Role", "name": "homelab-automation-data-connect",
+	}
+	binding_subjects(document) == {"ServiceAccount:kube-system:homelab-diagnostic"}
+}
+
 allowed_publisher_rule("homelab-report-publisher-flux-system", rule) if {
 	rule_matches_named(
 		rule,
@@ -267,6 +285,56 @@ deny contains msg if {
 	namespace := publisher_role_namespace(role_name)
 	not has_role(role_name, namespace)
 	msg := sprintf("required publisher Role %s/%s is missing", [namespace, role_name])
+}
+
+deny contains "connection Role must exist exactly once in automation-data" if {
+	matching := [document |
+		some document in documents
+		object.get(document, "kind", "") == "Role"
+		metadata_name(document) == "homelab-automation-data-connect"
+	]
+	count(matching) != 1
+}
+
+deny contains "connection Role must use automation-data namespace" if {
+	some document in documents
+	object.get(document, "kind", "") == "Role"
+	metadata_name(document) == "homelab-automation-data-connect"
+	metadata_namespace(document) != "automation-data"
+}
+
+deny contains "connection Role must grant only named Pod port-forward create" if {
+	some document in documents
+	object.get(document, "kind", "") == "Role"
+	metadata_name(document) == "homelab-automation-data-connect"
+	metadata_namespace(document) == "automation-data"
+	rules := object.get(document, "rules", [])
+	count(rules) != 1
+}
+
+deny contains "connection Role contains a forbidden RBAC rule" if {
+	some document in documents
+	object.get(document, "kind", "") == "Role"
+	metadata_name(document) == "homelab-automation-data-connect"
+	some rule in object.get(document, "rules", [])
+	not connection_role_rule_is_exact(rule)
+}
+
+deny contains "connection RoleBinding must bind only diagnostic" if {
+	matching := [document |
+		some document in documents
+		object.get(document, "kind", "") == "RoleBinding"
+		metadata_name(document) == "homelab-automation-data-connect"
+		connection_binding_is_exact(document)
+	]
+	count(matching) != 1
+}
+
+deny contains "connection RoleBinding has unexpected authority" if {
+	some document in documents
+	object.get(document, "kind", "") == "RoleBinding"
+	metadata_name(document) == "homelab-automation-data-connect"
+	not connection_binding_is_exact(document)
 }
 
 deny contains msg if {

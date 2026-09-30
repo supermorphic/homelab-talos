@@ -86,8 +86,8 @@ rg -Fq -- "scripts/upgrade/automation-data.sh '.kube/config'" <<<"$recipe" ||
   select(.kind == "Kustomization") |
   [.configMapGenerator[] | select(.name == "automation-data-postgresql-upgrade") |
     (.files | sort | join(","))] | join("")
-' "$kustomization")" == 'domain-validation.sql=scripts/domain-validation.sql,nocodb-extension.sql=scripts/nocodb-extension.sql,nocodb-metadata.sql=scripts/nocodb-metadata.sql,upgrade-nocodb.sql=scripts/upgrade-nocodb.sql' ]] ||
-	fail 'upgrade ConfigMap does not contain the four fixed reviewed SQL sources'
+' "$kustomization")" == 'application-login.sql=scripts/application-login.sql,domain-validation.sql=scripts/domain-validation.sql,nocodb-extension.sql=scripts/nocodb-extension.sql,nocodb-metadata.sql=scripts/nocodb-metadata.sql,upgrade-nocodb.sql=scripts/upgrade-nocodb.sql' ]] ||
+  fail 'upgrade ConfigMap does not contain the five fixed reviewed SQL sources'
 
 rg -Fq '\ir nocodb-extension.sql' "$control_sql" ||
 	fail 'fresh initialization does not load the shared NocoDB definitions'
@@ -126,7 +126,7 @@ jq -e '
   [.[] | select(
     .kind == "ConfigMap" and
     (.metadata.name | startswith("automation-data-postgresql-upgrade-")) and
-    ((.data | keys | sort) == ["domain-validation.sql", "nocodb-extension.sql", "nocodb-metadata.sql", "upgrade-nocodb.sql"])
+    ((.data | keys | sort) == ["application-login.sql", "domain-validation.sql", "nocodb-extension.sql", "nocodb-metadata.sql", "upgrade-nocodb.sql"])
   )] | if length == 1 then .[0] else error("expected one rendered upgrade ConfigMap") end
 ' "$rendered_package_json" >"$UPGRADE_TEST_EXPECTED_CONFIGMAP"
 export UPGRADE_TEST_EXPECTED_CONFIGMAP_NAME
@@ -242,28 +242,26 @@ case "$*" in
     fi
     ;;
   *'--namespace automation-data get configmaps --output json')
-    expected="$(jq -c . "$UPGRADE_TEST_EXPECTED_CONFIGMAP")"
     case "${UPGRADE_TEST_CASE:-}" in
       stale-configmap)
         jq -cn '{items:[{metadata:{name:"automation-data-postgresql-upgrade-stale1"},data:{"nocodb-extension.sql":"stale","upgrade-nocodb.sql":"stale"}}]}'
         ;;
       wrong-generated-name)
-        jq -cn --argjson expected "$expected" '{items:[($expected | .metadata.name = "automation-data-postgresql-upgrade-wrong1")]}'
+        jq -cn --slurpfile expected "$UPGRADE_TEST_EXPECTED_CONFIGMAP" '{items:[($expected[0] | .metadata.name = "automation-data-postgresql-upgrade-wrong1")]}'
         ;;
       changed-upgrade-sql)
-        jq -cn --argjson expected "$expected" '{items:[($expected | .data["upgrade-nocodb.sql"] = "changed reviewed SQL")]}'
+        jq -cn --slurpfile expected "$UPGRADE_TEST_EXPECTED_CONFIGMAP" '{items:[($expected[0] | .data["upgrade-nocodb.sql"] = "changed reviewed SQL")]}'
         ;;
-      *) jq -cn --argjson expected "$expected" '{items:[$expected]}' ;;
+      *) jq -cn --slurpfile expected "$UPGRADE_TEST_EXPECTED_CONFIGMAP" '{items:[$expected[0]]}' ;;
     esac
     ;;
   *'--namespace automation-data get configmap '*"$UPGRADE_TEST_EXPECTED_CONFIGMAP_NAME"' --output json')
-    expected="$(jq -c . "$UPGRADE_TEST_EXPECTED_CONFIGMAP")"
     case "${UPGRADE_TEST_CASE:-}" in
       stale-configmap | wrong-generated-name) exit 1 ;;
       changed-upgrade-sql)
-        jq -cn --argjson expected "$expected" '$expected | .data["upgrade-nocodb.sql"] = "changed reviewed SQL"'
+        jq -cn --slurpfile expected "$UPGRADE_TEST_EXPECTED_CONFIGMAP" '$expected[0] | .data["upgrade-nocodb.sql"] = "changed reviewed SQL"'
         ;;
-      *) jq -cn --argjson expected "$expected" '$expected' ;;
+      *) jq -cn --slurpfile expected "$UPGRADE_TEST_EXPECTED_CONFIGMAP" '$expected[0]' ;;
     esac
     ;;
   *'--namespace automation-data create --filename -')
@@ -286,14 +284,14 @@ case "$*" in
     if [[ "${UPGRADE_TEST_CASE:-}" == sql-unknown ]]; then
       printf '%s\n' 'UNSAFE_RAW_DIAGNOSTIC' 'ERROR: unknown_platform_revision'
     else
-      printf '%s\n' 'installed_revision=026-nocodb-v2' 'extension_contract_valid=true'
+      printf '%s\n' 'installed_revision=026-nocodb-v3' 'extension_contract_valid=true'
     fi
     ;;
   *'--namespace automation-data logs job/automation-data-nocodb-upgrade-'*' --container=upgrade')
     if [[ "${UPGRADE_TEST_CASE:-}" == sql-unknown ]]; then
       printf '%s\n' 'UNSAFE_RAW_DIAGNOSTIC' 'ERROR: unknown_platform_revision'
     else
-      printf '%s\n' 'installed_revision=026-nocodb-v2' 'extension_contract_valid=true'
+      printf '%s\n' 'installed_revision=026-nocodb-v3' 'extension_contract_valid=true'
     fi
     ;;
   *'--namespace automation-data get pods --selector='*'--output json')
@@ -333,7 +331,7 @@ EOF
 chmod 700 "$stub_bin/git" "$stub_bin/just" "$stub_bin/kubectl"
 
 run_case() {
-	local name="$1" confirmation="${2:-upgrade:automation-data:nocodb-v2}" output status
+	local name="$1" confirmation="${2:-upgrade:automation-data:nocodb-v3}" output status
 	rm -rf -- "$case_root"
 	mkdir -p "$case_root"
 	: >"$case_root/kubeconfig"
@@ -363,7 +361,10 @@ if run_case replacement-between-inspect-delete; then
 fi
 ! rg -Fxq unsafe-delete-replacement "$UPGRADE_TEST_LOG" ||
 	fail 'cleanup issued an unconditioned delete against a replacement Job'
-[[ -e "$case_root/job-exists" ]] || fail 'replacement Job was not retained'
+[[ -e "$case_root/job-exists" ]] || {
+	cat "$case_root/output" >&2
+	fail 'replacement Job was not retained'
+}
 
 if run_case ambiguous-create; then
 	fail 'ambiguous create response was accepted'
@@ -400,7 +401,7 @@ rg -Fxq delete-job "$UPGRADE_TEST_LOG" || fail 'valid upgrade did not delete its
 	  .valueFrom.secretKeyRef.name + "/" + .valueFrom.secretKeyRef.key] | join("|")' \
 	"$case_root/job.yaml")" == 'Job|true|upgrade|postgresql-credentials/backup-password' ]] ||
 	fail 'upgrade Job identity or Secret reference is wrong'
-rg -Fxq 'installed_revision=026-nocodb-v2' "$case_root/output" ||
+rg -Fxq 'installed_revision=026-nocodb-v3' "$case_root/output" ||
 	fail 'valid upgrade did not read back the fixed installed revision'
 ! rg -n 'password|SCRAM-SHA-256' "$case_root/output" >/dev/null ||
 	fail 'valid upgrade output exposed credential material'
@@ -650,6 +651,7 @@ SELECT pg_advisory_xact_lock(
 \! touch /tmp/race-upgrade-lock-ready
 SELECT pg_sleep(8);
 \ir /candidate/nocodb-extension.sql
+\ir /candidate/application-login.sql
 COMMIT;
 EOSQL
 chmod 600 "$race_upgrade_sql"
@@ -694,7 +696,7 @@ fi
 [[ "$backup_waited_for_upgrade" == true ]] ||
 	fail 'backup capture did not wait for the fixed upgrade advisory lock'
 [[ "$(psql_query "$race_container" automation_data_control \
-	'SELECT platform_operations.read_platform_revision();')" == 026-nocodb-v2 ]] ||
+	'SELECT platform_operations.read_platform_revision();')" == 026-nocodb-v3 ]] ||
 	fail 'race fixture backup did not observe the committed upgraded revision'
 race_bundle="$(find "$integration_root/backups/race" -mindepth 1 -maxdepth 1 \
 	-type d -name 'automation-data-*' -print -quit)"
@@ -785,7 +787,7 @@ wait "$lock_pid"
 upgrade_output="$integration_root/upgrade-output"
 psql_file "$old_container" automation_data_control /candidate/upgrade-nocodb.sql \
 	>"$upgrade_output"
-rg -Fxq 'installed_revision=026-nocodb-v2' "$upgrade_output" ||
+rg -Fxq 'installed_revision=026-nocodb-v3' "$upgrade_output" ||
 	fail 'real upgrade did not read back its installed revision'
 rg -Fxq 'extension_contract_valid=true' "$upgrade_output" ||
 	fail 'real upgrade did not validate its extension contract'
@@ -812,7 +814,7 @@ cmp -s "$integration_root/backup-state-before" "$integration_root/backup-state-a
 	"SELECT NOT (\$\$$(<"$integration_root/backup-state-before")\$\$::jsonb ? 'platformRevision');")" == t ]] ||
 	fail 'baseline backup capture unexpectedly included a platform revision'
 [[ "$(psql_query "$old_container" automation_data_control \
-	"SELECT \$\$$(<"$integration_root/backup-state-after")\$\$::jsonb->>'platformRevision';")" == 026-nocodb-v2 ]] ||
+	"SELECT \$\$$(<"$integration_root/backup-state-after")\$\$::jsonb->>'platformRevision';")" == 026-nocodb-v3 ]] ||
 	fail 'upgraded backup capture did not include the installed revision'
 
 installed_at_before="$(psql_query "$old_container" automation_data_control \
@@ -824,7 +826,7 @@ installed_at_after="$(psql_query "$old_container" automation_data_control \
 	"SELECT installed_at::text FROM platform_operations.platform_schema_revision WHERE singleton;")"
 [[ "$installed_at_before" == "$installed_at_after" ]] ||
 	fail 'validated no-op rerun rewrote migration metadata'
-rg -Fxq 'installed_revision=026-nocodb-v2' "$rerun_output" ||
+rg -Fxq 'installed_revision=026-nocodb-v3' "$rerun_output" ||
 	fail 'no-op rerun did not validate the installed revision'
 
 expect_oracle_grant_failure() { # <mutation> <restoration> <description>
@@ -862,7 +864,7 @@ expect_oracle_grant_failure \
 	'REVOKE CONNECT ON DATABASE template1 FROM PUBLIC;' \
 	'template1 PUBLIC CONNECT grant'
 [[ "$(psql_query "$old_container" automation_data_control \
-	'SELECT platform_operations.read_platform_revision();')" == 026-nocodb-v2 ]] ||
+	'SELECT platform_operations.read_platform_revision();')" == 026-nocodb-v3 ]] ||
 	fail 'revision oracle did not recover after restoring exact grants'
 
 run_backup_in_container "$old_container" "$integration_root/backups/new" ||
@@ -881,15 +883,20 @@ extension_catalog_query="
 SELECT 'table|' || table_name || '|' || column_name || '|' || data_type || '|' || is_nullable
 FROM information_schema.columns
 WHERE table_schema = 'platform_operations'
-  AND table_name IN ('platform_schema_revision', 'managed_nocodb_sources')
+  AND table_name IN ('platform_schema_revision', 'managed_nocodb_sources',
+    'managed_nocodb_schema_mappings', 'nocodb_source_operations',
+    'managed_application_logins')
 UNION ALL
 SELECT 'function|' || namespace.nspname || '.' || procedure.proname || '|' ||
-  pg_get_function_identity_arguments(procedure.oid) || '|' || owner_role.rolname
+  pg_get_function_identity_arguments(procedure.oid) || '|' || owner_role.rolname ||
+  '|' || md5(procedure.prosrc)
 FROM pg_proc AS procedure
 JOIN pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
 JOIN pg_roles AS owner_role ON owner_role.oid = procedure.proowner
 WHERE namespace.nspname IN ('platform_operations', 'platform_internal')
-  AND (procedure.proname LIKE '%nocodb%' OR procedure.proname = 'read_platform_revision')
+  AND (procedure.proname LIKE '%nocodb%' OR
+    procedure.proname LIKE '%application%' OR
+    procedure.proname IN ('read_platform_revision', 'capture_backup_state'))
 ORDER BY 1;
 "
 psql_query "$old_container" automation_data_control "$extension_catalog_query" \
@@ -898,7 +905,7 @@ psql_query "$old_container" automation_data_control "$extension_catalog_query" \
 fresh_container="$(new_container_name fresh)"
 start_database "$fresh_container" candidate
 [[ "$(psql_query "$fresh_container" automation_data_control \
-	'SELECT platform_operations.read_platform_revision();')" == 026-nocodb-v2 ]] ||
+	'SELECT platform_operations.read_platform_revision();')" == 026-nocodb-v3 ]] ||
 	fail 'fresh initialization did not install the fixed revision'
 [[ "$(psql_query "$fresh_container" automation_data_control \
 	"SELECT NOT has_database_privilege('automation_data_exporter', 'postgres', 'CONNECT') AND NOT has_database_privilege('automation_data_exporter', 'template1', 'CONNECT');")" == t ]] ||
@@ -1107,7 +1114,7 @@ SELECT count(*) FROM pg_roles WHERE rolname IN
 }
 
 restore_bundle "$old_bundle" 025-baseline
-restore_bundle "$new_bundle" 026-nocodb-v2
+restore_bundle "$new_bundle" 026-nocodb-v3
 
 # A never-ready registry row without a database is a retained provisioning outcome.
 # It must not prevent metadata initialization or erase the record.
@@ -1334,7 +1341,7 @@ psql_file "$v1_container" automation_data_control /tmp/nocodb-v1.sql >/dev/null
 	fail 'historical v1 fixture did not install'
 psql_file "$v1_container" automation_data_control /candidate/upgrade-nocodb.sql >/dev/null
 [[ "$(psql_query "$v1_container" automation_data_control \
-  'SELECT platform_operations.read_platform_revision();')" == 026-nocodb-v2 ]] ||
+  'SELECT platform_operations.read_platform_revision();')" == 026-nocodb-v3 ]] ||
 	fail 'guarded upgrade did not advance installed v1 to v2'
 [[ "$(psql_query "$v1_container" automation_data_control \
   "SELECT jsonb_typeof(platform_operations.capture_backup_state()->'nocodbSchemaMappings') = 'array';")" == t ]] ||
@@ -1547,6 +1554,9 @@ SELECT md5(string_agg(catalog, E'\n' ORDER BY catalog)) FROM (
 ) AS entries;"
 }
 frozen_schema_acl_before="$(frozen_schema_acl)"
+psql_query "$mapping_container" mapping_fixture '
+GRANT USAGE ON SCHEMA public TO PUBLIC;
+' >/dev/null
 mapping_before_public_revoke="$(psql_query "$mapping_container" automation_data_control "
 SELECT platform_operations.prepare_nocodb_access('mapping_fixture')::text;")"
 jq -e '.readerSchema == "analysis_view" and
@@ -1584,7 +1594,7 @@ jq -e '.readerEligible == true and .operatorEligible == true' \
 	fail 'custom preparation rewrote the frozen app/read_model catalog'
 mapping_backup_state="$(psql_query "$mapping_container" automation_data_control "
 SELECT platform_operations.capture_backup_state()::text;")"
-jq -e '.platformRevision == "026-nocodb-v2" and
+jq -e '.platformRevision == "026-nocodb-v3" and
   ([.nocodbSchemaMappings[] | select(.domain == "mapping_fixture" and
     .reader_schema == "analysis_view" and
     .operator_schema == "decision_entry")] | length == 1)' \
@@ -1597,7 +1607,7 @@ mapping_bundle="$(find "$integration_root/backups/mapping" -mindepth 1 -maxdepth
 	-type d -name 'automation-data-*' -print -quit)"
 [[ -n "$mapping_bundle" && -s "$mapping_bundle/COMPLETE" ]] ||
 	fail 'v2 mapping backup was not complete'
-restore_bundle "$mapping_bundle" 026-nocodb-v2 mapping
+restore_bundle "$mapping_bundle" 026-nocodb-v3 mapping
 
 # A v2 backup must reject a capture that drops the mapping registry key.
 # shellcheck disable=SC2016 # PostgreSQL dollar quoting must reach psql literally.
@@ -1621,6 +1631,11 @@ fi
 ! find "$integration_root/backups/mapping-tampered" -type f -name COMPLETE -print -quit | rg -q . ||
 	fail 'tampered v2 mapping capture published a complete backup'
 
+psql_query "$mapping_container" automation_data_control "
+SELECT platform_operations.claim_nocodb_operation(
+  'mapping_fixture', 'default', 'sync', NULL,
+  '00000000-0000-4000-8000-000000000405'::uuid
+);" >/dev/null
 first_reader_begin="$(psql_query "$mapping_container" automation_data_control "
 SELECT platform_operations.begin_nocodb_source(
   'mapping_fixture', 'reader', 'base-mapping', repeat('a', 48)
@@ -1637,13 +1652,19 @@ SELECT platform_operations.prepare_nocodb_access('mapping_fixture')::text;")"
 jq -e '.readerEligible == true and .readerSchema == "analysis_view"' \
 	<<<"$reader_error_plan" >/dev/null ||
 	fail 'custom reader error with retained LOGIN could not prepare for retry'
-reader_retry="$(psql_query "$mapping_container" automation_data_control "
+if psql_query "$mapping_container" automation_data_control "
 SELECT platform_operations.begin_nocodb_source(
   'mapping_fixture', 'reader', 'base-mapping', repeat('b', 48)
-)::text;")"
-jq -e '.state == "provisioning" and .credentialGeneration == 2 and
-  .baseId == "base-mapping"' <<<"$reader_retry" >/dev/null ||
-	fail 'custom reader error retry did not retain base identity and advance credentials'
+)::text;" >"$integration_root/private/unsafe-reader-retry.log" 2>&1; then
+	fail 'custom reader error retry changed credentials without reconciliation'
+fi
+[[ "$(psql_query "$mapping_container" automation_data_control "
+SELECT credential_generation FROM platform_operations.managed_nocodb_sources
+WHERE domain = 'mapping_fixture' AND pair = 'default' AND access_kind = 'reader';")" == 1 ]] ||
+	fail 'refused custom reader retry changed the credential generation'
+
+bash scripts/test/automation-data-v3-upgrade-test.sh ||
+  fail 'historical v2-to-v3 upgrade and optional backup fixture failed'
 
 printf '%s\n' \
 	'role_oids_unchanged=true' \

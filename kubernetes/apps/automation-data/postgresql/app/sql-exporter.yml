@@ -105,3 +105,36 @@ collectors:
           )::double precision AS age_seconds
           FROM platform_operations.managed_domains
           WHERE state IN ('provisioning', 'rotating')
+      - metric_name: automation_data_postgresql_optional_registry_consistent
+        type: gauge
+        help: Whether registered NocoDB sources and application logins have their roles and pair mappings.
+        values:
+          - consistent
+        query: |
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM platform_operations.managed_nocodb_sources AS source
+            WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = source.role_name)
+              OR (source.pair <> 'default' AND NOT EXISTS (
+                SELECT 1 FROM platform_operations.managed_nocodb_schema_mappings AS mapping
+                WHERE mapping.domain = source.domain AND mapping.pair = source.pair
+              ))
+          ) AND NOT EXISTS (
+            SELECT 1 FROM platform_operations.managed_application_logins AS login
+            WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = login.role_name)
+          ) THEN 1::double precision ELSE 0::double precision END AS consistent
+      - metric_name: automation_data_postgresql_oldest_incomplete_optional_operation_age_seconds
+        type: gauge
+        help: Age in seconds of the oldest incomplete source claim or application credential operation.
+        values:
+          - age_seconds
+        query: |
+          SELECT COALESCE(extract(epoch FROM clock_timestamp() - min(started_at)), 0)
+            ::double precision AS age_seconds
+          FROM (
+            SELECT operation_started_at AS started_at
+            FROM platform_operations.nocodb_source_operations WHERE phase <> 'complete'
+            UNION ALL
+            SELECT operation_started_at AS started_at
+            FROM platform_operations.managed_application_logins
+            WHERE state IN ('activating', 'rotating', 'error')
+          ) AS incomplete

@@ -87,7 +87,12 @@ scripts/test/nocodb-manifest-contract-test.sh "$temp_dir/source.yaml" "$temp_dir
 scripts/test/nocodb-workflow-contract-test.sh
 node scripts/test/nocodb-source-response-test.mjs
 node scripts/test/nocodb-schema-mapping-workflow-test.mjs
+node scripts/test/nocodb-pair-workflow-test.mjs
+node scripts/test/nocodb-extension-acceptance-test.mjs
+uv run --locked python scripts/test/automation-data-application-acceptance-test.py
 scripts/test/lib/nocodb-permissions-test.sh
+scripts/test/nocodb-pair-registry-test.sh
+scripts/test/nocodb-pair-lifecycle-test.sh
 scripts/test/nocodb-source-operation-test.sh
 scripts/test/nocodb-platform-preflight-test.sh
 scripts/test/nocodb-bootstrap-test.sh

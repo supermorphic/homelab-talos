@@ -143,6 +143,10 @@ else
         case "$subresource:$namespace" in
           exec:kube-system|exec:media|exec:homepage|exec:ntfy|exec:automation|          portforward:kube-system|portforward:media|portforward:monitoring) answer=yes ;;
         esac
+        if [[ "$subresource:$namespace:$resource_name" == \
+          'portforward:automation-data:automation-data-postgresql-0' ]]; then
+          answer=yes
+        fi
       fi
       ;;
     get:secrets:*|create:*:*|patch:*:*|delete:*:*|bind:*:*|escalate:*:*|impersonate:*:*) answer=no ;;
@@ -235,6 +239,10 @@ done
 for scope in kube-system media monitoring; do
   expect_request homelab-diagnostic create pods "$scope" portforward
 done
+expect_request homelab-diagnostic create pods/automation-data-postgresql-0 automation-data portforward
+expect_request homelab-diagnostic create pods/another-pod automation-data portforward
+expect_request homelab-observer create pods/automation-data-postgresql-0 automation-data portforward
+expect_request homelab-report-publisher create pods/automation-data-postgresql-0 automation-data portforward
 
 while read -r context verb resource scope subresource; do
   expect_request "$context" "$verb" "$resource" "$scope" "$subresource"
@@ -262,6 +270,8 @@ homelab-observer patch deployments.apps kube-system -
 homelab-observer delete deployments.apps kube-system -
 homelab-observer delete pods kube-system -
 homelab-diagnostic get secrets kube-system -
+homelab-diagnostic get secrets automation-data -
+homelab-diagnostic patch statefulsets.apps automation-data -
 homelab-diagnostic create kustomizations.kustomize.toolkit.fluxcd.io flux-system -
 homelab-diagnostic patch kustomizations.kustomize.toolkit.fluxcd.io flux-system -
 homelab-diagnostic delete kustomizations.kustomize.toolkit.fluxcd.io flux-system -

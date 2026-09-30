@@ -868,6 +868,82 @@ Adding drop operations to the ordinary provisioning workflow would turn input mi
 or workflow misuse into destructive cluster-wide actions. Decommissioning remains a
 separate attended administrative boundary under the destructive-operation invariant.
 
+## Registered application logins (issue 491)
+
+[Issue 491](https://github.com/supermorphic/homelab-talos/issues/491) adds PostgreSQL
+credentials for application-declared reads and functions, alongside the
+[NocoDB source pairs](028-nocodb-operator-ui.md#independently-scoped-source-pairs-issue-491).
+[Career Ops #197](https://github.com/supermorphic/career-ops/issues/197) is the first
+consumer; it owns schemas, grants, function semantics, CLI role selection, migrations,
+and application acceptance. Private CLI access is required now. Worker deployment and
+workload credential delivery remain in [#483](https://github.com/supermorphic/homelab-talos/issues/483).
+The platform supplies no general SQL execution API.
+
+### Registration and authority
+
+`managed_application_logins` binds a ready domain, application name matching
+`^[a-z][a-z0-9_]{0,23}$`, and explicit schema to
+`app_<md5(domain + ':' + application)>_integration`. Registration creates a restricted
+`NOLOGIN` role, freezes the mapping, and rejects role collisions or unrelated existing
+roles. Its schema may also serve a NocoDB operator source; their permissions remain distinct.
+
+Consumer migrations grant reads and `EXECUTE` on reviewed functions. The platform checks
+all effective authority, including PUBLIC, inherited, column, default, and routine grants:
+
+- No direct DML, ownership, role membership, grant options, schema/database/role creation,
+  replication, RLS bypass, or access to another application schema or database.
+- Writes use consumer-declared functions; consumers review definer authority, safe name
+  resolution, exact operations, and grants. Registration supplies no automatic grants.
+- Registry data is limited to identity, role, state, operation ID, credential generation,
+  and bounded timestamps/error codes. States are `awaiting_grants`, `activating`, `ready`,
+  `rotating`, and `error`. Validation never rotates credentials.
+
+### Protected credential installation and recovery
+
+The existing private provisioner handles register/activate/validate/rotate. The
+[operator procedure](../guides/automation-data-operations.md#registered-application-logins-and-private-cli-access)
+contains commands and file formats. Activation and rotation:
+
+1. Save a strong random candidate and operation record in protected storage outside the checkout
+   before submitting the credential through a protected authenticated request body.
+2. Bind the server request to the selected login, operation ID, and prior generation.
+   A retry reuses that candidate and cannot affect another generation.
+3. Authenticate through the private tunnel and read back database/role identity, acknowledge
+   the generation, then atomically install the service/pass profile and binding.
+
+Reject symlinks, unsafe ownership/modes, wrong targets, and implicit overwrite. Credentials
+must not enter arguments, output, errors, saved workflow executions, or repository artifacts.
+Ambiguous failures retain the candidate for retry; missing material requires an explicitly
+confirmed new rotation. This lifecycle neither reads NocoDB credentials nor extracts n8n
+credentials, and leaves other roles unchanged. Backups retain registrations and verifiers;
+the protected client credential is a separate recovery root.
+
+### Private connection and migration boundary
+
+The helper validates a registered identity and protected profile, then opens a loopback
+port-forward to the fixed PostgreSQL Pod/port using the approved scoped context. It checks
+session identity and cleans up its tunnel. No arbitrary target, database, address, SQL,
+Secret read, exec, workload mutation, public ingress, or fallback to broader credentials
+is allowed. See the [named access grant](../guides/agent-cluster-access.md#observer-and-diagnostic).
+Connectivity alone does not authorize consumer queries, writes, or migrations.
+
+Migration uses an explicitly selected, operator-retained migrator profile. Missing
+credentials require separately authorized recovery through the existing domain rotation
+lifecycle, preserving the n8n binding and arranging protected delivery. Onboarding never
+retrieves that credential from n8n or rotates it automatically.
+
+### Verification and rollout
+
+Synthetic tests cover authentication, permitted reads/functions, actual denials for
+withheld objects and excess authority, isolated rotation, interrupted installation,
+credential non-disclosure, unsafe profiles, and fixed tunnel target/context/cleanup.
+Complete isolated restore must authenticate with the retained client credential and prove
+permitted operations and denials; catalog inspection alone is insufficient.
+
+The candidate passed disposable lifecycle and recovery run
+`20260930T143422Z-f6abe9c57ed7-operator-4edbc3f4`. Hosted validation, authorized live upgrade
+and credential installation, browser access, and recorded recovery are separate gates.
+
 ## Review triggers
 
 Revisit this design when measured load requires connection pooling, automatic failover,

@@ -445,6 +445,17 @@ If the matching connection-encryption key is lost, stop ordinary recovery and pr
 a separately reviewed recovery design. A restored database cannot decrypt its saved
 source credentials without that key.
 
+For v3, restore all pair mappings, source states, operation claims, application
+registrations, roles/verifiers, databases, and NocoDB metadata together. Preserve claims
+as evidence; never automatically replay incomplete operations. Retain the protected
+client credential directory separately because dumps cannot recover its password.
+
+Before starting NocoDB or authenticating a client, prove every source hostname resolves
+only to isolated PostgreSQL and egress cannot reach production. Require all pairs' retained
+IDs/views, authenticated positive/denial probes, cleanup, and a fresh restored backup using
+the [extended restore procedure](../guides/nocodb-operations.md#11-record-acceptance-for-additional-pairs-and-application-logins).
+Older bundles prove only their original contract, excluding registrations added later.
+
 ### OpenBao credential broker state
 
 Recover OpenBao only after Talos/Kubernetes, Cilium, Flux/SOPS, and Longhorn are

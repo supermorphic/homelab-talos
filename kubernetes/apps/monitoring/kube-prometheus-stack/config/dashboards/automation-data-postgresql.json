@@ -245,6 +245,44 @@
           "expr": "max(automation_data_postgresql_oldest_incomplete_provisioning_age_seconds{namespace=\"automation-data\",service=\"automation-data-postgresql\"})"
         }
       ]
+    },
+    {
+      "id": 14,
+      "title": "Optional login and source registry consistency",
+      "type": "stat",
+      "gridPos": {"h": 5, "w": 8, "x": 8, "y": 31},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [{"type": "value", "options": {"0": {"text": "INCONSISTENT"}, "1": {"text": "CONSISTENT"}}}],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+        },
+        "overrides": []
+      },
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{
+        "refId": "A",
+        "expr": "min(automation_data_postgresql_optional_registry_consistent{namespace=\"automation-data\",service=\"automation-data-postgresql\"})"
+      }]
+    },
+    {
+      "id": 15,
+      "title": "Oldest incomplete source or login operation age",
+      "type": "stat",
+      "gridPos": {"h": 5, "w": 8, "x": 16, "y": 31},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1800}]}
+        },
+        "overrides": []
+      },
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{
+        "refId": "A",
+        "expr": "max(automation_data_postgresql_oldest_incomplete_optional_operation_age_seconds{namespace=\"automation-data\",service=\"automation-data-postgresql\"})"
+      }]
     }
   ],
   "refresh": "1m",

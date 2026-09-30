@@ -22,7 +22,12 @@ just --dry-run bootstrap automation-data >/dev/null 2>&1 ||
 # their existing suites and are intentionally not repeated here.
 scripts/test/automation-data-secrets-test.sh
 scripts/test/automation-data-control-contract-test.sh
+scripts/test/automation-data-scoped-permissions-test.sh
+scripts/test/automation-data-login-lifecycle-test.sh
 scripts/test/automation-data-workflow-contract-test.sh
+node scripts/test/automation-data-login-workflow-test.mjs
+uv run --locked python scripts/test/automation-data-login-command-test.py
+uv run --locked python scripts/test/automation-data-connect-test.py
 scripts/test/automation-data-provisioning-command-test.sh
 scripts/test/automation-data-exporter-grant-test.sh
 scripts/test/automation-data-upgrade-test.sh --offline
@@ -52,21 +57,27 @@ expected_metrics=(
   automation_data_postgresql_backup_last_success_timestamp_seconds
   automation_data_postgresql_connections
   automation_data_postgresql_database_size_bytes
+  automation_data_postgresql_oldest_incomplete_optional_operation_age_seconds
   automation_data_postgresql_oldest_incomplete_provisioning_age_seconds
+  automation_data_postgresql_optional_registry_consistent
   automation_data_postgresql_registry_catalog_consistent
   automation_data_postgresql_transactions_total
 )
 [[ "${metrics[*]}" == "${expected_metrics[*]}" ]] ||
-  fail 'SQL Exporter must expose only the four baseline and two platform-health metrics'
+  fail 'SQL Exporter must expose only the four baseline and four platform-health metrics'
 
 dynamic_metrics="$(yq -r '
   [.collectors[].metrics[] |
-    select(.metric_name | test("registry_catalog|oldest_incomplete")) |
+    select(.metric_name | test("registry_catalog|optional_registry|oldest_incomplete")) |
     .metric_name] | sort | join(",")
 ' "$exporter")"
 [[ "$dynamic_metrics" == \
-  'automation_data_postgresql_oldest_incomplete_provisioning_age_seconds,automation_data_postgresql_registry_catalog_consistent' ]] ||
-  fail 'SQL Exporter does not contain exactly the two approved dynamic-platform signals'
+  'automation_data_postgresql_oldest_incomplete_optional_operation_age_seconds,automation_data_postgresql_oldest_incomplete_provisioning_age_seconds,automation_data_postgresql_optional_registry_consistent,automation_data_postgresql_registry_catalog_consistent' ]] ||
+  fail 'SQL Exporter does not contain exactly the four approved dynamic-platform signals'
+[[ "$(yq -r '[.collectors[].metrics[] |
+  select(.metric_name | test("registry_catalog|optional_registry|oldest_incomplete")) |
+  select(has("key_labels"))] | length' "$exporter")" == 0 ]] ||
+  fail 'platform-health metrics must not label individual registrations or operations'
 
 database_label_contract="$(yq -o=json -I=0 '
   [.collectors[].metrics[] |
@@ -88,7 +99,7 @@ dashboard='kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards/au
     select(. == "dashboards/automation-data-postgresql.json")] | length' \
     kubernetes/apps/monitoring/kube-prometheus-stack/config/kustomization.yaml)" == 1 ]] ||
   fail 'the automation-data Grafana dashboard must be packaged exactly once'
-jq -e --argjson expected 13 '
+jq -e --argjson expected 15 '
   .uid == "automation-data-postgresql" and
   (.panels | length) == $expected and
   ([.panels[] | select(.datasource != {"type":"prometheus","uid":"${datasource}"})] | length) == 0

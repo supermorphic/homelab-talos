@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import subprocess
 import tempfile
 import threading
@@ -14,6 +15,7 @@ from urllib.parse import urlsplit
 
 class KubernetesStub(BaseHTTPRequestHandler):
     requests: ClassVar[list[bytes]] = []
+    forwards: ClassVar[list[str]] = []
 
     def log_message(self, _format: str, *_args: object) -> None:
         pass
@@ -33,7 +35,28 @@ class KubernetesStub(BaseHTTPRequestHandler):
                 {"kind": "APIVersions", "versions": ["v1"], "serverAddressByClientCIDRs": []}
             )
         elif path == "/api/v1":
-            self.respond({"kind": "APIResourceList", "groupVersion": "v1", "resources": []})
+            self.respond(
+                {
+                    "kind": "APIResourceList",
+                    "groupVersion": "v1",
+                    "resources": [
+                        {
+                            "name": "pods",
+                            "singularName": "pod",
+                            "namespaced": True,
+                            "kind": "Pod",
+                            "verbs": ["get", "list"],
+                        },
+                        {
+                            "name": "pods/portforward",
+                            "singularName": "",
+                            "namespaced": True,
+                            "kind": "PodPortForwardOptions",
+                            "verbs": ["create"],
+                        },
+                    ],
+                }
+            )
         elif path == "/apis":
             self.respond(
                 {
@@ -63,10 +86,32 @@ class KubernetesStub(BaseHTTPRequestHandler):
                     ],
                 }
             )
+        elif path == "/api/v1/namespaces/automation-data/pods/automation-data-postgresql-0":
+            self.respond(
+                {
+                    "apiVersion": "v1",
+                    "kind": "Pod",
+                    "metadata": {
+                        "name": "automation-data-postgresql-0",
+                        "namespace": "automation-data",
+                    },
+                    "status": {"phase": "Running"},
+                    "spec": {
+                        "containers": [{"name": "postgresql", "ports": [{"containerPort": 5432}]}]
+                    },
+                }
+            )
+        elif path.endswith("/pods/automation-data-postgresql-0/portforward"):
+            self.forwards.append("GET " + path)
+            self.send_error(403, "synthetic named GET denial")
         else:
             raise AssertionError(f"unexpected discovery request: {self.path}")
 
     def do_POST(self) -> None:
+        if urlsplit(self.path).path.endswith("/pods/automation-data-postgresql-0/portforward"):
+            self.forwards.append("POST " + urlsplit(self.path).path)
+            self.send_error(400, "synthetic port-forward stop")
+            return
         assert self.path == "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews", self.path
         if self.headers.get("Transfer-Encoding") == "chunked":
             chunks = []
@@ -125,6 +170,73 @@ def main() -> None:
                 request = KubernetesStub.requests[0]
                 for value in (b"contract-space", b"get", b"apps", b"deployments", b"test-reports"):
                     assert value in request, (value, request)
+                named_forward = subprocess.run(
+                    [
+                        "kubectl",
+                        "--kubeconfig",
+                        str(config),
+                        "auth",
+                        "can-i",
+                        "create",
+                        "pods/automation-data-postgresql-0",
+                        "--subresource",
+                        "portforward",
+                        "--namespace",
+                        "automation-data",
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                assert named_forward.returncode == 0, named_forward.stderr
+                assert named_forward.stdout.strip() == "yes", named_forward.stdout
+                assert len(KubernetesStub.requests) == 2, KubernetesStub.requests
+                forward_review = KubernetesStub.requests[1]
+                for value in (
+                    b"automation-data",
+                    b"create",
+                    b"pods",
+                    b"portforward",
+                    b"automation-data-postgresql-0",
+                ):
+                    assert value in forward_review, (value, forward_review)
+                with socket.socket() as listener:
+                    listener.bind(("127.0.0.1", 0))
+                    port = listener.getsockname()[1]
+                try:
+                    forward_result = subprocess.run(
+                        [
+                            "kubectl",
+                            "--kubeconfig",
+                            str(config),
+                            "--context",
+                            "stub",
+                            "--namespace",
+                            "automation-data",
+                            "port-forward",
+                            "--address",
+                            "127.0.0.1",
+                            "pod/automation-data-postgresql-0",
+                            f"{port}:5432",
+                        ],
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                        timeout=4,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    forward_result = exc
+                assert KubernetesStub.forwards, (
+                    "kubectl never requested the named Pod port-forward",
+                    forward_result,
+                )
+                assert all(
+                    path.endswith(
+                        "/namespaces/automation-data/pods/automation-data-postgresql-0/portforward"
+                    )
+                    for path in KubernetesStub.forwards
+                ), KubernetesStub.forwards
+                assert KubernetesStub.forwards[-1].startswith("POST "), KubernetesStub.forwards
                 unsupported = subprocess.run(
                     [
                         "kubectl",
@@ -145,7 +257,7 @@ def main() -> None:
                 )
                 assert unsupported.returncode != 0, unsupported
                 assert "unknown flag: --resource-name" in unsupported.stderr, unsupported.stderr
-                assert len(KubernetesStub.requests) == 1, KubernetesStub.requests
+                assert len(KubernetesStub.requests) == 2, KubernetesStub.requests
         finally:
             server.shutdown()
             thread.join()

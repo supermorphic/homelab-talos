@@ -109,6 +109,7 @@ The current caller inventory is:
 | `ntfy` | ntfy ACL and credential checks | None |
 | `automation` | Web research n8n contract | None |
 | `monitoring` | None | Loki and Prometheus verification |
+| `automation-data` | None | `automation-data-connect` for `automation-data-postgresql-0` only |
 
 New namespaces receive no interactive grant automatically. OpenBao receives neither
 grant. These namespace restrictions do not establish host-level isolation from
@@ -130,7 +131,7 @@ observer
   → agent discretion within approved read-oriented workflows
 
 diagnostic
-  → agent discretion only through approved named verifier workflows
+  → agent discretion only through approved named verifier and connection workflows
 
 report-publisher
   → guarded evidence publication only
@@ -144,9 +145,18 @@ logs, metrics, and observer-tier verification. It cannot open an exec session or
 forward.
 
 `homelab-diagnostic` is reduced privilege, not read-only. It inherits observer access and
-adds `pods/exec` and `pods/portforward`. Approved verifiers select this context explicitly
-when their designed oracle needs one of those operations. Outside those named verifier
+adds `pods/exec` and `pods/portforward`. Approved verifiers and the fixed
+`automation-data-connect` helper select this context explicitly. Outside these named
 paths, the agent must not use those capabilities without specific operator authorization.
+
+The `automation-data` grant allows only `create pods/portforward` on
+`automation-data-postgresql-0`; it adds no other Pod, exec, Secret, or workload access.
+The fixed connection helper validates the scoped context, protected profile, Pod, and
+PostgreSQL session identity, then holds a loopback tunnel until exit. Activation/rotation
+uses that tunnel to authenticate before installing credentials. Follow the
+[application and migration connection procedure](automation-data-operations.md#registered-application-logins-and-private-cli-access).
+Connectivity does not authorize consumer queries or migrations; missing migration
+credentials require separately authorized recovery.
 
 `mise exec -- just kube openbao-verify` uses `homelab-observer` for Kubernetes reads
 and the existing Prometheus route for sanitized configuration observations. A separate
