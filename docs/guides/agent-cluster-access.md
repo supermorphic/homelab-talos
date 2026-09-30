@@ -149,20 +149,14 @@ adds `pods/exec` and `pods/portforward`. Approved verifiers and the fixed
 `automation-data-connect` helper select this context explicitly. Outside these named
 paths, the agent must not use those capabilities without specific operator authorization.
 
-The `automation-data` grant permits `create pods/portforward` only for the named Pod
-`automation-data-postgresql-0`. It does not permit another Pod, Pod exec, Secret reads,
-or workload changes in that namespace. `mise exec -- just kube automation-data-connect
-<domain> application/<application>` opens a loopback connection on the selected local
-port and holds it in the foreground. A separately retained migration profile may use
-`migrator` instead of `application/<application>`. Set `AUTOMATION_DATA_SERVICE_FILE`
-and `AUTOMATION_DATA_SERVICE` to the explicit protected local profile before running
-the command. The helper checks the profile, scoped context, named permission, Pod
-identity, and authenticated database role; interruption closes only its own tunnel.
-It does not grant permission to query private records or run consumer migrations.
-Application activation/rotation uses this same named tunnel to prove the retained
-candidate credential before profile installation. Follow the
-[protected credential procedure](automation-data-operations.md#registered-application-logins-and-private-cli-access);
-missing migration credentials require separately authorized recovery.
+The `automation-data` grant allows only `create pods/portforward` on
+`automation-data-postgresql-0`; it adds no other Pod, exec, Secret, or workload access.
+The fixed connection helper validates the scoped context, protected profile, Pod, and
+PostgreSQL session identity, then holds a loopback tunnel until exit. Activation/rotation
+uses that tunnel to authenticate before installing credentials. Follow the
+[application and migration connection procedure](automation-data-operations.md#registered-application-logins-and-private-cli-access).
+Connectivity does not authorize consumer queries or migrations; missing migration
+credentials require separately authorized recovery.
 
 `mise exec -- just kube openbao-verify` uses `homelab-observer` for Kubernetes reads
 and the existing Prometheus route for sanitized configuration observations. A separate

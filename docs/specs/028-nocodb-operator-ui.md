@@ -674,186 +674,97 @@ sources that do not depend on historical job retention.
 
 ## Independently scoped source pairs (issue 491)
 
-This section records the implementation candidate for
-[issue 491](https://github.com/supermorphic/homelab-talos/issues/491). It extends the
-existing lifecycle without changing existing source identities or grants. The candidate
-passed disposable component and complete isolated recovery acceptance in canonical run
-`20260930T143422Z-f6abe9c57ed7-operator-4edbc3f4`. That run includes two independently
-scoped pairs, retained saved views, application authentication/rotation, concurrent
-creation, a lost external API response, and foreign-base rejection. Hosted validation,
-deployment, attended browser acceptance, and recorded live recovery are separate gates;
-this evidence does not establish a production upgrade or consumer completion.
-
-### Consumer requirement and ownership
-
-[Career Ops issue 197](https://github.com/supermorphic/career-ops/issues/197) needs an
-additional reader/operator surface and a separate application integration login in an
-existing managed database. Its existing status, validation, migration, and export CLI
-commands consume protected PostgreSQL service and password files. The platform must
-supply a supported private connection procedure for those commands. The later interview
-interface owns bounded application operations; it does not receive a general SQL tool.
-
-An in-cluster worker is not a prerequisite. Its deployment and workload secret delivery
-belong to [issue 483](https://github.com/supermorphic/homelab-talos/issues/483).
-The registered application login remains usable by a future workload with separately
-approved connectivity and credential delivery. Application schemas, exact grants,
-integration functions, migrations, and application acceptance remain consumer-owned.
+[Issue 491](https://github.com/supermorphic/homelab-talos/issues/491) supports multiple
+reader/operator pairs in one managed database. [Career Ops #197](https://github.com/supermorphic/career-ops/issues/197)
+is the first consumer and owns schemas, grants, migrations, integration functions, and
+application acceptance. Its agent CLI uses a separate
+[application database login](026-automation-data-postgresql-platform.md#registered-application-logins-issue-491).
+Worker deployment is independent and belongs to [#483](https://github.com/supermorphic/homelab-talos/issues/483).
 
 ### Pair identity and compatibility
 
-Add `pair` to the existing source and mapping registries. Source identity becomes
-`(domain, pair, access_kind)`; mapping identity becomes `(domain, pair)`. The reserved
-pair `default` identifies the existing lifecycle. Upgrade existing rows to `default`
-without replacing them or changing timestamps, role names, NocoDB IDs, passwords,
-credential generations, saved views, or selected schemas. Domain-only APIs and commands
-continue to select `default`, retaining their existing response shape.
-
-Additional pair names match `^[a-z][a-z0-9_]{0,23}$`, excluding `default`. Registration
-requires an existing ready managed domain, an explicit reader schema, and an optional,
-different operator schema. Apply the current custom-schema naming restrictions and
-reject schema reuse across pairs in the same database. Include the implicit default
-schemas when checking collisions. An identical registration is idempotent; changing a
-registered mapping or adopting an existing unrelated role is refused.
-
-Use stable bounded role names for named pairs:
-`nocodb_<md5(domain + ':' + pair)>_reader` and
-`nocodb_<md5(domain + ':' + pair)>_operator`. The digest is an identifier, not a secret
-or authentication mechanism. Check the complete domain/pair binding and global role
-uniqueness before creation; any collision fails closed. Existing default role names stay
-unchanged. Return canonical role names for consumer migrations to use.
-
-Registration prepares restricted `NOLOGIN` candidates without creating consumer schemas
-or grants. Consumer migrations then grant the intended access. Preparation reports both
-roles' eligibility without generating credentials; sync activates only eligible roles.
-New pairs require explicit grants and receive no automatic grants on future objects.
-
-### NocoDB organization and command contract
-
-Give each additional pair its own base, titled `<domain>--<pair>`, with a reader source
-and optional operator source. This preserves the original base and provides a separate
-place for the additional surface's tables and saved views. A shared base would couple
-source naming and presentation across independently registered surfaces. A separate
-managed-domain alias would misrepresent database ownership and is not supported.
-
-Keep all existing recipes. Add these recipes under `mise exec -- just kube`:
-
-| Recipe | Purpose |
+| Contract | Behavior |
 | --- | --- |
-| `nocodb-pair-register <domain> <pair> <reader-schema> <operator-schema-or-dash>` | Freeze the mapping and create restricted role candidates |
-| `nocodb-pair-prepare <domain> <pair>` | Check initial grant eligibility without NocoDB registration |
-| `nocodb-pair-sync <domain> <pair>` | Create, resume, or validate only this pair |
-| `nocodb-pair-rotate <domain> <pair> <reader-or-operator>` | Rotate only the selected source login and integration |
+| Registry identity | Sources use `(domain, pair, access_kind)`; mappings use `(domain, pair)`. |
+| Existing pairs | Upgrade rows to reserved `default` without changing timestamps, roles, explicit grants, passwords, generations, IDs, views, or schemas. Domain-only calls retain their response shape. |
+| Named pairs | Names match `^[a-z][a-z0-9_]{0,23}$`, excluding `default`, in an existing ready domain. |
+| Schema mapping | Explicit reader and optional distinct operator schema; existing naming rules apply. No schema reuse across pairs, including implicit default schemas. |
+| Registration | Identical requests are idempotent; changed mappings, unrelated existing roles, and collisions are refused. |
+| Role names | `nocodb_<md5(domain + ':' + pair)>_reader` and `_operator`; validate full binding and global uniqueness. The digest is only an identifier. |
+| Initial access | Registration creates `NOLOGIN` grant targets. Consumer migrations supply schemas and explicit grants, including future objects; prepare checks eligibility and sync activates eligible roles. |
+| Presentation | Each named pair has base `<domain>--<pair>`, a reader source, and optional operator source. Separate bases preserve independent tables/views without aliasing the managed database. |
 
-Use operation-specific confirmation values containing the full selected domain/pair
-and, for rotation, access kind. Extend the existing authenticated source workflow with
-an optional `pair` field and a named-pair registration operation. Routine prepare,
-sync, and rotation accept only registered identity selectors. Registration alone accepts
-schema names. No operation accepts caller-selected hosts, databases, SQL, or grants.
-Named-pair responses include `pair`; legacy requests retain the legacy response contract.
+The reader establishes the pair's base ID. Integration titles include domain, pair, and
+access kind; default names remain unchanged. Title matches never authorize adoption of
+unrelated bases, integrations, or sources.
 
-The reader establishes the retained base ID for its pair. Integration titles include
-domain, pair, and access kind. Preserve all legacy names for `default`. A title match
-alone cannot authorize adoption of an additional base, integration, or source.
+### Commands and operation claims
 
-### Concurrent requests, interruption, and rotation
+The [operator guide](../guides/nocodb-operations.md#add-an-independent-source-pair) owns
+register/prepare/sync/rotate/status/retry commands and confirmations. The existing
+private webhook accepts optional `pair`; named responses include it. Registration alone
+accepts schema names. Other operations select registered identities; none accepts arbitrary
+hosts, databases, SQL, or grants. Mutation confirmations bind the full target and operation.
 
-Carry pair identity through every function, workflow branch, readiness check, response,
-error, and recovery query. Use the existing domain lock for registration and collision
-checks, with a persistent operation claim for work spanning external API calls.
-The claim binds domain, pair, operation, access kind, and generation. Concurrent callers
-observe the active claim; they do not issue another create or rotate request. State
-writes compare that claim so a stale completion cannot overwrite a later operation.
+Carry pair identity through all functions, workflow branches, readiness checks, and
+responses. Registration/collision checks use the domain lock. A persistent claim binds
+domain, pair, operation, access kind, and generation across external API calls; competing
+callers observe it, and state writes reject stale completions. Resume only that claim. Retain creation job IDs
+and known object IDs. Unknown outcomes require observation or attended reconciliation:
+never recreate, adopt, or delete an ambiguous object because a wait expired.
 
-Do not treat an expired wait as proof that creation failed. Retain source creation job
-IDs and all known base/integration/source IDs. Resume only a bound operation. An unknown
-create outcome requires bounded observation or attended reconciliation before another
-create can occur. Ambiguous objects are preserved for diagnosis, never automatically
-adopted or deleted. Default-pair behavior must pass the same concurrency regression tests.
+Unchanged sync preserves credentials, generations, and IDs. Additive metadata refresh
+uses the supported UI procedure followed by scoped sync. Rotation affects only the
+selected pair/access kind. Read-only status returns the retained claim ID, phase,
+operation, access kind, and generation; it grants no retry authority.
 
-Unchanged sync preserves credentials, generations, and durable NocoDB identities.
-Metadata refresh remains the supported additive refresh procedure followed by scoped
-sync and identity verification. Rotation changes only the selected pair/access kind.
-The read-only `nocodb-source-status <domain>` and
-`nocodb-pair-status <domain> <pair>` commands expose the retained claim ID, phase,
-operation, access kind, and generation through the fixed authenticated webhook.
-They do not grant retry authority or establish quiescence.
+Partial rotation retains its claim and identities. Retry binds the same target to its
+exact `quiescedOperationId` and requires attended confirmation that the previous workflow
+ended and external requests completed or were cancelled. Elapsed time alone is insufficient;
+unknown/in-flight outcomes stay blocked. SQL rejects an active claim, wrong predecessor,
+or different target. Ordinary sync cannot generate a replacement password. Default pairs
+must pass the same concurrency and recovery tests.
 
-Partial rotation retains its claim and identities; ordinary sync cannot repair it by
-generating another password. Explicit retry is attended and binds the same target to
-the retained `quiescedOperationId`. Before confirming retry, the operator establishes
-that the previous workflow has ended and its NocoDB requests have completed or been
-cancelled. A timeout or elapsed wait alone does not establish this condition. If the
-external outcome remains in flight or unknown, retry remains blocked. The SQL claim
-checks the exact predecessor ID and rejects an active claim or a different target.
+### Effective authority
 
-### Effective authority and withheld objects
+Validate table/column grants, grant options, sequences, inherited/PUBLIC access, default
+privileges, routine execution, ownership, role membership, and database isolation before
+activation and during sync/rotation.
 
-Validate effective privileges before activation and during sync/rotation. Include table
-and column grants, grant options, sequences, inherited and `PUBLIC` access, default
-privileges, routine execution, ownership, role membership, and database isolation.
-Preserve the standard default reader contract. Explicitly mapped readers may have
-SELECT on a subset of their schema's presentation objects, with at least one usable
-presentation object; they need not read bookkeeping tables in that schema.
+- Preserve the standard default reader contract. Explicitly mapped readers need at least
+  one usable presentation object and may read a subset of their schema.
+- Operators need an eligible editing surface with only explicit SELECT/controlled DML
+  within their schema. Neither role needs access to bookkeeping or other withheld objects.
+- Source logins cannot execute application routines directly or gain ownership, role
+  assumption, DDL, grant options, or another database's authority. Routine checks distinguish
+  application routines from the reviewed system-function baseline. Consumer-owned triggers
+  and their application tests govern effects of permitted writes.
 
-Operators may have only the consumer's explicit SELECT and controlled DML grants within
-their selected schema. Require an eligible editing surface without requiring access to
-every object. Source logins cannot directly execute application routines or receive
-ownership, role assumption, DDL, grant options, or other databases' authority. Trigger
-execution caused by permitted writes remains governed by consumer-owned trigger
-definitions and application tests. Routine checks distinguish application routines from
-the platform's reviewed PostgreSQL system-function baseline.
+The platform enforces an authority ceiling. Consumers define the exact object/operation
+allowlist; real PostgreSQL tests must prove same-schema withheld-table/function and
+cross-pair denials.
 
-Platform validation enforces this authority ceiling; it does not invent an application
-object allowlist. Consumer migrations and acceptance establish the exact objects and
-operations. Synthetic platform tests must independently prove denial for withheld
-tables and functions in the same schema, as well as denial across pairs.
+### Upgrade, recovery, and acceptance
 
-The separate application-login lifecycle and CLI connection procedure are proposed in
-[specification 026](026-automation-data-postgresql-platform.md#registered-application-logins-issue-491).
+The guarded additive revision `026-nocodb-v3` recognizes baseline/v1/v2 states and rejects
+unknown state. Fresh initialization and upgrade share definitions and validate installed
+function contracts. Deploy backup compatibility first. Complete bundles capture every
+mapping, source, claim, application registration, role/verifier, and NocoDB metadata;
+consistency checks cover changes to all of them. Retain prior-format recovery without
+rewriting captured bundles, and take a fresh complete backup after upgrade and acceptance.
 
-### Upgrade, backup, and acceptance
+Required evidence covers unchanged default credentials/IDs/views through upgrade and
+registration; real privilege checks; concurrent and interrupted creation; additive refresh;
+selected rotation and partial recovery; both pairs' isolated restore with retained views;
+authenticated application recovery; Community Edition field/linked-record editing; and
+protected CLI credentials and transport, including negative cases.
 
-Introduce revision `026-nocodb-v3` through the guarded additive upgrade. Recognize the
-existing baseline and v1/v2 states explicitly; reject unknown state. Share definitions
-between fresh initialization and upgrade, and validate installed function contracts.
-Ship backup/restore compatibility before applying the upgrade. Do not mutate a captured
-bundle to make its format appear current.
-
-Complete bundles include every pair mapping, source row, operation claim, application
-login registration, role definition, password verifier, and NocoDB metadata database.
-Consistency capture must detect changes to any of these states. Keep prior supported
-bundles restorable and require a fresh complete bundle after upgrade and acceptance.
-
-Extend the existing disposable component test and isolated restore drill. Required
-evidence includes:
-
-- a populated default pair surviving upgrade and additional-pair registration with
-  identical credentials, generations, IDs, schema mapping, and saved views;
-- initial grant preparation, withheld objects, effective privilege ceilings, positive
-  access, and cross-pair denials demonstrated through real PostgreSQL sessions;
-- simultaneous requests, interrupted creation, bounded retry, additive metadata
-  refresh, selected-source rotation, and partial-rotation recovery without duplicates;
-- both pairs restored with their saved presentation state and connections targeting
-  only the isolated database, plus restored application-login authentication and denials;
-- native Community Edition table and linked-record editing on synthetic objects;
-- protected credential handling and fixed private CLI connectivity, including negative
-  cases for incorrect targets and accidental credential output.
-
-The existing attended access and restore suites preserve their baseline contracts.
-Select `NOCODB_ACCESS_EXTENSION_CONFIRM=test:nocodb:access:source-pairs-v3` and
-`NOCODB_RESTORE_EXTENSION_CONFIRM=restore:nocodb:source-pairs-v3` to record the
-additional contract. The access extension installs only fixed synthetic fixtures,
-retains default source identities, and checks named-pair rotation and a separate
-application credential through the private tunnel. The restore extension uses the
-retained protected application credential in an isolated client Job, proves its
-fixed writes/reads and actual PostgreSQL privilege denials, and cleans up its temporary
-Secret and Job. Baseline results explicitly state that this extension was not selected.
-
-Local checks and hosted merge validation do not establish live acceptance. Record
-authorized live access, browser, and isolated restore evidence through the existing
-test catalog. The consumer handoff must include exact commands, returned role names,
-grant prerequisites, private access instructions, deployed revision, and evidence
-references. No production opt-in or credential rotation is implied by design approval.
+Use the [extended attended access and restore procedure](../guides/nocodb-operations.md#11-record-acceptance-for-additional-pairs-and-application-logins).
+Baseline runs explicitly identify omitted extension coverage. Disposable component and
+isolated recovery run `20260930T143422Z-f6abe9c57ed7-operator-4edbc3f4` passed; this is
+candidate evidence. Live upgrade, browser acceptance, and recorded recovery remain
+separately authorized gates. Consumer handoff includes deployed revision, commands,
+returned roles, grant/connection prerequisites, and evidence IDs.
 
 ## Review triggers
 

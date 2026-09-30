@@ -445,20 +445,16 @@ If the matching connection-encryption key is lost, stop ordinary recovery and pr
 a separately reviewed recovery design. A restored database cannot decrypt its saved
 source credentials without that key.
 
-For the v3 source-pair and application-login extension, restore the complete control
-registry, every pair mapping and operation claim, roles/verifiers, managed databases,
-and NocoDB metadata together. Restore claims as evidence; do not automatically replay
-incomplete creates or rotations. Retain the external application's protected credential
-directory separately: a globals dump cannot recover its plaintext client password.
+For v3, restore all pair mappings, source states, operation claims, application
+registrations, roles/verifiers, databases, and NocoDB metadata together. Preserve claims
+as evidence; never automatically replay incomplete operations. Retain the protected
+client credential directory separately because dumps cannot recover its password.
 
-Before starting restored NocoDB or authenticating a retained client, prove that every
-source hostname resolves only to the isolated PostgreSQL instance and that egress cannot
-reach production. The restore request helper enumerates every pair through supported
-NocoDB APIs. Require retained IDs/views, positive access, scoped denials, and a fresh
-complete backup from the restored environment. Previous-format bundles remain valid
-for their original contract; they do not establish recovery of registrations added
-after that backup. See the
-[application credential procedure](../guides/automation-data-operations.md#registered-application-logins-and-private-cli-access).
+Before starting NocoDB or authenticating a client, prove every source hostname resolves
+only to isolated PostgreSQL and egress cannot reach production. Require all pairs' retained
+IDs/views, authenticated positive/denial probes, cleanup, and a fresh restored backup using
+the [extended restore procedure](../guides/nocodb-operations.md#11-record-acceptance-for-additional-pairs-and-application-logins).
+Older bundles prove only their original contract, excluding registrations added later.
 
 ### OpenBao credential broker state
 

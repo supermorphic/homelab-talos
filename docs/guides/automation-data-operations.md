@@ -368,36 +368,29 @@ paused and retain the backup while classifying the failed step.
 
 ## Registered application logins and private CLI access
 
-The v3 candidate supports a separate application identity in an existing ready domain.
-It does not deliver NocoDB passwords or broaden the domain runtime credential.
-Career Ops #197 needs both this CLI connection path and the in-cluster NocoDB pair.
-Consumer schemas, grants, fixed integration functions, migration guards, role selection,
-and application acceptance remain in the consumer repository.
+After deploying v3, register a PostgreSQL identity for agent/application reads and fixed
+functions in a ready domain. Consumers own schemas, grants, migrations, CLI role selection,
+and acceptance; see the [authority contract](../specs/026-automation-data-postgresql-platform.md#registration-and-authority).
+NocoDB source credentials and human UI accounts have separate responsibilities.
 
 ### Register, grant, and activate
 
-1. Register a synthetic `interview` login bound to `sample.app`:
+1. Supply `AUTOMATION_DATA_PROVISIONING_TOKEN` through approved private handling.
+   `AUTOMATION_DATA_PROVISIONING_URL`, if set, must equal the fixed endpoint
+   `https://n8n.lab.supermorphic.com/webhook/automation-data-provision`. Register the
+   synthetic `sample.app` target and retain its returned role:
 
    ```bash
    AUTOMATION_DATA_LOGIN_REGISTER_CONFIRM='register:automation-data:sample:interview:app' \
      mise exec -- just kube automation-data-login-register sample interview app
    ```
 
-   Supply the existing private provisioner token through
-   `AUTOMATION_DATA_PROVISIONING_TOKEN` using approved private handling. The fixed URL
-   is `https://n8n.lab.supermorphic.com/webhook/automation-data-provision`;
-   `AUTOMATION_DATA_PROVISIONING_URL`, if set, must match it exactly. The returned role
-   is `app_<md5(domain + ':' + application)>_integration`, initially `NOLOGIN`.
+2. Through the distinct migrator, grant that `NOLOGIN` role database `CONNECT`, schema
+   `USAGE`, intended reads, and `EXECUTE` on reviewed functions. Review function/definer
+   authority and unintended PUBLIC grants. No direct DML, ownership, role membership,
+   or schema creation is allowed; effective permissions must remain within the target.
 
-2. Use the distinct migrator and consumer-reviewed migrations to grant `CONNECT`,
-   schema `USAGE`, intended reads, and `EXECUTE` only on approved fixed functions.
-   The integration role receives no direct DML, ownership, role membership, or schema
-   creation. Consumer review must establish safe function semantics and definer
-   authority. Revoke unintended `PUBLIC` access; the platform validates effective
-   permissions and rejects authority outside the registered schema/database.
-
-3. Bootstrap scoped credentials and select an absolute private directory outside
-   every checkout. It must be owned by the current user with mode `0700`:
+3. Create an owned `0700` directory outside every checkout, then activate and validate:
 
    ```bash
    mise exec -- just talos kubeconfig
@@ -407,31 +400,24 @@ and application acceptance remain in the consumer repository.
    mise exec -- just kube automation-data-login-validate sample interview
    ```
 
-   Activation durably saves a random candidate and operation record before submitting
-   it. It authenticates through the fixed tunnel, acknowledges the server generation,
-   then installs the protected profile. It returns only role/generation metadata and
-   the `serviceFile` path. A bounded failure retains the candidate for explicit retry
-   of the same command, operation ID, and password.
+   Activation saves the candidate/operation before submission, authenticates through
+   the fixed tunnel, acknowledges the generation, and installs the profile. Output is
+   limited to role/generation metadata and `serviceFile`. Ambiguous failure retains the
+   same candidate and operation for retry.
 
 ### Protected files and connection
 
-Under `<directory>/<domain>/<application>/`, retain:
+Retain `<directory>/<domain>/<application>/` in approved private storage:
 
 | Path | Purpose |
 | --- | --- |
-| `pending/candidate.pgpass` | Candidate password retained across ambiguous failure. |
-| `pending/operation.json` | Non-secret target, operation ID, expected generation, local phase. |
-| `generation-<n>/credential.pgpass` | Versioned active credential. |
-| `generation-<n>/service.conf`, `binding.json` | Versioned target and registry binding. |
-| `service.conf`, `binding.json` | Selected profile and binding after acknowledgment. |
+| `pending/candidate.pgpass`, `pending/operation.json` | Candidate and target/operation/generation/phase needed for retry. |
+| `generation-<n>/` | Versioned `credential.pgpass`, `service.conf`, and `binding.json`. |
+| Top-level `service.conf`, `binding.json` | Selected profile and binding after acknowledgment. |
 
-Files are owned regular files with mode `0600`; directories use `0700`. The helper
-rejects symlinks, unsafe ownership/modes, mismatched targets, inline profile passwords,
-and inherited `PG*` connection settings. Preserve older generations and recovery
-material in approved private storage. Missing candidate material requires a separately
-confirmed new rotation; ordinary retry does not generate a replacement password.
-
-Select the returned profile and its section, `automation_data_<domain>_<returned-role>`:
+Use owned regular `0600` files and `0700` directories, preserving older generations.
+The helper rejects symlinks, unsafe modes/ownership, mismatched targets, inline profile
+passwords, and inherited `PG*` settings. Select the returned profile and service section:
 
 ```bash
 export AUTOMATION_DATA_SERVICE_FILE=/ABSOLUTE/PRIVATE/PATH/application-logins/sample/interview/service.conf
@@ -439,19 +425,16 @@ export AUTOMATION_DATA_SERVICE='automation_data_sample_<returned-role>'
 mise exec -- just kube automation-data-connect sample application/interview
 ```
 
-The helper runs in the foreground. It binds only `127.0.0.1:15432` to port `5432` on
-`automation-data-postgresql-0`, verifies the database and session role, and ends when
-interrupted, the child exits, or the Pod changes. `AUTOMATION_DATA_LOCAL_PORT` can select
-another local port from 1024–65535; use the same value during activation and connection.
-`AUTOMATION_DATA_KUBECONFIG`, if set, must contain the approved scoped contexts; the
-default is this worktree's `.kube/config`. It never falls back to administrative access.
+The foreground helper binds `127.0.0.1:15432` to port `5432` on
+`automation-data-postgresql-0` and verifies database/session identity. It closes when
+interrupted, its child exits, or the Pod changes. `AUTOMATION_DATA_LOCAL_PORT` may select
+1024–65535; use the same port for activation and connection. `AUTOMATION_DATA_KUBECONFIG`
+defaults to this worktree's `.kube/config` and must contain the approved scoped contexts;
+there is no administrative fallback or SQL/query argument.
 
-In another terminal, select the same service/pass profile in the consumer CLI.
-Career Ops uses `CAREER_EVIDENCE_SERVICE_FILE` and `CAREER_EVIDENCE_SERVICE` for status,
-validation, and private export. Its role-selection changes and scoped function
-acceptance belong to issue 197; this platform candidate does not establish that the
-current consumer CLI accepts the new identity. No general SQL shell or query argument
-is supplied by the connection helper.
+In another terminal, give the consumer CLI the same profile. Career Ops uses
+`CAREER_EVIDENCE_SERVICE_FILE` and `CAREER_EVIDENCE_SERVICE`; issue 197 must update its
+role selection and prove reads/functions/export before claiming consumer acceptance.
 
 ### Rotation, migration prerequisites, and recovery
 
@@ -460,25 +443,20 @@ AUTOMATION_DATA_LOGIN_ROTATE_CONFIRM='rotate:automation-data:sample:interview' \
   mise exec -- just kube automation-data-login-rotate sample interview
 ```
 
-Rotation changes only this application credential. It preserves the prior active
-profile until authentication and server acknowledgment succeed. An ambiguous result
-keeps recovery material; retry the same command from the same protected directory.
-Do not delete `pending/` to force a new operation.
+Rotation affects only this login and retains the active profile until authentication
+and acknowledgment succeed. Retry ambiguous activation/rotation with the same command
+and directory; never delete `pending/` to force a new operation. Missing candidate
+material requires a separately confirmed new rotation.
 
 Migration uses `automation-data-connect <domain> migrator` with an explicitly selected,
-operator-retained service/pass profile for `<domain>_migrator`. The helper does not
-retrieve that password from n8n. An unavailable migrator credential is a separate
-operator prerequisite. Do not rotate it automatically during onboarding. If recovery
-is needed, obtain separate authorization for the existing targeted domain migrator
-rotation, verify its exact n8n credential binding and current backup, run that guarded
-lifecycle, and arrange protected delivery before using the consumer migration runner.
+operator-retained profile for `<domain>_migrator`. Missing credentials require separate
+authorization for the existing targeted domain rotation: verify the backup and exact
+n8n binding, run the guarded lifecycle, then arrange protected delivery. Onboarding
+never retrieves the password from n8n or rotates it automatically.
 
-Complete v3 bundles retain all pair mappings, source states, operation claims, login
-registrations, roles/verifiers, and NocoDB metadata. Client credentials remain a separate
-recovery root. The local fixture restores both pairs, saved views, and a retained
-application credential against an isolated PostgreSQL instance. Live upgrade, named
-pair/browser access, client installation, and recorded restore acceptance remain later
-authorized steps.
+Keep client credentials alongside the other [recovery roots](../runbooks/platform-disaster-recovery.md#nocodb-metadata-recovery):
+backups retain verifiers, not recoverable client passwords. Live upgrade, credential
+installation, browser access, and recorded restore require their own authorization.
 
 ## Destructive administration
 
