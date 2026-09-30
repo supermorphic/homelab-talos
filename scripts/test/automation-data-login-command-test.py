@@ -103,7 +103,11 @@ class LoginCommandTest(unittest.TestCase):
         self.assertEqual([item["operation"] for item in self.requests],
                          ["login-validate", "login-activate", "login-complete"])
         self.assertNotIn(self.requests[1]["password"], output + errors)
-        self.assertTrue((self.directory / "sample" / "interview" / "service.conf").exists())
+        selected = self.directory / "sample" / "interview"
+        self.assertTrue((selected / "service.conf").exists())
+        binding = json.loads((selected / "binding.json").read_text())
+        self.assertEqual(binding["application"], "interview")
+        self.assertEqual(binding["credentialGeneration"], 1)
 
     def test_ambiguous_failure_retains_candidate(self):
         self.fail_install = True

@@ -153,6 +153,16 @@ valid_fixture_base := [
 		"kube-system",
 		"homelab-report-publisher-flux-system",
 	),
+	role("homelab-automation-data-connect", "automation-data", [{
+		"apiGroups": [""],
+		"resources": ["pods/portforward"],
+		"resourceNames": ["automation-data-postgresql-0"],
+		"verbs": ["create"],
+	}]),
+	role_binding(
+		"homelab-automation-data-connect", "automation-data",
+		"homelab-diagnostic", "kube-system", "homelab-automation-data-connect",
+	),
 	lease("homelab-test-report-publish-lock", "flux-system"),
 ]
 
@@ -233,6 +243,43 @@ message |
 test_complete_valid_fixture_has_zero_denials if {
 	messages := deny with input as valid_fixture
 	count(messages) == 0
+}
+
+test_connection_role_must_be_named_and_fixed if {
+	messages := deny with input as fixture_with_rule("homelab-automation-data-connect", [""], ["pods/portforward"], ["create"])
+	count(messages_matching(messages, "connection Role contains a forbidden RBAC rule")) == 1
+}
+
+replace_connection_role(document) := object.union(document, {"rules": [{
+	"apiGroups": [""], "resources": ["pods/portforward"],
+	"resourceNames": ["another-pod"], "verbs": ["create"],
+}]}) if {
+	object.get(object.get(document, "metadata", {}), "name", "") == "homelab-automation-data-connect"
+	object.get(document, "kind", "") == "Role"
+}
+
+replace_connection_role(document) := document if {
+	object.get(object.get(document, "metadata", {}), "name", "") != "homelab-automation-data-connect"
+}
+
+replace_connection_role(document) := document if {
+	object.get(document, "kind", "") != "Role"
+}
+
+test_connection_role_cannot_forward_other_pod if {
+	fixture_input := [replace_connection_role(document) | some document in valid_fixture]
+	messages := deny with input as fixture_input
+	count(messages_matching(messages, "connection Role contains a forbidden RBAC rule")) == 1
+}
+
+test_connection_role_cannot_duplicate_in_other_namespace if {
+	bad := role("homelab-automation-data-connect", "other", [{
+		"apiGroups": [""], "resources": ["pods/portforward"],
+		"resourceNames": ["automation-data-postgresql-0"], "verbs": ["create"],
+	}])
+	messages := deny with input as array.concat(valid_fixture, [bad])
+	count(messages_matching(messages, "connection Role must exist exactly once")) == 1
+	count(messages_matching(messages, "connection Role must use automation-data namespace")) == 1
 }
 
 test_complete_combined_fixture_has_zero_denials if {

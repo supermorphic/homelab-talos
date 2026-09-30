@@ -167,8 +167,8 @@ def update_phase(directory: Path, operation: dict, phase: str) -> None:
     fsync_directory(pending)
 
 
-def install_profile(directory: Path, domain: str, role: str, generation: int,
-                    port: int) -> None:
+def install_profile(directory: Path, domain: str, application: str, schema: str,
+                    role: str, generation: int, operation_id: str, port: int) -> None:
     pending = validate_private_directory(directory / "pending")
     source = validate_private_file(pending / "candidate.pgpass")
     version = directory / f"generation-{generation}"
@@ -190,12 +190,29 @@ def install_profile(directory: Path, domain: str, role: str, generation: int,
             raise PrivateFileError("generation_collision")
     else:
         write_private_file_exclusive(versioned_service, service)
+    binding = (json.dumps({"domain": domain, "application": application,
+                           "database": domain, "schema": schema, "role": role,
+                           "credentialGeneration": generation, "operationId": operation_id,
+                           "localPort": port}, sort_keys=True) + "\n").encode()
+    versioned_binding = version / "binding.json"
+    if versioned_binding.exists() or versioned_binding.is_symlink():
+        validate_private_file(versioned_binding)
+        if versioned_binding.read_bytes() != binding:
+            raise PrivateFileError("generation_collision")
+    else:
+        write_private_file_exclusive(versioned_binding, binding)
     selected = directory / "service.conf"
     if selected.exists() or selected.is_symlink():
         validate_private_file(selected)
     temporary = directory / f".service-{uuid.uuid4().hex}.tmp"
     write_private_file_exclusive(temporary, service)
     os.replace(temporary, selected)
+    selected_binding = directory / "binding.json"
+    if selected_binding.exists() or selected_binding.is_symlink():
+        validate_private_file(selected_binding)
+    temporary_binding = directory / f".binding-{uuid.uuid4().hex}.tmp"
+    write_private_file_exclusive(temporary_binding, binding)
+    os.replace(temporary_binding, selected_binding)
     fsync_directory(directory)
 
 
@@ -319,7 +336,8 @@ def execute(action: str, domain: str, application: str, schema: str | None = Non
             if result["state"] != "ready":
                 raise RequestError("completion_response_invalid")
             update_phase(directory, operation, "acknowledged")
-            install_profile(directory, domain, state["role"], result["credentialGeneration"], port)
+            install_profile(directory, domain, application, state["schema"], state["role"],
+                            result["credentialGeneration"], operation["operationId"], port)
             clear_completed_pending(directory)
             print(json.dumps({"domain": domain, "application": application,
                               "role": state["role"], "credentialGeneration": result[

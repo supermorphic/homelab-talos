@@ -230,6 +230,12 @@ assert_can_i "$diagnostic" no create pods monitoring exec
 for ns in homepage ntfy automation; do
   assert_can_i "$diagnostic" no create pods "$ns" portforward
 done
+assert_can_i "$diagnostic" yes create pods automation-data portforward automation-data-postgresql-0
+assert_can_i "$diagnostic" no create pods automation-data portforward another-pod
+assert_can_i "$observer" no create pods automation-data portforward automation-data-postgresql-0
+assert_can_i "$publisher" no create pods automation-data portforward automation-data-postgresql-0
+assert_can_i "$diagnostic" no get secrets automation-data
+assert_can_i "$diagnostic" no patch statefulsets.apps automation-data
 assert_can_i "$diagnostic" yes create pods kube-system exec
 assert_can_i "$diagnostic" yes create pods kube-system portforward
 assert_can_i "$diagnostic" no get secrets kube-system

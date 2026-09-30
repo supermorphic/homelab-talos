@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
+import re
+import selectors
 import stat
+import subprocess
+import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
 import psycopg
+import yaml
 
 
 class PrivateFileError(ValueError):
@@ -17,6 +24,9 @@ class PrivateFileError(ValueError):
 
 class PrivateTunnelUnavailable(RuntimeError):
     """The scoped Kubernetes tunnel is not yet available."""
+
+
+_ACTIVE_TUNNELS: dict[int, tuple[subprocess.Popen, Path, str]] = {}
 
 
 def _check_owner_mode(path: Path, *, directory: bool) -> None:
@@ -109,7 +119,250 @@ def authenticate_candidate(port: int, database: str, role: str, password: str) -
 
 @contextlib.contextmanager
 def private_database_tunnel(kubeconfig: Path | None, local_port: int) -> Iterator[int]:
-    """Task 7 supplies the scoped fixed-pod implementation."""
-    del kubeconfig, local_port
-    raise PrivateTunnelUnavailable("scoped_private_tunnel_unavailable")
-    yield 0  # pragma: no cover
+    """Forward only the ready automation-data PostgreSQL Pod through scoped credentials."""
+    config = scoped_kubeconfig(kubeconfig)
+    assert_scoped_identity(config)
+    assert_named_forward_allowed(config)
+    if not 1024 <= local_port <= 65535:
+        raise PrivateTunnelUnavailable("invalid_local_port")
+    uid = read_fixed_pod(config)
+    process = start_fixed_forward(config, local_port)
+    thread = None
+    stop = None
+    try:
+        assert_pod_unchanged(config, uid)
+        thread, stop = start_pod_watcher(config, uid, process)
+        _ACTIVE_TUNNELS[local_port] = (process, config, uid)
+        yield local_port
+        if process.poll() is not None:
+            raise PrivateTunnelUnavailable("private_tunnel_ended")
+        assert_pod_unchanged(config, uid)
+    finally:
+        if _ACTIVE_TUNNELS.get(local_port, (None,))[0] is process:
+            _ACTIVE_TUNNELS.pop(local_port, None)
+        if stop is not None:
+            stop.set()
+        if thread is not None:
+            thread.join(timeout=3)
+        stop_fixed_forward(process)
+
+
+def assert_tunnel_active(port: int) -> None:
+    retained = _ACTIVE_TUNNELS.get(port)
+    if retained is None or retained[0].poll() is not None:
+        raise PrivateTunnelUnavailable("private_tunnel_ended")
+    assert_pod_unchanged(retained[1], retained[2])
+
+
+def scoped_kubeconfig(kubeconfig: Path | None) -> Path:
+    """Accept only the three-context scoped worktree credential layout."""
+    selected = kubeconfig or Path(__file__).resolve().parents[2] / ".kube" / "config"
+    try:
+        selected = validate_private_file(selected)
+        data = yaml.safe_load(selected.read_text())
+        contexts = {item["name"]: item["context"] for item in data["contexts"]}
+        users = {item["name"]: item["user"] for item in data["users"]}
+        expected = {"homelab-observer", "homelab-diagnostic", "homelab-report-publisher"}
+        if set(contexts) != expected or set(users) != expected or \
+                data.get("current-context") != "homelab-observer" or \
+                any(contexts[name] != {"cluster": "homelab", "user": name}
+                    for name in expected) or \
+                any(set(users[name]) != {"token"} or not users[name]["token"]
+                    for name in expected):
+            raise ValueError("scoped_contexts_invalid")
+        clusters = {item["name"]: item["cluster"] for item in data["clusters"]}
+        if set(clusters) != {"homelab"} or \
+                not str(clusters["homelab"].get("server", "")).startswith("https://") or \
+                not clusters["homelab"].get("certificate-authority-data"):
+            raise ValueError("scoped_cluster_invalid")
+    except (OSError, KeyError, TypeError, ValueError, yaml.YAMLError) as exc:
+        raise PrivateTunnelUnavailable("scoped_kubeconfig_required") from exc
+    return selected
+
+
+def _kubectl(config: Path, *arguments: str) -> list[str]:
+    return ["kubectl", "--kubeconfig", str(config), "--context", "homelab-diagnostic",
+            "--namespace", "automation-data", *arguments]
+
+
+def _run_kubectl(config: Path, *arguments: str) -> str:
+    try:
+        completed = subprocess.run(_kubectl(config, *arguments), capture_output=True,
+                                   text=True, timeout=8, check=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise PrivateTunnelUnavailable("scoped_kubectl_failed") from exc
+    return completed.stdout
+
+
+def assert_scoped_identity(config: Path) -> None:
+    try:
+        identity = json.loads(_run_kubectl(config, "auth", "whoami", "-o", "json"))
+        if identity["status"]["userInfo"]["username"] != \
+                "system:serviceaccount:kube-system:homelab-diagnostic":
+            raise ValueError("diagnostic_identity_mismatch")
+    except (KeyError, ValueError) as exc:
+        raise PrivateTunnelUnavailable("diagnostic_identity_required") from exc
+
+
+def assert_named_forward_allowed(config: Path) -> None:
+    answer = _run_kubectl(config, "auth", "can-i", "create",
+                          "pods/automation-data-postgresql-0", "--subresource", "portforward")
+    if answer.strip() != "yes":
+        raise PrivateTunnelUnavailable("named_forward_denied")
+
+
+def read_fixed_pod(config: Path) -> str:
+    """Check target namespace, owner, phase, readiness, and UID before forwarding."""
+    try:
+        pod = json.loads(_run_kubectl(config, "get", "pod",
+                                      "automation-data-postgresql-0", "-o", "json"))
+        metadata = pod["metadata"]
+        owners = metadata["ownerReferences"]
+        uid = metadata["uid"]
+        if metadata["name"] != "automation-data-postgresql-0" or \
+                metadata["namespace"] != "automation-data" or \
+                not isinstance(uid, str) or not re.fullmatch(r"[0-9a-f-]{36}", uid) or \
+                len(owners) != 1 or owners[0].get("kind") != "StatefulSet" or \
+                owners[0].get("name") != "automation-data-postgresql" or \
+                owners[0].get("controller") is not True or \
+                pod["status"]["phase"] != "Running" or \
+                not any(item.get("type") == "Ready" and item.get("status") == "True"
+                        for item in pod["status"]["conditions"]):
+            raise ValueError("fixed_pod_not_ready")
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise PrivateTunnelUnavailable("fixed_pod_not_ready") from exc
+    return uid
+
+
+def assert_pod_unchanged(config: Path, expected_uid: str) -> None:
+    if read_fixed_pod(config) != expected_uid:
+        raise PrivateTunnelUnavailable("fixed_pod_replaced")
+
+
+def wait_for_forward(process: subprocess.Popen, port: int) -> None:
+    """Require kubectl's own forwarding message, not a pre-existing listener."""
+    selector = selectors.DefaultSelector()
+    buffers: dict[int, str] = {}
+    try:
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                selector.register(stream, selectors.EVENT_READ)
+                buffers[stream.fileno()] = ""
+        deadline = time.monotonic() + 12
+        expected = f"Forwarding from 127.0.0.1:{port} -> 5432"
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise PrivateTunnelUnavailable("private_tunnel_exited")
+            for key, _ in selector.select(timeout=0.25):
+                handle = key.fileobj.fileno()
+                chunk = os.read(handle, 4096)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                buffers[handle] += chunk.decode("utf-8", errors="replace")
+                lines = buffers[handle].split("\n")
+                buffers[handle] = lines.pop()[-4096:]
+                if any(line.strip() == expected for line in lines):
+                    return
+        raise PrivateTunnelUnavailable("private_tunnel_start_timeout")
+    finally:
+        selector.close()
+
+
+def stop_fixed_forward(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        process.terminate()
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=3)
+
+
+def start_fixed_forward(config: Path, port: int) -> subprocess.Popen:
+    argv = _kubectl(config, "port-forward", "--address", "127.0.0.1",
+                    "pod/automation-data-postgresql-0", f"{port}:5432")
+    try:
+        process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, bufsize=1)
+        wait_for_forward(process, port)
+        return process
+    except BaseException as exc:
+        if "process" in locals():
+            stop_fixed_forward(process)
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        raise PrivateTunnelUnavailable("private_tunnel_start_failed") from exc
+
+
+def start_pod_watcher(config: Path, uid: str, process: subprocess.Popen) -> tuple[threading.Thread, threading.Event]:
+    stop = threading.Event()
+
+    def watch() -> None:
+        while not stop.wait(2):
+            try:
+                assert_pod_unchanged(config, uid)
+            except PrivateTunnelUnavailable:
+                stop_fixed_forward(process)
+                return
+
+    thread = threading.Thread(target=watch, name="automation-data-pod-watch", daemon=True)
+    thread.start()
+    return thread, stop
+
+
+def _pgpass_fields(line: str) -> list[str]:
+    fields = []
+    current = []
+    escaped = False
+    for char in line:
+        if escaped:
+            current.append(char)
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == ":":
+            fields.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+    if escaped:
+        raise PrivateFileError("passfile_invalid")
+    fields.append("".join(current))
+    return fields
+
+
+def validate_service_profile(service_file: Path, section: str, database: str,
+                             role: str, port: int) -> dict[str, str]:
+    """Parse only one exact local service and pass entry; return its private password."""
+    service_file = validate_private_file(service_file)
+    lines = service_file.read_text().splitlines()
+    if not lines or lines[0] != f"[{section}]" or len(lines) != 7:
+        raise PrivateFileError("service_profile_invalid")
+    fields: dict[str, str] = {}
+    for line in lines[1:]:
+        if "=" not in line:
+            raise PrivateFileError("service_profile_invalid")
+        key, value = line.split("=", 1)
+        if key in fields:
+            raise PrivateFileError("service_profile_invalid")
+        fields[key] = value
+    if set(fields) != {"host", "port", "dbname", "user", "passfile", "sslmode"} or \
+            fields["host"] != "127.0.0.1" or fields["port"] != str(port) or \
+            fields["dbname"] != database or fields["user"] != role or \
+            fields["sslmode"] != "disable" or \
+            not Path(fields["passfile"]).is_absolute():
+        raise PrivateFileError("service_profile_invalid")
+    passfile = validate_private_file(Path(fields["passfile"]))
+    pass_lines = passfile.read_text().splitlines()
+    if len(pass_lines) != 1:
+        raise PrivateFileError("passfile_invalid")
+    values = _pgpass_fields(pass_lines[0])
+    if len(values) != 5 or values[:4] != ["127.0.0.1", str(port), database, role] or \
+            not values[4]:
+        raise PrivateFileError("passfile_invalid")
+    return {"password": values[4], "passfile": str(passfile)}
