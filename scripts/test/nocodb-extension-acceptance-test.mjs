@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 const graph=JSON.parse(readFileSync('kubernetes/apps/automation/n8n/app/workflows/nocodb-acceptance-domain.json','utf8'));
+assert.equal(new Set(graph.nodes.map(n=>n.id)).size,graph.nodes.length,
+  'Every n8n node must have a distinct ID');
 const nodes=new Map(graph.nodes.map(n=>[n.name,n]));
 for(const operation of ['extensions','extensions-cleanup']) {
   const result=new Function('$json',nodes.get('Normalize Acceptance Request').parameters.jsCode)(
