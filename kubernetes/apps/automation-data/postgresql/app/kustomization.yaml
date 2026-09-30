@@ -26,6 +26,8 @@ configMapGenerator:
       - update-backup-status.sql=scripts/update-backup-status.sql
   - name: automation-data-postgresql-upgrade
     files:
+      - credential-discovery.sql=scripts/credential-discovery.sql
+      - nocodb-discovery.sql=scripts/nocodb-discovery.sql
       - nocodb-extension.sql=scripts/nocodb-extension.sql
       - application-login.sql=scripts/application-login.sql
       - nocodb-metadata.sql=scripts/nocodb-metadata.sql
