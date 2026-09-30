@@ -147,9 +147,9 @@ mise exec -- just test record test.openbao-restore-drill
 ```
 
 Review the exact confirmation shown by the command. Supply matching seal material and
-the operator password only through its private prompts. Require both restore and
-cleanup to pass. The drill uses isolated scratch resources; a production outage or
-production storage replacement needs a separate recovery plan.
+the operator password retained with that snapshot only through its private prompts.
+Require both restore and cleanup to pass. The drill uses isolated scratch resources;
+a production outage or production storage replacement needs a separate recovery plan.
 
 If cleanup failed, stop before another drill. After reviewing the failure and
 its correction, run `mise exec -- just kube openbao-restore-cleanup <failed-run-id>`
