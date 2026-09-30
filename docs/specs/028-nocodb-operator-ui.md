@@ -259,6 +259,13 @@ and workspace creation and reads the settings back. Provisioning creates no publ
 or view links. Telemetry and support chat are disabled, and the application URL matches
 the private route.
 
+The human operator keeps one NocoDB administrator account across the provisioned bases,
+their exposed tables, and saved views. Source pairs use PostgreSQL credentials behind
+those bases; they do not create additional human UI accounts. Registered application
+logins are PostgreSQL credentials for agents and CLI/application clients. Browser
+automation authenticates through NocoDB's UI account separately. Database grants and
+source registration determine which tables the UI exposes, including for its administrator.
+
 SOPS-managed configuration supplies metadata credentials, authentication material, the
 retained connection encryption key, bootstrap administrator credentials, and fixed
 webhook authentication. Plaintext values must not appear in output, command arguments,

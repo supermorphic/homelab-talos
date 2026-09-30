@@ -4,6 +4,13 @@ This guide stages and operates the private NocoDB interface for selected
 automation-data PostgreSQL domains. NocoDB is an optional operator interface. PostgreSQL
 remains the authority boundary, and n8n remains the workflow and bulk-change boundary.
 
+Use your existing NocoDB administrator login to browse all provisioned bases, their
+exposed tables, and saved views. Switching bases does not require switching accounts.
+Reader/operator source credentials are managed behind those bases. An application
+login is a PostgreSQL credential for an agent or CLI/application client; Playwright
+browser access uses NocoDB UI authentication instead. Tables withheld by database
+grants or absent from the configured sources remain outside the UI.
+
 The activation change sets the NocoDB Flux Kustomization to `spec.suspend: false`
 and enrolls Homepage, Gatus, alerts, and recurring verification together. On 2026-09-09,
 the operator completed bootstrap, source provisioning, access acceptance, and the browser
