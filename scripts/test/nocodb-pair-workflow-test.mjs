@@ -152,6 +152,19 @@ assert.throws(() => invoke('Prepare Reader Integration', {list: [
   {id: 'foreign-integration', title: integration.payload.title}]}, integrationLookup));
 
 for (const kind of ['Reader', 'Operator']) {
+  const accessKind=kind.toLowerCase();
+  const base={domain:'sample',pair:'interviews',operation:'rotate',requestedAccessKind:accessKind,
+    baseId:'base-retained',schema:`extra_${accessKind}`};
+  const selection={sourceId:'source-retained',selectedIntegrationId:'integration-retained'};
+  const sourceMetadata={id:selection.sourceId,base_id:base.baseId,
+    fk_integration_id:selection.selectedIntegrationId,alias:kind==='Reader'?'Read Model':'Operator',
+    config:{searchPath:[base.schema]},is_data_readonly:kind==='Reader',is_schema_readonly:true};
+  const validated=invoke(`Validate ${kind} Source`,sourceMetadata,{
+    [kind==='Reader'?'Start Reader':'Prepare Operator']:base,
+    [`Read ${kind} State`]:{result:{state:'rotating',operation:'rotate'}},
+    [`Discover ${kind} Source`]:selection});
+  assert.equal(validated.registryOperation,'rotate',`${kind} read-back must retain the registry operation`);
+  assert.equal(validated.operation,'rotate');
   const partial = nodes.get(`${kind} Error Rotation`).parameters.conditions.conditions;
   const acceptsPartialState = state => partial.every(condition => {
     const values = {state, registryOperation: 'rotate', operation: 'rotate', requestedAccessKind: kind.toLowerCase()};
