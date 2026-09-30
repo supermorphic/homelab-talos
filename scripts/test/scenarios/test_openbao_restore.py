@@ -576,6 +576,61 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(restore.RestoreError):
             cluster.cleanup_inventory()
 
+    def test_cleanup_ignores_metrics_view_but_still_checks_the_stored_pod(self):
+        from scripts.test.scenarios import openbao_restore as scenario
+
+        cluster = scenario.ScratchKube(Path("/synthetic/operator-config"), RUN, {}, None)
+        cluster.pod_uid = "current-scratch-pod"
+        cluster.command = lambda *a, **kw: b"pods.metrics.k8s.io\npods\n"
+        listed = []
+        def objects(*args):
+            kind = args[3]
+            listed.append(kind)
+            if kind == "pods.metrics.k8s.io":
+                return {"items": [{"apiVersion": "metrics.k8s.io/v1beta1", "kind": "PodMetrics",
+                                   "metadata": {"name": "scratch-0", "namespace": cluster.namespace}}]}
+            return {"items": [{"kind": "Pod", "metadata": {"name": "scratch-0",
+                "uid": cluster.pod_uid, "annotations": {restore.OWNER: RUN}}}]}
+        cluster.json = objects
+        cluster.cleanup_inventory()
+        self.assertEqual(listed, ["pods"])
+        cluster.json = lambda *a: {"items": [{"kind": "Pod", "metadata": {
+            "name": "foreign", "uid": "foreign-uid"}}]}
+        with self.assertRaises(restore.RestoreError):
+            cluster.cleanup_inventory()
+        self.assertEqual(cluster.cleanup_resource, "pods")
+
+    def test_cleanup_retry_returns_resource_context_without_adapter_exception_text(self):
+        from scripts.test.scenarios import openbao_restore as scenario
+
+        with tempfile.TemporaryDirectory() as temp:
+            config = Path(temp).resolve() / "config"
+            config.write_text("synthetic")
+            cluster = scenario.ScratchKube(config, RUN, {}, None)
+            def reject(kube):
+                kube.cleanup_stage = "inventory"
+                kube.cleanup_resource = "jobs.batch"
+                raise RuntimeError(MARKER)
+            with patch.dict("os.environ", {"OPENBAO_OPERATOR_KUBECONFIG": str(config)}), patch.object(scenario.guards, "source_revision", return_value="a" * 40), patch.object(scenario.guards, "require_deployed_revision"), patch.object(scenario, "ScratchKube", return_value=cluster), patch.object(scenario, "cleanup_target", side_effect=reject), patch("builtins.print") as output:
+                self.assertEqual(scenario.cleanup_main(RUN), 1)
+            result = json.loads(output.call_args.args[0])
+            self.assertEqual(result["stage"], "inventory")
+            self.assertEqual(result["cleanup_resource"], "jobs.batch")
+            self.assertNotIn(MARKER, json.dumps(result))
+
+    def test_recorded_restore_keeps_sanitized_cleanup_context(self):
+        fixture = RestoreTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.kube.fail_cleanup = True
+        fixture.kube.cleanup_stage = "inventory"
+        fixture.kube.cleanup_resource = "jobs.batch"
+        result = fixture.run_drill()
+        self.assertEqual(result["cleanup"], "failed")
+        self.assertEqual(result["cleanup_stage"], "inventory")
+        self.assertEqual(result["cleanup_resource"], "jobs.batch")
+        self.assertNotIn(MARKER, json.dumps(result))
+
     def test_cleanup_retry_reconstructs_only_reviewed_owned_objects(self):
         from scripts.test.scenarios import openbao_restore as scenario
 

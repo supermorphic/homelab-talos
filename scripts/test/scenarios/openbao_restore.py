@@ -87,6 +87,8 @@ class ScratchKube:
         self.created = []
         self.pv_uid = None
         self.volume_uid = None
+        self.cleanup_stage = "inspect-owned-resources"
+        self.cleanup_resource = None
 
     def command(self, *args, input_bytes=None):
         return guards.command(
@@ -417,6 +419,7 @@ seal "static" {
     def cleanup_inventory(self):
         # Namespace deletion is recursive. Inspect every discoverable API kind,
         # so an unrelated Job or custom resource is never silently removed.
+        self.cleanup_stage = "inventory"
         kinds = (
             self.command("api-resources", "--verbs=list", "--namespaced=true", "-o", "name")
             .decode()
@@ -426,8 +429,11 @@ seal "static" {
         if self.pod_uid:
             known.add(self.pod_uid)
         for kind in kinds:
-            if kind in {"events", "events.events.k8s.io"}:
+            # PodMetrics is a virtual view, not a stored namespace object. Its
+            # underlying Pod still undergoes the normal ownership checks.
+            if kind in {"events", "events.events.k8s.io", "pods.metrics.k8s.io"}:
                 continue
+            self.cleanup_resource = kind
             for item in self.json("-n", self.namespace, "get", kind, "-o", "json")["items"]:
                 meta = item["metadata"]
                 annotations = meta.get("annotations", {})
@@ -459,6 +465,7 @@ seal "static" {
                 ):
                     continue
                 raise restore.RestoreError()
+        self.cleanup_resource = None
 
     def storage_removed(self):
         claims = [d for d in self.created if d["kind"] == "PersistentVolumeClaim"]
@@ -488,11 +495,16 @@ seal "static" {
         # Repeat the full reviewed manifest checks after the confirmation pause,
         # using the approved UIDs rather than adopting current objects again.
         for expected in self.created:
+            self.cleanup_stage = "recheck-owned-resources"
+            self.cleanup_resource = expected["kind"]
             actual = self.read(expected)
             restore.owned(expected, actual, run_id)
             if not guards.contains_source(expected, actual):
                 raise restore.RestoreError()
+        self.cleanup_resource = None
+        self.cleanup_stage = "delete-namespace"
         self.delete(documents[0])
+        self.cleanup_stage = "wait-for-storage-removal"
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
             value = self.command(
@@ -632,6 +644,7 @@ def cleanup_target(kube):
     kube.created, kube.extra = [], []
     documents = restore.documents(kube.run_id, "2.7.0")
     for expected in documents:
+        kube.cleanup_resource = expected["kind"]
         actual = kube.read(expected)
         expected["metadata"]["uid"] = actual["metadata"]["uid"]
         restore.owned(expected, actual, kube.run_id)
@@ -639,6 +652,7 @@ def cleanup_target(kube):
             raise restore.RestoreError()
         kube.created.append(expected)
     for kind, name in (("Secret", "scratch-seal"), ("ConfigMap", "scratch-config")):
+        kube.cleanup_resource = kind
         expected = {"apiVersion": "v1", "kind": kind, "immutable": True,
                     "metadata": {"name": name, "namespace": kube.namespace,
                                  "annotations": {restore.OWNER: kube.run_id}}}
@@ -649,8 +663,11 @@ def cleanup_target(kube):
             raise restore.RestoreError()
         kube.created.append(expected)
         kube.extra.append(expected)
+    kube.cleanup_resource = None
+    kube.cleanup_stage = "verify-scratch-pod"
     kube.pod_uid = kube.json("-n", kube.namespace, "get", "pod", "scratch-0", "-o", "json")["metadata"]["uid"]
     kube.assert_pod(kube.pod_uid)
+    kube.cleanup_stage = "verify-scratch-storage"
     kube.assert_storage()
     kube.cleanup_inventory()
     return documents
@@ -659,6 +676,7 @@ def cleanup_target(kube):
 def cleanup_main(run_id):
     """Attended retry for a complete retained scratch topology; evidence stays final."""
     result = {"status": "fail", "cleanup": "not-required", "stage": "preflight"}
+    kube = None
     try:
         selected = Path(os.environ["OPENBAO_OPERATOR_KUBECONFIG"])
         if not selected.is_absolute() or not selected.is_file():
@@ -667,6 +685,7 @@ def cleanup_main(run_id):
         guards.require_deployed_revision(selected, revision)
         kube = ScratchKube(selected, run_id, {}, None)
         documents = cleanup_target(kube)
+        kube.cleanup_stage = "confirmation"
         target = {"objects": [d["metadata"] for d in kube.created], "pod_uid": kube.pod_uid,
                   "pv_uid": kube.pv_uid, "volume_uid": kube.volume_uid}
         required = f"cleanup:openbao-restore:{run_id}:{guards.digest(target)}"
@@ -674,6 +693,7 @@ def cleanup_main(run_id):
         print("Exact confirmation: " + required, flush=True)
         if input("Enter exact confirmation: ") != required:
             raise restore.RestoreError()
+        kube.cleanup_stage = "source-preflight"
         if guards.source_revision() != revision:
             raise restore.RestoreError()
         guards.require_deployed_revision(selected, revision)
@@ -685,6 +705,10 @@ def cleanup_main(run_id):
         result.update(status="pass", cleanup="passed")
     except Exception:  # noqa: BLE001 -- Never expose Secret bodies or adapter errors.
         result["status"] = "fail"
+        if kube is not None:
+            result["stage"] = kube.cleanup_stage
+            if kube.cleanup_resource:
+                result["cleanup_resource"] = kube.cleanup_resource
     print(json.dumps(result, sort_keys=True))
     return 0 if result["status"] == "pass" else 1
 
