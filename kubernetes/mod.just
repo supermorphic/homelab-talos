@@ -130,6 +130,11 @@ automation-data-login-rotate domain application: require-bash
 automation-data-connect domain registered_identity: require-bash
     @uv run --locked python scripts/operations/automation-data-connect.py {{quote(domain)}} {{quote(registered_identity)}}
 
+# Private observational metadata; readiness does not authorize a consumer operation.
+[positional-arguments]
+automation-data-credentials *args: require-bash
+    @uv run --locked python scripts/operations/automation-data-credentials.py "$@"
+
 # Apply reviewed control functions to initialized PostgreSQL after a fresh backup.
 # Operator-run; deactivate provisioning and drain executions before confirmation.
 automation-data-control-migrate: require-bash

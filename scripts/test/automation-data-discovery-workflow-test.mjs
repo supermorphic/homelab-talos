@@ -29,7 +29,7 @@ for (const source of Object.keys(revisions)) for(const pass of [1,2]) values[`Ob
 const collect=()=>evaluate('Collect Attempt 1',{},values)[0].json;
 assert.equal(collect().retryRequired,false);
 assert.ok(collect().sources.every(s=>s.complete));
-values['Observe n8n 1.2'].snapshot.observedAt=new Date(Date.now()+10).toISOString();
+values['Observe n8n 1.2'].snapshot.observedAt=new Date(Date.now()-10).toISOString();
 assert.ok(collect().sources.every(s=>s.complete),'collection timestamps must not change fingerprint stability');
 values['Observe n8n 1.2'].snapshot=snapshot('n8n',[{kind:'credential',id:'new-id',name:null,type:'postgres',updatedAt:new Date().toISOString()}]);
 assert.equal(collect().retryRequired,true,'changed object count triggers whole-attempt retry');
@@ -63,7 +63,9 @@ values['Observe platform 1.1']={snapshot:snapshot('platform')};
 const late=evaluate('Collect Attempt 1',{},values,init.startedAt+30001)[0].json;
 assert.ok(late.sources.every(s=>!s.complete));
 for(const node of workflow.nodes.filter(n=>n.type==='n8n-nodes-base.postgres')) {
-  assert.ok(node.parameters.query.includes('BEGIN READ ONLY'));
+  assert.equal(node.parameters.options.queryBatching,'transaction');
+  assert.ok(node.parameters.query.includes('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY'));
+  assert.ok(!node.parameters.query.includes('COMMIT'));
   assert.ok(node.parameters.query.includes('statement_timeout'));
   assert.ok(node.parameters.query.includes('platform_discovery.read_snapshot()'));
   assert.ok(!node.parameters.query.includes('$json'));

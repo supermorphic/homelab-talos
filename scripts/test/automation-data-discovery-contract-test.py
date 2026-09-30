@@ -88,6 +88,7 @@ class DiscoveryContractTest(unittest.TestCase):
     def test_duplicate_ids_overflow_and_malformed_boolean_are_rejected(self):
         variants = [
             self.raw | {"complete": 1},
+            self.raw | {"objects": [self.raw["objects"][0]], "objectCount": True},
             self.raw | {"objects": self.raw["objects"] * 501},
             self.raw | {"objects": [self.raw["objects"][0]] * 2},
         ]
