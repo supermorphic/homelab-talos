@@ -2061,10 +2061,6 @@ secret-scan:
         | gitleaks stdin --redact --no-banner
     fi
 
-# Build the reviewed OpenBao source patch with synthetic local acceptance only.
-openbao-build directory:
-    @mise exec go@1.27.1 node@20.20.2 pnpm@10.34.4 -- uv run --locked python kubernetes/apps/security/openbao/build/build.py {{quote(directory)}}
-
 # Operator-only creation of new OpenBao seal ciphertext and off-cluster recovery.
 openbao-secrets:
     @scripts/secrets/openbao.sh

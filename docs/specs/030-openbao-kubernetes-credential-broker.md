@@ -73,25 +73,6 @@ Track chart and image updates through the repository's Renovate conventions.
 These are design inputs; chart rendering and runtime compatibility remain
 implementation gates.
 
-The 2.7.0 compatibility build applies one reviewed Kubernetes secrets-engine
-patch to immutable upstream source. It resolves the existing cached token/CA
-reader before reusing a Kubernetes client, and rebuilds that client when the
-effective configuration changes. The production one-minute token-file cache
-remains in use. The projected issuer identity and named TokenRequest RBAC stay
-unchanged. No periodic configuration writer or long-lived issuer credential is
-introduced.
-
-Build inputs and the source patch live in `kubernetes/apps/security/openbao/build/`.
-`just repo openbao-build <new-directory>` checks the upstream archive checksum,
-proves the rotation regression fails before the patch, runs the patched upstream
-test package, and builds the original UI and server with pinned tools. The image
-uses the pinned official 2.7.0 image as its base. The image workflow publishes a
-candidate digest; deployment must select that reviewed digest. Package revisions
-sort after the equivalent official version and before a later upstream version.
-The binary retains the upstream API/storage version and identifies its patch in
-build metadata. Retire the downstream patch when a reviewed upstream release
-provides the same behavior.
-
 The server values must explicitly configure:
 
 - three replicas, integrated Raft storage, stable pod-based Raft IDs, and
@@ -639,16 +620,6 @@ has rejoined and caught up. Transfer leadership to an upgraded member before
 replacing the old leader. Recheck live health immediately before every eviction.
 Attended HA and upgrade workflows use the retained operator password to obtain a
 policy-checked session and revoke that session when the workflow ends.
-For a transition from the known original 2.7.0 image, the confirmed upgrade plan
-includes one reapplication of the exact source-owned Kubernetes backend config.
-This invalidates its old cached client before the ordinary issuance and eviction
-preconditions. Fresh source, snapshot, cluster identity, and configuration checks
-precede this write; an ambiguous result stops the workflow. This repair does not
-run during HA acceptance or recur as a background reconciler.
-Issuance acceptance repeats issuance after the initial credential is actually
-rejected for expiry. A first successful issue cannot establish continued operation
-across the issuer-token rotation window. Failure evidence retains the original
-fixed acceptance step and numeric HTTP status before session cleanup.
 Refuse concurrent node maintenance or a second unavailable voter. Version
 rollback requires a compatible retained snapshot; downgrading only the image is
 not the recovery procedure.

@@ -17,34 +17,13 @@ EXPIRY_POLL_INTERVAL = 5
 class AcceptanceError(Exception):
     """Sanitized failure; never include transport or response text."""
 
-    def __init__(self, *, step=None, http_status=None):
-        super().__init__()
-        self.step = step if step in {
-            "login", "issue", "denial", "revoke", "claims", "identity", "canary",
-            "protected", "expiry",
-        } else None
-        self.http_status = http_status if type(http_status) is int and 100 <= http_status <= 599 else None
-        self.session_cleanup_failed = False
-
-    def evidence(self):
-        result = {}
-        if self.step:
-            result["step"] = self.step
-        if self.http_status is not None:
-            result["http_status"] = self.http_status
-        if self.session_cleanup_failed:
-            result["session_cleanup"] = "failed"
-        return result
-
 
 def call(api, method, path, expected, **kwargs):
     try:
         status, body = api.request(method, path, **kwargs)
         if status not in expected or not isinstance(body, dict):
-            raise AcceptanceError(http_status=status)
+            raise AcceptanceError()
         return body
-    except AcceptanceError:
-        raise
     except Exception:  # noqa: BLE001 -- Discard credential-bearing adapter exception text.
         raise AcceptanceError() from None
 
@@ -87,22 +66,16 @@ def prove_identity(kube, token):
 def acceptance(bao, kube, clock, *, wait_expiry=True):
     """Use dedicated workload authentication; check the credential Kubernetes accepts."""
     session = None
-    failure = None
-    step = "login"
     try:
         session = bao.login()
-        step = "issue"
         data = bao.issue(session)
-        step = "denial"
         if bao.deny_unapproved(session) is not True:
             raise AcceptanceError()
         # The OpenBao session also expires after 600 seconds. Revoke it before
         # waiting on the independently issued Kubernetes credential. Never retry
         # an ambiguous revoke; the run must fail if that one request fails.
         issued_session, session = session, None
-        step = "revoke"
         bao.revoke(issued_session)
-        step = "claims"
         if (
             data["service_account_name"] != ACCOUNT
             or data["service_account_namespace"] != NAMESPACE
@@ -110,17 +83,13 @@ def acceptance(bao, kube, clock, *, wait_expiry=True):
             raise AcceptanceError()
         token = data["service_account_token"]
         expires = token_claims(token, clock)
-        step = "identity"
         prove_identity(kube, token)
         path = f"/api/v1/namespaces/{NAMESPACE}/configmaps/"
-        step = "canary"
         body = call(kube, "GET", path + "openbao-canary", {200}, token=token)
         if body.get("data") != {"marker": "synthetic-openbao-reader-canary"}:
             raise AcceptanceError()
-        step = "protected"
         call(kube, "GET", path + "openbao-protected", {403}, token=token)
         if wait_expiry:
-            step = "expiry"
             reject_by = expires + API_EXPIRY_LEEWAY + SKEW + EXPIRY_POLL_INTERVAL
             deadline = clock.monotonic() + reject_by - clock.time()
             while clock.time() <= expires + SKEW:
@@ -149,25 +118,14 @@ def acceptance(bao, kube, clock, *, wait_expiry=True):
             "openbao_issuance_denied": True,
             "expired": wait_expiry,
         }
-    except Exception as error:  # noqa: BLE001 -- Retain only fixed step and numeric HTTP status.
-        status = error.http_status if isinstance(error, AcceptanceError) else None
-        failure = AcceptanceError(step=step, http_status=status)
-        raise failure from None
+    except Exception:  # noqa: BLE001 -- Discard credential-bearing adapter exception text.
+        raise AcceptanceError() from None
     finally:
         if session:
             try:
                 bao.revoke(session)
-            except Exception:  # noqa: BLE001 -- Preserve the original failure before cleanup.
-                if failure is None:
-                    raise AcceptanceError(step="revoke") from None
-                failure.session_cleanup_failed = True
-
-
-def sustained_acceptance(bao, kube, clock):
-    """Issue again after the initial credential's real expiry/rotation window."""
-    initial = acceptance(bao, kube, clock)
-    after_rotation = acceptance(bao, kube, clock, wait_expiry=False)
-    return {"initial": initial, "after_rotation": after_rotation}
+            except Exception:  # noqa: BLE001 -- Discard credential-bearing adapter exception text.
+                raise AcceptanceError() from None
 
 
 def issuer_boundary(issuer, clock, suffix, *, owner=None):
