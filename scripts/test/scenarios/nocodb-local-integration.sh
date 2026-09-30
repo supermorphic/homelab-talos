@@ -121,7 +121,7 @@ done
 
 network="$run_marker-network"
 containers=("$run_marker-postgres" "$run_marker-nocodb" "$run_marker-n8n" \
-	"$run_marker-restore-postgres" "$run_marker-restore-nocodb")
+	"$run_marker-restore-postgres" "$run_marker-restore-nocodb" "$run_marker-auth-probe")
 volumes=("$run_marker-postgres-data" "$run_marker-n8n-data" "$run_marker-restore-postgres-data")
 
 require_absent_or_owned() { # <kind> <name>
@@ -255,12 +255,14 @@ nocodb_name="${containers[1]}"
 n8n_name="${containers[2]}"
 restore_postgres_name="${containers[3]}"
 restore_nocodb_name="${containers[4]}"
+auth_probe_name="${containers[5]}"
 postgres_volume="${volumes[0]}"
 n8n_volume="${volumes[1]}"
 restore_postgres_volume="${volumes[2]}"
 
 "$podman_bin" network create --label "homelab-talos.test-run=$run_marker" "$network" >/dev/null
 network_created=true
+created_containers+=("$auth_probe_name")
 [[ "$cleanup_test" == false ]] || {
 	phase='cleanup-test'
 	exit 79
@@ -652,6 +654,51 @@ source_call() { # <operation> <access-kind|-> <output> [domain]
 		fi
 	fi
 	validate_source_response "$operation" "$access_kind" "$output" "$domain"
+}
+
+pair_call() { # <register|prepare|sync|rotate> <output> [access-kind]
+	local operation="$1" output="$2" access_kind="${3:-}" body status
+	local domain='automation_data_acceptance' pair='extra'
+	local action="pair-$operation" confirmation_name confirmation_value
+	local -a command=(scripts/nocodb/source-operation.sh "$action" "$domain" "$pair")
+	case "$operation" in
+		register)
+			body="$(jq -cn --arg domain "$domain" --arg pair "$pair" \
+				'{domain:$domain,pair:$pair,operation:"register",readerSchema:"extra_read",operatorSchema:"extra_edit"}')"
+			command+=(extra_read extra_edit)
+			confirmation_name=NOCODB_PAIR_REGISTER_CONFIRM
+			confirmation_value="register:nocodb:$domain:$pair:extra_read:extra_edit"
+			;;
+		prepare|sync)
+			body="$(jq -cn --arg domain "$domain" --arg pair "$pair" --arg operation "$operation" \
+				'{domain:$domain,pair:$pair,operation:$operation}')"
+			confirmation_name="NOCODB_PAIR_${operation^^}_CONFIRM"
+			confirmation_value="$operation:nocodb:$domain:$pair"
+			;;
+		rotate)
+			[[ "$access_kind" == reader || "$access_kind" == operator ]] || fail 'invalid pair rotation target.'
+			body="$(jq -cn --arg domain "$domain" --arg pair "$pair" --arg access_kind "$access_kind" \
+				'{domain:$domain,pair:$pair,operation:"rotate",accessKind:$access_kind}')"
+			command+=("$access_kind")
+			confirmation_name=NOCODB_PAIR_ROTATE_CONFIRM
+			confirmation_value="rotate:nocodb:$domain:$pair:$access_kind"
+			;;
+		*) fail 'invalid pair operation.' ;;
+	esac
+	webhook_call automation-data-nocodb-source source-webhook "$body" "$output"
+	if ! jq -e '.ok == true' "$output" >/dev/null; then
+		jq '{ok,domain,pair,operation,state,errorCode,reader:(.reader|if type=="object" then {state,credentialGeneration} else . end),operator:(.operator|if type=="object" then {state,credentialGeneration} else . end)}' "$output" >&2 || true
+		fail "named pair $operation failed."
+	fi
+	set +e
+	env PATH="$integration_root/validator-bin:$PATH" \
+		NOCODB_SOURCE_OPERATION_ACTUAL_RESPONSE="$output" \
+		NOCODB_SOURCE_PROVISIONING_HEADER="$source_webhook_secret" \
+		"$confirmation_name=$confirmation_value" \
+		"${command[@]}" >/dev/null
+	status=$?
+	set -e
+	[[ "$status" == 0 ]] || fail "named pair $operation failed operator command validation."
 }
 
 acceptance_call() { # <operation> <run-id> <output>
@@ -1060,6 +1107,58 @@ prove_logical_restore() { # <ready-source-response> <probe-response>
 		"$integration_root/restore-signin-response.json")"
 	record_secret "$restored_session"
 	nocodb_session="$restored_session"
+	local named_base named_reader_table named_operator_table retained_password
+	named_base="$(jq -er '.baseId' "$integration_root/extra-ready.json")"
+	named_reader_table="$(jq -er --arg source "$(jq -er '.reader.sourceId' "$integration_root/extra-ready.json")" \
+		'(.list // .data // [])[] | select(.title == "visible_facts" and .source_id == $source) | .id' \
+		"$integration_root/extra-tables.json")"
+	named_operator_table="$(jq -er --arg source "$(jq -er '.operator.sourceId' "$integration_root/extra-ready.json")" \
+		'(.list // .data // [])[] | select(.title == "decisions" and .source_id == $source) | .id' \
+		"$integration_root/extra-tables.json")"
+	http_request GET "$restore_url/api/v2/meta/bases/$named_base/sources" nocodb-token - \
+		"$integration_root/restore-extra-sources.json"
+	jq -e --slurpfile before "$integration_root/extra-ready.json" '
+		(if type == "array" then . else (.list // .data // []) end) as $sources |
+		([$sources[] | select(.id == $before[0].reader.sourceId and
+			.fk_integration_id == $before[0].reader.integrationId and
+			.is_schema_readonly == true and .is_data_readonly == true)] | length) == 1 and
+		([$sources[] | select(.id == $before[0].operator.sourceId and
+			.fk_integration_id == $before[0].operator.integrationId and
+			.is_schema_readonly == true and .is_data_readonly == false)] | length) == 1
+	' "$integration_root/restore-extra-sources.json" >/dev/null ||
+		fail 'restored named pair lost source identities or privilege flags.'
+	http_request GET "$restore_url/api/v2/meta/bases/$named_base/tables" nocodb-token - \
+		"$integration_root/restore-extra-tables.json"
+	jq -e --slurpfile before "$integration_root/extra-tables.json" '
+		[(.list // .data // [])[] | {id,title,source_id}] | sort_by(.id) ==
+		([$before[0] | (.list // .data // [])[] | {id,title,source_id}] | sort_by(.id))
+	' "$integration_root/restore-extra-tables.json" >/dev/null ||
+		fail 'restored named pair changed reflected table identities.'
+	for named_table in "$named_reader_table" "$named_operator_table"; do
+		http_request GET "$restore_url/api/v2/meta/tables/$named_table/views" nocodb-token - \
+			"$integration_root/restore-extra-views-$named_table.json"
+		local original_views="$integration_root/extra-reader-views.json"
+		[[ "$named_table" == "$named_operator_table" ]] &&
+			original_views="$integration_root/extra-operator-views.json"
+		jq -e --slurpfile before "$original_views" '
+			[(.list // .data // [])[] | {id,title,fk_model_id}] | sort_by(.id) ==
+			([$before[0] | (.list // .data // [])[] | {id,title,fk_model_id}] | sort_by(.id))
+		' "$integration_root/restore-extra-views-$named_table.json" >/dev/null ||
+			fail 'restored named pair changed a saved-view identity.'
+	done
+	IFS=: read -r retained_host retained_port retained_database retained_role retained_password \
+		<"$application_credential_file"
+	[[ "$retained_host" == 127.0.0.1 && "$retained_port" == 5432 &&
+		"$retained_database" == automation_data_acceptance &&
+		"$retained_role" == "$application_role" &&
+		"$retained_password" == "$application_password" ]] ||
+		fail 'protected application credential binding changed.'
+	application_authenticates "$restore_postgres_name" "$retained_password" ||
+		fail 'retained application credential did not authenticate to isolated restore.'
+	"$podman_bin" exec "$restore_postgres_name" psql --no-psqlrc --tuples-only --no-align \
+		--set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_control --command \
+		"SELECT (platform_operations.validate_application_login('automation_data_acceptance','interview')->>'valid')::boolean;" |
+		rg -qx t || fail 'restored application privilege validation failed.'
 	http_request GET "$restore_url/api/v2/meta/bases/$(jq -er '.baseId' "$ready_before")/sources" nocodb-token - \
 		"$integration_root/restore-sources.json"
 	jq -e --slurpfile before "$ready_before" '
@@ -1117,6 +1216,8 @@ WHERE source.domain = 'automation_data_acceptance';")" ||
 		fail 'could not capture the restored source registry for the production request helper.'
 	nocodb_restore_validate_source_registry <(printf '%s\n' "$source_registry") ||
 		fail 'restored source registry did not satisfy the production request contract.'
+	jq -e '(.items | length) == 4 and ([.items[].pair] | unique) == ["default","extra"]' \
+		<<<"$source_registry" >/dev/null || fail 'restored source registry lost a pair.'
 	{
 		printf 'APP_SERVICE=restore-nocodb\n'
 		printf 'RUN_HASH=%s\n' "$run_id"
@@ -1223,7 +1324,297 @@ slice_run() { # <suffix> <initial-source-phase>
 	fi
 }
 
+prove_named_pair() {
+	local reader_role operator_role
+	phase='named-pair-registration'
+	pair_call register "$integration_root/extra-registration.json"
+	jq -e '.pair == "extra" and .state == "registered" and
+		.readerSchema == "extra_read" and .operatorSchema == "extra_edit" and
+		(.readerRole | test("^nocodb_[a-f0-9]{32}_reader$")) and
+		(.operatorRole | test("^nocodb_[a-f0-9]{32}_operator$"))' \
+		"$integration_root/extra-registration.json" >/dev/null || fail 'named pair registration was incomplete.'
+	reader_role="$(jq -er '.readerRole' "$integration_root/extra-registration.json")"
+	operator_role="$(jq -er '.operatorRole' "$integration_root/extra-registration.json")"
+	[[ "$reader_role" =~ ^nocodb_[a-f0-9]{32}_reader$ &&
+		"$operator_role" =~ ^nocodb_[a-f0-9]{32}_operator$ ]] || fail 'named pair roles were malformed.'
+	pair_call prepare "$integration_root/extra-before-grants.json"
+	jq -e '.readerEligible == false and .operatorEligible == false' \
+		"$integration_root/extra-before-grants.json" >/dev/null ||
+		fail 'named pair was eligible before its consumer-reviewed grants.'
+
+	phase='named-pair-migrator-grants'
+	cat >"$integration_root/extra-grants.sql" <<SQL
+SET SESSION AUTHORIZATION automation_data_acceptance_migrator;
+SET ROLE automation_data_acceptance_owner;
+CREATE SCHEMA extra_read AUTHORIZATION automation_data_acceptance_owner;
+CREATE SCHEMA extra_edit AUTHORIZATION automation_data_acceptance_owner;
+CREATE TABLE extra_read.visible_facts (id bigint PRIMARY KEY, fact text NOT NULL);
+INSERT INTO extra_read.visible_facts VALUES (1, 'named-reader');
+CREATE TABLE extra_read.withheld_bookkeeping (id bigint PRIMARY KEY, detail text NOT NULL);
+INSERT INTO extra_read.withheld_bookkeeping VALUES (1, 'withheld');
+CREATE TABLE extra_edit.decisions (id bigint PRIMARY KEY, decision text NOT NULL);
+INSERT INTO extra_edit.decisions VALUES (1, 'pending');
+GRANT CONNECT ON DATABASE automation_data_acceptance TO "$reader_role", "$operator_role";
+GRANT USAGE ON SCHEMA extra_read TO "$reader_role";
+GRANT SELECT ON extra_read.visible_facts TO "$reader_role";
+GRANT USAGE ON SCHEMA extra_edit TO "$operator_role";
+GRANT SELECT, INSERT, UPDATE, DELETE ON extra_edit.decisions TO "$operator_role";
+SQL
+	"$podman_bin" exec --interactive "$postgres_name" psql --no-psqlrc \
+		--set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_acceptance \
+		<"$integration_root/extra-grants.sql" >/dev/null || fail 'named pair migrator grants failed.'
+	pair_call prepare "$integration_root/extra-prepared.json"
+	jq -e '.readerEligible == true and .operatorEligible == true and
+		.operatorRequested == true' "$integration_root/extra-prepared.json" >/dev/null ||
+		fail 'named pair did not become eligible after reviewed grants.'
+
+	phase='named-pair-first-sync'
+	pair_call sync "$integration_root/extra-ready.json"
+	jq -e '.pair == "extra" and .reader.state == "ready" and .operator.state == "ready" and
+		.reader.dataEditAllowed == false and .operator.dataEditAllowed == true and
+		.reader.schemaEditAllowed == false and .operator.schemaEditAllowed == false and
+		.reader.sourceId != .operator.sourceId' "$integration_root/extra-ready.json" >/dev/null ||
+		fail 'named pair source privilege or identity was wrong.'
+	pair_call sync "$integration_root/extra-repeat.json"
+	jq -e --slurpfile before "$integration_root/extra-ready.json" '
+		.baseId == $before[0].baseId and
+		.reader.sourceId == $before[0].reader.sourceId and
+		.reader.integrationId == $before[0].reader.integrationId and
+		.reader.credentialGeneration == $before[0].reader.credentialGeneration and
+		.operator.sourceId == $before[0].operator.sourceId and
+		.operator.integrationId == $before[0].operator.integrationId and
+		.operator.credentialGeneration == $before[0].operator.credentialGeneration
+	' "$integration_root/extra-repeat.json" >/dev/null ||
+		fail 'repeated named pair sync changed source or credential identity.'
+	local base_id reader_source operator_source
+	base_id="$(jq -er '.baseId' "$integration_root/extra-ready.json")"
+	reader_source="$(jq -er '.reader.sourceId' "$integration_root/extra-ready.json")"
+	operator_source="$(jq -er '.operator.sourceId' "$integration_root/extra-ready.json")"
+	http_request GET "$nocodb_url/api/v2/meta/bases/$base_id/tables" nocodb-token - \
+		"$integration_root/extra-tables.json"
+	jq -e --arg reader "$reader_source" --arg operator "$operator_source" '
+		(.list // .data // []) as $tables |
+		([$tables[] | select(.title == "visible_facts" and .source_id == $reader)] | length) == 1 and
+		([$tables[] | select(.title == "decisions" and .source_id == $operator)] | length) == 1 and
+		([$tables[] | select(.title == "withheld_bookkeeping")] | length) == 0
+	' "$integration_root/extra-tables.json" >/dev/null ||
+		fail 'named pair reflected a withheld or missing table.'
+	local reader_table operator_table
+	reader_table="$(jq -er --arg source "$reader_source" \
+		'(.list // .data // [])[] | select(.title == "visible_facts" and .source_id == $source) | .id' \
+		"$integration_root/extra-tables.json")"
+	operator_table="$(jq -er --arg source "$operator_source" \
+		'(.list // .data // [])[] | select(.title == "decisions" and .source_id == $source) | .id' \
+		"$integration_root/extra-tables.json")"
+	http_request GET "$nocodb_url/api/v2/meta/tables/$reader_table/views" nocodb-token - \
+		"$integration_root/extra-reader-views.json"
+	http_request GET "$nocodb_url/api/v2/meta/tables/$operator_table/views" nocodb-token - \
+		"$integration_root/extra-operator-views.json"
+	jq -e '(.list // .data // []) | length > 0 and all(.[]; .id | type == "string")' \
+		"$integration_root/extra-reader-views.json" >/dev/null ||
+		fail 'named reader did not retain a saved view.'
+	jq -e '(.list // .data // []) | length > 0 and all(.[]; .id | type == "string")' \
+		"$integration_root/extra-operator-views.json" >/dev/null ||
+		fail 'named operator did not retain a saved view.'
+	source_call sync - "$integration_root/default-after-extra.json"
+	jq -e --slurpfile before "$integration_root/source-ready.json" '
+		.baseId == $before[0].baseId and
+		.reader.sourceId == $before[0].reader.sourceId and
+		.reader.credentialGeneration == $before[0].reader.credentialGeneration and
+		.operator.sourceId == $before[0].operator.sourceId and
+		.operator.credentialGeneration == $before[0].operator.credentialGeneration
+	' "$integration_root/default-after-extra.json" >/dev/null ||
+		fail 'named pair creation changed the default pair.'
+}
+
+application_authenticates() { # <postgres-container> <password>
+	local container="$1" password="$2" observed host
+	if [[ "$container" == "$postgres_name" ]]; then
+		host='automation-data-postgresql.automation-data.svc.cluster.local'
+	elif [[ "$container" == "$restore_postgres_name" ]]; then
+		host='restore-postgresql'
+	else
+		fail 'application authentication selected an unknown PostgreSQL container.'
+	fi
+	observed="$("$podman_bin" run --rm --name "$auth_probe_name" \
+		--label "homelab-talos.test-run=$run_marker" --network "$network" \
+		--env "PGPASSWORD=$password" "$postgres_image" \
+		psql --no-psqlrc --no-password --tuples-only --no-align --set=ON_ERROR_STOP=1 \
+		--host="$host" --username="$application_role" \
+		--dbname=automation_data_acceptance --command 'SELECT current_user;' 2>/dev/null)" || return 1
+	[[ "$observed" == "$application_role" ]]
+}
+
+prove_application_login() {
+	local domain='automation_data_acceptance' application='interview' body
+	phase='application-login-registration'
+	body="$(jq -cn --arg domain "$domain" --arg application "$application" \
+		'{domain:$domain,operation:"login-register",application:$application,schema:"app"}')"
+	webhook_call automation-data-provision provision-webhook "$body" \
+		"$integration_root/application-registration.json"
+	jq -e '.ok == true and .state == "awaiting_grants" and
+		.schema == "app" and (.role | test("^app_[a-f0-9]{32}_integration$"))' \
+		"$integration_root/application-registration.json" >/dev/null ||
+		fail 'application login registration failed.'
+	application_role="$(jq -er '.role' "$integration_root/application-registration.json")"
+	[[ "$application_role" =~ ^app_[a-f0-9]{32}_integration$ ]] ||
+		fail 'application login role was malformed.'
+	cat >"$integration_root/application-grants.sql" <<SQL
+SET SESSION AUTHORIZATION automation_data_acceptance_migrator;
+SET ROLE automation_data_acceptance_owner;
+CREATE TABLE app.integration_facts (id bigint PRIMARY KEY, fact text NOT NULL);
+INSERT INTO app.integration_facts VALUES (1, 'original');
+CREATE TABLE app.withheld_bookkeeping (id bigint PRIMARY KEY, detail text NOT NULL);
+INSERT INTO app.withheld_bookkeeping VALUES (1, 'private');
+CREATE FUNCTION app.record_integration_fact(bigint,text) RETURNS void LANGUAGE sql
+  SECURITY DEFINER SET search_path = pg_catalog, app
+  AS 'INSERT INTO app.integration_facts(id,fact) VALUES (\$1,\$2)
+      ON CONFLICT (id) DO UPDATE SET fact = EXCLUDED.fact';
+REVOKE ALL ON FUNCTION app.record_integration_fact(bigint,text) FROM PUBLIC;
+CREATE FUNCTION app.withheld_admin() RETURNS bigint LANGUAGE sql
+  SECURITY DEFINER SET search_path = pg_catalog, app
+  AS 'SELECT count(*) FROM app.withheld_bookkeeping';
+REVOKE ALL ON FUNCTION app.withheld_admin() FROM PUBLIC;
+GRANT CONNECT ON DATABASE automation_data_acceptance TO "$application_role";
+GRANT USAGE ON SCHEMA app TO "$application_role";
+GRANT SELECT ON app.integration_facts TO "$application_role";
+GRANT EXECUTE ON FUNCTION app.record_integration_fact(bigint,text) TO "$application_role";
+SQL
+	"$podman_bin" exec --interactive "$postgres_name" psql --no-psqlrc \
+		--set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_acceptance \
+		<"$integration_root/application-grants.sql" >/dev/null || fail 'application migrator grants failed.'
+	body="$(jq -cn --arg domain "$domain" --arg application "$application" \
+		'{domain:$domain,operation:"login-validate",application:$application}')"
+	webhook_call automation-data-provision provision-webhook "$body" \
+		"$integration_root/application-eligible.json"
+	jq -e '.ok == true and .state == "awaiting_grants" and .valid == true' \
+		"$integration_root/application-eligible.json" >/dev/null ||
+		fail 'application login grants were not eligible.'
+	phase='application-login-activation'
+	application_password="$(random_secret)"
+	record_secret "$application_password"
+	application_credential_file="$integration_root/application-credential.pgpass"
+	printf '127.0.0.1:5432:%s:%s:%s\n' "$domain" "$application_role" \
+		"$application_password" >"$application_credential_file"
+	chmod 600 "$application_credential_file"
+	body="$(jq -cn --arg domain "$domain" --arg application "$application" \
+		--arg password "$application_password" \
+		'{domain:$domain,operation:"login-activate",application:$application,
+		operationId:"00000000-0000-4000-8000-000000000491",expectedGeneration:0,password:$password}')"
+	webhook_call automation-data-provision provision-webhook "$body" \
+		"$integration_root/application-activated.json"
+	jq -e '.ok == true and .state == "activating" and .credentialGeneration == 1 and
+		.operationId == "00000000-0000-4000-8000-000000000491"' \
+		"$integration_root/application-activated.json" >/dev/null ||
+		fail 'application credential activation failed.'
+	application_authenticates "$postgres_name" "$application_password" ||
+		fail 'activated application credential did not authenticate.'
+	if application_authenticates "$postgres_name" "$(random_secret)"; then
+		fail 'application password probe accepted an unrelated password.'
+	fi
+	body="$(jq -cn --arg domain "$domain" --arg application "$application" \
+		'{domain:$domain,operation:"login-complete",application:$application,
+		operationId:"00000000-0000-4000-8000-000000000491",credentialGeneration:1}')"
+	webhook_call automation-data-provision provision-webhook "$body" \
+		"$integration_root/application-ready.json"
+	jq -e '.ok == true and .state == "ready" and .credentialGeneration == 1' \
+		"$integration_root/application-ready.json" >/dev/null ||
+		fail 'application login completion failed.'
+	[[ "$("$podman_bin" exec --env "PGPASSWORD=$application_password" "$postgres_name" \
+		psql --no-psqlrc --no-password --tuples-only --no-align --set=ON_ERROR_STOP=1 \
+		--host=127.0.0.1 --username="$application_role" --dbname="$domain" \
+		--command "SELECT app.record_integration_fact(2,'created'); SELECT fact FROM app.integration_facts WHERE id=2;" 2>/dev/null | tail -1)" == created ]] ||
+		fail 'application fixed write/read functions failed.'
+	if "$podman_bin" exec --env "PGPASSWORD=$application_password" "$postgres_name" \
+		psql --no-psqlrc --no-password --tuples-only --no-align --set=ON_ERROR_STOP=1 \
+		--host=127.0.0.1 --username="$application_role" --dbname="$domain" \
+		--command 'SELECT * FROM app.withheld_bookkeeping;' >/dev/null 2>&1; then
+		fail 'application login read the withheld bookkeeping table.'
+	fi
+	if "$podman_bin" exec --env "PGPASSWORD=$application_password" "$postgres_name" \
+		psql --no-psqlrc --no-password --tuples-only --no-align --set=ON_ERROR_STOP=1 \
+		--host=127.0.0.1 --username="$application_role" --dbname="$domain" \
+		--command 'SELECT app.withheld_admin();' >/dev/null 2>&1; then
+		fail 'application login executed the withheld privileged routine.'
+	fi
+}
+
+prove_targeted_rotations() {
+	local domain='automation_data_acceptance' application='interview'
+	local old_password="$application_password" body before_registry after_registry
+	phase='named-pair-reader-rotation'
+	pair_call rotate "$integration_root/extra-reader-rotated.json" reader
+	jq -e --slurpfile before "$integration_root/extra-ready.json" '
+		.baseId == $before[0].baseId and
+		.reader.sourceId == $before[0].reader.sourceId and
+		.reader.integrationId == $before[0].reader.integrationId and
+		.reader.credentialGeneration == ($before[0].reader.credentialGeneration + 1) and
+		.operator.sourceId == $before[0].operator.sourceId and
+		.operator.integrationId == $before[0].operator.integrationId and
+		.operator.credentialGeneration == $before[0].operator.credentialGeneration
+	' "$integration_root/extra-reader-rotated.json" >/dev/null ||
+		fail 'named reader rotation changed its sibling identity or credential.'
+	pair_call sync "$integration_root/extra-after-rotation.json"
+	jq -e --slurpfile before "$integration_root/extra-reader-rotated.json" '
+		.reader.sourceId == $before[0].reader.sourceId and
+		.reader.credentialGeneration == $before[0].reader.credentialGeneration and
+		.operator.sourceId == $before[0].operator.sourceId and
+		.operator.credentialGeneration == $before[0].operator.credentialGeneration
+	' "$integration_root/extra-after-rotation.json" >/dev/null ||
+		fail 'named pair sync changed a freshly rotated credential.'
+	cp "$integration_root/extra-after-rotation.json" "$integration_root/extra-ready.json"
+	source_call sync - "$integration_root/default-after-extra-rotation.json"
+	jq -e --slurpfile before "$integration_root/default-after-extra.json" '
+		.reader.sourceId == $before[0].reader.sourceId and
+		.reader.credentialGeneration == $before[0].reader.credentialGeneration and
+		.operator.sourceId == $before[0].operator.sourceId and
+		.operator.credentialGeneration == $before[0].operator.credentialGeneration
+	' "$integration_root/default-after-extra-rotation.json" >/dev/null ||
+		fail 'named pair rotation changed the default pair.'
+
+	phase='application-credential-rotation'
+	before_registry="$("$podman_bin" exec "$postgres_name" psql --no-psqlrc --tuples-only --no-align \
+		--set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_control --command \
+		"SELECT jsonb_agg(jsonb_build_object('pair',pair,'accessKind',access_kind,'credentialGeneration',credential_generation,'sourceId',source_id,'integrationId',integration_id) ORDER BY pair,access_kind) FROM platform_operations.managed_nocodb_sources WHERE domain = '$domain';")"
+	application_password="$(random_secret)"
+	record_secret "$application_password"
+	body="$(jq -cn --arg domain "$domain" --arg application "$application" \
+		--arg password "$application_password" \
+		'{domain:$domain,operation:"login-rotate",application:$application,
+		operationId:"00000000-0000-4000-8000-000000000492",expectedGeneration:1,password:$password}')"
+	webhook_call automation-data-provision provision-webhook "$body" \
+		"$integration_root/application-rotated.json"
+	jq -e '.ok == true and .state == "rotating" and .credentialGeneration == 2 and
+		.operationId == "00000000-0000-4000-8000-000000000492"' \
+		"$integration_root/application-rotated.json" >/dev/null ||
+		fail 'application credential rotation did not advance once.'
+	application_authenticates "$postgres_name" "$application_password" ||
+		fail 'new application credential did not authenticate.'
+	if application_authenticates "$postgres_name" "$old_password"; then
+		fail 'old application credential still authenticated after rotation.'
+	fi
+	body="$(jq -cn --arg domain "$domain" --arg application "$application" \
+		'{domain:$domain,operation:"login-complete",application:$application,
+		operationId:"00000000-0000-4000-8000-000000000492",credentialGeneration:2}')"
+	webhook_call automation-data-provision provision-webhook "$body" \
+		"$integration_root/application-rotation-ready.json"
+	jq -e '.ok == true and .state == "ready" and .credentialGeneration == 2' \
+		"$integration_root/application-rotation-ready.json" >/dev/null ||
+		fail 'application rotation did not complete.'
+	printf '127.0.0.1:5432:%s:%s:%s\n' "$domain" "$application_role" \
+		"$application_password" >"$application_credential_file"
+	chmod 600 "$application_credential_file"
+	after_registry="$("$podman_bin" exec "$postgres_name" psql --no-psqlrc --tuples-only --no-align \
+		--set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_control --command \
+		"SELECT jsonb_agg(jsonb_build_object('pair',pair,'accessKind',access_kind,'credentialGeneration',credential_generation,'sourceId',source_id,'integrationId',integration_id) ORDER BY pair,access_kind) FROM platform_operations.managed_nocodb_sources WHERE domain = '$domain';")"
+	[[ "$before_registry" == "$after_registry" ]] ||
+		fail 'application rotation changed a NocoDB source registry entry.'
+}
+
 slice_run first true
+prove_named_pair
+prove_application_login
+prove_targeted_rotations
 prove_aged_jobs_rotation_and_restart "$integration_root/source-ready.json"
 slice_run second false
 prove_additive_metadata_refresh "$integration_root/source-ready.json" "$integration_root/acceptance-probe.json"
