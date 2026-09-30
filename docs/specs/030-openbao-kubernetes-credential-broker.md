@@ -9,10 +9,11 @@ refinements to the seal threat model and configuration-drift verification.
 The source implementation is merged. Seal material and the initialization recovery
 bundle are retained by the operator; three servers are initialized and Ready.
 The prerequisite, server, acceptance, and backup Flux units reconcile through Git.
-The private route and monitoring activate through a reviewed Git change after
-attended issuance, HA, and restore acceptance. Source and CI results are candidate
-evidence only; issue 449 remains open until deployed route and monitoring
-verification pass.
+The private route and monitoring are active. Source and CI results are candidate
+evidence only; issue 449 remains open pending sustained issuance and retained,
+passing live acceptance. Readiness and configuration verification do not establish
+that the Kubernetes issuer credential remains usable across token rotation; see
+the known upstream limitation below.
 
 Deploy OpenBao inside the Talos cluster to issue short-lived credentials for
 pre-existing Kubernetes ServiceAccounts. Git and Flux own every ServiceAccount,
@@ -94,7 +95,9 @@ The server values must explicitly configure:
 Use a Git-owned server ServiceAccount. Omit chart-generated pod-registration RBAC
 and active/standby label-based routing. A Service selects Ready servers; OpenBao
 handles forwarding to the leader. A headless Service provides peer discovery.
-Mount only the projected, rotating Kubernetes API token needed by the issuer.
+The current source mounts the projected, rotating Kubernetes API token needed by
+the issuer. Its compatibility limitation is recorded below; a different issuer
+credential requires a reviewed source and recovery-policy change.
 
 Start with requests of 100m CPU and 256 MiB memory per server, and limits of one
 CPU and 1 GiB memory. These are provisional reservations, not measured capacity.
@@ -485,6 +488,65 @@ actual expiry, audience, and authenticated identity. Kubernetes determines the
 effective expiration. Reject excessive lifetime. An OpenBao lease revocation
 does not independently revoke an existing ServiceAccount JWT: expiration and
 Kubernetes object lifecycle remain the effective invalidation mechanisms.
+
+### Known upstream issuer-token rotation limitation
+
+Investigation on 2026-09-29 reproduced a rotation failure in the official OpenBao
+2.7.0 Kubernetes secrets engine. Its
+[cached-client lookup](https://github.com/openbao/openbao/blob/ca305a02daa68b203325daa1b25c18d7a252d4b3/internal/builtin/logical/kubernetes/path_creds.go)
+returns an existing client before consulting the local token-file reader. The
+[client constructor](https://github.com/openbao/openbao/blob/ca305a02daa68b203325daa1b25c18d7a252d4b3/internal/builtin/logical/kubernetes/client.go)
+captures a bearer token rather than a token-file reference. An isolated test with
+synthetic credentials succeeded before token replacement and failed afterward.
+This concerns OpenBao's **issuer credential**, independently of operator login
+sessions and the short-lived credentials it issues to consumers.
+
+The same failure is reported in the still-open upstream
+[Kubernetes secrets plugin issue 103](https://github.com/hashicorp/vault-plugin-secrets-kubernetes/issues/103).
+Source inspection found the same client cache and static bearer-token constructor
+in OpenBao 2.3.2, 2.4.4, 2.5.4, 2.6.3, and 2.7.0. For example,
+[2.6.3 uses the same early cache return](https://github.com/openbao/openbao/blob/v2.6.3/builtin/logical/kubernetes/path_creds.go).
+No unaffected downgrade target was established; changing the image to one of
+these older versions is not a remedy. This is source evidence, not a live
+downgrade or compatibility test.
+
+Kubernetes refreshes projected tokens automatically; applications must reload
+them. Skipping HA tests or leaving pods running does not stop expiry. Increasing
+the issuer token lifetime postpones this failure without correcting it. See
+[Kubernetes token projection](https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/#service-account-token-volume-projection).
+
+An operator can temporarily restore issuance by reapplying the exact existing
+`kubernetes/config` values: the upstream
+[configuration write](https://github.com/openbao/openbao/blob/ca305a02daa68b203325daa1b25c18d7a252d4b3/internal/builtin/logical/kubernetes/path_config.go)
+clears the cached client. This requires no member eviction, HA test, root token,
+or replacement of an issued consumer token. Ordinary `openbao-config-apply`
+skips unchanged objects, so a no-difference apply is not this repair. A successful
+refresh is temporary and must not be reported as sustained recovery.
+
+The operator rejected custom server images. No fixed official release or
+documented automatic client-refresh setting was identified during this review.
+A supported Kubernetes alternative is a
+[manually created ServiceAccount token Secret](https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/#manually-create-a-long-lived-api-token-for-a-serviceaccount)
+for the existing issuer identity. This token does not expire automatically;
+Kubernetes recommends bounded tokens where possible. Using it would require a
+reviewed mount change and explicit revocation/rotation handling. Preserve the
+named TokenRequest RBAC, issuer/consumer separation, and consumer expiry. This
+alternative is not deployed or validated by this documentation change.
+
+Keeping the issuer credential short-lived with the affected official image would
+instead require a recurring, narrowly authorized backend refresh. That introduces
+a configuration writer and its scheduling, authentication, and failure-monitoring
+requirements, departing from the current operator-owned configuration model.
+Neither workaround changes the ten-minute consumer credential requirement. Select
+and review the issuer workaround separately; do not weaken consumer expiry to
+work around an issuer-cache failure.
+
+Retain the official image and do not add periodic privileged configuration writes
+or pod restarts to conceal this limitation. Revisit projected issuer tokens when
+an official fix is available. Acceptance of that fix must prove issuance after
+the original issuer token expires, without restarting servers or rewriting their
+configuration. Ordinary readiness and configuration-drift checks remain useful
+but cannot prove that behavior.
 
 ## Private networking and TLS
 
