@@ -192,7 +192,7 @@ generation="$(query "SELECT generation FROM platform_operations.nocodb_source_op
 if query "SELECT platform_operations.complete_nocodb_operation(
   'claim_fixture','extra','$second_id'::uuid,$generation)" \
   >"$scratch/stale.out" 2>"$scratch/stale.err"; then
-  echo 'A stale operation completed another caller’s claim.' >&2
+  echo 'A stale operation completed a different claim.' >&2
   exit 1
 fi
 rg -q 'nocodb_claim_stale' "$scratch/stale.err"

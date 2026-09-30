@@ -181,5 +181,5 @@ if query 'SELECT platform_operations.capture_backup_state()' \
   exit 1
 fi
 rg -q 'incomplete_application_operation' "$scratch/active-capture.err"
-stage=done
+stage='done'
 echo 'Automation-data v3 upgrade and backup state passed.'
