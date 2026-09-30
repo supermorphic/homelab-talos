@@ -332,6 +332,46 @@ class CommandTests(unittest.TestCase):
             self.resolve("source", pair="default", access_kind="reader").decision, "ready"
         )
 
+    def test_completed_observational_sync_claim_does_not_change_source_generation(self):
+        self.raw["platform"]["objects"].append(
+            {
+                "kind": "claim",
+                "id": "sample:default",
+                "domain": "sample",
+                "pair": "default",
+                "operationId": "fixture-new-sync",
+                "operation": "sync",
+                "accessKind": None,
+                "generation": 20,
+                "phase": "complete",
+            }
+        )
+        # A repeated successful sync obtains a new operation claim while preserving
+        # current source and credential generations when no source mutation is needed.
+        result = self.resolve("source", pair="default", access_kind="reader")
+        self.assertEqual(result.decision, "ready")
+        self.assertEqual(result.identity["operationGeneration"], 3)
+        self.assertEqual(result.identity["credentialGeneration"], 2)
+        self.assertEqual(result.identity["evidence"]["claim"]["generation"], 20)
+
+    def test_builtin_default_mapping_is_distinct_from_registered_custom_mapping(self):
+        self.raw["platform"]["objects"] = [
+            o for o in self.raw["platform"]["objects"] if o["kind"] != "mapping"
+        ]
+        result = self.resolve("source", access_kind="reader")
+        self.assertEqual(result.decision, "ready")
+        self.assertEqual(result.identity["mappingOrigin"], "built_in_default")
+        self.assertEqual(result.identity["evidence"]["mapping"]["readerSchema"], "read_model")
+        row = next(o for o in self.raw["platform"]["objects"] if o["kind"] == "source")
+        row.update(
+            id="sample:extra:reader",
+            pair="extra",
+            role="nocodb_c5a3aa32680d2c32c1c6f8aa8661f6e7_reader",
+        )
+        self.assertNotEqual(
+            self.resolve("source", pair="extra", access_kind="reader").decision, "ready"
+        )
+
     def test_incomplete_role_attributes_cannot_produce_ready(self):
         role = next(
             o

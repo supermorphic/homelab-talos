@@ -27,6 +27,7 @@ from automation_data_inventory import (
     InventoryError,
     SourceObservation,
     build_inventory,
+    lifecycle_evidence,
     resolve,
     timestamp,
     validate_observation,
@@ -379,3 +380,13 @@ def assert_profile_unchanged(selected: ProfileMetadata) -> None:
             != selected.file_signature
         ):
             raise PrivateFileError("connection_profile_changed")
+
+
+def lifecycle_readback(mutation: dict) -> dict:
+    """Best-effort observational evidence; failure must never erase successful mutation."""
+    try:
+        request = DiscoveryRequest("list", domain=mutation["domain"])
+        config = load_access_config()
+        return lifecycle_evidence(mutation, build_inventory(fetch_observations(config, request)))
+    except Exception:  # noqa: BLE001 - return only a fixed evidence status
+        return {"status": "unavailable", "observedAt": None, "errorCode": "source_unavailable"}

@@ -233,6 +233,12 @@ require(http_nodes, "The source workflow must contain NocoDB HTTP calls.")
 seen_paths = set()
 for node in http_nodes:
     parameters = node.get("parameters", {})
+    if node["name"] == "Observe Mutation Inventory":
+        require(parameters.get("url") == "http://127.0.0.1:5678/webhook/automation-data-credential-inventory" and parameters.get("method") == "POST",
+                "Inventory readback must call only its fixed local observational endpoint.")
+        require(node.get("credentials") == {"httpHeaderAuth": {"id": "", "name": "Automation Data Inventory Header"}},
+                "Inventory readback must use only its named credential placeholder.")
+        continue
     path = normalized_path(parameters.get("url", ""))
     require(path in allowed_nocodb_paths, f"{node['name']} uses an unapproved NocoDB path: {path}")
     require(parameters.get("authentication") == "genericCredentialType", f"{node['name']} must use Header Auth.")
@@ -278,8 +284,9 @@ for name in ("Evaluate Reader Job", "Evaluate Operator Job"):
     require(all(state in code for state in terminal_job_states), f"{name} omits a terminal job state.")
 
 serialized = json.dumps(workflow)
-require("DELETE" not in serialized.upper(), "The source workflow must not call source delete.")
-require(not any("credentials" in node for node in nodes), "The source workflow must not embed credential IDs.")
+require(not any(node.get("parameters", {}).get("method") == "DELETE" for node in http_nodes) and
+        not re.search(r"\bDELETE\s+FROM\b", serialized, re.IGNORECASE), "The source workflow must not call source delete.")
+require(not any("credentials" in node for node in nodes if node["name"] != "Observe Mutation Inventory"), "The source workflow must not embed credential IDs.")
 
 # NocoDB 2026.08.2 (tag commit 28c50ff08c37fe3ced3a7dba021f7cba7b2c51dc)
 # defines the database member of IntegrationReq.type as "database". Keep the
@@ -349,7 +356,7 @@ require(
     "Configuration must return through its bounded response.",
 )
 require(
-    not any(by_name[name].get("type") in {"n8n-nodes-base.httpRequest", "n8n-nodes-base.crypto"} for name in reachable("Configure Schema Mapping")),
+    not any(by_name[name].get("type") in {"n8n-nodes-base.httpRequest", "n8n-nodes-base.crypto"} for name in reachable("Configure Schema Mapping") if name != "Observe Mutation Inventory"),
     "Configuration must not create sources or generate passwords.",
 )
 initial_prepare_outputs = connections.get("Initial Prepare Requested", {}).get("main", [])
@@ -375,12 +382,12 @@ require("List Domain Bases" in reachable("Claim Source Operation") and
         "Create Domain Base" not in reachable_avoiding("Source Webhook", {"Claim Source Operation"}),
         "No base creation may bypass the persisted operation claim.")
 require(
-    successors("Prepare Access Response") == ["Respond", "Prepare Source Error Response"],
+    successors("Prepare Access Response") == ["Inventory Readback Required", "Prepare Source Error Response"],
     "The bounded prepare response must share the authenticated webhook response and error paths.",
 )
 prepare_reachable = reachable("Prepare Access Response")
 require(
-    not any(by_name[name].get("type") in {"n8n-nodes-base.httpRequest", "n8n-nodes-base.crypto"} for name in prepare_reachable),
+    not any(by_name[name].get("type") in {"n8n-nodes-base.httpRequest", "n8n-nodes-base.crypto"} for name in prepare_reachable if name != "Observe Mutation Inventory"),
     "Prepare must terminate before every NocoDB HTTP and password-generation node.",
 )
 require(
@@ -1987,6 +1994,7 @@ mapfile -t packaged_workflows < <(
 )
 expected_workflows=(
   'automation-data-canary.json=workflows/automation-data-canary.json'
+  'automation-data-credential-inventory.json=workflows/automation-data-credential-inventory.json'
   'automation-data-provisioner.json=workflows/automation-data-provisioner.json'
   'nocodb-acceptance-domain.json=workflows/nocodb-acceptance-domain.json'
   'nocodb-source-provisioner.json=workflows/nocodb-source-provisioner.json'

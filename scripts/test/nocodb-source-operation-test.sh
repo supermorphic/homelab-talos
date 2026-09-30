@@ -189,6 +189,9 @@ valid_sync_response="$(jq -cn --argjson reader_validation "$reader_validation" -
 }')"
 valid_rotate_response="$(jq -c '.operation = "rotate" | .operator.generation = 2 | .operator.credentialGeneration = 2' <<<"$valid_sync_response")"
 valid_prepare_response='{"ok":true,"domain":"domain_one","operation":"prepare","state":"prepared","readerRole":"domain_one_reader","readerEligible":true,"operatorRequested":true,"operatorRole":"domain_one_operator","operatorEligible":false}'
+for response_variable in valid_sync_response valid_rotate_response valid_prepare_response; do
+  printf -v "$response_variable" '%s' "$(jq -c '. + {inventoryReadback:{status:"unavailable",observedAt:null,errorCode:"source_unavailable"}}' <<<"${!response_variable}")"
+done
 
 pair_hash="$(printf 'domain_one:interviews' | md5sum | cut -d' ' -f1)"
 pair_register_response="$(jq -cn --arg hash "$pair_hash" '{ok:true,domain:"domain_one",pair:"interviews",operation:"register",state:"registered",readerSchema:"extra_read",operatorSchema:"extra_edit",readerRole:("nocodb_"+$hash+"_reader"),operatorRole:("nocodb_"+$hash+"_operator")}')"

@@ -59,6 +59,7 @@ class DiscoveryContractTest(unittest.TestCase):
     def test_unknown_schema_or_fields_do_not_echo_raw_secrets(self):
         for change in [
             {"schemaRevision": "unknown"},
+            {"receivedAt": "SENTINEL_SECRET"},
             {"headers": "SENTINEL_SECRET"},
             {"objects": [{"kind": "credential", "id": "fixture", "data": "SENTINEL_SECRET"}]},
         ]:

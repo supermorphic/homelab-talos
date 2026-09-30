@@ -297,6 +297,8 @@ def validate_observation(raw: object, source: str) -> SourceObservation:
     if raw.get("schemaRevision") != SCHEMA_REVISIONS[source]:
         raise InventoryError("unsupported_schema")
     timestamp(raw.get("observedAt"))
+    if raw.get("receivedAt") is not None:
+        timestamp(raw["receivedAt"])
     objects = raw.get("objects")
     if not isinstance(objects, list):
         raise InventoryError("invalid_response")
@@ -509,7 +511,7 @@ def build_inventory(observations: list[SourceObservation]) -> InventoryEnvelope:
         except InventoryError as error:
             clean = SourceObservation(source, "unavailable", error_code=str(error))
         summary = to_wire(clean)
-        summary["receivedAt"] = observation.received_at or datetime.now(UTC).isoformat()
+        summary["receivedAt"] = clean.received_at or datetime.now(UTC).isoformat()
         if clean.complete and not _fresh(summary):
             summary.update(
                 status="unavailable",
@@ -701,25 +703,21 @@ def build_inventory(observations: list[SourceObservation]) -> InventoryEnvelope:
         claim = get("platform", "claim", f"{item.get('domain')}:{item.get('pair')}")
         item["evidence"]["claim"] = claim
         mapping = get("platform", "mapping", f"{item.get('domain')}:{item.get('pair')}")
+        item["mappingOrigin"] = "registered" if mapping is not None else "not_observed"
+        if mapping is None and item.get("pair") == "default":
+            # The existing default lifecycle uses these built-in schema names when
+            # no custom mapping is registered. This is a procedure-derived expectation,
+            # not an observation of source configuration or database grants.
+            mapping = {
+                "domain": item.get("domain"),
+                "pair": "default",
+                "readerSchema": "read_model",
+                "operatorSchema": "operator",
+            }
+            item["mappingOrigin"] = "built_in_default"
         item["evidence"]["mapping"] = mapping
-        if claim is not None:
-            if claim.get("phase") != "complete":
-                issue(item, "uncertain_claim", "platform", None, claim.get("operationId"))
-            elif (
-                item.get("state") == "ready"
-                and claim.get("operation") == item.get("operation")
-                and claim.get("accessKind") in {None, item.get("accessKind")}
-                and type(claim.get("generation")) is int
-                and type(item.get("operationGeneration")) is int
-                and item["operationGeneration"] < claim["generation"]
-            ):
-                issue(
-                    item,
-                    "claim_generation_mismatch",
-                    "platform",
-                    claim["generation"],
-                    item["operationGeneration"],
-                )
+        if claim is not None and claim.get("phase") != "complete":
+            issue(item, "uncertain_claim", "platform", None, claim.get("operationId"))
         for kind, key in [
             ("source", "sourceId"),
             ("integration", "integrationId"),
@@ -1083,3 +1081,88 @@ def render_result(result: InventoryEnvelope | Resolution, format: str) -> str:
         else "Credential metadata inventory; authentication and authorization are separate."
     )
     return heading + "\n" + json.dumps(wire, indent=2, sort_keys=True)
+
+
+def lifecycle_evidence(mutation: dict, inventory: InventoryEnvelope) -> dict:
+    """Observe the mutation's retained metadata without changing its outcome."""
+    operation = mutation.get("operation", "")
+    family = (
+        "application"
+        if operation.startswith("login-")
+        else "source"
+        if operation in {"configure", "register", "prepare", "sync", "rotate"}
+        else "migration"
+    )
+    required = (
+        ["platform"]
+        if family == "application"
+        else ["platform", "nocodb" if family == "source" else "n8n"]
+    )
+    summaries = {s["source"]: s for s in inventory.sources}
+    if any(not _fresh(summaries.get(s, {})) for s in required):
+        return {"status": "unavailable", "observedAt": None, "errorCode": "source_unavailable"}
+    observed_at = min((summaries[s]["observedAt"] for s in required), key=timestamp)
+    targets = [
+        i
+        for i in inventory.items
+        if i["family"] == family and i.get("domain") == mutation.get("domain")
+    ]
+    if family == "application":
+        targets = [i for i in targets if i.get("application") == mutation.get("application")]
+        matches = (
+            len(targets) == 1
+            and all(
+                targets[0].get(k) == mutation.get(k)
+                for k in ["role", "state", "credentialGeneration"]
+            )
+            and not targets[0]["discrepancies"]
+        )
+    elif family == "migration":
+        matches = (
+            len(targets) == 1
+            and targets[0].get("credentialId") == mutation.get("migratorCredentialId")
+            and not targets[0]["discrepancies"]
+        )
+        runtime = [
+            i
+            for i in inventory.items
+            if i["family"] == "workflow" and i.get("domain") == mutation.get("domain")
+        ]
+        matches = (
+            matches
+            and len(runtime) == 1
+            and runtime[0].get("credentialId") == mutation.get("runtimeCredentialId")
+            and not runtime[0]["discrepancies"]
+        )
+    else:
+        pair = mutation.get("pair") or "default"
+        targets = [i for i in targets if i.get("pair") == pair]
+        matches = bool(targets) and not any(i["discrepancies"] for i in targets)
+        if operation in {"sync", "rotate"}:
+            for kind in ["reader", "operator"]:
+                expected = mutation.get(kind)
+                if expected is not None:
+                    rows = [i for i in targets if i.get("accessKind") == kind]
+                    matches = (
+                        matches
+                        and len(rows) == 1
+                        and all(
+                            rows[0].get(k) == expected.get(k)
+                            for k in ["state", "credentialGeneration", "sourceId", "integrationId"]
+                        )
+                    )
+        else:
+            for kind in ["reader", "operator"]:
+                expected_role = mutation.get(kind + "Role")
+                if expected_role:
+                    matches = matches and any(
+                        i.get("accessKind") == kind
+                        and i.get("role") == expected_role
+                        and i["evidence"].get("role") is not None
+                        for i in targets
+                    )
+    return {
+        "status": "observed" if matches else "inconsistent",
+        "observedAt": observed_at,
+        "errorCode": None if matches else "target_metadata_mismatch",
+    }

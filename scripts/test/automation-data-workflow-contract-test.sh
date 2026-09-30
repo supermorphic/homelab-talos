@@ -118,6 +118,12 @@ allowed_dynamic_urls = {
 for node in http_nodes:
     parameters = node.get("parameters", {})
     url = parameters.get("url")
+    if node["name"] == "Observe Mutation Inventory":
+        require(url == "http://127.0.0.1:5678/webhook/automation-data-credential-inventory" and parameters.get("method") == "POST",
+                "Inventory readback must call only its fixed local observational endpoint.")
+        require(node.get("credentials") == {"httpHeaderAuth": {"id": "", "name": "Automation Data Inventory Header"}},
+                "Inventory readback must use only the named inventory credential placeholder.")
+        continue
     require(url == allowed_literal_url or url in allowed_dynamic_urls, f"{node['name']} has a dynamic or non-local API URL.")
     require(parameters.get("authentication") == "genericCredentialType", f"{node['name']} must use an n8n Header Auth credential.")
     require(parameters.get("genericAuthType") == "httpHeaderAuth", f"{node['name']} must use Header Auth.")
@@ -151,7 +157,7 @@ for name in ("List Provision Credentials", "List Ready Credentials", "List Rotat
 serialized = json.dumps(workflow)
 for forbidden in ("DROP DATABASE", "DROP ROLE", "TRUNCATE", "DELETE FROM", "queryField"):
     require(forbidden.lower() not in serialized.lower(), f"Forbidden operation or request field found: {forbidden}")
-require(not any("credentials" in node for node in nodes), "The Git template must not embed credential IDs or bindings.")
+require(not any("credentials" in node for node in nodes if node["name"] != "Observe Mutation Inventory"), "The Git template must not embed credential IDs or bindings.")
 
 connections = workflow.get("connections", {})
 
@@ -178,6 +184,7 @@ credential_writes = {
     node["name"]
     for node in http_nodes
     if node.get("parameters", {}).get("method") in {"POST", "PATCH"}
+    and node["name"] != "Observe Mutation Inventory"
     and not node.get("parameters", {}).get("url", "").endswith("+ '/test' }}")
 }
 ready_reachable = reachable("Ready Credential Set")
@@ -274,7 +281,12 @@ const dispatchResponse = (operation, result) => {
     const node = byName[name];
     if (node.type === 'n8n-nodes-base.respondToWebhook') return { response: input, recordings };
     let output = 0;
-    if (node.type === 'n8n-nodes-base.postgres') {
+    if (node.name === 'Inventory Readback Required') {
+      if (input.ok !== false && !['status','validate','login-validate'].includes(input.operation)) {
+        throw new Error('error dispatch unexpectedly reached a successful mutation');
+      }
+      output = 1;
+    } else if (node.type === 'n8n-nodes-base.postgres') {
       if (!node.parameters.query.includes('platform_operations.record_operation_error(')) {
         throw new Error(`unexpected database call in error dispatch: ${name}`);
       }
@@ -487,6 +499,7 @@ mapfile -t packaged_workflows < <(
 )
 expected_workflows=(
   'automation-data-canary.json=workflows/automation-data-canary.json'
+  'automation-data-credential-inventory.json=workflows/automation-data-credential-inventory.json'
   'automation-data-provisioner.json=workflows/automation-data-provisioner.json'
   'nocodb-acceptance-domain.json=workflows/nocodb-acceptance-domain.json'
   'nocodb-source-provisioner.json=workflows/nocodb-source-provisioner.json'

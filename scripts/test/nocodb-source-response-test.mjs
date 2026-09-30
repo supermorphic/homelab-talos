@@ -77,7 +77,7 @@ const produceResponse = (currentItem, operation) => {
   const produce = new Function('$json', '$', responseNode.parameters.jsCode);
   const response = produce(currentItem, lookupNode);
   assert.equal(response.length, 1, 'response producer must return exactly one item');
-  return response[0].json;
+  return {...response[0].json, inventoryReadback:{status:'unavailable',observedAt:null,errorCode:'source_unavailable'}};
 };
 
 const fixture = await mkdtemp(join(tmpdir(), 'homelab-nocodb-source-response-test.'));
@@ -179,6 +179,7 @@ printf '%s\\n' "\${NOCODB_SOURCE_RESPONSE_BODY:?}"
 
   for (const operatorSchema of ['requests', null]) {
     const configured = {ok: true, operation: 'configure', state: 'configured', domain: 'domain_one',
+      inventoryReadback:{status:'unavailable',observedAt:null,errorCode:'source_unavailable'},
       readerSchema: 'reporting', readerRole: 'domain_one_reader', operatorSchema,
       operatorRole: operatorSchema === null ? null : 'domain_one_operator'};
     const result = invoke(configured, 'configure', operatorSchema);
@@ -188,6 +189,11 @@ printf '%s\\n' "\${NOCODB_SOURCE_RESPONSE_BODY:?}"
       assert.notEqual(invoke(invalid, 'configure', operatorSchema).status, 0, 'configure accepted mismatched mapping response');
     }
   }
+  const unsafeReadback = {...produced.values().next().value,
+    inventoryReadback:{status:'unavailable',observedAt:null,errorCode:'SENTINEL_REMOTE_SECRET'}};
+  const rejectedReadback = invoke(unsafeReadback);
+  assert.equal(rejectedReadback.status, 0, 'Invalid readback must not erase the independently validated mutation success');
+  assert.ok(!rejectedReadback.stdout.includes('SENTINEL_REMOTE_SECRET'));
   for (const readerSchema of ['platform_reporting', 'pg_reporting', 'public', 'app', 'read_model', 'a'.repeat(49)]) {
     const rejected = spawnSync(commandPath, ['configure', 'domain_one', readerSchema, 'requests'], {
       cwd: repoRoot, encoding: 'utf8', env: {...process.env, PATH: `${binDir}:${process.env.PATH}`,

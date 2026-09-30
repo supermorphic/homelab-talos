@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from automation_data_access import (
     fetch_observations,
     file_signature,
+    lifecycle_readback,
     load_access_config,
     safe_path,
 )
@@ -387,7 +388,8 @@ def execute(action: str, domain: str, application: str, schema: str | None = Non
                                                 "application": application, "schema": schema}),
                                   domain, application)
         print(json.dumps({"domain": domain, "application": application,
-                          "role": result["role"], "state": result["state"]}))
+                          "role": result["role"], "state": result["state"],
+                          "inventoryReadback": lifecycle_readback({**result, "operation": "login-register"})}))
         return
     if action == "validate":
         result = require_response(send_request({"domain": domain, "operation": "login-validate",
@@ -469,7 +471,8 @@ def execute(action: str, domain: str, application: str, schema: str | None = Non
             clear_completed_pending(directory)
             print(json.dumps({"domain": domain, "application": application,
                               "role": state["role"], "credentialGeneration": result[
-                                  "credentialGeneration"], "serviceFile": str(directory / "service.conf")}))
+                                  "credentialGeneration"], "serviceFile": str(directory / "service.conf"),
+                              "inventoryReadback": lifecycle_readback({**result, "operation": "login-complete"})}))
 
 
 def main(argv: list[str]) -> int:
