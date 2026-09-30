@@ -219,3 +219,18 @@ for (const kind of ['Reader', 'Operator']) {
 }
 
 console.log('NocoDB named pair workflow boundaries passed.');
+
+const statusRequest = invoke('Normalize Source Request', {body: {
+  domain:'sample', pair:'interviews', operation:'status'}});
+assert.equal(statusRequest.operation,'status');
+assert.equal(nodes.get('Read Source Operation').parameters.query,
+  'SELECT platform_operations.read_nocodb_operation_state($1, $2) AS result;');
+const statusResult = invoke('Prepare Operation Status', {result: {
+  operationId:previousOperation,phase:'uncertain',operation:'rotate',accessKind:'operator',generation:2}},
+  {'Normalize Source Request':statusRequest});
+assert.equal(statusResult.claim.operationId,previousOperation);
+assert.equal(statusResult.claim.phase,'uncertain');
+assert.deepEqual(invoke('Prepare Operation Status',{result:null},
+  {'Normalize Source Request':statusRequest}).claim,null);
+assert.throws(()=>invoke('Prepare Operation Status',{result:{password:'untrusted'}},
+  {'Normalize Source Request':statusRequest}));

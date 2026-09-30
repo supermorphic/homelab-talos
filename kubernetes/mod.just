@@ -1229,3 +1229,10 @@ openbao-upgrade: require-bash
 # Attended issuer mount adoption with quorum guards and final issuance proof.
 openbao-issuer-rollout: require-bash
     @uv run --locked python -m scripts.openbao.issuer_rollout
+
+# Read the retained operation ID and phase without changing sources or credentials.
+nocodb-source-status domain: require-bash
+    @scripts/nocodb/source-operation.sh status {{quote(domain)}}
+
+nocodb-pair-status domain pair: require-bash
+    @scripts/nocodb/source-operation.sh pair-status {{quote(domain)}} {{quote(pair)}}

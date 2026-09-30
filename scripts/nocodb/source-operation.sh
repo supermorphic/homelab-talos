@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo 'Usage: source-operation.sh <prepare|sync|rotate> <domain> [reader|operator]; retry <domain> <reader|operator> <quiesced-operation-id>; configure <domain> <reader-schema> [operator-schema|-]; or pair-register|pair-prepare|pair-sync|pair-rotate|pair-retry <domain> <pair> [schema|access arguments] [quiesced-operation-id]' >&2
+  echo 'Usage: source-operation.sh <status|prepare|sync|rotate> <domain> [reader|operator]; retry <domain> <reader|operator> <quiesced-operation-id>; configure <domain> <reader-schema> [operator-schema|-]; or pair-register|pair-prepare|pair-sync|pair-rotate|pair-retry <domain> <pair> [schema|access arguments] [quiesced-operation-id]' >&2
   exit 2
 }
 
@@ -29,6 +29,13 @@ require_quiesced_operation() {
 }
 
 case "$action" in
+status) [[ "$#" -eq 2 ]] || usage ;;
+pair-status)
+  [[ "$#" -eq 3 ]] || usage
+  pair="$3"
+  operation=status
+  [[ "$pair" =~ ^[a-z][a-z0-9_]{0,23}$ && "$pair" != default ]] || usage
+  ;;
   configure)
     [[ "$#" -ge 3 && "$#" -le 4 ]] || usage
     reader_schema="${3:-}"
@@ -63,8 +70,8 @@ case "$action" in
       exit 1
     }
     ;;
-  rotate|retry)
-    [[ ( "$operation" == rotate && "$#" -eq 3 ) || ( "$operation" == retry && "$#" -eq 4 ) ]] || usage
+rotate | retry)
+  [[ ("$operation" == rotate && "$#" -eq 3) || ("$operation" == retry && "$#" -eq 4) ]] || usage
     access_kind="$3"
     [[ "$access_kind" == reader || "$access_kind" == operator ]] || {
       echo 'NocoDB source rotation access kind must be reader or operator.' >&2
@@ -98,13 +105,13 @@ case "$action" in
       exit 1
     }
     ;;
-  pair-prepare|pair-sync|pair-rotate|pair-retry)
-    [[ "$#" -eq 3 || ( "$action" == pair-rotate && "$#" -eq 4 ) || ( "$action" == pair-retry && "$#" -eq 5 ) ]] || usage
+pair-prepare | pair-sync | pair-rotate | pair-retry)
+  [[ "$#" -eq 3 || ("$action" == pair-rotate && "$#" -eq 4) || ("$action" == pair-retry && "$#" -eq 5) ]] || usage
     pair="$3"
     [[ "$pair" =~ ^[a-z][a-z0-9_]{0,23}$ && "$pair" != default ]] || usage
     operation="${action#pair-}"
     if [[ "$operation" == rotate || "$operation" == retry ]]; then
-      [[ ( "$operation" == rotate && "$#" -eq 4 ) || ( "$operation" == retry && "$#" -eq 5 ) ]] || usage
+    [[ ("$operation" == rotate && "$#" -eq 4) || ("$operation" == retry && "$#" -eq 5) ]] || usage
       access_kind="$4"
       [[ "$access_kind" == reader || "$access_kind" == operator ]] || usage
       expected_confirmation="${operation}:nocodb:${domain}:${pair}:${access_kind}"
@@ -187,7 +194,23 @@ curl_status=$?
 set -e
 [[ "$curl_status" -eq 0 ]] || exit "$curl_status"
 
-if [[ "$action" == configure ]]; then
+if [[ "$operation" == status ]]; then
+  jq -e --arg domain "$domain" --arg pair "$pair" '
+    .ok == true and .domain == $domain and .operation == "status" and
+    (if $pair == "" then has("pair") | not else .pair == $pair end) and
+    (keys | sort == (["ok","domain","operation","claim"] + (if $pair == "" then [] else ["pair"] end) | sort)) and
+    (.claim == null or (.claim |
+      (keys | sort == ["accessKind","generation","operation","operationId","phase"]) and
+      (.operationId | type == "string" and test("^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$")) and
+      (.phase == "active" or .phase == "uncertain" or .phase == "complete") and
+      (.operation == "sync" or .operation == "rotate") and
+      (.accessKind == null or .accessKind == "reader" or .accessKind == "operator") and
+      (.generation | type == "number" and . >= 1 and . == floor)))
+  ' <<<"$response" >/dev/null || {
+    echo "NocoDB operation status response is invalid." >&2
+    exit 1
+  }
+elif [[ "$action" == configure ]]; then
   jq -e --arg domain "$domain" --arg reader "$reader_schema" --arg operator "$operator_schema" '
     type == "object" and
     (keys | sort == ["domain", "ok", "operation", "operatorRole", "operatorSchema", "readerRole", "readerSchema", "state"]) and

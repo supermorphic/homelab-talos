@@ -465,3 +465,11 @@ assert_contains 'response did not satisfy the source lifecycle contract'
 assert_no_secret_output
 
 echo 'NocoDB source operation command tests passed.'
+
+case_name='observational named-pair status exposes the bounded retained claim'
+OUT="$(PATH="$stub_bin:$linux_bin:$PATH" \
+  NOCODB_SOURCE_OPERATION_EXPECTED_BODY='{"domain":"domain_one","pair":"extra","operation":"status"}' \
+  NOCODB_SOURCE_OPERATION_RESPONSE='{"ok":true,"domain":"domain_one","pair":"extra","operation":"status","claim":{"operationId":"00000000-0000-4000-8000-000000000491","phase":"uncertain","operation":"rotate","accessKind":"operator","generation":2}}' \
+  NOCODB_SOURCE_PROVISIONING_HEADER="$token" "$command" pair-status domain_one extra)"
+jq -e '.claim.operationId == "00000000-0000-4000-8000-000000000491" and .claim.phase == "uncertain"' <<<"$OUT" >/dev/null
+assert_no_secret_output

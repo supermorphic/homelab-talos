@@ -35,7 +35,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['domain', 'operation', 'pair', 'accessKind', 'readerSchema', 'operatorSchema', 'quiescedOperationId']);\nif (Object.keys(body).some((key) => !allowedFields.has(key))) throw new Error('unexpected_request_field');\nconst {domain, operation, pair, accessKind, readerSchema, operatorSchema, quiescedOperationId} = body;\nif (typeof domain !== 'string' || !/^[a-z][a-z0-9_]{0,47}$/.test(domain)) throw new Error('invalid_domain');\nif (!['configure', 'register', 'prepare', 'sync', 'rotate', 'retry'].includes(operation)) throw new Error('invalid_operation');\nif (pair !== undefined && (typeof pair !== 'string' || pair === 'default' || !/^[a-z][a-z0-9_]{0,23}$/.test(pair))) throw new Error('invalid_pair');\nif (operation === 'register' && pair === undefined) throw new Error('pair_required');\nif (operation === 'configure' && pair !== undefined) throw new Error('pair_not_allowed');\nif (operation === 'rotate' || operation === 'retry') {\n  if (!['reader', 'operator'].includes(accessKind)) throw new Error('invalid_access_kind');\n} else if (accessKind !== undefined) throw new Error('access_kind_only_allowed_for_rotation');\nif (operation === 'retry') {\n  if (typeof quiescedOperationId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(quiescedOperationId)) throw new Error('quiesced_operation_required');\n} else if (quiescedOperationId !== undefined) throw new Error('quiesced_operation_only_allowed_for_retry');\nconst validSchema = value => typeof value === 'string' && /^[a-z][a-z0-9_]{0,47}$/.test(value) && !value.startsWith('pg_') && !value.startsWith('platform') && !['public','app','read_model','operator','information_schema','platform_internal','platform_operations'].includes(value);\nif (operation === 'configure' || operation === 'register') {\n  if (!validSchema(readerSchema) || !(operatorSchema === null || validSchema(operatorSchema)) || readerSchema === operatorSchema) throw new Error('invalid_schema_mapping');\n} else if (readerSchema !== undefined || operatorSchema !== undefined) throw new Error('schema_mapping_only_allowed_for_registration');\nreturn [{ json: {domain, operation: operation === 'retry' ? 'rotate' : operation, ...(operation === 'retry' ? {quiescedOperationId} : {}), requestedAccessKind: accessKind || null, ...(pair !== undefined ? {pair} : {}), ...(['configure','register'].includes(operation) ? {readerSchema, operatorSchema} : {}), ...(accessKind ? {accessKind} : {})} }];"
+        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['domain', 'operation', 'pair', 'accessKind', 'readerSchema', 'operatorSchema', 'quiescedOperationId']);\nif (Object.keys(body).some((key) => !allowedFields.has(key))) throw new Error('unexpected_request_field');\nconst {domain, operation, pair, accessKind, readerSchema, operatorSchema, quiescedOperationId} = body;\nif (typeof domain !== 'string' || !/^[a-z][a-z0-9_]{0,47}$/.test(domain)) throw new Error('invalid_domain');\nif (!['configure', 'register', 'prepare', 'sync', 'rotate', 'retry', 'status'].includes(operation)) throw new Error('invalid_operation');\nif (pair !== undefined && (typeof pair !== 'string' || pair === 'default' || !/^[a-z][a-z0-9_]{0,23}$/.test(pair))) throw new Error('invalid_pair');\nif (operation === 'register' && pair === undefined) throw new Error('pair_required');\nif (operation === 'configure' && pair !== undefined) throw new Error('pair_not_allowed');\nif (operation === 'rotate' || operation === 'retry') {\n  if (!['reader', 'operator'].includes(accessKind)) throw new Error('invalid_access_kind');\n} else if (accessKind !== undefined) throw new Error('access_kind_only_allowed_for_rotation');\nif (operation === 'retry') {\n  if (typeof quiescedOperationId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(quiescedOperationId)) throw new Error('quiesced_operation_required');\n} else if (quiescedOperationId !== undefined) throw new Error('quiesced_operation_only_allowed_for_retry');\nconst validSchema = value => typeof value === 'string' && /^[a-z][a-z0-9_]{0,47}$/.test(value) && !value.startsWith('pg_') && !value.startsWith('platform') && !['public','app','read_model','operator','information_schema','platform_internal','platform_operations'].includes(value);\nif (operation === 'configure' || operation === 'register') {\n  if (!validSchema(readerSchema) || !(operatorSchema === null || validSchema(operatorSchema)) || readerSchema === operatorSchema) throw new Error('invalid_schema_mapping');\n} else if (readerSchema !== undefined || operatorSchema !== undefined) throw new Error('schema_mapping_only_allowed_for_registration');\nreturn [{ json: {domain, operation: operation === 'retry' ? 'rotate' : operation, ...(operation === 'retry' ? {quiescedOperationId} : {}), requestedAccessKind: accessKind || null, ...(pair !== undefined ? {pair} : {}), ...(['configure','register'].includes(operation) ? {readerSchema, operatorSchema} : {}), ...(accessKind ? {accessKind} : {})} }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -3143,6 +3143,70 @@
       ],
       "id": "20000000-0000-4000-8000-000000000012",
       "name": "Resume Bound Sync"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.operation }}",
+              "rightValue": "status",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -400,
+        -400
+      ],
+      "id": "20000000-0000-4000-8000-000000000090",
+      "name": "Status Requested"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.read_nocodb_operation_state($1, $2) AS result;",
+        "options": {
+          "queryReplacement": "={{ [$json.domain, $json.pair || 'default'] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -180,
+        -400
+      ],
+      "id": "20000000-0000-4000-8000-000000000091",
+      "name": "Read Source Operation",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Normalize Source Request').first(0).json;\nconst row = $json.result;\nlet claim = null;\nif (row !== null) {\n  if (!row || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(row.operationId) || !['active','uncertain','complete'].includes(row.phase) || !['sync','rotate'].includes(row.operation) || !Number.isSafeInteger(row.generation) || row.generation < 1 || !(row.accessKind === null || ['reader','operator'].includes(row.accessKind))) throw new Error('operation_status_invalid');\n  claim = {operationId:row.operationId, phase:row.phase, operation:row.operation, accessKind:row.accessKind, generation:row.generation};\n}\nreturn [{json:{ok:true,domain:request.domain,...(request.pair ? {pair:request.pair}:{}),operation:'status',claim}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40,
+        -400
+      ],
+      "id": "20000000-0000-4000-8000-000000000092",
+      "name": "Prepare Operation Status",
+      "onError": "continueErrorOutput"
     }
   ],
   "pinData": {},
@@ -3162,7 +3226,7 @@
       "main": [
         [
           {
-            "node": "Validate Managed Domain",
+            "node": "Status Requested",
             "type": "main",
             "index": 0
           }
@@ -5831,6 +5895,53 @@
         [
           {
             "node": "Respond Active Claim",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Status Requested": {
+      "main": [
+        [
+          {
+            "node": "Read Source Operation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Validate Managed Domain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Source Operation": {
+      "main": [
+        [
+          {
+            "node": "Prepare Operation Status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Source Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Operation Status": {
+      "main": [
+        [
+          {
+            "node": "Respond",
             "type": "main",
             "index": 0
           }

@@ -82,6 +82,7 @@ require("Object.keys" in normalize_code and "allowedFields" in normalize_code, "
 require("requestedAccessKind" in normalize_code, "The source workflow must preserve the normalized rotation target separately.")
 
 approved_functions = {
+    "platform_operations.read_nocodb_operation_state",
     "platform_operations.configure_nocodb_pair",
     "platform_operations.configure_nocodb_schema_mapping",
     "platform_operations.claim_nocodb_operation",
