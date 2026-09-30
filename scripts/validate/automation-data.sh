@@ -26,6 +26,7 @@ scripts/test/automation-data-scoped-permissions-test.sh
 scripts/test/automation-data-login-lifecycle-test.sh
 scripts/test/automation-data-workflow-contract-test.sh
 node scripts/test/automation-data-login-workflow-test.mjs
+uv run --locked python scripts/test/automation-data-login-command-test.py
 scripts/test/automation-data-provisioning-command-test.sh
 scripts/test/automation-data-exporter-grant-test.sh
 scripts/test/automation-data-upgrade-test.sh --offline

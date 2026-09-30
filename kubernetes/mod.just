@@ -105,6 +105,20 @@ n8n-validate: require-bash
 automation-data-validate: require-bash
     @scripts/validate/automation-data.sh
 
+# Register or manage a separately scoped application login through the private provisioner.
+# The Python command owns exact confirmations and protected local credential files.
+automation-data-login-register domain application schema: require-bash
+    @uv run --locked python scripts/operations/automation-data-login.py register {{quote(domain)}} {{quote(application)}} {{quote(schema)}}
+
+automation-data-login-activate domain application: require-bash
+    @uv run --locked python scripts/operations/automation-data-login.py activate {{quote(domain)}} {{quote(application)}}
+
+automation-data-login-validate domain application: require-bash
+    @uv run --locked python scripts/operations/automation-data-login.py validate {{quote(domain)}} {{quote(application)}}
+
+automation-data-login-rotate domain application: require-bash
+    @uv run --locked python scripts/operations/automation-data-login.py rotate {{quote(domain)}} {{quote(application)}}
+
 # Apply reviewed control functions to initialized PostgreSQL after a fresh backup.
 # Operator-run; deactivate provisioning and drain executions before confirmation.
 automation-data-control-migrate: require-bash
