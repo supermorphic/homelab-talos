@@ -78,6 +78,7 @@ KINDS = {
     "secret-mount",
     "jwt-config",
     "jwt-role",
+    "approle-role",
     "userpass-user",
     "policy",
     "kubernetes-config",
@@ -87,6 +88,7 @@ INVENTORY_KINDS = {
     "auth-method",
     "secret-mount",
     "jwt-role",
+    "approle-role",
     "userpass-user",
     "policy",
     "issuance-role",
@@ -131,6 +133,7 @@ def load_document(path: Path) -> dict:
                     "policies/backup.json",
                     "policies/acceptance.json",
                     "policies/config-reader.json",
+                    "policies/agent-profiles.json",
                 }:
                     raise SafeError("invalid-source")
                 fields = {"policy": strict_json((path.parent / filename).read_bytes())}

@@ -61,6 +61,9 @@ class BaoClient:
             raise SafeError('invalid-source')
         return self._request('POST', path, json.dumps(payload).encode('utf-8'), token)
 
+    def delete(self, path: str, *, token: str | None = None) -> object:
+        return self._request("DELETE", path, None, token)
+
     def _request(self, method: str, path: str, body: bytes | None, token: str | None) -> object:
         if (not isinstance(path, str) or not path or path.startswith('/') or '..' in path.split('/')
                 or '?' in path or '#' in path or '//' in path):
@@ -75,12 +78,12 @@ class BaoClient:
         try:
             # Raft initialization can finish after the ordinary API deadline;
             # the one-time response contains the only initial recovery material.
-            timeout = 30 if method == 'POST' and path == 'sys/init' else self.timeout
+            timeout = 30 if method in {'POST', 'DELETE'} and path == 'sys/init' else self.timeout
             with self._open(request, timeout=timeout) as response:
                 if response.geturl() != url:
                     raise ReadFailure('invalid-response')
                 if response.status < 200 or response.status >= 300:
-                    if method == 'POST':
+                    if method in {'POST', 'DELETE'}:
                         raise AmbiguousWrite('ambiguous-write', http_status=response.status)
                     raise ReadFailure('read-denied' if response.status == 403 else 'invalid-response')
                 length = response.headers.get('Content-Length')
@@ -94,20 +97,20 @@ class BaoClient:
                 data = response.read(self.max_bytes + 1)
                 if len(data) > self.max_bytes:
                     raise MalformedResponse('invalid-response')
-                if method == 'POST' and response.status == 204 and not data:
+                if method in {'POST', 'DELETE'} and response.status == 204 and not data:
                     return {}
                 try:
                     return strict_json(data, 'invalid-response')
                 except SafeError:
                     raise MalformedResponse('invalid-response') from None
         except urllib.error.HTTPError as error:
-            if method == 'POST':
+            if method in {'POST', 'DELETE'}:
                 raise AmbiguousWrite('ambiguous-write', http_status=error.code) from None
             if error.code == 404:
                 raise NotFound('invalid-response') from None
             raise ReadFailure('read-denied' if error.code == 403 else 'invalid-response') from None
         except (TimeoutError, OSError, urllib.error.URLError, http.client.HTTPException, ValueError, OverflowError):
-            if method == 'POST':
+            if method in {'POST', 'DELETE'}:
                 raise AmbiguousWrite('ambiguous-write') from None
             raise ReadFailure('timeout') from None
         except SafeError:

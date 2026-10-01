@@ -30,6 +30,17 @@ class Response:
 
 
 class ClientTest(unittest.TestCase):
+    def test_delete_is_one_bounded_mutation_without_blind_retry(self):
+        seen = []
+        def open_request(request, timeout):
+            seen.append(request.get_method())
+            raise TimeoutError("SYNTHETIC_PRIVATE_MARKER")
+        client = BaoClient("https://openbao.example", opener=open_request)
+        with self.assertRaises(AmbiguousWrite) as caught:
+            client.delete("auth/homelab-approle/role/synthetic-owned", token="synthetic-operator")
+        self.assertNotIn("SYNTHETIC_PRIVATE_MARKER", str(caught.exception))
+        self.assertEqual(seen, ["DELETE"])
+
     def test_verified_tls_and_bounded_read(self):
         seen = []
 

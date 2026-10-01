@@ -1253,3 +1253,16 @@ nocodb-source-status domain: require-bash
 
 nocodb-pair-status domain pair: require-bash
     @scripts/nocodb/source-operation.sh pair-status {{quote(domain)}} {{quote(pair)}}
+
+# Attended workstation AppRole lifecycle; explicit operator credential required.
+openbao-workstation action slot="agent-workstation": require-bash
+    @uv run --locked python -m scripts.openbao.workstation {{quote(action)}} {{quote(slot)}}
+
+# Install checkout-local standard exec contexts after attended enrollment.
+kubeconfig profile="observer": require-bash
+    @uv run --locked --no-dev python -m scripts.openbao.credentials install {{quote(profile)}}
+
+# Attended profile/caller acceptance with isolated temporary workstation identities.
+agent-credentials-test: require-bash
+    @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}"
+    @TEST_KUBECONFIG="$OPENBAO_OPERATOR_KUBECONFIG" scripts/test/run-catalog-suite.sh test.agent-credentials -- uv run --locked python -m scripts.test.scenarios.agent_credentials

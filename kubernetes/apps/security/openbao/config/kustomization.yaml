@@ -12,3 +12,4 @@ configMapGenerator:
       - backup.json=policies/backup.json
       - acceptance.json=policies/acceptance.json
       - config-reader.json=policies/config-reader.json
+      - agent-profiles.json=policies/agent-profiles.json

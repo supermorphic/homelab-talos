@@ -14,6 +14,8 @@ publisher_role_names := {
 	"homelab-report-publisher-test-reports",
 }
 
+profile_role_names := {"homelab-campaign-coordinator", "openbao-agent-tokenrequest"}
+
 connection_role_names := {"homelab-automation-data-connect"}
 
 publisher_role_namespace(role_name) := trim_prefix(role_name, "homelab-report-publisher-")
@@ -25,10 +27,10 @@ expected_document_names := {
 		"homelab-diagnostic-view",
 		"homelab-observer-extra",
 	},
-	"Lease": {"homelab-test-report-publish-lock"},
-	"Role": publisher_role_names | connection_role_names,
-	"RoleBinding": ((publisher_role_names | diagnostic_role_names) | connection_role_names),
-	"ServiceAccount": {"homelab-observer", "homelab-diagnostic", "homelab-report-publisher"},
+	"Lease": {"homelab-test-report-publish-lock", "homelab-test-run-lock"},
+	"Role": ((publisher_role_names | connection_role_names) | profile_role_names),
+	"RoleBinding": (((publisher_role_names | diagnostic_role_names) | connection_role_names) | profile_role_names),
+	"ServiceAccount": {"homelab-observer", "homelab-diagnostic", "homelab-report-publisher", "homelab-campaign-coordinator"},
 }
 
 required_read_rules := {
@@ -530,4 +532,81 @@ deny contains msg if {
 	name := metadata_name(document)
 	not expected_document_names[kind][name]
 	msg := sprintf("unexpected agent-access %s %s", [kind, name])
+}
+
+profile_role_contracts := {
+	"homelab-campaign-coordinator": {
+		"namespace": "flux-system",
+		"rules": [{
+			"apiGroups": ["coordination.k8s.io"], "resources": ["leases"],
+			"resourceNames": ["homelab-test-run-lock"], "verbs": ["get", "update"],
+		}],
+		"subjects": [{"kind": "ServiceAccount", "name": "homelab-campaign-coordinator", "namespace": "kube-system"}],
+	},
+	"openbao-agent-tokenrequest": {
+		"namespace": "kube-system",
+		"rules": [{
+			"apiGroups": [""], "resources": ["serviceaccounts/token"],
+			"resourceNames": ["homelab-observer", "homelab-diagnostic", "homelab-report-publisher", "homelab-campaign-coordinator"],
+			"verbs": ["create"],
+		}],
+		"subjects": [{"kind": "ServiceAccount", "name": "openbao", "namespace": "openbao"}],
+	},
+}
+
+profile_role_exact(document, name) if {
+	contract := profile_role_contracts[name]
+	metadata_namespace(document) == contract.namespace
+	object.get(document, "rules", []) == contract.rules
+	object.get(document, "aggregationRule", null) == null
+}
+
+profile_binding_exact(document, name) if {
+	contract := profile_role_contracts[name]
+	metadata_namespace(document) == contract.namespace
+	object.get(document, "subjects", []) == contract.subjects
+	object.get(document, "roleRef", {}) == {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": name}
+}
+
+deny contains msg if {
+	some name in profile_role_names
+	roles := publisher_documents("Role", name)
+	not count(roles) == 1
+	msg := sprintf("agent Role %s must exist once", [name])
+}
+
+deny contains msg if {
+	some document in documents
+	document.kind == "Role"
+	name := metadata_name(document)
+	name in profile_role_names
+	not profile_role_exact(document, name)
+	msg := sprintf("agent Role %s must match its exact named grant", [name])
+}
+
+deny contains msg if {
+	some name in profile_role_names
+	bindings := publisher_documents("RoleBinding", name)
+	not count(bindings) == 1
+	msg := sprintf("agent RoleBinding %s must exist once", [name])
+}
+
+deny contains msg if {
+	some document in documents
+	document.kind == "RoleBinding"
+	name := metadata_name(document)
+	name in profile_role_names
+	not profile_binding_exact(document, name)
+	msg := sprintf("agent RoleBinding %s must match its exact subject", [name])
+}
+
+campaign_lease_exact if {
+	leases := publisher_documents("Lease", "homelab-test-run-lock")
+	count(leases) == 1
+	metadata_namespace(leases[0]) == "flux-system"
+	object.get(leases[0], "spec", null) == null
+}
+
+deny contains "campaign Lease must exist once without runtime spec" if {
+	not campaign_lease_exact
 }

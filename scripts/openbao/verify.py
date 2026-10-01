@@ -12,6 +12,7 @@ from .drift import compare, compare_inventory, sanitize
 INVENTORY_ENDPOINTS = {
     'auth-method': 'sys/auth',
     'secret-mount': 'sys/mounts',
+    'approle-role': 'auth/homelab-approle/role',
     'jwt-role': 'auth/homelab-jwt/role',
     'userpass-user': 'auth/homelab-userpass/users',
     'policy': 'sys/policies/acl',
@@ -21,6 +22,8 @@ INVENTORY_ENDPOINTS = {
 
 def _keys(value: object, kind: str) -> set[str]:
     if not isinstance(value, dict):
+        raise SafeError('incomplete-list')
+    if kind not in {'auth-method', 'secret-mount'} and set(value) != {'keys'}:
         raise SafeError('incomplete-list')
     # sys/auth and sys/mounts return maps, while LIST endpoints return `keys`.
     keys = list(value) if kind in {'auth-method', 'secret-mount'} and 'keys' not in value else value.get('keys')

@@ -27,6 +27,19 @@ confirmation_type="$(yq -r '.confirmation.type' - <<<"$entry_json")"
 confirmation_variable="$(yq -r '.confirmation.variable // "none"' - <<<"$entry_json")"
 confirmation_expected="$(yq -r '.confirmation.expected // ""' - <<<"$entry_json")"
 
+# This one attended scenario releases its operator holder before proving the
+# coordinator's acquire/release contract. It owns checked Lease sections itself.
+scenario_lease=false
+if [[ "$suite_id" == 'test.agent-credentials' ]]; then
+  [[ "$*" == 'uv run --locked python -m scripts.test.scenarios.agent_credentials' ||
+    "$*" == 'uv run --locked --no-dev python scripts/test/scenarios/agent_credentials.py' ]] || {
+    echo 'Agent credential acceptance requires its canonical guarded entrypoint.' >&2
+    exit 2
+  }
+  [[ -z "${TEST_CAMPAIGN_LEASE_HOLDER:-}" ]] || exit 2
+  scenario_lease=true
+fi
+
 case "$confirmation_type" in
   none|command) ;;
   exact)
@@ -120,7 +133,7 @@ write_run_id_output "$run_id"
 # suites create their own canonical runs and must not overwrite the parent's pointer.
 unset TEST_RUN_ID_FILE
 
-if [[ "$mutates_cluster" == 'true' ]]; then
+if [[ "$mutates_cluster" == 'true' && "$scenario_lease" == 'false' ]]; then
   lease_release_status='failed'
   if [[ -n "${TEST_CAMPAIGN_LEASE_HOLDER:-}" ]]; then
     if verify_test_lease_holder "$kubeconfig" "$TEST_CAMPAIGN_LEASE_HOLDER"; then
@@ -183,7 +196,7 @@ elif [[ "$lease_joined" == 'true' ]]; then
   export HOMELAB_DISRUPTION_LEASE_HOLDER="$TEST_CAMPAIGN_LEASE_HOLDER"
 fi
 
-if [[ "$mutates_cluster" != 'true' ||
+if [[ "$mutates_cluster" != 'true' || "$scenario_lease" == 'true' ||
   "$disruption_admitted" == 'true' ]]; then
   set +e
   "$@" 2>&1 | tee "$run_dir/logs/console.log"

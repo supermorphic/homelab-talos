@@ -72,6 +72,7 @@ STANDALONE_SUITES = {
     # Attended issuance/eviction acceptance requires explicit operator authority.
     "test.openbao-issuance",
     "test.openbao-ha",
+    "test.agent-credentials",
     # Provisioning rotates credentials and needs operator-paired n8n/database
     # backups before restore. It belongs in explicit acceptance, not weekly/full.
     "test.automation-data-provisioning",

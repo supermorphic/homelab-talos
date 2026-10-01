@@ -156,8 +156,10 @@ class OperatorClient:
             raise SafeError("source-mismatch")
         return [self.peer(f"openbao-{i}").read("sys/init") for i in range(3)]
 
-    def read(self, path, token=None):
-        return self.peer(self.active).read(path, token=token)
+    def read(self, path, token=None, *, list_request=False):
+        return self.peer(self.active).read(
+            path, token=token, **({"list_request": True} if list_request else {})
+        )
 
     def request(self, method, path):
         try:
@@ -176,6 +178,9 @@ class OperatorClient:
         if path == "sys/init":
             return self.peer("openbao-0").post(path, payload)
         return self.peer(self.active).post(path, payload, token=token)
+
+    def delete(self, path, token=None):
+        return self.peer(self.active).delete(path, token=token)
 
     def wait_quorum(self, token):
         self.token = token

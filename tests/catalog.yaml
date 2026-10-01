@@ -942,3 +942,9 @@ suites:
     runner: {command: "mise exec -- just kube openbao-ha-test", implementation: scripts/test/scenarios/openbao_ha.py}
     native_results: {strategy: wrapper-junit}
     dispatch: {mode: direct, runtime: uv-python, path: scripts/test/scenarios/openbao_ha.py, args: [], selector: null}
+
+  - metadata: {id: test.agent-credentials, source: test, framework: python, suite: platform, tier: integration, target: openbao, scenario: workstation-profiles-lifecycles-callers, scope: system, intent: acceptance, mutates_cluster: true, execution_owner: human}
+    confirmation: {type: command, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube agent-credentials-test", implementation: scripts/test/scenarios/agent_credentials.py}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: direct, runtime: uv-python, path: scripts/test/scenarios/agent_credentials.py, args: [], selector: null}

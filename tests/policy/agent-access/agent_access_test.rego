@@ -96,6 +96,19 @@ read_rules := [{
 ]
 
 valid_fixture_base := [
+	service_account("homelab-campaign-coordinator"),
+	role("homelab-campaign-coordinator", "flux-system", [{
+		"apiGroups": ["coordination.k8s.io"], "resources": ["leases"],
+		"resourceNames": ["homelab-test-run-lock"], "verbs": ["get", "update"],
+	}]),
+	role_binding("homelab-campaign-coordinator", "flux-system", "homelab-campaign-coordinator", "kube-system", "homelab-campaign-coordinator"),
+	role("openbao-agent-tokenrequest", "kube-system", [{
+		"apiGroups": [""], "resources": ["serviceaccounts/token"],
+		"resourceNames": ["homelab-observer", "homelab-diagnostic", "homelab-report-publisher", "homelab-campaign-coordinator"],
+		"verbs": ["create"],
+	}]),
+	role_binding("openbao-agent-tokenrequest", "kube-system", "openbao", "openbao", "openbao-agent-tokenrequest"),
+	lease("homelab-test-run-lock", "flux-system"),
 	service_account("homelab-observer"),
 	service_account("homelab-diagnostic"),
 	service_account("homelab-report-publisher"),
@@ -466,7 +479,7 @@ test_observer_cannot_receive_an_additional_binding if {
 test_expected_role_cannot_use_aggregation if {
 	fixture_input := json.patch(valid_fixture, [{
 		"op": "add",
-		"path": "/5/aggregationRule",
+		"path": "/11/aggregationRule",
 		"value": {"clusterRoleSelectors": [{"matchLabels": {"rbac.example.com/aggregate": "true"}}]},
 	}])
 	messages := deny with input as fixture_input
@@ -488,4 +501,19 @@ test_diagnostic_cannot_exec_openbao if {
 test_diagnostic_must_have_all_required_bindings if {
 	messages := deny with input as valid_fixture_base
 	count(messages) > 0
+}
+
+test_agent_issuer_rejects_unnamed_grants if {
+	messages := deny with input as fixture_with_rule("openbao-agent-tokenrequest", [""], ["serviceaccounts/token"], ["create"])
+	"agent Role openbao-agent-tokenrequest must match its exact named grant" in messages
+}
+
+test_coordinator_rejects_extra_lease_authority if {
+	messages := deny with input as fixture_with_rule("homelab-campaign-coordinator", ["coordination.k8s.io"], ["leases"], ["delete"])
+	"agent Role homelab-campaign-coordinator must match its exact named grant" in messages
+}
+
+test_campaign_lease_must_be_precreated if {
+	messages := deny with input as fixture_without("homelab-test-run-lock")
+	"campaign Lease must exist once without runtime spec" in messages
 }

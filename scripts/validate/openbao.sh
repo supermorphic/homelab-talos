@@ -49,6 +49,27 @@ assert all("*" not in path and not path.startswith("kubernetes/creds/")
            for path in reader_paths)
 assert all(path == "auth/token/revoke-self" or "update" not in rule["capabilities"]
            for path, rule in reader_paths.items())
+profiles = {"observer": "homelab-observer", "diagnostic": "homelab-diagnostic",
+            "publisher": "homelab-report-publisher", "campaign-coordinator": "homelab-campaign-coordinator"}
+objects = {(o.kind, o.name): o for o in desired["objects"]}
+for profile, account in profiles.items():
+    fields = objects[("issuance-role", profile)].fields
+    assert fields["service_account_name"] == account
+    assert fields["allowed_kubernetes_namespaces"] == ["kube-system"]
+    assert fields["token_default_ttl"] == fields["token_max_ttl"] == 600
+    assert fields["token_default_audiences"] == [api_audience]
+    assert all(fields[key] == "" for key in (
+        "generated_role_rules", "kubernetes_role_name", "allowed_kubernetes_namespace_selector"))
+role = objects[("approle-role", "agent-workstation")].fields
+assert role["bind_secret_id"] is True and role["secret_id_ttl"] == 7776000
+assert role["secret_id_num_uses"] == 0 and role["token_no_default_policy"] is True
+assert all(role[key] == 60 for key in ("token_ttl", "token_max_ttl", "token_explicit_max_ttl"))
+assert role["token_period"] == 0 and role["token_type"] == "service"
+assert role["token_policies"] == ["agent-profiles"]
+assert objects[("policy", "agent-profiles")].fields["policy"]["path"] == {
+    **{f"kubernetes/creds/{profile}": {"capabilities": ["update"]} for profile in profiles},
+    "auth/token/revoke-self": {"capabilities": ["update"]},
+}
 for obj in desired["objects"]:
     if obj.kind == "jwt-role":
         assert obj.fields["token_no_default_policy"] is True
