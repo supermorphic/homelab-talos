@@ -897,8 +897,9 @@ def main():
                 with lease(kubeconfig):
                     scope.cleanup()
                 result["cleanup"] = "passed"
-    except BaseException:  # noqa: BLE001 -- Includes interrupt cleanup; never expose secret-bearing exceptions.
+    except BaseException as error:  # noqa: BLE001 -- Includes interrupt cleanup; never expose secret-bearing exceptions.
         result["status"] = "fail"
+        result["classification"] = str(error) if isinstance(error, SafeError) else "invalid-response"
         if scope and result["cleanup"] != "passed":
             result["cleanup"] = "failed"
     finally:

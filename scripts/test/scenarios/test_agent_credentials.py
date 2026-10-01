@@ -1,10 +1,11 @@
 """Offline guards for the single attended profile acceptance scenario."""
 
 import copy
+import io
 import json
 import tempfile
 import unittest
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -209,6 +210,28 @@ class AcceptanceGuardTests(unittest.TestCase):
     def test_scope_selection_requires_explicit_operator_context_and_run(self):
         with patch.dict("os.environ", {}, clear=True), self.assertRaises(SafeError):
             scenario.run_inputs()
+
+    def test_preflight_failure_retains_safe_reason_without_exception_text(self):
+        for error, classification in (
+            (SafeError("source-mismatch"), "source-mismatch"),
+            (RuntimeError("SECRET_MARKER"), "invalid-response"),
+        ):
+            with self.subTest(classification=classification):
+                output = io.StringIO()
+                with (
+                    patch.object(scenario, "run_inputs", return_value=(
+                        Path("/synthetic/operator"), self.directory,
+                    )),
+                    patch.object(scenario.workstation, "target", side_effect=error),
+                    redirect_stdout(output),
+                ):
+                    self.assertEqual(scenario.main(), 1)
+                expected = {"status": "fail", "cleanup": "not-required",
+                            "classification": classification}
+                self.assertEqual(json.loads(output.getvalue()), expected)
+                retained = (self.directory / "diagnostics/agent-credentials.json").read_text()
+                self.assertEqual(json.loads(retained), expected)
+                self.assertNotIn("SECRET_MARKER", output.getvalue() + retained)
 
 
 if __name__ == "__main__":
