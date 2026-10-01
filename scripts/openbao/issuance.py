@@ -28,7 +28,7 @@ def call(api, method, path, expected, **kwargs):
         raise AcceptanceError() from None
 
 
-def token_claims(token, clock):
+def token_claims(token, clock, *, identity=IDENTITY):
     try:
         parts = token.split(".")
         if len(parts) != 3 or len(token) > 32768:
@@ -36,7 +36,7 @@ def token_claims(token, clock):
         claims = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
         issued, expires = claims["iat"], claims["exp"]
         if (
-            claims["sub"] != IDENTITY
+            claims["sub"] != identity
             or claims["aud"] != [AUDIENCE]
             or type(issued) is not int
             or type(expires) is not int

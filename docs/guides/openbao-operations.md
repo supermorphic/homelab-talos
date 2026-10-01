@@ -322,3 +322,26 @@ profiles belong to the same workstation trust boundary. Any process able to use
 that workstation SecretID can request any profile. Context choice does not isolate
 agents running as the same operating-system user. Talos reader issuance stays
 separate.
+
+After enrollment, install the four contexts in each authorized checkout:
+
+```sh
+mise exec -- just kube kubeconfig
+# Optional initial context:
+mise exec -- just kube kubeconfig diagnostic
+```
+
+Installation preserves existing administrator or unknown configs. An operator
+must move those files to an explicit operator-only destination before installing
+scoped contexts. Recognized legacy scoped configs can be replaced. Setup stores
+connection metadata and exec commands, with no bearer tokens. Each exec invocation
+uses one 60-second OpenBao session, issues one 600-second Kubernetes token, and
+revokes the session before returning an `expirationTimestamp`. Failed issuance or
+cleanup returns no credential. It does not retry ambiguous writes or use broader
+authentication.
+
+During an OpenBao outage, an existing client process may use its cached Kubernetes
+token until expiry. A new command can fail immediately because it needs a new
+OpenBao login. Expired clients must refresh and can fail until OpenBao recovers.
+There is no shared cache or daemon. The existing Talos setup remains unchanged
+until caller acceptance and the later cutover.

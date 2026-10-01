@@ -5,8 +5,9 @@
 Design for [issue 450](https://github.com/supermorphic/homelab-talos/issues/450).
 The operator selected AppRole and requested explicit credential lifecycles,
 revocation of existing issuance authority, standard Kubernetes exec credentials,
-and caller-level lifetime and outage tests. This written specification awaits
-operator review. Implementation and live acceptance have not started.
+and caller-level lifetime and outage tests. The operator approved the design.
+Additive broker, workstation lifecycle, and exec-helper implementation is underway.
+Deployment, live acceptance, and legacy caller retirement remain pending.
 
 [Specification 030](030-openbao-kubernetes-credential-broker.md) records the
 completed platform dependency, issue 449, including retained issuance, expiry,
@@ -73,7 +74,9 @@ workflow policy still applies.
 ### Workstation SecretID
 
 Use `bind_secret_id=true`, `secret_id_ttl=2160h` (90 days), and
-`secret_id_num_uses=0` (reusable). Reuse avoids consumption races between parallel
+`secret_id_num_uses=0` (reusable). The AppRole mount allows the full 90-day
+SecretID lifetime; the role separately limits login tokens to 60 seconds.
+Reuse avoids consumption races between parallel
 commands. The workstation cannot create or rotate its own SecretIDs.
 
 Enrollment installs one `0600`, owner-checked, regular file under
