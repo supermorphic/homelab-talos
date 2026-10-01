@@ -73,7 +73,13 @@ def send_request(payload: dict) -> dict:
         "X-Automation-Data-Provisioning": token,
     })
     try:
-        with WEBHOOK_OPENER.open(request, timeout=20) as response:
+        # Successful mutations can include up to 30 seconds of optional inventory
+        # readback. Preserve their response within the original 20-second operation
+        # budget plus readback and margin; observational validation stays shorter.
+        timeout = 60 if payload.get("operation") in {
+            "login-register", "login-activate", "login-rotate", "login-complete"
+        } else 20
+        with WEBHOOK_OPENER.open(request, timeout=timeout) as response:
             content = response.read(65537)
         if len(content) > 65536:
             raise RequestError("response_too_large")

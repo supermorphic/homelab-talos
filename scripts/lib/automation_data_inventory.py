@@ -160,6 +160,20 @@ FIXED_CREDENTIAL_NAMES = {
     "Automation Data Inventory Header",
 }
 
+# Purpose requires both the fixed identity name and its expected credential type.
+PLATFORM_CREDENTIAL_NAMES = {
+    "Automation Data Provisioner",
+    "Automation Data Inventory Reader",
+    "NocoDB Inventory Reader",
+    "n8n Inventory Reader",
+}
+FIXED_CREDENTIAL_FAMILIES = {
+    name: ("postgres", "platform")
+    if name in PLATFORM_CREDENTIAL_NAMES
+    else ("httpHeaderAuth", "api_webhook")
+    for name in FIXED_CREDENTIAL_NAMES
+}
+
 
 class InventoryError(ValueError):
     """A fixed, safe reason code; never include raw input in errors."""
@@ -799,9 +813,10 @@ def build_inventory(observations: list[SourceObservation]) -> InventoryEnvelope:
     for credential in by_kind["n8n"].get("credential", {}).values():
         if credential["id"] in used_credentials:
             continue
-        known = credential.get("name") in FIXED_CREDENTIAL_NAMES
+        expected = FIXED_CREDENTIAL_FAMILIES.get(credential.get("name"))
+        known = expected is not None and credential.get("type") == expected[0]
         item = _item(
-            "api_webhook" if known else "unclassified",
+            expected[1] if known else "unclassified",
             "credential:" + credential["id"],
             {
                 "credentialId": credential["id"],

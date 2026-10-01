@@ -185,6 +185,41 @@ class CommandTests(unittest.TestCase):
             DiscoveryRequest("resolve", "sample", purpose, **selectors), self.build(), self.profile
         )
 
+    def test_fixed_database_credentials_and_tokens_keep_distinct_families(self):
+        names = [
+            "Automation Data Provisioner",
+            "Automation Data Inventory Reader",
+            "NocoDB Inventory Reader",
+            "n8n Inventory Reader",
+        ]
+        for index, name in enumerate(names):
+            self.raw["n8n"]["objects"].append(
+                {"kind": "credential", "id": f"platform-{index}", "name": name, "type": "postgres"}
+            )
+        self.raw["n8n"]["objects"].extend(
+            [
+                {
+                    "kind": "credential",
+                    "id": "fixed-header",
+                    "name": "Automation Data Inventory Header",
+                    "type": "httpHeaderAuth",
+                },
+                {
+                    "kind": "credential",
+                    "id": "wrong-type",
+                    "name": "Automation Data Provisioner",
+                    "type": "httpHeaderAuth",
+                },
+            ]
+        )
+        items = {
+            item["credentialId"]: item for item in self.build().items if item.get("credentialId")
+        }
+        for index in range(len(names)):
+            self.assertEqual(items[f"platform-{index}"]["family"], "platform")
+        self.assertEqual(items["fixed-header"]["family"], "api_webhook")
+        self.assertEqual(items["wrong-type"]["family"], "unclassified")
+
     def test_all_four_purposes_and_typed_actions(self):
         application = self.resolve("application", application="interview")
         self.assertEqual(application.decision, "ready")

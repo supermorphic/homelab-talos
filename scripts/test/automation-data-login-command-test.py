@@ -185,6 +185,30 @@ class LoginCommandTest(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertNotIn(SENTINEL, output + errors)
 
+    def test_slow_inventory_readback_preserves_each_successful_mutation(self):
+        graph = json.loads((Path(__file__).resolve().parents[2] /
+            "kubernetes/apps/automation/n8n/app/workflows/automation-data-provisioner.json").read_text())
+        readback_budget = next(node for node in graph["nodes"]
+            if node["name"] == "Observe Mutation Inventory")["parameters"]["options"]["timeout"] / 1000
+        for operation in ["login-register", "login-activate", "login-rotate", "login-complete"]:
+            calls = []
+            def delayed_response(request, timeout, operation=operation, calls=calls):
+                calls.append(json.loads(request.data))
+                # Simulate committed mutation + delayed optional metadata; no sleeping
+                # or private endpoint. A socket budget below this point loses the result.
+                if timeout <= 25:
+                    raise urllib.error.URLError("synthetic slow inventory readback")
+                self.assertGreaterEqual(timeout, 20 + readback_budget)
+                return io.BytesIO(json.dumps({"ok": True, "operation": operation,
+                    "inventoryReadback": {"status": "unavailable", "observedAt": None,
+                                          "errorCode": "source_unavailable"}}).encode())
+            with mock.patch.object(command.WEBHOOK_OPENER, "open", side_effect=delayed_response):
+                result = REAL_SEND_REQUEST({"domain": "sample", "operation": operation,
+                                           "application": "interview"})
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["inventoryReadback"]["status"], "unavailable")
+            self.assertEqual(len(calls), 1)
+
     def test_webhook_target_and_http_error_are_bounded(self):
         def reject(request, timeout):
             self.assertEqual(request.full_url, command.WEBHOOK)

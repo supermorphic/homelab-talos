@@ -241,7 +241,8 @@ fresh_repo="$fixture/fresh-repo"
 mkdir -p "$fresh_repo/scripts/test/scenarios" "$fresh_repo/scripts/test/lib"
 git -C "$fresh_repo" init --quiet
 cp "$runner" "$fresh_repo/$runner"
-cp scripts/test/lib/nocodb-restore-command.sh "$fresh_repo/scripts/test/lib/"
+cp scripts/test/lib/nocodb-restore-command.sh scripts/test/lib/automation-data-discovery-restore.sh \
+	"$fresh_repo/scripts/test/lib/"
 set +e
 (cd "$fresh_repo" && PATH="$fixture/bin:$PATH" NOCODB_LOCAL_RUN_ID=cleanupguard \
 	NOCODB_LOCAL_GUARD_CLEANUP=true "$runner" --cleanup-test) >"$fixture/output" 2>&1
