@@ -18,6 +18,27 @@ defines each identity's permissions. OpenBao authenticates the workstation and
 issues temporary credentials. Checkout location and branch do not select
 credential authority. Source and evidence authority retain their separate checks.
 
+## Implementation scope and proportionality
+
+Keep the implementation to the existing platform plus one local credential path:
+a kubeconfig writer, a standard exec helper, the four role/RBAC definitions, and
+the caller changes needed to use them. Reuse the existing OpenBao HTTP client,
+operator guards, configuration checks, and test/report infrastructure. Small
+functions in existing modules are sufficient where they keep those boundaries
+clear; this design does not require a new framework or package per lifecycle.
+
+Outage behavior and the workstation trust boundary are documented contracts,
+not requests for outage-management or agent-isolation services. The three
+credential lifecycles require explicit rules, not three separate managers.
+Implement only the operator actions needed to enroll, rotate, and revoke the
+workstation safely. Do not build a workstation fleet registry, generic auth
+provider interface, background renewal, shared cache, or new reporting system.
+
+Use representative caller acceptance and existing tests as described below.
+Do not multiply every failure case across every profile, checkout, and caller.
+The permission boundaries and revocation barrier still need direct proof;
+reducing duplication must not remove those checks.
+
 ## Authentication choice and trust boundary
 
 Use OpenBao AppRole over the existing verified HTTPS route. Each enrolled
@@ -266,11 +287,12 @@ state by ordinary configuration apply. Their readback checks must verify exact
 target bindings and effective policies without putting runtime identifiers in
 public reports. Add no automatic privileged configuration controller.
 
-Use `kube openbao-workstation-enroll`, `kube openbao-workstation-rotate`, and
-`kube openbao-workstation-revoke` for these attended operations. Reuse the
-existing operator authentication, source checks, target-bound confirmations,
-sanitized transport, and repeated mutation preconditions. Do not give ordinary
-workstation roles any access to these administrative operations.
+Expose these attended actions through one thin
+`kube openbao-workstation <enroll|rotate|revoke>` entrypoint, sharing the existing
+operator authentication, source checks, target-bound confirmations, sanitized
+transport, and repeated mutation preconditions. Keep one implementation of the
+shared lifecycle steps. Do not give ordinary workstation roles any access to
+these administrative operations.
 
 ## Talos and cutover
 
@@ -321,6 +343,17 @@ Separately authorized registered live acceptance must prove:
 | Workstation revocation | Fresh login denied and a previously issued, still-unexpired OpenBao session denied for all four issuance paths; another workstation identity unaffected. |
 | OpenBao outage | Existing process uses its cached valid token; new process and expired-token refresh fail; recovery permits fresh issuance. |
 | Rotation and recovery | Replacement works; prior authentication fails. Interrupted operations preserve the revocation boundary. |
+
+Keep this acceptance bounded. Check identity and permissions for all four
+profiles from both checkout forms, as the issue requires. Test shared expiry,
+outage, and client-cache behavior once through the common issuance path; repeat
+only where a caller uses materially different client behavior. Exercise existing
+read/watch, diagnostic, publisher, and Lease workflows rather than building a
+new long-running test application. Reuse current authorization-matrix assertions
+and the existing issuance scenario's expiry checks. Offline tests cover malformed
+responses and partial-failure combinations; live tests establish actual API and
+caller behavior. Collect issuance timing during these runs, without a separate
+benchmark suite or performance monitoring subsystem.
 
 Use controlled client-side transport failure to test broker unavailability
 without disrupting the production platform. Do not present it as an HA test.
