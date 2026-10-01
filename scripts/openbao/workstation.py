@@ -428,7 +428,7 @@ def main(argv):
         if not selected or not kubeconfig.is_absolute() or not kubeconfig.is_file():
             print(
                 "Set OPENBAO_OPERATOR_KUBECONFIG to an existing absolute operator kubeconfig path. "
-                "For agent setup, use: mise exec -- just kube openbao-agent-setup <path> enroll",
+                "For agent setup, use: mise exec -- just bootstrap openbao-agent <path> enroll",
                 file=sys.stderr,
             )
             raise SafeError("invalid-source")

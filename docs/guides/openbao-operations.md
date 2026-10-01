@@ -279,7 +279,7 @@ be deployed first. Existing credential setup remains available until caller
 acceptance permits cutover. From your clean primary checkout of deployed `main`, run:
 
 ```sh
-mise exec -- just kube openbao-agent-setup /absolute/path/to/operator-kubeconfig
+mise exec -- just bootstrap openbao-agent /absolute/path/to/operator-kubeconfig
 ```
 
 Replace the path with your existing, explicitly authorized operator kubeconfig.
@@ -295,9 +295,9 @@ After resolving a failure, resume at the first unfinished step:
 
 ```sh
 # Configuration apply succeeded; enrollment has not started.
-mise exec -- just kube openbao-agent-setup /absolute/path/to/operator-kubeconfig enroll
+mise exec -- just bootstrap openbao-agent /absolute/path/to/operator-kubeconfig enroll
 # Enrollment succeeded; run acceptance without enrolling again.
-mise exec -- just kube openbao-agent-setup /absolute/path/to/operator-kubeconfig test
+mise exec -- just bootstrap openbao-agent /absolute/path/to/operator-kubeconfig test
 ```
 
 If enrollment or test cleanup reports an incomplete mutation, follow its recovery

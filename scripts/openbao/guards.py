@@ -189,7 +189,7 @@ def freeze_target(kubeconfig, phase) -> dict:
     if not recipient:
         print(
             "Set OPENBAO_RECOVERY_RECIPIENT to the public age recipient in the seal artifact. "
-            "For agent setup, use: mise exec -- just kube openbao-agent-setup <path>",
+            "For agent setup, use: mise exec -- just bootstrap openbao-agent <path>",
             file=sys.stderr,
         )
     validate_recipient(recipient)

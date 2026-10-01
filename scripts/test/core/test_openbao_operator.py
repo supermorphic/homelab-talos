@@ -43,7 +43,7 @@ raise SystemExit(7 if sys.argv[-1] == os.getenv("FAIL_STEP") else 0)
 
     def run_recipe(self, *args):
         result = subprocess.run(
-            [self.just, "--justfile", str(ROOT / ".justfile"), "kube", *args],
+            [self.just, "--justfile", str(ROOT / ".justfile"), *args],
             env=self.env, cwd=ROOT, capture_output=True, text=True, check=False,
         )
         self.assertNotIn("SYNTHETIC_CREDENTIAL_DO_NOT_PRINT", result.stdout + result.stderr)
@@ -51,7 +51,7 @@ raise SystemExit(7 if sys.argv[-1] == os.getenv("FAIL_STEP") else 0)
         return result, calls
 
     def test_setup_supplies_inputs_and_runs_in_order(self):
-        result, calls = self.run_recipe("openbao-agent-setup", str(self.config))
+        result, calls = self.run_recipe("bootstrap", "openbao-agent", str(self.config))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([c["args"] for c in calls], [
             ["kube", "openbao-config-apply"], ["kube", "openbao-workstation", "enroll"],
@@ -70,12 +70,12 @@ raise SystemExit(7 if sys.argv[-1] == os.getenv("FAIL_STEP") else 0)
             with self.subTest(step=step):
                 self.trace.unlink(missing_ok=True)
                 self.env["FAIL_STEP"] = step
-                result, calls = self.run_recipe("openbao-agent-setup", str(self.config))
+                result, calls = self.run_recipe("bootstrap", "openbao-agent", str(self.config))
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(len(calls), count)
 
     def test_resume_acceptance_does_not_enroll_again(self):
-        result, calls = self.run_recipe("openbao-agent-setup", str(self.config), "test")
+        result, calls = self.run_recipe("bootstrap", "openbao-agent", str(self.config), "test")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([c["args"] for c in calls], [["test", "record", "test.agent-credentials"]])
 
@@ -83,7 +83,7 @@ raise SystemExit(7 if sys.argv[-1] == os.getenv("FAIL_STEP") else 0)
         for config, step in (("relative/config", "apply"), (str(self.root / "missing"), "apply"),
                              (str(self.config), "typo")):
             with self.subTest(config=config, step=step):
-                result, calls = self.run_recipe("openbao-agent-setup", config, step)
+                result, calls = self.run_recipe("bootstrap", "openbao-agent", config, step)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(calls, [])
 
@@ -94,8 +94,8 @@ raise SystemExit(7 if sys.argv[-1] == os.getenv("FAIL_STEP") else 0)
             with patch.dict(os.environ, {"OPENBAO_OPERATOR_KUBECONFIG": ""}), redirect_stdout(output), redirect_stderr(error):
                 self.assertEqual(main(args), 1)
             self.assertIn("OPENBAO_OPERATOR_KUBECONFIG", error.getvalue())
-            self.assertIn("openbao-agent-setup", error.getvalue())
-        result, _ = self.run_recipe("agent-credentials-test")
+            self.assertIn("bootstrap openbao-agent", error.getvalue())
+        result, _ = self.run_recipe("kube", "agent-credentials-test")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("OPENBAO_OPERATOR_KUBECONFIG", result.stderr)
 
@@ -106,7 +106,7 @@ raise SystemExit(7 if sys.argv[-1] == os.getenv("FAIL_STEP") else 0)
               redirect_stderr(error), self.assertRaises(operator.SafeError)):
             guards.freeze_target(self.config, "config-apply")
         self.assertIn("OPENBAO_RECOVERY_RECIPIENT", error.getvalue())
-        self.assertIn("openbao-agent-setup", error.getvalue())
+        self.assertIn("bootstrap openbao-agent", error.getvalue())
 
 
 class OperatorTunnelTest(unittest.TestCase):
