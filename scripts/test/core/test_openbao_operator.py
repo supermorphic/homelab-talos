@@ -1,11 +1,112 @@
 import io
 import json
+import os
+import shutil
+import subprocess
+import tempfile
 import unittest
-from contextlib import nullcontext, redirect_stdout
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from scripts.openbao import operator
+from scripts.openbao import guards, operator, workstation
+
+ROOT = Path(__file__).resolve().parents[3]
+
+
+class OperatorSetupTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.config = self.root / "operator config"
+        self.config.write_text("SYNTHETIC_CREDENTIAL_DO_NOT_PRINT")
+        self.trace = self.root / "calls.jsonl"
+        self.just = shutil.which("just")
+        # Replace only the attended child workflows; execute the real setup recipe.
+        child = self.root / "just"
+        child.write_text('''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+keys = ("OPENBAO_OPERATOR_KUBECONFIG", "TEST_KUBECONFIG", "KUBECONFIG", "OPENBAO_CONFIG_AUTH",
+        "OPENBAO_RECOVERY_RECIPIENT", "OPENBAO_CONFIG_CONFIRM")
+with Path(os.environ["SETUP_TRACE"]).open("a") as stream:
+    stream.write(json.dumps({"args": sys.argv[1:], "env": {k: os.getenv(k) for k in keys}}) + "\\n")
+raise SystemExit(7 if sys.argv[-1] == os.getenv("FAIL_STEP") else 0)
+''')
+        child.chmod(0o755)
+        self.env = {**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
+                    "SETUP_TRACE": str(self.trace), "OPENBAO_OPERATOR_KUBECONFIG": "",
+                    "KUBECONFIG": "/synthetic/ambient-config",
+                    "OPENBAO_CONFIG_CONFIRM": "stale-confirmation",
+                    "OPENBAO_RECOVERY_RECIPIENT": "stale-recipient"}
+
+    def run_recipe(self, *args):
+        result = subprocess.run(
+            [self.just, "--justfile", str(ROOT / ".justfile"), "kube", *args],
+            env=self.env, cwd=ROOT, capture_output=True, text=True, check=False,
+        )
+        self.assertNotIn("SYNTHETIC_CREDENTIAL_DO_NOT_PRINT", result.stdout + result.stderr)
+        calls = [json.loads(line) for line in self.trace.read_text().splitlines()] if self.trace.exists() else []
+        return result, calls
+
+    def test_setup_supplies_inputs_and_runs_in_order(self):
+        result, calls = self.run_recipe("openbao-agent-setup", str(self.config))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([c["args"] for c in calls], [
+            ["kube", "openbao-config-apply"], ["kube", "openbao-workstation", "enroll"],
+            ["test", "record", "test.agent-credentials"],
+        ])
+        for call in calls:
+            self.assertEqual(call["env"]["OPENBAO_OPERATOR_KUBECONFIG"], str(self.config))
+            self.assertEqual(call["env"]["TEST_KUBECONFIG"], str(self.config))
+            self.assertEqual(call["env"]["KUBECONFIG"], str(self.config))
+            self.assertEqual(call["env"]["OPENBAO_CONFIG_AUTH"], "userpass")
+            self.assertIsNone(call["env"]["OPENBAO_CONFIG_CONFIRM"])
+            self.assertRegex(call["env"]["OPENBAO_RECOVERY_RECIPIENT"], r"^age1[a-z0-9]{58}$")
+
+    def test_setup_stops_after_failed_apply_or_enrollment(self):
+        for step, count in (("openbao-config-apply", 1), ("enroll", 2)):
+            with self.subTest(step=step):
+                self.trace.unlink(missing_ok=True)
+                self.env["FAIL_STEP"] = step
+                result, calls = self.run_recipe("openbao-agent-setup", str(self.config))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(len(calls), count)
+
+    def test_resume_acceptance_does_not_enroll_again(self):
+        result, calls = self.run_recipe("openbao-agent-setup", str(self.config), "test")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([c["args"] for c in calls], [["test", "record", "test.agent-credentials"]])
+
+    def test_bad_inputs_stop_before_any_workflow(self):
+        for config, step in (("relative/config", "apply"), (str(self.root / "missing"), "apply"),
+                             (str(self.config), "typo")):
+            with self.subTest(config=config, step=step):
+                result, calls = self.run_recipe("openbao-agent-setup", config, step)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(calls, [])
+
+    def test_individual_commands_explain_missing_operator_config(self):
+        for main, args in ((operator.main, ["operator", "config-apply"]),
+                           (workstation.main, ["workstation", "enroll", "agent-workstation"])):
+            output, error = io.StringIO(), io.StringIO()
+            with patch.dict(os.environ, {"OPENBAO_OPERATOR_KUBECONFIG": ""}), redirect_stdout(output), redirect_stderr(error):
+                self.assertEqual(main(args), 1)
+            self.assertIn("OPENBAO_OPERATOR_KUBECONFIG", error.getvalue())
+            self.assertIn("openbao-agent-setup", error.getvalue())
+        result, _ = self.run_recipe("agent-credentials-test")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("OPENBAO_OPERATOR_KUBECONFIG", result.stderr)
+
+    def test_missing_recipient_explains_setup_before_cluster_access(self):
+        error = io.StringIO()
+        with (patch.dict(os.environ, {"OPENBAO_RECOVERY_RECIPIENT": ""}),
+              patch.object(guards, "source_revision", return_value="a" * 40),
+              redirect_stderr(error), self.assertRaises(operator.SafeError)):
+            guards.freeze_target(self.config, "config-apply")
+        self.assertIn("OPENBAO_RECOVERY_RECIPIENT", error.getvalue())
+        self.assertIn("openbao-agent-setup", error.getvalue())
 
 
 class OperatorTunnelTest(unittest.TestCase):

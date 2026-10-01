@@ -1258,11 +1258,42 @@ nocodb-pair-status domain pair: require-bash
 openbao-workstation action slot="agent-workstation": require-bash
     @uv run --locked python -m scripts.openbao.workstation {{quote(action)}} {{quote(slot)}}
 
+# Apply agent profiles, enroll this workstation, and record acceptance; resume with enroll or test.
+openbao-agent-setup operator_kubeconfig start="apply": require-bash
+    #!/usr/bin/env bash
+    set -euo pipefail
+    set +x
+    operator_config={{quote(operator_kubeconfig)}}
+    start={{quote(start)}}
+    if [[ "$operator_config" != /* || ! -f "$operator_config" ]]; then
+      echo 'Supply an existing absolute operator kubeconfig path: just kube openbao-agent-setup /absolute/path/to/operator-kubeconfig' >&2
+      exit 1
+    fi
+    case "$start" in
+      apply|enroll|test) ;;
+      *) echo 'Starting step must be apply, enroll, or test.' >&2; exit 1 ;;
+    esac
+    export OPENBAO_OPERATOR_KUBECONFIG="$operator_config"
+    export TEST_KUBECONFIG="$operator_config"
+    export KUBECONFIG="$operator_config"
+    export OPENBAO_CONFIG_AUTH=userpass
+    # Read public metadata only. Existing source/target guards validate the recipient.
+    OPENBAO_RECOVERY_RECIPIENT="$(yq -er '.sops.age[0].recipient' kubernetes/apps/security/openbao/app/openbao-seal.sops.yaml)"
+    export OPENBAO_RECOVERY_RECIPIENT
+    unset OPENBAO_CONFIG_CONFIRM
+    if [[ "$start" == apply ]]; then
+      just kube openbao-config-apply
+    fi
+    if [[ "$start" != test ]]; then
+      just kube openbao-workstation enroll
+    fi
+    just test record test.agent-credentials
+
 # Install checkout-local standard exec contexts after attended enrollment.
 kubeconfig profile="observer": require-bash
     @uv run --locked --no-dev python -m scripts.openbao.credentials install {{quote(profile)}}
 
 # Attended profile/caller acceptance with isolated temporary workstation identities.
 agent-credentials-test: require-bash
-    @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}"
+    @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}" || { echo 'Set OPENBAO_OPERATOR_KUBECONFIG to an absolute operator kubeconfig path, or use just kube openbao-agent-setup <path> test.' >&2; exit 1; }
     @TEST_KUBECONFIG="$OPENBAO_OPERATOR_KUBECONFIG" scripts/test/run-catalog-suite.sh test.agent-credentials -- uv run --locked python -m scripts.test.scenarios.agent_credentials
