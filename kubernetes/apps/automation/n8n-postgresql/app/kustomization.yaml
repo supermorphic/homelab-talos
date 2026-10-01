@@ -18,6 +18,9 @@ configMapGenerator:
     files:
       - backup.sh=scripts/backup.sh
       - update-backup-status.sql=scripts/update-backup-status.sql
+  - name: n8n-postgresql-discovery
+    files:
+      - credential-discovery.sql=scripts/credential-discovery.sql
   - name: n8n-postgresql-sql-exporter
     files:
       - sql-exporter.yml=sql-exporter.yml

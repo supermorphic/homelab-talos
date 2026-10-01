@@ -34,6 +34,7 @@ fi
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 source scripts/test/lib/nocodb-restore-command.sh
+source scripts/test/lib/automation-data-discovery-restore.sh
 
 postgres_image_expected='postgres:17.11-alpine3.24'
 n8n_image_expected='docker.n8n.io/n8nio/n8n:2.36.7'
@@ -64,8 +65,8 @@ case "$#" in
 	cleanup_test=false
 	output_safety_test=false
 	;;
-	1)
-		case "$1" in
+1)
+	case "$1" in
 	--preflight)
 		preflight_only=true
 		cleanup_test=false
@@ -81,10 +82,10 @@ case "$#" in
 		cleanup_test=false
 		output_safety_test=true
 		;;
-			*) usage ;;
-		esac
-		;;
 	*) usage ;;
+	esac
+	;;
+*) usage ;;
 esac
 
 secret_manifest="${NOCODB_LOCAL_SECRET_MANIFEST:?internal secret manifest is required}"
@@ -98,10 +99,10 @@ if [[ "$output_safety_test" == true ]]; then
 	output_test_sentinel="${NOCODB_LOCAL_OUTPUT_TEST_SENTINEL:?output test sentinel is required}"
 	record_secret "$output_test_sentinel"
 	case "${NOCODB_LOCAL_OUTPUT_TEST_LEAK_STREAM:-safe}" in
-		safe) ;;
-		stdout) printf '%s\n' "$output_test_sentinel" ;;
-		stderr) printf '%s\n' "$output_test_sentinel" >&2 ;;
-		*) fail 'output safety test stream is invalid.' ;;
+	safe) ;;
+	stdout) printf '%s\n' "$output_test_sentinel" ;;
+	stderr) printf '%s\n' "$output_test_sentinel" >&2 ;;
+	*) fail 'output safety test stream is invalid.' ;;
 	esac
 	echo 'NocoDB local integration output safety self-test completed.'
 	exit 0
@@ -144,18 +145,18 @@ require_absent_or_owned() { # <kind> <name>
 	local kind="$1" name="$2" status owner
 	set +e
 	case "$kind" in
-		container) "$podman_bin" container exists "$name" >/dev/null 2>&1 ;;
-		network) "$podman_bin" network exists "$name" >/dev/null 2>&1 ;;
-		volume) "$podman_bin" volume exists "$name" >/dev/null 2>&1 ;;
+	container) "$podman_bin" container exists "$name" >/dev/null 2>&1 ;;
+	network) "$podman_bin" network exists "$name" >/dev/null 2>&1 ;;
+	volume) "$podman_bin" volume exists "$name" >/dev/null 2>&1 ;;
 	esac
 	status=$?
 	set -e
 	[[ "$status" == 1 ]] && return 0
 	[[ "$status" == 0 ]] || fail "could not determine whether $kind $name exists."
 	case "$kind" in
-		container) owner="$("$podman_bin" inspect --format '{{ index .Config.Labels "homelab-talos.test-run" }}' "$name" 2>/dev/null)" ;;
-		network) owner="$("$podman_bin" network inspect --format '{{ index .Labels "homelab-talos.test-run" }}' "$name" 2>/dev/null)" ;;
-		volume) owner="$("$podman_bin" volume inspect --format '{{ index .Labels "homelab-talos.test-run" }}' "$name" 2>/dev/null)" ;;
+	container) owner="$("$podman_bin" inspect --format '{{ index .Config.Labels "homelab-talos.test-run" }}' "$name" 2>/dev/null)" ;;
+	network) owner="$("$podman_bin" network inspect --format '{{ index .Labels "homelab-talos.test-run" }}' "$name" 2>/dev/null)" ;;
+	volume) owner="$("$podman_bin" volume inspect --format '{{ index .Labels "homelab-talos.test-run" }}' "$name" 2>/dev/null)" ;;
 	esac
 	[[ "$owner" == "$run_marker" ]] || fail "$kind $name exists but is not owned by this run."
 	fail "$kind $name already exists for this run; choose a new run ID."
@@ -181,17 +182,17 @@ phase='resource-creation'
 
 resource_owner() { # <kind> <name>
 	case "$1" in
-		container) "$podman_bin" inspect --format '{{ index .Config.Labels "homelab-talos.test-run" }}' "$2" 2>/dev/null ;;
-		network) "$podman_bin" network inspect --format '{{ index .Labels "homelab-talos.test-run" }}' "$2" 2>/dev/null ;;
-		volume) "$podman_bin" volume inspect --format '{{ index .Labels "homelab-talos.test-run" }}' "$2" 2>/dev/null ;;
+	container) "$podman_bin" inspect --format '{{ index .Config.Labels "homelab-talos.test-run" }}' "$2" 2>/dev/null ;;
+	network) "$podman_bin" network inspect --format '{{ index .Labels "homelab-talos.test-run" }}' "$2" 2>/dev/null ;;
+	volume) "$podman_bin" volume inspect --format '{{ index .Labels "homelab-talos.test-run" }}' "$2" 2>/dev/null ;;
 	esac
 }
 
 resource_exists() { # <kind> <name>
 	case "$1" in
-		container) "$podman_bin" container exists "$2" >/dev/null 2>&1 ;;
-		network) "$podman_bin" network exists "$2" >/dev/null 2>&1 ;;
-		volume) "$podman_bin" volume exists "$2" >/dev/null 2>&1 ;;
+	container) "$podman_bin" container exists "$2" >/dev/null 2>&1 ;;
+	network) "$podman_bin" network exists "$2" >/dev/null 2>&1 ;;
+	volume) "$podman_bin" volume exists "$2" >/dev/null 2>&1 ;;
 	esac
 }
 
@@ -206,9 +207,9 @@ remove_owned_resource() { # <kind> <name>
 	owner="$(resource_owner "$kind" "$name")" || return 1
 	[[ "$owner" == "$run_marker" ]] || return 1
 	case "$kind" in
-		container) "$podman_bin" rm --force "$name" >/dev/null 2>&1 ;;
-		network) "$podman_bin" network rm "$name" >/dev/null 2>&1 ;;
-		volume) "$podman_bin" volume rm "$name" >/dev/null 2>&1 ;;
+	container) "$podman_bin" rm --force "$name" >/dev/null 2>&1 ;;
+	network) "$podman_bin" network rm "$name" >/dev/null 2>&1 ;;
+	volume) "$podman_bin" volume rm "$name" >/dev/null 2>&1 ;;
 	esac || return 1
 	set +e
 	resource_exists "$kind" "$name"
@@ -258,11 +259,16 @@ nocodb_connection_key="$(random_secret)"
 provision_webhook_secret="$(random_secret)"
 source_webhook_secret="$(random_secret)"
 acceptance_webhook_secret="$(random_secret)"
+inventory_webhook_secret="$(random_secret)"
+platform_inventory_password="$(random_secret)"
+nocodb_inventory_password="$(random_secret)"
+n8n_inventory_password="$(random_secret)"
 for generated_secret in \
 	"$postgres_password" "$provisioner_password" "$backup_password" "$exporter_password" \
 	"$metadata_password" "$n8n_password" "$n8n_encryption_key" "$n8n_owner_password" \
 	"$nocodb_admin_password" "$nocodb_jwt_secret" "$nocodb_connection_key" \
-	"$provision_webhook_secret" "$source_webhook_secret" "$acceptance_webhook_secret"; do
+	"$provision_webhook_secret" "$source_webhook_secret" "$acceptance_webhook_secret" \
+	"$inventory_webhook_secret" "$platform_inventory_password" "$nocodb_inventory_password" "$n8n_inventory_password"; do
 	record_secret "$generated_secret"
 done
 
@@ -397,15 +403,16 @@ http_request() { # <method> <url> <auth-mode> <body-file|-> <output-file>
 			'connect-timeout = 5' 'max-time = 120' 'max-filesize = 1048576'
 		printf 'request = "%s"\nurl = "%s"\noutput = "%s"\n' "$method" "$url" "$output"
 		case "$auth" in
-			none) ;;
-			n8n-cookie) printf 'cookie = "%s"\n' "$integration_root/n8n.cookies" ;;
-			n8n-key) printf 'header = "X-N8N-API-KEY: %s"\n' "$n8n_api_key" ;;
-			nocodb-jwt) printf 'header = "xc-auth: %s"\n' "$nocodb_session" ;;
-			nocodb-token) printf 'header = "xc-token: %s"\n' "$nocodb_token" ;;
-			provision-webhook) printf 'header = "X-Automation-Data-Provisioning: %s"\n' "$provision_webhook_secret" ;;
-			source-webhook) printf 'header = "Authorization: Bearer %s"\n' "$source_webhook_secret" ;;
-			acceptance-webhook) printf 'header = "Authorization: Bearer %s"\n' "$acceptance_webhook_secret" ;;
-			*) return 64 ;;
+		none) ;;
+		n8n-cookie) printf 'cookie = "%s"\n' "$integration_root/n8n.cookies" ;;
+		n8n-key) printf 'header = "X-N8N-API-KEY: %s"\n' "$n8n_api_key" ;;
+		nocodb-jwt) printf 'header = "xc-auth: %s"\n' "$nocodb_session" ;;
+		nocodb-token) printf 'header = "xc-token: %s"\n' "$nocodb_token" ;;
+		provision-webhook) printf 'header = "X-Automation-Data-Provisioning: %s"\n' "$provision_webhook_secret" ;;
+		source-webhook) printf 'header = "Authorization: Bearer %s"\n' "$source_webhook_secret" ;;
+		acceptance-webhook) printf 'header = "Authorization: Bearer %s"\n' "$acceptance_webhook_secret" ;;
+		inventory-webhook) printf 'header = "X-Automation-Data-Inventory: %s"\n' "$inventory_webhook_secret" ;;
+		*) return 64 ;;
 		esac
 		if [[ "$body" != - ]]; then
 			printf 'header = "Content-Type: application/json"\ndata-binary = "@%s"\n' "$body"
@@ -424,10 +431,10 @@ http_status_request() { # <url> <auth-mode> <output-file>
 		printf 'request = "GET"\nurl = "%s"\noutput = "%s"\nwrite-out = "%%{http_code}"\n' \
 			"$url" "$output"
 		case "$auth" in
-			none) ;;
-			nocodb-jwt) printf 'header = "xc-auth: %s"\n' "$nocodb_session" ;;
-			nocodb-token) printf 'header = "xc-token: %s"\n' "$nocodb_token" ;;
-			*) return 64 ;;
+		none) ;;
+		nocodb-jwt) printf 'header = "xc-auth: %s"\n' "$nocodb_session" ;;
+		nocodb-token) printf 'header = "xc-token: %s"\n' "$nocodb_token" ;;
+		*) return 64 ;;
 		esac
 	} >"$config"
 	chmod 600 "$config"
@@ -442,10 +449,10 @@ http_status_json_request() { # <method> <url> <auth-mode> <body-file> <output-fi
 		printf 'request = "%s"\nurl = "%s"\noutput = "%s"\nwrite-out = "%%{http_code}"\n' \
 			"$method" "$url" "$output"
 		case "$auth" in
-			nocodb-jwt) printf 'header = "xc-auth: %s"\n' "$nocodb_session" ;;
-			nocodb-token) printf 'header = "xc-token: %s"\n' "$nocodb_token" ;;
-			acceptance-webhook) printf 'header = "Authorization: Bearer %s"\n' "$acceptance_webhook_secret" ;;
-			*) return 64 ;;
+		nocodb-jwt) printf 'header = "xc-auth: %s"\n' "$nocodb_session" ;;
+		nocodb-token) printf 'header = "xc-token: %s"\n' "$nocodb_token" ;;
+		acceptance-webhook) printf 'header = "Authorization: Bearer %s"\n' "$acceptance_webhook_secret" ;;
+		*) return 64 ;;
 		esac
 		printf 'header = "Content-Type: application/json"\ndata-binary = "@%s"\n' "$body"
 	} >"$config"
@@ -468,13 +475,13 @@ wait_nocodb_job() { # <base-id> <job-id> <output-file>
 				"$integration_root/job-list-response.json" >"$output"
 			job_status="$(jq -er '.status' "$output")"
 			case "$job_status" in
-				completed) return 0 ;;
-				failed)
-					jq '{job,status,resultType:(.result|type)}' "$output" >&2 || true
-					fail 'NocoDB metadata job failed.'
-					;;
-				waiting | active | delayed) ;;
-				*) fail 'NocoDB metadata job returned an unknown state.' ;;
+			completed) return 0 ;;
+			failed)
+				jq '{job,status,resultType:(.result|type)}' "$output" >&2 || true
+				fail 'NocoDB metadata job failed.'
+				;;
+			waiting | active | delayed) ;;
+			*) fail 'NocoDB metadata job returned an unknown state.' ;;
 			esac
 		fi
 		sleep 1
@@ -529,6 +536,33 @@ create_n8n_credential() { # <name> <type> <data-json>
 		'select(.name == $name and .type == $type) | .id | select(type == "string" and length > 0)' "$response"
 }
 
+phase='discovery-projection-installation'
+install_discovery_projection() { # <database> <reader> <candidate> <reviewed-sql>
+	local database="$1" reader="$2" candidate="$3" reviewed_sql="$4"
+	"$podman_bin" exec --interactive "$postgres_name" psql -X --set=ON_ERROR_STOP=1 \
+		--username postgres --dbname "$database" <"$reviewed_sql" \
+		>"$integration_root/discovery-install-$database.log" 2>&1 || fail 'Reviewed discovery projection failed.'
+	printf "SET log_statement='none'; SET log_min_error_statement='panic'; ALTER ROLE %s LOGIN PASSWORD '%s';\n" "$reader" "$candidate" |
+		"$podman_bin" exec --interactive "$postgres_name" psql -X --set=ON_ERROR_STOP=1 --username postgres --dbname "$database" \
+			>"$integration_root/discovery-login-$database.log" 2>&1 || fail 'Synthetic discovery reader activation failed.'
+}
+install_discovery_projection automation_data_control automation_data_inventory "$platform_inventory_password" \
+	kubernetes/apps/automation-data/postgresql/app/scripts/credential-discovery.sql
+install_discovery_projection nocodb nocodb_inventory "$nocodb_inventory_password" \
+	kubernetes/apps/automation-data/postgresql/app/scripts/nocodb-discovery.sql
+install_discovery_projection n8n n8n_inventory "$n8n_inventory_password" \
+	kubernetes/apps/automation/n8n-postgresql/app/scripts/credential-discovery.sql
+inventory_pg_credential() { # <name> <database> <reader> <candidate>
+	local data
+	data="$(jq -cn --arg database "$2" --arg user "$3" --arg password "$4" \
+		'{host:"automation-data-postgresql.automation-data.svc.cluster.local",port:5432,database:$database,user:$user,password:$password,ssl:"disable"}')"
+	create_n8n_credential "$1" postgres "$data"
+}
+platform_inventory_id="$(inventory_pg_credential 'Automation Data Inventory Reader' automation_data_control automation_data_inventory "$platform_inventory_password")"
+nocodb_inventory_id="$(inventory_pg_credential 'NocoDB Inventory Reader' nocodb nocodb_inventory "$nocodb_inventory_password")"
+n8n_inventory_id="$(inventory_pg_credential 'n8n Inventory Reader' n8n n8n_inventory "$n8n_inventory_password")"
+inventory_header_id="$(create_n8n_credential 'Automation Data Inventory Header' httpHeaderAuth "$(jq -cn --arg value "$inventory_webhook_secret" '{name:"X-Automation-Data-Inventory",value:$value}')")"
+
 provisioner_pg_data="$(jq -cn --arg password "$provisioner_password" '{host:"automation-data-postgresql.automation-data.svc.cluster.local",port:5432,database:"automation_data_control",user:"automation_data_provisioner",password:$password,ssl:"disable"}')"
 provisioner_pg_id="$(create_n8n_credential 'Automation Data Provisioner' postgres "$provisioner_pg_data")"
 n8n_header_id="$(create_n8n_credential 'Local n8n API' httpHeaderAuth "$(jq -cn --arg value "$n8n_api_key" '{name:"X-N8N-API-KEY",value:$value}')")"
@@ -545,6 +579,7 @@ bind_workflow() { # <source> <output> <postgres-id> <postgres-name> <http-id> <h
 	jq --arg pg_id "$pg_id" --arg pg_name "$pg_name" --arg http_id "$http_id" --arg http_name "$http_name" \
 		--arg webhook_id "$webhook_id" --arg webhook_name "$webhook_name" \
 		--arg runtime_id "$runtime_id" --arg runtime_name "$runtime_name" \
+		--arg inventory_header_id "$inventory_header_id" \
 		--argjson runtime_nodes "$runtime_nodes" --argjson migrator_nodes "$migrator_nodes" '
 		.nodes |= map(
 			. as $node |
@@ -555,6 +590,7 @@ bind_workflow() { # <source> <output> <postgres-id> <postgres-name> <http-id> <h
 			elif .type == "n8n-nodes-base.postgres" and $runtime_id != ""
 			then error("unknown acceptance PostgreSQL node")
 			elif .type == "n8n-nodes-base.postgres" then .credentials = {postgres:{id:$pg_id,name:$pg_name}}
+			elif .name == "Observe Mutation Inventory" then .credentials = {httpHeaderAuth:{id:$inventory_header_id,name:"Automation Data Inventory Header"}}
 			elif .type == "n8n-nodes-base.httpRequest" then .credentials = {httpHeaderAuth:{id:$http_id,name:$http_name}}
 			elif .type == "n8n-nodes-base.webhook" then .credentials = {httpHeaderAuth:{id:$webhook_id,name:$webhook_name}}
 			else . end
@@ -589,6 +625,13 @@ import_and_publish() { # <local-file> <workflow-name>
 }
 
 phase='workflow-import'
+jq --arg platform "$platform_inventory_id" --arg nocodb "$nocodb_inventory_id" --arg n8n "$n8n_inventory_id" --arg header "$inventory_header_id" '
+    .nodes |= map(if .type == "n8n-nodes-base.postgres" then
+      .credentials.postgres.id = (if .credentials.postgres.name == "Automation Data Inventory Reader" then $platform
+        elif .credentials.postgres.name == "NocoDB Inventory Reader" then $nocodb else $n8n end)
+      elif .type == "n8n-nodes-base.webhook" then .credentials.httpHeaderAuth.id = $header else . end)
+    ' kubernetes/apps/automation/n8n/app/workflows/automation-data-credential-inventory.json >"$integration_root/inventory-workflow.json"
+inventory_workflow_id="$(import_and_publish "$integration_root/inventory-workflow.json" 'Automation Data Credential Inventory')"
 import_and_publish "$integration_root/automation-data-provisioner.json" 'Automation Data Provisioner' >/dev/null
 import_and_publish "$integration_root/nocodb-source-provisioner.json" 'NocoDB Source Provisioner' >/dev/null
 
@@ -621,15 +664,15 @@ validate_source_response() { # <operation> <access-kind|-> <actual-response> [do
 	local confirmation_name confirmation_value validator_status
 	local -a command=(scripts/nocodb/source-operation.sh "$operation" "$domain")
 	case "$operation" in
-		sync)
-			confirmation_name='NOCODB_SOURCE_SYNC_CONFIRM'
-			confirmation_value="sync:nocodb:$domain"
-			;;
-		rotate)
-			confirmation_name='NOCODB_SOURCE_ROTATE_CONFIRM'
-			confirmation_value="rotate:nocodb:$domain:$access_kind"
-			command+=("$access_kind")
-			;;
+	sync)
+		confirmation_name='NOCODB_SOURCE_SYNC_CONFIRM'
+		confirmation_value="sync:nocodb:$domain"
+		;;
+	rotate)
+		confirmation_name='NOCODB_SOURCE_ROTATE_CONFIRM'
+		confirmation_value="rotate:nocodb:$domain:$access_kind"
+		command+=("$access_kind")
+		;;
 	esac
 	set +e
 	env PATH="$integration_root/validator-bin:$PATH" \
@@ -678,36 +721,36 @@ pair_call() { # <register|prepare|sync|rotate|retry> <output> [access-kind]
 	local action="pair-$operation" confirmation_name confirmation_value
 	local -a command=(scripts/nocodb/source-operation.sh "$action" "$domain" "$pair")
 	case "$operation" in
-		register)
-			body="$(jq -cn --arg domain "$domain" --arg pair "$pair" \
-				'{domain:$domain,pair:$pair,operation:"register",readerSchema:"extra_read",operatorSchema:"extra_edit"}')"
-			command+=(extra_read extra_edit)
-			confirmation_name=NOCODB_PAIR_REGISTER_CONFIRM
-			confirmation_value="register:nocodb:$domain:$pair:extra_read:extra_edit"
-			;;
+	register)
+		body="$(jq -cn --arg domain "$domain" --arg pair "$pair" \
+			'{domain:$domain,pair:$pair,operation:"register",readerSchema:"extra_read",operatorSchema:"extra_edit"}')"
+		command+=(extra_read extra_edit)
+		confirmation_name=NOCODB_PAIR_REGISTER_CONFIRM
+		confirmation_value="register:nocodb:$domain:$pair:extra_read:extra_edit"
+		;;
 	prepare | sync)
-			body="$(jq -cn --arg domain "$domain" --arg pair "$pair" --arg operation "$operation" \
-				'{domain:$domain,pair:$pair,operation:$operation}')"
-			confirmation_name="NOCODB_PAIR_${operation^^}_CONFIRM"
-			confirmation_value="$operation:nocodb:$domain:$pair"
-			;;
+		body="$(jq -cn --arg domain "$domain" --arg pair "$pair" --arg operation "$operation" \
+			'{domain:$domain,pair:$pair,operation:$operation}')"
+		confirmation_name="NOCODB_PAIR_${operation^^}_CONFIRM"
+		confirmation_value="$operation:nocodb:$domain:$pair"
+		;;
 	rotate | retry)
-			[[ "$access_kind" == reader || "$access_kind" == operator ]] || fail 'invalid pair rotation target.'
-			body="$(jq -cn --arg domain "$domain" --arg pair "$pair" --arg access_kind "$access_kind" \
-				--arg operation "$operation" \
-				'{domain:$domain,pair:$pair,operation:$operation,accessKind:$access_kind}')"
-			command+=("$access_kind")
-			confirmation_name="NOCODB_PAIR_${operation^^}_CONFIRM"
-			confirmation_value="$operation:nocodb:$domain:$pair:$access_kind"
-            if [[ "$operation" == retry ]]; then
-                # This fixture called SQL directly; no workflow or external request
-                # was started for the retained claim, so quiescence is established.
-                command+=("$recovery_id")
-                confirmation_value+=":$recovery_id:quiesced"
-                body="$(jq --arg id "$recovery_id" '. + {quiescedOperationId:$id}' <<<"$body")"
-            fi
-			;;
-		*) fail 'invalid pair operation.' ;;
+		[[ "$access_kind" == reader || "$access_kind" == operator ]] || fail 'invalid pair rotation target.'
+		body="$(jq -cn --arg domain "$domain" --arg pair "$pair" --arg access_kind "$access_kind" \
+			--arg operation "$operation" \
+			'{domain:$domain,pair:$pair,operation:$operation,accessKind:$access_kind}')"
+		command+=("$access_kind")
+		confirmation_name="NOCODB_PAIR_${operation^^}_CONFIRM"
+		confirmation_value="$operation:nocodb:$domain:$pair:$access_kind"
+		if [[ "$operation" == retry ]]; then
+			# This fixture called SQL directly; no workflow or external request
+			# was started for the retained claim, so quiescence is established.
+			command+=("$recovery_id")
+			confirmation_value+=":$recovery_id:quiesced"
+			body="$(jq --arg id "$recovery_id" '. + {quiescedOperationId:$id}' <<<"$body")"
+		fi
+		;;
+	*) fail 'invalid pair operation.' ;;
 	esac
 	webhook_call automation-data-nocodb-source source-webhook "$body" "$output"
 	if ! jq -e '.ok == true' "$output" >/dev/null; then
@@ -1113,6 +1156,7 @@ prove_logical_restore() { # <ready-source-response> <probe-response>
 		--username postgres --dbname automation_data_control --command \
 		"SELECT platform_operations.read_platform_revision();")" == 026-nocodb-v3 ]] ||
 		fail 'restored platform revision was not exact.'
+	prove_discovery_restored_projections
 	restore_ip="$("$podman_bin" inspect "$restore_postgres_name" | jq -er --arg network "$network" \
 		'.[0].NetworkSettings.Networks[$network].IPAddress')"
 	[[ "$restore_ip" =~ ^[0-9a-fA-F:.]+$ ]] || fail 'could not resolve the isolated restored PostgreSQL address.'
@@ -1624,7 +1668,7 @@ prove_application_login() {
 		fail 'fixed current-run application cleanup failed.'
 	"$podman_bin" exec "$postgres_name" psql --no-psqlrc --tuples-only --no-align \
 		--set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_acceptance --command \
-		"SELECT NOT EXISTS (SELECT FROM app.integration_facts WHERE id = ('x'||substr(md5('$run_id'),1,15))::bit(60)::bigint) AND EXISTS (SELECT FROM app.integration_facts WHERE id=2 AND fact='created');" | \
+		"SELECT NOT EXISTS (SELECT FROM app.integration_facts WHERE id = ('x'||substr(md5('$run_id'),1,15))::bit(60)::bigint) AND EXISTS (SELECT FROM app.integration_facts WHERE id=2 AND fact='created');" |
 		rg -qx t || fail 'application cleanup removed another fixture or retained the current run.'
 
 }
@@ -1918,11 +1962,11 @@ JS
 		sleep 0.05
 	done
 	[[ "$("$podman_bin" exec "$n8n_name" cat /tmp/source-loss-count)" == 1 ]] || fail 'external create did not reach the held-response boundary.'
-    [[ "$("$podman_bin" exec "$postgres_name" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
-        --username postgres --dbname automation_data_control --tuples-only --no-align --command \
-        "SELECT phase FROM platform_operations.nocodb_source_operations WHERE domain='$domain' AND pair='default';")" == active ]] ||
-        fail 'first creation claim was not active at the concurrency boundary.'
-    phase='concurrent-create-with-response-in-flight'
+	[[ "$("$podman_bin" exec "$postgres_name" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
+		--username postgres --dbname automation_data_control --tuples-only --no-align --command \
+		"SELECT phase FROM platform_operations.nocodb_source_operations WHERE domain='$domain' AND pair='default';")" == active ]] ||
+		fail 'first creation claim was not active at the concurrency boundary.'
+	phase='concurrent-create-with-response-in-flight'
 	webhook_call automation-data-nocodb-source source-webhook \
 		'{"domain":"issue491_response_loss","operation":"sync"}' "$integration_root/loss-concurrent.json"
 	jq -e '.ok == false and .domain == "issue491_response_loss" and (.errorCode == "operation_in_progress" or .errorCode == "source_operation_failed")' \
@@ -1975,11 +2019,111 @@ JS
 		fail 'observing a lost response changed the source password.'
 }
 
+observe_discovery() { # <output-file>
+	webhook_call automation-data-credential-inventory inventory-webhook '{"action":"list"}' "$1"
+	jq -e --arg id "$inventory_workflow_id" --arg header "$inventory_header_id" \
+		--arg platform "$platform_inventory_id" --arg nocodb "$nocodb_inventory_id" --arg n8n "$n8n_inventory_id" '
+        (.sources[] | select(.source == "n8n")) as $source |
+        if $source.complete then
+          any($source.objects[]; .kind == "workflow" and .id == $id and .published == true) and
+          ([ $source.objects[] | select(.kind == "binding" and .workflowId == $id) | .credentialId ] | unique | sort) ==
+          ([$header,$platform,$nocodb,$n8n] | sort)
+        else true end' "$1" >/dev/null || fail 'Actual published inventory workflow bindings were not observed.'
+}
+assert_discovery() { # <mode> <snapshot> [fixture-expectations]
+	uv run --locked python scripts/test/lib/automation-data-discovery-acceptance.py "$@" || fail 'Independent credential inventory assertion failed.'
+}
+discovery_owned_database() {
+	[[ "$("$podman_bin" inspect --format '{{ index .Config.Labels "homelab-talos.test-run" }}' "$postgres_name")" == "$run_marker" ]] || fail 'Discovery fixture database ownership changed.'
+}
+prove_discovery_current() { # <expected-application-generation> <application-response>
+	phase='credential-discovery-current-inventory'
+	observe_discovery "$integration_root/discovery-current.json"
+	assert_discovery complete "$integration_root/discovery-current.json" "$1"
+	assert_discovery lifecycle "$integration_root/discovery-current.json" "$2"
+	assert_discovery lifecycle "$integration_root/discovery-current.json" "$integration_root/extra-ready.json"
+}
+prove_discovery_timeout_and_recovery() {
+	phase='credential-discovery-reader-cancellation'
+	discovery_owned_database
+	"$podman_bin" exec --interactive "$postgres_name" psql -X --set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_control \
+		>"$integration_root/discovery-delay.log" 2>&1 <<'SQL'
+ALTER FUNCTION platform_discovery.read_snapshot() RENAME TO fast_snapshot;
+CREATE FUNCTION platform_discovery.read_snapshot() RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET search_path=pg_catalog AS $$ BEGIN PERFORM pg_sleep(3); RETURN platform_discovery.fast_snapshot(); END $$;
+ALTER FUNCTION platform_discovery.read_snapshot() OWNER TO automation_data_inventory_projection;
+REVOKE ALL ON FUNCTION platform_discovery.read_snapshot() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION platform_discovery.read_snapshot() TO automation_data_inventory;
+SQL
+	observe_discovery "$integration_root/discovery-cancelled.json"
+	assert_discovery incomplete "$integration_root/discovery-cancelled.json"
+	discovery_owned_database
+	"$podman_bin" exec --interactive "$postgres_name" psql -X --set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_control \
+		<kubernetes/apps/automation-data/postgresql/app/scripts/credential-discovery.sql \
+		>"$integration_root/discovery-rebuild.log" 2>&1
+	"$podman_bin" exec "$postgres_name" psql -X --set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_control \
+		--command 'DROP FUNCTION platform_discovery.fast_snapshot();' >/dev/null
+	observe_discovery "$integration_root/discovery-after-cancellation.json"
+	assert_discovery complete "$integration_root/discovery-after-cancellation.json" 2
+}
+prove_discovery_attended_removal() {
+	phase='credential-discovery-reviewed-synthetic-removal'
+	local credential_id removed_runtime
+	credential_id="$(create_n8n_credential 'Synthetic discovery removal' httpHeaderAuth '{"name":"X-Synthetic","value":"SYNTHETIC_REMOVAL_ONLY"}')"
+	[[ "$credential_id" =~ ^[A-Za-z0-9_-]+$ ]] || fail 'Synthetic removal credential identity is invalid.'
+	discovery_owned_database
+	"$podman_bin" exec "$postgres_name" psql -X --set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_control \
+		--command 'CREATE ROLE issue506_unregistered NOLOGIN;' >/dev/null
+	observe_discovery "$integration_root/discovery-before-removal.json"
+	jq -e --arg id "$credential_id" '
+        all(.sources[]; .complete == true) and
+        any(.sources[] | select(.source == "n8n") | .objects[]; .kind == "credential" and .id == $id) and
+        any(.sources[] | select(.source == "platform") | .objects[]; .kind == "role" and .id == "issue506_unregistered")
+        ' "$integration_root/discovery-before-removal.json" >/dev/null || fail 'Removal targets were not independently enumerated.'
+	http_request DELETE "$n8n_url/api/v1/credentials/$credential_id" n8n-key - "$integration_root/discovery-delete-response.json"
+	discovery_owned_database
+	"$podman_bin" exec "$postgres_name" psql -X --set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_control \
+		--command 'DROP ROLE issue506_unregistered;' >/dev/null
+	observe_discovery "$integration_root/discovery-after-removal.json"
+	jq -n --arg id "$credential_id" '{schemaVersion:1,steps:["enumerated","removed","enumerated"],
+        removed:[["n8n","credential",$id],["platform","role","issue506_unregistered"]]}' >"$integration_root/discovery-removal-receipt.json"
+	assert_discovery absent "$integration_root/discovery-after-removal.json" "$integration_root/discovery-removal-receipt.json"
+    jq --slurpfile cancelled "$integration_root/discovery-cancelled.json" '
+      .sources |= map(if .source == "platform" then
+        ($cancelled[0].sources[] | select(.source == "platform")) else . end)
+      ' "$integration_root/discovery-after-removal.json" >"$integration_root/discovery-removal-incomplete.json"
+    if uv run --locked python scripts/test/lib/automation-data-discovery-acceptance.py absent \
+        "$integration_root/discovery-removal-incomplete.json" "$integration_root/discovery-removal-receipt.json" >/dev/null 2>&1; then
+        fail 'A removal receipt established absence despite failed independent enumeration.'
+    fi
+	assert_discovery complete "$integration_root/discovery-after-removal.json" 2
+	application_authenticates "$postgres_name" "$application_password" || fail 'Synthetic removal affected the surviving application.'
+	acceptance_call probe "$run_id" "$integration_root/discovery-surviving-consumers.json"
+	jq -e '.ok == true' "$integration_root/discovery-surviving-consumers.json" >/dev/null || fail 'Surviving consumers failed after attended synthetic removal.'
+	# Remove only one unused synthetic domain's observed credential, then its registry
+	# row. Each side remains observable independently; no production delete API is added.
+	webhook_call automation-data-provision provision-webhook '{"domain":"issue506_inventory_removal","operation":"provision"}' "$integration_root/discovery-removal-domain.json"
+	removed_runtime="$(jq -er '.runtimeCredentialId' "$integration_root/discovery-removal-domain.json")"
+	[[ "$removed_runtime" =~ ^[A-Za-z0-9_-]+$ ]] || fail 'Synthetic domain credential identity is invalid.'
+	http_request DELETE "$n8n_url/api/v1/credentials/$removed_runtime" n8n-key - "$integration_root/discovery-domain-delete.json"
+	observe_discovery "$integration_root/discovery-registry-only.json"
+	assert_discovery registry-only "$integration_root/discovery-registry-only.json"
+	discovery_owned_database
+	"$podman_bin" exec "$postgres_name" psql -X --set=ON_ERROR_STOP=1 --username postgres --dbname automation_data_control \
+		--command "DELETE FROM platform_operations.managed_domains WHERE domain='issue506_inventory_removal';" >/dev/null
+	observe_discovery "$integration_root/discovery-observed-only.json"
+	assert_discovery observed-only "$integration_root/discovery-observed-only.json"
+}
+
 slice_run first true
 prove_named_pair
 prove_concurrent_pair_sync
 prove_application_login
+prove_discovery_current 1 "$integration_root/application-ready.json"
 prove_targeted_rotations
+prove_discovery_current 2 "$integration_root/application-rotation-ready.json"
+prove_discovery_timeout_and_recovery
+prove_discovery_attended_removal
 prove_partial_rotation_retry
 prove_aged_jobs_rotation_and_restart "$integration_root/source-ready.json"
 slice_run second false
@@ -1989,3 +2133,5 @@ prove_interrupted_initial_creation
 prove_logical_restore "$integration_root/source-ready.json" "$integration_root/acceptance-probe.json"
 prove_foreign_base_title_collision
 prove_lost_source_create_response
+phase='credential-discovery-sql-permission-and-installer-boundaries'
+scripts/test/automation-data-discovery-sql-test.sh

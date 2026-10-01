@@ -130,10 +130,23 @@ automation-data-login-rotate domain application: require-bash
 automation-data-connect domain registered_identity: require-bash
     @uv run --locked python scripts/operations/automation-data-connect.py {{quote(domain)}} {{quote(registered_identity)}}
 
+# Private observational metadata; readiness does not authorize a consumer operation.
+[positional-arguments]
+automation-data-credentials *args: require-bash
+    @uv run --locked python scripts/operations/automation-data-credentials.py "$@"
+
+# Operator-run: bind an already protected migrator profile to fresh credential metadata.
+automation-data-login-enroll-migrator domain: require-bash
+    @uv run --locked python scripts/operations/automation-data-login.py enroll-migrator {{quote(domain)}}
+
 # Apply reviewed control functions to initialized PostgreSQL after a fresh backup.
 # Operator-run; deactivate provisioning and drain executions before confirmation.
 automation-data-control-migrate: require-bash
     @scripts/operations/automation-data-control-migrate.sh {{quote(kubeconfig)}}
+
+# Operator-run one-time discovery installation; never a routine credential fallback.
+automation-data-discovery-install: require-bash
+    @scripts/operations/automation-data-discovery-install.sh {{quote(kubeconfig)}}
 
 # Apply the one fixed existing-platform upgrade for the NocoDB extension. Guard:
 # AUTOMATION_DATA_UPGRADE_CONFIRM='upgrade:automation-data:nocodb-v3'.

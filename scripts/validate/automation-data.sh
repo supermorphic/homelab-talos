@@ -20,6 +20,12 @@ just --dry-run bootstrap automation-data >/dev/null 2>&1 ||
 # These focused tests are the only merge-gate owners of the issue-specific behavior.
 # Repository-wide lint, schema, policy, SOPS, gitleaks, and Prometheus checks remain in
 # their existing suites and are intentionally not repeated here.
+# Offline discovery tests belong here once; real SQL/application assurance belongs
+# to test.nocodb-local-integration and never runs in secret-free validation.
+for test in contract access command lifecycle summary; do
+  uv run --locked python "scripts/test/automation-data-discovery-$test-test.py"
+done
+scripts/test/automation-data-discovery-install-test.sh
 scripts/test/automation-data-secrets-test.sh
 scripts/test/automation-data-control-contract-test.sh
 scripts/test/automation-data-scoped-permissions-test.sh

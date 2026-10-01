@@ -223,7 +223,16 @@ case "$url" in
   *) echo "Unexpected Prometheus observation: $url" >&2; exit 65 ;;
 esac
 EOF
-chmod +x "$fixture/bin/kubectl" "$fixture/bin/curl"
+# Verifier fixtures never adopt workstation enrollment or contact private inventory.
+# The actual summary transport/allowlist has its own offline test owner.
+cat >"$fixture/bin/uv" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == 'run --locked python scripts/operations/automation-data-discovery-summary.py' ]] || exit 65
+printf '%s\n' 'inventory summary' >>"$OBSERVATIONS"
+printf '%s\n' '{"schemaVersion":1,"status":"unavailable","sources":[],"discrepancyCount":0}'
+EOF
+chmod +x "$fixture/bin/kubectl" "$fixture/bin/curl" "$fixture/bin/uv"
 
 staged_source="$fixture/staged-source"
 durable_source="$fixture/durable-source"
@@ -371,6 +380,7 @@ while IFS= read -r observation; do
     *' get ciliumnetworkpolicy '*) ;;
     *' get prometheusrule '*) ;;
     curl\ *) ;;
+    inventory\ summary) ;;
     *) echo "NocoDB verification contract test failed: disallowed observation: $observation" >&2; exit 1 ;;
   esac
 done <"$fixture/observations.log"

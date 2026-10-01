@@ -3,8 +3,8 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## One-time operator setup\n\nImport this inactive template in the private n8n instance at `n8n.lab.supermorphic.com`, then bind these credentials in the UI:\n\n1. **Automation Data Provisioner** \u2014 Postgres credential for `automation_data_control`.\n2. **Automation Data n8n API** \u2014 Header Auth credential containing the full-access Community API key in `X-N8N-API-KEY`.\n3. **Automation Data Provisioning Header** \u2014 Header Auth credential named `X-Automation-Data-Provisioning` for this private webhook.\n\nBind the Postgres credential to every Postgres node, the API credential to every HTTP Request node, and the webhook credential to **Provisioning Webhook**. Keep execution-data persistence disabled.",
-        "height": 500,
+        "content": "## One-time operator setup\n\nImport this inactive template in the private n8n instance at `n8n.lab.supermorphic.com`, then bind these credentials in the UI:\n\n1. **Automation Data Provisioner** \u2014 Postgres credential for `automation_data_control`.\n2. **Automation Data n8n API** \u2014 Header Auth credential containing the full-access Community API key in `X-N8N-API-KEY`.\n3. **Automation Data Provisioning Header** \u2014 Header Auth credential named `X-Automation-Data-Provisioning` for this private webhook.\n\nBind the Postgres credential to every Postgres node, the API credential to every HTTP Request node except **Observe Mutation Inventory**, and the webhook credential to **Provisioning Webhook**. Keep execution-data persistence disabled.\n\nBind **Automation Data Inventory Header** only to **Observe Mutation Inventory**. The separately authorized discovery installer creates this credential after the databases are initialized. Follow docs/guides/automation-data-operations.md#upgrade-existing-mutation-workflows for initial enrollment and upgrades. Do not reuse an API or provisioning header for inventory readback.\n\nFirst platform bootstrap only: NocoDB initialization depends on platform acceptance. Disable **Observe Mutation Inventory** and publish with the three existing credentials to complete that acceptance. After NocoDB initialization and discovery installation, bind the dedicated inventory header, enable the node, and republish. Readback remains unavailable until this upgrade.",
+        "height": 720,
         "width": 560
       },
       "type": "n8n-nodes-base.stickyNote",
@@ -1358,6 +1358,105 @@
       "id": "00000000-0000-4000-8000-000000000206",
       "name": "Prepare Application Response",
       "onError": "continueErrorOutput"
+    },
+    {
+      "name": "Inventory Readback Required",
+      "id": "inventory-readback-required",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3000,
+        2000
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "successful-mutation",
+              "leftValue": "={{ $json.ok === true && !['status','validate','login-validate'].includes($json.operation) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "name": "Retain Mutation Result",
+      "id": "retain-mutation-result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3000,
+        2000
+      ],
+      "parameters": {
+        "jsCode": "return [{json:{mutation:$json,startedAt:Date.now()}}];"
+      }
+    },
+    {
+      "name": "Observe Mutation Inventory",
+      "id": "observe-mutation-inventory",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3000,
+        2000
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:5678/webhook/automation-data-credential-inventory",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {action:'list',domain:$json.mutation.domain} }}",
+        "options": {
+          "timeout": 30000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Automation Data Inventory Header"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "name": "Attach Inventory Readback",
+      "id": "attach-inventory-readback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3000,
+        2000
+      ],
+      "parameters": {
+        "jsCode": "const retained = $('Retain Mutation Result').first().json;\nconst mutation = retained.mutation;\nlet inventoryReadback = {status:'unavailable', observedAt:null, errorCode:'source_unavailable'};\ntry {\n  const response = $json.body ?? $json;\n  const now = Date.now();\n  if (now - retained.startedAt > 30000 || Buffer.byteLength(JSON.stringify(response)) > 4194304 ||\n      response.schemaVersion !== 1 || !Array.isArray(response.sources) || response.sources.length !== 3)\n    throw new Error('invalid_inventory');\n  const revisions = {platform:'automation-data-discovery-v1',nocodb:'nocodb-2026.08.2-v1',n8n:'n8n-2.36.7-v1'};\n  const sources = Object.fromEntries(response.sources.map(s=>[s.source,s]));\n  if (Object.keys(sources).length !== 3) throw new Error('invalid_inventory');\n  const operation = mutation.operation;\n  const application = operation.startsWith('login-');\n  const source = ['configure','register','prepare','sync','rotate'].includes(operation);\n  const required = application ? ['platform'] : ['platform',source?'nocodb':'n8n'];\n  for (const name of required) {\n    const s = sources[name]; const observed = Date.parse(s?.observedAt);\n    if (!s || s.complete !== true || s.status !== 'ok' || s.schemaRevision !== revisions[name] ||\n        !Number.isFinite(observed) || now-observed < 0 || now-observed > 60000 ||\n        !Array.isArray(s.objects) || s.objects.length > 1000 || s.objectCount !== s.objects.length)\n      throw new Error('incomplete_inventory');\n  }\n  const platform = sources.platform.objects;\n  let matches = false;\n  const roleExists = role => platform.some(o=>o.kind==='role' && o.id===role);\n  if (application) {\n    const rows = platform.filter(o=>o.kind==='application' && o.domain===mutation.domain && o.application===mutation.application);\n    matches = rows.length===1 && roleExists(mutation.role) &&\n      ['role','state','credentialGeneration'].every(k=>rows[0][k]===mutation[k]);\n  } else if (!source) {\n    const rows = platform.filter(o=>o.kind==='domain' && o.domain===mutation.domain);\n    matches = rows.length===1 && ['migrator','runtime'].every(label=>{\n      const id=mutation[label+'CredentialId'];\n      const credentials=sources.n8n.objects.filter(o=>o.kind==='credential' && o.id===id);\n      return id && rows[0][label+'CredentialId']===id && roleExists(rows[0][label+'Role']) &&\n        credentials.length===1 && credentials[0].type==='postgres' &&\n        credentials[0].name==='automation-data/'+mutation.domain+'/'+label &&\n        Date.parse(credentials[0].updatedAt)===Date.parse(rows[0][label+'UpdatedAt']);\n    });\n  } else {\n    const pair=mutation.pair ?? 'default';\n    const rows=platform.filter(o=>o.kind==='source' && o.domain===mutation.domain && o.pair===pair);\n    matches=rows.length>0 && !platform.some(o=>o.kind==='claim' && o.domain===mutation.domain && o.pair===pair && o.phase!=='complete');\n    for(const kind of ['reader','operator']) {\n      const expected=mutation[kind];\n      if(['sync','rotate'].includes(operation) && expected) {\n        const target=rows.filter(o=>o.accessKind===kind);\n        matches=matches && target.length===1 && roleExists(target[0].role) &&\n          ['state','credentialGeneration','sourceId','integrationId'].every(k=>target[0][k]===expected[k]);\n        if(expected.state==='ready') {\n          const sourceRows=sources.nocodb.objects.filter(o=>o.kind==='source' && o.id===expected.sourceId);\n          const integrations=sources.nocodb.objects.filter(o=>o.kind==='integration' && o.id===expected.integrationId);\n          matches=matches && sourceRows.length===1 && integrations.length===1 &&\n            sourceRows[0].integrationId===expected.integrationId && sourceRows[0].baseId===mutation.baseId &&\n            sourceRows[0].enabled===true && sourceRows[0].deleted===false && sourceRows[0].intrinsic===false &&\n            sourceRows[0].dataEditAllowed===(kind==='operator') && sourceRows[0].schemaEditAllowed===false;\n        }\n      } else if(mutation[kind+'Role']) {\n        matches=matches && rows.some(o=>o.accessKind===kind && o.role===mutation[kind+'Role'] && roleExists(o.role));\n      }\n    }\n  }\n  const observedAt=required.map(s=>sources[s].observedAt).sort((a,b)=>Date.parse(a)-Date.parse(b))[0];\n  inventoryReadback={status:matches?'observed':'inconsistent',observedAt,errorCode:matches?null:'target_metadata_mismatch'};\n} catch {}\nreturn [{json:{...mutation,inventoryReadback}}];"
+      }
     }
   ],
   "pinData": {},
@@ -2290,7 +2389,7 @@
       "main": [
         [
           {
-            "node": "Respond",
+            "node": "Inventory Readback Required",
             "type": "main",
             "index": 0
           }
@@ -2344,7 +2443,7 @@
       "main": [
         [
           {
-            "node": "Respond",
+            "node": "Inventory Readback Required",
             "type": "main",
             "index": 0
           }
@@ -2355,7 +2454,7 @@
       "main": [
         [
           {
-            "node": "Respond",
+            "node": "Inventory Readback Required",
             "type": "main",
             "index": 0
           }
@@ -2456,7 +2555,7 @@
       "main": [
         [
           {
-            "node": "Respond",
+            "node": "Inventory Readback Required",
             "type": "main",
             "index": 0
           }
@@ -2464,6 +2563,57 @@
         [
           {
             "node": "Prepare Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inventory Readback Required": {
+      "main": [
+        [
+          {
+            "node": "Retain Mutation Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retain Mutation Result": {
+      "main": [
+        [
+          {
+            "node": "Observe Mutation Inventory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Observe Mutation Inventory": {
+      "main": [
+        [
+          {
+            "node": "Attach Inventory Readback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Inventory Readback": {
+      "main": [
+        [
+          {
+            "node": "Respond",
             "type": "main",
             "index": 0
           }

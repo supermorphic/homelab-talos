@@ -767,6 +767,41 @@ candidate evidence. Live upgrade, browser acceptance, and recorded recovery rema
 separately authorized gates. Consumer handoff includes deployed revision, commands,
 returned roles, grant/connection prerequisites, and evidence IDs.
 
+## Credential discovery and source evidence (issue 506)
+
+The [shared discovery contract](026-automation-data-postgresql-platform.md#task-oriented-credential-discovery-issue-506)
+owns the observation/access boundary, limits, assurance, and rollout status. The
+[operations guide](../guides/nocodb-operations.md#credential-discovery-for-approved-work)
+owns credential families, task selection, and lifecycle procedures. NocoDB adds these
+interpretation rules:
+
+- Enumerate bases, integrations, and sources independently of platform registration.
+  Compare retained IDs and full domain/pair/access bindings, including workspace/base,
+  source-to-integration links, enabled/deleted state, and edit flags. Detect registry-only,
+  observed-only, duplicate, cross-pair, and wrong-base assignments without adopting objects.
+- Exclude connection configuration, encrypted payloads, hashes, tokens, personal details,
+  and free-form descriptions. Unknown objects retain bounded opaque IDs and `unclassified`
+  status. A matching title does not establish ownership. UI membership metadata does not
+  establish PostgreSQL access; configured Secret locators do not prove retained contents or
+  recovery material. Off-cluster recovery material remains `not_observed`.
+- A ready source requires its exact integration, base, source, and editing flags. Registered
+  `awaiting_grants` roles can legitimately be NOLOGIN without an integration/source. The
+  pinned application's intrinsic local source is not an orphan external integration.
+- The legacy default pair may lack a mapping row. Label its built-in `read_model`/`operator`
+  expectation `mappingOrigin=built_in_default`; named pairs require registered mappings.
+  Neither mapping proves encrypted connection settings or grants.
+- An unchanged completed sync can advance its claim generation while retaining source and
+  credential generations. Compare these separately; active or uncertain claims block
+  readiness. Registered role/schema/generation and prior lifecycle validation are distinct
+  from independent observations of the encrypted connection.
+- n8n evidence uses published bindings, not saved drafts. Intentional reuse of one runtime
+  credential across workflow nodes is valid; conflicting identity assignments are not.
+  Generating a source password in n8n does not imply n8n retains it as a credential.
+
+Synthetic tests cover these distinctions, including multiple pairs and partial lifecycle
+states. Metadata consistency cannot establish successful login, permission enforcement,
+password equality, or restore success.
+
 ## Review triggers
 
 Revisit the architecture when demonstrated requirements call for native attachments,

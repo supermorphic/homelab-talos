@@ -1,5 +1,104 @@
 # Automation-data PostgreSQL operations
 
+Use [credential discovery for approved work](nocodb-operations.md#credential-discovery-for-approved-work)
+for task selection, readiness decisions, and autonomous helper use.
+
+## Private credential-discovery installation
+
+Installation is separately authorized operator administration on clean deployed main,
+after NocoDB and n8n initialize their databases. Prepare owned 0700 directories and 0600
+regular files outside checkouts, without symlinks or hard links. The access directory is
+`$XDG_CONFIG_HOME/homelab/automation-data`, falling back to
+`$HOME/.config/homelab/automation-data`. Create its non-secret `access.json`:
+
+```json
+{
+  "schemaVersion": 1,
+  "inventoryAuthFile": "/path/to/private/access/inventory-auth",
+  "applicationProfileRoot": "/path/to/private/application-profiles",
+  "migratorProfileRoot": "/path/to/private/migrator-profiles"
+}
+```
+
+Replace the placeholders. `inventoryAuthFile` must select `inventory-auth` in the access
+directory; `applicationProfileRoot` must match `AUTOMATION_DATA_LOGIN_DIRECTORY`, retaining
+its domain/application subdirectories. Supply the enrollment API key in the access
+directory's protected `n8n-api-key` file, never in chat or command arguments. Select the
+already-authorized administrative kubeconfig with the `kubeconfig` Just variable. Set
+`AUTOMATION_DATA_DISCOVERY_INSTALL_DIRECTORY` to the absolute access directory and
+`AUTOMATION_DATA_DISCOVERY_INSTALL_CONFIRM=install:automation-data:discovery`, then run:
+
+```sh
+mise exec -- just kube automation-data-discovery-install
+```
+
+The installer checks deployed source, holds the shared mutation Lease, takes fresh backups,
+installs and tests restricted readers, and enrolls/publishes the private inventory workflow.
+It verifies readback and removes its temporary resources. It does not update the mutation
+workflows; complete [their upgrade](#upgrade-existing-mutation-workflows) below.
+
+Retain `pending/operation.json` and candidates until installation/recovery evidence is
+accepted. Retry with the same material; reruns do not rotate active readers. Conflicting
+credentials or uncertain API creation require attended reconciliation, not receipt deletion
+and repeated creation. Remove `n8n-api-key` when enrollment is complete.
+
+For separately authorized replacement/revocation, deactivate the inventory workflow and
+drain executions. Confirm retained IDs/roles, revoke only the selected header or reader,
+prepare protected replacement material, and update its n8n binding and local header as
+applicable. Repeat inventory acceptance before republishing. For restoration or lost
+material, use [credential-discovery recovery](../runbooks/platform-disaster-recovery.md#credential-discovery-recovery).
+
+### Upgrade existing mutation workflows
+
+First platform bootstrap must complete provisioning and restore acceptance before NocoDB
+initializes. For this initial stage, disable **Observe Mutation Inventory** in the platform
+provisioner and bind its three existing credentials to the other nodes. Readback remains
+`unavailable`; this does not satisfy discovery acceptance.
+
+After inventory installation, update **Automation Data Provisioner** and **NocoDB Source
+Provisioner** in the authorized private n8n editor. ConfigMap deployment does not update
+published workflows.
+
+1. Retain graphs, IDs, and bindings as protected rollback evidence. Unpublish the selected
+   workflow and let in-flight mutations finish. Replace its graph from the reviewed
+   template on the same workflow ID; do not publish a duplicate webhook path.
+2. Restore bindings as follows and enable **Observe Mutation Inventory**:
+
+   | Node | Platform provisioner credential | Source provisioner credential |
+   | --- | --- | --- |
+   | Every Postgres node | Automation Data Provisioner | Automation Data Provisioner |
+   | Observe Mutation Inventory | Automation Data Inventory Header | Automation Data Inventory Header |
+   | Other HTTP Request nodes | Automation Data n8n API | NocoDB Operator API |
+   | Incoming webhook | Automation Data Provisioning Header | NocoDB Source Provisioning Header |
+
+3. Verify bindings and disabled execution-data persistence, then publish. During authorized
+   lifecycle acceptance, require successful platform and source mutations to return
+   `inventoryReadback.status=observed` for their exact targets. On observation failure,
+   check the binding and retry inventory without repeating the successful mutation.
+
+First-time publication uses the same bindings, subject to the initial bootstrap exception
+above. If rollback is needed, restore the retained graph/bindings on the same workflow.
+
+### Bind an installed migrator profile
+
+After inventory acceptance, separately authorize enrollment on clean deployed main.
+Retain the already-authorized migrator material in protected
+`<migratorProfileRoot>/<domain>/service.conf` and `credential.pgpass`; do not export it
+from n8n. Select the exact file with `AUTOMATION_DATA_SERVICE_FILE`, its section with
+`AUTOMATION_DATA_SERVICE`, and, if needed, its fixed port with `AUTOMATION_DATA_LOCAL_PORT`.
+For this synthetic target, set
+`AUTOMATION_DATA_LOGIN_ENROLL_CONFIRM=enroll:automation-data:sample:migrator` and run:
+
+```sh
+mise exec -- just kube automation-data-login-enroll-migrator sample
+```
+
+The helper verifies deployed source, current metadata, profile permissions, and authentication
+through its fixed tunnel, then writes non-secret `binding.json` with the credential ID/update
+marker, service, and port. It leaves passwords intact. Repeat this attended procedure for a
+lost or changed binding; never relabel old material as current. Explicitly selected protected
+profiles remain supported.
+
 This guide activates and operates the shared PostgreSQL platform used by n8n domain
 workflows. The platform database is separate from n8n's own PostgreSQL database.
 
@@ -148,19 +247,10 @@ agent output.
 
 ### 4. Import and publish the provisioning workflow
 
-Import
-`kubernetes/apps/automation/n8n/app/workflows/automation-data-provisioner.json`.
-Bind:
-
-- **Automation Data Provisioner** to every Postgres node;
-- **Automation Data n8n API** to every HTTP Request node; and
-- **Automation Data Provisioning Header** to **Provisioning Webhook**.
-
-Keep the workflow's execution-data settings unchanged, then publish it. Do not add
-credential IDs or values to the template in Git.
-
-**Expected result:** **Automation Data Provisioner** is published with all three named
-credentials bound, and its execution-data settings remain unchanged.
+Import `kubernetes/apps/automation/n8n/app/workflows/automation-data-provisioner.json`.
+Follow the [mutation workflow procedure](#upgrade-existing-mutation-workflows) for
+credential bindings, the first-bootstrap exception, publication, and readback acceptance.
+Do not add credential IDs or values to the template in Git.
 
 ### 5. Validate provisioning and rotation
 

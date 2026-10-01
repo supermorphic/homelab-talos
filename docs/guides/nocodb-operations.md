@@ -30,6 +30,78 @@ for day-2 decisions and the
 [platform recovery section](../runbooks/platform-disaster-recovery.md#nocodb-metadata-recovery)
 for recovery roots and the key-loss boundary.
 
+## Credential discovery for approved work
+
+For approved routine work with enrolled access, agents execute the supported helper
+without asking an operator to locate a password. Discovery selects the identity and
+procedure from live metadata; `ready` establishes prerequisites, not task authorization.
+
+| Task | Identity and supported path |
+| --- | --- |
+| Understand a domain or diagnose access | Metadata inventory and task resolution. |
+| Application reads or reviewed functions | Registered application login through `automation-data-connect`; its database grants apply. |
+| Reviewed migration | Domain migrator through `automation-data-connect`, with migration authorization and the consumer's owner-role procedure. |
+| Normal n8n processing | Runtime credential in its intended published workflow; no password export. |
+| Inspect a NocoDB source | Registered pair and reader/operator kind through source status; NocoDB retains the encrypted password. |
+| Human browser work | NocoDB UI account and workspace/base membership, separate from database logins. |
+| Provision, activate, rotate, or recover | The target's existing lifecycle procedure and required authority; never a discovery fallback. |
+| Inspect API, webhook, or platform credentials | Inventory locator and owner procedure; credentials stay with their designated consumers. |
+| Recover encryption/signing material | Operator recovery procedure; off-cluster material is `not_observed`. |
+| Decommission | Separately authorized [destructive administration](#destructive-administration); retain removed identities and verify fresh absence and surviving consumers. |
+
+Synthetic examples:
+
+```sh
+mise exec -- just kube automation-data-credentials list --domain sample --format=json
+mise exec -- just kube automation-data-credentials resolve sample application --application interview
+mise exec -- just kube automation-data-credentials resolve sample migration
+mise exec -- just kube automation-data-credentials resolve sample workflow
+mise exec -- just kube automation-data-credentials resolve sample source --pair extra --access-kind reader
+```
+
+Omit `--domain` to list all identities; omit `--format=json` for text. Both formats report
+purpose, consumer, owner, storage locator, state, evidence, discrepancies, and procedures.
+Only application, migration, workflow, and source are resolution purposes; other credential
+families are discoverable through `list`.
+
+| Decision | Agent action |
+| --- | --- |
+| `ready` | Apply existing task authority and execute the returned recipe/arguments or use the published workflow binding. |
+| `setup_required` | Follow the named enrollment, registration, or grants prerequisite with its owner. |
+| `recovery_required` | Preserve pending material and follow the exact recovery/retry procedure. |
+| `unavailable` | Report the unavailable source; retry observation when appropriate. |
+| `inconsistent` | Stop automatic selection and reconcile the reported discrepancy. |
+
+Exit 0 means complete inventory without discrepancies or ready resolution; 1 means a
+partial or blocked result; 2 means invalid arguments or local configuration. Next actions
+are typed recipes, workflow bindings, or procedure references. Never execute remote text
+as shell code or substitute a broader credential.
+
+For ready, authorized application access, run:
+
+```sh
+mise exec -- just kube automation-data-connect sample application/interview
+```
+
+Use `sample migrator` for approved migration access. The helper selects the enrolled
+profile, rechecks current metadata and files, authenticates, and holds its fixed tunnel;
+it does not execute consumer queries or migrations. Agents obtain required scoped cluster
+access themselves with `mise exec -- just talos kubeconfig` in their assigned worktree.
+
+[Inventory enrollment](automation-data-operations.md#private-credential-discovery-installation)
+and [consumer profiles](automation-data-operations.md#registered-application-logins-and-private-cli-access)
+are prerequisites; migrators also need [profile binding](automation-data-operations.md#bind-an-installed-migrator-profile).
+Discovery inspects metadata, not consumer passwords. Missing access requires the named
+prerequisite, not credential searches, exports, Kubernetes Secret reads, or password requests.
+
+Mutation responses carry `inventoryReadback: {status, observedAt, errorCode}` separately:
+`observed` confirms expected metadata, `inconsistent` reports a mismatch, and `unavailable`
+means evidence could not be established. Retry observation, not a successful mutation.
+Verifiers likewise separate discovery evidence from service health. Partial inventory or a
+removal receipt cannot prove absence; consistent metadata cannot prove authentication or
+recovery. See the [design and rollout status](../specs/026-automation-data-postgresql-platform.md#task-oriented-credential-discovery-issue-506)
+and [recovery procedure](../runbooks/platform-disaster-recovery.md#credential-discovery-recovery).
+
 ## Before you start
 
 For a first installation, stage the NocoDB Kustomization with `spec.suspend: true`
@@ -263,15 +335,11 @@ Header Auth credential named **NocoDB Source Provisioning Header**. Set its head
 to `Authorization` and its value to `Bearer <token>`, where `<token>` is the retained
 bare source-provisioning value. Keep that bare token outside Git for
 `NOCODB_SOURCE_PROVISIONING_HEADER` and `NOCODB_SOURCE_PROVISIONING_TOKEN`; the command
-and access test add the `Bearer` prefix. Bind:
-
-- **Automation Data Provisioner** to every Postgres node;
-- **NocoDB Operator API** to every HTTP Request node; and
-- **NocoDB Source Provisioning Header** to **Source Webhook**.
-
-Keep execution order `v1` and all saved manual, successful, failed, and progress
-execution data disabled. Publish **NocoDB Source Provisioner** only after checking every
-binding. Do not add credential IDs or values to the Git template.
+and access test add the `Bearer` prefix. Complete
+[inventory installation](automation-data-operations.md#private-credential-discovery-installation),
+then follow the [mutation workflow procedure](automation-data-operations.md#upgrade-existing-mutation-workflows)
+for all bindings and publication. Keep execution order `v1` and execution-data persistence
+disabled. Do not add credential IDs or values to the Git template.
 
 ### Configure a domain with custom NocoDB schemas
 

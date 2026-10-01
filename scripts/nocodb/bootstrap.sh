@@ -59,8 +59,10 @@ emit_bootstrap_success() {
   printf 'NocoDB Operator API credential ID: %s\n' "$credential_id"
   cat >&2 <<'EOF'
 Import the secret-free NocoDB source-provisioning workflow. Bind NocoDB Operator API,
-Automation Data Provisioner, and the fixed provisioning Header Auth credential exactly
-as its setup note specifies, then publish it. Revoke any reported orphan token in NocoDB
+Automation Data Provisioner, the fixed provisioning Header Auth credential, and the
+discovery installer's Automation Data Inventory Header exactly as its setup note specifies.
+Follow the mutation workflow procedure in docs/guides/automation-data-operations.md before
+publication. Revoke any reported orphan token in NocoDB
 after verifying the credential. Keep durable suspend changes in Git.
 EOF
   success_reported=true

@@ -221,3 +221,7 @@ while IFS=$'\t' read -r claim volume; do
 done < <(yq -r '.items[] | [.metadata.name, .spec.volumeName] | @tsv' - <<<"$pvc_json")
 
 echo 'automation-data read-only acceptance passed: Flux and the current StatefulSet are Ready; both retained claims and Longhorn volumes are healthy; the private Service, scrape target, 14 alert rules, dashboard, Gatus canary success, backup freshness, registry consistency, and incomplete-operation age match their contracts.'
+
+# Dedicated inventory-only access; no new Kubernetes or database authority.
+echo 'credential-discovery evidence (separate from service health):'
+uv run --locked python scripts/operations/automation-data-discovery-summary.py

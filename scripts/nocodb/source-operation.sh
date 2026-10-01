@@ -194,6 +194,23 @@ curl_status=$?
 set -e
 [[ "$curl_status" -eq 0 ]] || exit "$curl_status"
 
+# Validate readback independently. Its failure cannot erase a successful mutation.
+inventory_readback=''
+if [[ "$operation" != status ]]; then
+	if jq -e '.inventoryReadback | type == "object" and
+    (keys | sort == ["errorCode","observedAt","status"]) and
+    (.status == "observed" or .status == "unavailable" or .status == "inconsistent") and
+    (.observedAt == null or (.observedAt | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.+-]+Z?$"))) and
+    (if .status == "observed" then .errorCode == null and .observedAt != null
+     elif .status == "inconsistent" then .errorCode == "target_metadata_mismatch" and .observedAt != null
+     else .errorCode == "source_unavailable" and .observedAt == null end)' <<<"$response" >/dev/null 2>&1; then
+		inventory_readback="$(jq -c '.inventoryReadback' <<<"$response")"
+	else
+		inventory_readback='{"status":"unavailable","observedAt":null,"errorCode":"source_unavailable"}'
+	fi
+	response="$(jq -c 'del(.inventoryReadback)' <<<"$response")"
+fi
+
 if [[ "$operation" == status ]]; then
   jq -e --arg domain "$domain" --arg pair "$pair" '
     .ok == true and .domain == $domain and .operation == "status" and
@@ -340,4 +357,8 @@ else
   }
 fi
 
-printf '%s\n' "$response"
+if [[ -n "$inventory_readback" ]]; then
+	jq --argjson readback "$inventory_readback" '. + {inventoryReadback:$readback}' <<<"$response"
+else
+	printf '%s\n' "$response"
+fi

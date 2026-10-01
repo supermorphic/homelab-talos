@@ -18,6 +18,13 @@ import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+from automation_data_access import (
+    fetch_observations,
+    file_signature,
+    lifecycle_readback,
+    load_access_config,
+    safe_path,
+)
 from automation_data_client import (
     PrivateFileError,
     authenticate_candidate,
@@ -25,8 +32,10 @@ from automation_data_client import (
     private_database_tunnel,
     validate_private_directory,
     validate_private_file,
+    validate_service_profile,
     write_private_file_exclusive,
 )
+from automation_data_inventory import DiscoveryRequest, build_inventory, resolve
 
 WEBHOOK = "https://n8n.lab.supermorphic.com/webhook/automation-data-provision"
 DOMAIN = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
@@ -64,7 +73,13 @@ def send_request(payload: dict) -> dict:
         "X-Automation-Data-Provisioning": token,
     })
     try:
-        with WEBHOOK_OPENER.open(request, timeout=20) as response:
+        # Successful mutations can include up to 30 seconds of optional inventory
+        # readback. Preserve their response within the original 20-second operation
+        # budget plus readback and margin; observational validation stays shorter.
+        timeout = 60 if payload.get("operation") in {
+            "login-register", "login-activate", "login-rotate", "login-complete"
+        } else 20
+        with WEBHOOK_OPENER.open(request, timeout=timeout) as response:
             content = response.read(65537)
         if len(content) > 65536:
             raise RequestError("response_too_large")
@@ -261,6 +276,116 @@ def require_deployed_login_sources() -> None:
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def require_deployed_enrollment_sources() -> None:
+    repository = Path(__file__).resolve().parents[2]
+    script = (
+        "source scripts/lib/rollout.sh; require_deployed_source "
+        "'automation-data migrator enrollment' "
+        "scripts/operations/automation-data-login.py "
+        "scripts/lib/automation_data_access.py scripts/lib/automation_data_inventory.py "
+        "scripts/lib/automation_data_client.py "
+        "kubernetes/apps/automation/n8n/app/workflows/automation-data-credential-inventory.json"
+    )
+    subprocess.run(
+        ["bash", "-c", script],
+        cwd=repository,
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def enroll_migrator(domain: str) -> None:
+    """Operator-only binding of an already installed private profile; never export from n8n."""
+    confirmation("enroll", domain, "migrator")
+    require_deployed_enrollment_sources()
+    config = load_access_config()
+    directory = safe_path(config.migrator_profile_root / domain, directory=True)
+    selected_file = os.environ.get("AUTOMATION_DATA_SERVICE_FILE", "")
+    section = os.environ.get("AUTOMATION_DATA_SERVICE", "")
+    if selected_file != str(directory / "service.conf") or not re.fullmatch(
+        r"[A-Za-z][A-Za-z0-9_-]{0,127}", section
+    ):
+        raise PrivateFileError("installed_migrator_profile_required")
+    service_file = safe_path(selected_file)
+    passfile = safe_path(directory / "credential.pgpass")
+    if (directory / "pending").exists() or (directory / "pending").is_symlink():
+        raise PrivateFileError("pending_profile_operation")
+    request = DiscoveryRequest("resolve", domain, "migration")
+
+    def current_binding():
+        resolution = resolve(request, build_inventory(fetch_observations(config, request)))
+        if (
+            resolution.decision != "setup_required"
+            or resolution.identity is None
+            or resolution.prerequisites[-1]
+            != {"name": "protected_current_profile", "status": "missing"}
+        ):
+            raise PrivateFileError("migrator_metadata_not_ready")
+        item = resolution.identity
+        return {
+            "domain": domain,
+            "database": domain,
+            "role": item["role"],
+            "credentialId": item["credentialId"],
+            "credentialUpdatedAt": item["credentialUpdatedAt"],
+            "service": section,
+            "localPort": local_port(),
+        }
+
+    with operation_lock(directory):
+        binding = current_binding()
+        signature = file_signature([service_file, passfile])
+        kubeconfig = os.environ.get("AUTOMATION_DATA_KUBECONFIG")
+        with private_database_tunnel(
+            Path(kubeconfig) if kubeconfig else None, local_port()
+        ) as port:
+            if (
+                current_binding() != binding
+                or file_signature([service_file, passfile]) != signature
+            ):
+                raise PrivateFileError("enrollment_profile_changed")
+            profile = validate_service_profile(
+                service_file, section, domain, binding["role"], port
+            )
+            if profile["passfile"] != str(passfile):
+                raise PrivateFileError("migrator_passfile_mismatch")
+            authenticate_candidate(port, domain, binding["role"], profile["password"])
+            if (
+                current_binding() != binding
+                or file_signature([service_file, passfile]) != signature
+            ):
+                raise PrivateFileError("enrollment_profile_changed")
+            selected = directory / "binding.json"
+            if selected.exists() or selected.is_symlink():
+                safe_path(selected)
+                if selected.stat().st_size > 16384:
+                    raise PrivateFileError("invalid_existing_binding")
+                old_binding = json.loads(selected.read_text())
+                if any(
+                    old_binding.get(key) != binding[key]
+                    for key in ["domain", "database", "role", "service", "localPort"]
+                ):
+                    raise PrivateFileError("existing_binding_target_mismatch")
+            temporary = directory / f".binding-{uuid.uuid4().hex}.tmp"
+            write_private_file_exclusive(
+                temporary, (json.dumps(binding, sort_keys=True) + "\n").encode()
+            )
+            os.replace(temporary, selected)
+            fsync_directory(directory)
+    print(
+        json.dumps(
+            {
+                "domain": domain,
+                "role": binding["role"],
+                "enrolled": True,
+                "credentialId": binding["credentialId"],
+                "serviceFile": str(service_file),
+            }
+        )
+    )
+
+
 def execute(action: str, domain: str, application: str, schema: str | None = None) -> None:
     if action == "register":
         confirmation(action, domain, application, schema)
@@ -269,7 +394,8 @@ def execute(action: str, domain: str, application: str, schema: str | None = Non
                                                 "application": application, "schema": schema}),
                                   domain, application)
         print(json.dumps({"domain": domain, "application": application,
-                          "role": result["role"], "state": result["state"]}))
+                          "role": result["role"], "state": result["state"],
+                          "inventoryReadback": lifecycle_readback({**result, "operation": "login-register"})}))
         return
     if action == "validate":
         result = require_response(send_request({"domain": domain, "operation": "login-validate",
@@ -351,27 +477,50 @@ def execute(action: str, domain: str, application: str, schema: str | None = Non
             clear_completed_pending(directory)
             print(json.dumps({"domain": domain, "application": application,
                               "role": state["role"], "credentialGeneration": result[
-                                  "credentialGeneration"], "serviceFile": str(directory / "service.conf")}))
+                                  "credentialGeneration"], "serviceFile": str(directory / "service.conf"),
+                              "inventoryReadback": lifecycle_readback({**result, "operation": "login-complete"})}))
 
 
 def main(argv: list[str]) -> int:
     try:
+        if len(argv) == 2 and argv[0] == "enroll-migrator":
+            domain = argv[1]
+            if not DOMAIN.fullmatch(domain) or domain in {
+                "postgres",
+                "template0",
+                "template1",
+                "automation_data_control",
+            }:
+                raise ValueError("invalid_domain")
+            enroll_migrator(domain)
+            return 0
         if len(argv) not in (3, 4):
             raise ValueError("invalid_arguments")
         action, domain, application = argv[:3]
         schema = argv[3] if len(argv) == 4 else None
-        if action not in {"register", "activate", "validate", "rotate"} or \
-                (action == "register") != (schema is not None) or \
-                not DOMAIN.fullmatch(domain) or domain in {"postgres", "template0", "template1",
-                                                     "automation_data_control"} or \
-                not APPLICATION.fullmatch(application) or \
-                (schema is not None and (not SCHEMA.fullmatch(schema) or schema.startswith("pg_") or
-                                         schema in {"public", "information_schema"})):
+        if (
+            action not in {"register", "activate", "validate", "rotate"}
+            or (action == "register") != (schema is not None)
+            or not DOMAIN.fullmatch(domain)
+            or domain in {"postgres", "template0", "template1", "automation_data_control"}
+            or not APPLICATION.fullmatch(application)
+            or (
+                schema is not None
+                and (
+                    not SCHEMA.fullmatch(schema)
+                    or schema.startswith("pg_")
+                    or schema in {"public", "information_schema"}
+                )
+            )
+        ):
             raise ValueError("invalid_arguments")
         execute(action, domain, application, schema)
         return 0
     except Exception:  # noqa: BLE001 - never print a response body, token, or candidate
-        print("Automation-data login operation failed; retained candidate if present.", file=sys.stderr)
+        print(
+            "Automation-data login operation failed; retained candidate if present.",
+            file=sys.stderr,
+        )
         return 1
 
 

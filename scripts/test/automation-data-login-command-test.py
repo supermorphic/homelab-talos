@@ -19,7 +19,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "operations"))
+import automation_data_access as access
 import automation_data_client as client
+from automation_data_inventory import validate_observation
 
 COMMAND_PATH = Path(__file__).resolve().parents[1] / "operations" / "automation-data-login.py"
 SPEC = importlib.util.spec_from_file_location("automation_data_login", COMMAND_PATH)
@@ -29,7 +31,9 @@ SPEC.loader.exec_module(command)
 REAL_SEND_REQUEST = command.send_request
 
 
-ROLE = "app_" + hashlib.md5(b"sample:interview", usedforsecurity=False).hexdigest() + "_integration"
+ROLE = (
+    "app_" + hashlib.md5(b"sample:interview", usedforsecurity=False).hexdigest() + "_integration"
+)
 SENTINEL = "synthetic-secret-never-print-1234567890"
 
 
@@ -181,6 +185,30 @@ class LoginCommandTest(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertNotIn(SENTINEL, output + errors)
 
+    def test_slow_inventory_readback_preserves_each_successful_mutation(self):
+        graph = json.loads((Path(__file__).resolve().parents[2] /
+            "kubernetes/apps/automation/n8n/app/workflows/automation-data-provisioner.json").read_text())
+        readback_budget = next(node for node in graph["nodes"]
+            if node["name"] == "Observe Mutation Inventory")["parameters"]["options"]["timeout"] / 1000
+        for operation in ["login-register", "login-activate", "login-rotate", "login-complete"]:
+            calls = []
+            def delayed_response(request, timeout, operation=operation, calls=calls):
+                calls.append(json.loads(request.data))
+                # Simulate committed mutation + delayed optional metadata; no sleeping
+                # or private endpoint. A socket budget below this point loses the result.
+                if timeout <= 25:
+                    raise urllib.error.URLError("synthetic slow inventory readback")
+                self.assertGreaterEqual(timeout, 20 + readback_budget)
+                return io.BytesIO(json.dumps({"ok": True, "operation": operation,
+                    "inventoryReadback": {"status": "unavailable", "observedAt": None,
+                                          "errorCode": "source_unavailable"}}).encode())
+            with mock.patch.object(command.WEBHOOK_OPENER, "open", side_effect=delayed_response):
+                result = REAL_SEND_REQUEST({"domain": "sample", "operation": operation,
+                                           "application": "interview"})
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["inventoryReadback"]["status"], "unavailable")
+            self.assertEqual(len(calls), 1)
+
     def test_webhook_target_and_http_error_are_bounded(self):
         def reject(request, timeout):
             self.assertEqual(request.full_url, command.WEBHOOK)
@@ -248,6 +276,113 @@ class LoginCommandTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             client.validate_session_identity(fake_connection.__enter__.return_value,
                                              "sample", ROLE)
+
+
+class MigratorEnrollmentTest(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+        self.root.chmod(0o700)
+        self.directory = self.root / "sample"
+        self.directory.mkdir(mode=0o700)
+        self.passfile = self.directory / "credential.pgpass"
+        self.service = self.directory / "service.conf"
+        self.write(
+            self.passfile, "127.0.0.1:15432:sample:sample_migrator:SYNTHETIC_RETAINED_SECRET\n"
+        )
+        self.write(
+            self.service,
+            f"[retained_migrator]\nhost=127.0.0.1\nport=15432\ndbname=sample\n"
+            f"user=sample_migrator\npassfile={self.passfile}\nsslmode=disable\n",
+        )
+        self.retained = (self.service.read_bytes(), self.passfile.read_bytes())
+        fixture_spec = importlib.util.spec_from_file_location(
+            "enrollment_fixtures",
+            Path(__file__).with_name("automation-data-discovery-command-test.py"),
+        )
+        fixture_module = importlib.util.module_from_spec(fixture_spec)
+        fixture_spec.loader.exec_module(fixture_module)
+        self.raw = fixture_module.fixtures()
+        env = mock.patch.dict(
+            os.environ,
+            {
+                "AUTOMATION_DATA_SERVICE_FILE": str(self.service),
+                "AUTOMATION_DATA_SERVICE": "retained_migrator",
+                "AUTOMATION_DATA_LOGIN_ENROLL_CONFIRM": "enroll:automation-data:sample:migrator",
+            },
+            clear=True,
+        )
+        env.start()
+        self.addCleanup(env.stop)
+        config = access.AccessConfig(self.root / "inventory-auth", self.root, self.root)
+        for mocked in [
+            mock.patch.object(command, "load_access_config", return_value=config, create=True),
+            mock.patch.object(
+                command,
+                "fetch_observations",
+                side_effect=lambda *_: [
+                    validate_observation(raw, source) for source, raw in self.raw.items()
+                ],
+                create=True,
+            ),
+            mock.patch.object(command, "require_deployed_enrollment_sources", create=True),
+            mock.patch.object(
+                command, "private_database_tunnel", return_value=contextlib.nullcontext(15432)
+            ),
+        ]:
+            mocked.start()
+            self.addCleanup(mocked.stop)
+
+    def write(self, path, value):
+        path.write_text(value)
+        path.chmod(0o600)
+
+    def invoke(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            result = command.main(["enroll-migrator", "sample"])
+        self.assertNotIn("SYNTHETIC_RETAINED_SECRET", output.getvalue())
+        self.assertEqual((self.service.read_bytes(), self.passfile.read_bytes()), self.retained)
+        return result, output.getvalue()
+
+    def test_attended_enrollment_authenticates_and_binds_without_export_or_mutation(self):
+        with (
+            mock.patch.object(command, "authenticate_candidate") as authenticate,
+            mock.patch.object(
+                command, "send_request", side_effect=AssertionError("mutation forbidden")
+            ),
+        ):
+            result, output = self.invoke()
+        self.assertEqual(result, 0, output)
+        self.assertEqual(authenticate.call_args.args[:3], (15432, "sample", "sample_migrator"))
+        binding = json.loads((self.directory / "binding.json").read_text())
+        self.assertEqual(binding["credentialId"], "fixture-migrator")
+        self.assertNotIn("credentialGeneration", binding)
+        self.assertEqual(stat.S_IMODE((self.directory / "binding.json").stat().st_mode), 0o600)
+
+    def test_confirmation_and_authentication_failure_preserve_unbound_files(self):
+        with (
+            mock.patch.dict(os.environ, {"AUTOMATION_DATA_LOGIN_ENROLL_CONFIRM": "wrong"}),
+            mock.patch.object(command, "authenticate_candidate") as authenticate,
+        ):
+            self.assertEqual(self.invoke()[0], 1)
+        authenticate.assert_not_called()
+        with mock.patch.object(
+            command, "authenticate_candidate", side_effect=ValueError(SENTINEL)
+        ):
+            result, output = self.invoke()
+        self.assertEqual(result, 1)
+        self.assertNotIn(SENTINEL, output)
+        self.assertFalse((self.directory / "binding.json").exists())
+
+    def test_marker_changes_during_authentication_do_not_bind_stale_material(self):
+        def change(*_):
+            self.raw["platform"]["objects"][0]["migratorCredentialId"] = "replacement-fixture"
+
+        with mock.patch.object(command, "authenticate_candidate", side_effect=change):
+            self.assertEqual(self.invoke()[0], 1)
+        self.assertFalse((self.directory / "binding.json").exists())
 
 
 if __name__ == "__main__":

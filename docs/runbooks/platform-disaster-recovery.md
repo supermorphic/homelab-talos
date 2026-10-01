@@ -456,6 +456,17 @@ IDs/views, authenticated positive/denial probes, cleanup, and a fresh restored b
 the [extended restore procedure](../guides/nocodb-operations.md#11-record-acceptance-for-additional-pairs-and-application-logins).
 Older bundles prove only their original contract, excluding registrations added later.
 
+### Credential-discovery recovery
+
+After application restoration, reconstruct n8n's derived `platform_discovery` schema
+and restricted reader with retained protected enrollment material. n8n logical backups
+exclude this schema and its ownership/grants. Use the reviewed SQL from
+[discovery installation](../guides/automation-data-operations.md#private-credential-discovery-installation),
+then verify reader authentication, denials, and complete fresh metadata before exposing
+the private workflow. Restore workstation profiles and bindings separately; database
+dumps cannot recover client password files. Lost material requires attended replacement.
+Inventory does not prove restored consumer authentication, grants, or retained encryption keys.
+
 ### OpenBao credential broker state
 
 Recover OpenBao only after Talos/Kubernetes, Cilium, Flux/SOPS, and Longhorn are

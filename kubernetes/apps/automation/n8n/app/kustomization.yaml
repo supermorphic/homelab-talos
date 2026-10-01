@@ -17,6 +17,7 @@ configMapGenerator:
       - values.yaml=values.yaml
   - name: n8n-workflow-templates
     files:
+      - automation-data-credential-inventory.json=workflows/automation-data-credential-inventory.json
       - automation-data-provisioner.json=workflows/automation-data-provisioner.json
       - automation-data-canary.json=workflows/automation-data-canary.json
       - nocodb-acceptance-domain.json=workflows/nocodb-acceptance-domain.json

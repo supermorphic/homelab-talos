@@ -944,6 +944,83 @@ The candidate passed disposable lifecycle and recovery run
 `20260930T143422Z-f6abe9c57ed7-operator-4edbc3f4`. Hosted validation, authorized live upgrade
 and credential installation, browser access, and recorded recovery are separate gates.
 
+## Task-oriented credential discovery (issue 506)
+
+Implemented with focused and real disposable lifecycle/restore evidence. Live installation,
+workstation enrollment, and approved helper acceptance remain pending after merge.
+
+Task-oriented discovery is the primary interface; metrics provide health and consistency
+summaries. Extend the existing platform without another registry, scheduled collector, or
+credential broker. OpenBao issuance and the issue 507 audit remain separate work.
+[The discovery guide](../guides/nocodb-operations.md#credential-discovery-for-approved-work)
+owns use cases, commands, result interpretation, and agent actions;
+[installation](../guides/automation-data-operations.md#private-credential-discovery-installation)
+and [recovery](../runbooks/platform-disaster-recovery.md#credential-discovery-recovery)
+own the operational procedures.
+
+### Observation boundary
+
+A private, authenticated n8n workflow uses its own header and three restricted SQL readers:
+platform registries/PostgreSQL roles, NocoDB object metadata, and n8n credential identities
+and published workflow bindings. Fixed projections accept no arbitrary SQL or destinations.
+Readers cannot access business records, credential payloads, password verifiers, or mutation
+functions. Projection owners have only required column privileges; definer functions fix
+`search_path` and revoke PUBLIC execution. Project bindings inside PostgreSQL without
+returning workflow parameters. Disable all execution persistence and exclude the inventory
+path from public webhook routing. Routine inventory needs no administrator credential,
+Kubernetes Secret read, exec, or tunnel.
+
+Enumerate observed objects independently of registration, then join retained IDs to detect
+missing, duplicate, unregistered, and inconsistent objects without repair or adoption.
+Pin projections to tested application schemas; drift returns `unsupported_schema`, never a
+raw-table/API fallback. [Specification 028](028-nocodb-operator-ui.md#credential-discovery-and-source-evidence-issue-506)
+defines NocoDB-specific evidence rules.
+
+Each source is limited to 1,000 objects and 1 MiB; the total response to 4 MiB and 30 seconds,
+including connection and response handling. Overflow returns `limit_exceeded`, never a
+complete truncated result. Read each projection in a REPEATABLE READ, READ ONLY transaction
+with local statement timeouts and n8n-managed commit/rollback. Compare fingerprints from
+two separate observations of every source, with one retry within the deadline; continued
+change returns `unstable`. Equality proves metadata stability, not a distributed snapshot.
+Take no provisioning lock. Preserve observation/receipt times and completeness; future,
+invalid, or more than 60-second-old observations cannot establish readiness.
+
+Output is versioned, bounded metadata with fixed error codes. Return neither raw remote
+errors nor secret-bearing fields. Unknown facts remain unknown; partial enumeration cannot
+prove absence. Metrics carry counts, freshness, and consistency, not credential IDs or paths.
+
+### Access and lifecycle invariants
+
+Discovery, credential availability, and task authorization are separate. Next actions contain
+fixed recipe identifiers and validated arguments, not executable remote text. Missing access
+names an existing prerequisite; discovery never provisions, rotates, or retries with broader
+credentials. UI, source, application, runtime, migrator, platform, and recovery identities
+remain distinct.
+
+Local configuration contains only the inventory-header locator and approved profile roots,
+outside checkouts under existing ownership/file-permission rules. Discovery inspects binding
+metadata and file properties without opening consumer password files. Automatic selection
+requires current application generation or migrator credential ID/update marker; unbound,
+stale, or pending material cannot be selected. Only the connection helper consumes the
+selected password, repeats metadata/file checks immediately before use, authenticates the
+session identity, and owns tunnel cleanup. Explicitly supplied profiles retain their existing
+behavior and authority. Ready, authorized routine work requires no password handoff.
+
+Lifecycle readback is independent of mutation success. Observation failure cannot trigger
+another mutation. Pending and acknowledged generations remain distinct. Current absence
+requires complete independent enumeration; retained removal receipts alone cannot prove it.
+Verifiers report discovery evidence separately from service-health results.
+
+### Assurance
+
+Focused tests cover missing/duplicate/wrong bindings, state and generation mismatches,
+profile selection, stale/partial/oversized/unstable observations, bounded failures, secret
+sentinels, noninteractive helper use, and create/rotate/removal sequences. Registered
+`test.nocodb-local-integration` proves actual pinned schemas and published bindings,
+restricted-reader authentication and denials, targeted rotations, pooled-transaction recovery
+after timeout, synthetic attended removal, and restored projections. Candidate evidence does
+not establish deployed access or replace hosted validation and attended live acceptance.
+
 ## Review triggers
 
 Revisit this design when measured load requires connection pooling, automatic failover,
