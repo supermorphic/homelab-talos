@@ -1,8 +1,11 @@
 """Offline guards for the single attended profile acceptance scenario."""
 
 import copy
+import json
 import tempfile
 import unittest
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -132,6 +135,76 @@ class AcceptanceGuardTests(unittest.TestCase):
             self.scope.disable(actor)
         post.assert_called_once_with("identity/entity/id/synthetic-entity", {"disabled": True})
         self.assertNotIn("disabled_at", actor)
+
+    def test_each_caller_requires_issuance_after_its_observed_expiry(self):
+        events = self.directory / "events.jsonl"
+        actor = {"directory": self.directory}
+        records = [
+            {"profile": "diagnostic", "issued_at": 100, "expires_at": 700},
+            {"profile": "diagnostic", "issued_at": 699, "expires_at": 1299},
+        ]
+        events.write_text("\n".join(json.dumps(r) for r in records))
+        with self.assertRaises(SafeError):
+            scenario.assert_caller_refresh(actor, ["diagnostic"])
+        records[1]["issued_at"] = 701
+        events.write_text("\n".join(json.dumps(r) for r in records))
+        scenario.assert_caller_refresh(actor, ["diagnostic"])
+        with self.assertRaises(SafeError):
+            scenario.assert_caller_refresh(actor, ["diagnostic", "publisher"])
+
+    def test_lifetime_cannot_pass_when_watch_reconnection_fails(self):
+        actor = {"directory": self.directory}
+
+        @contextmanager
+        def running(*args, **kwargs):
+            yield Mock(poll=Mock(return_value=None))
+
+        calls = []
+
+        @contextmanager
+        def watch(*args, **kwargs):
+            calls.append("watch")
+            if len(calls) == 2:
+                raise SafeError("invalid-response")
+            yield Mock(poll=Mock(return_value=None))
+
+        with (
+            patch.object(
+                scenario.credentials,
+                "load_workstation",
+                return_value={
+                    "cluster": {
+                        "certificate_authority_data": "c3ludGhldGlj",
+                        "server": "https://example.test",
+                    }
+                },
+            ),
+            patch.object(
+                scenario.credentials,
+                "issue_exec_credential",
+                return_value={
+                    "status": {
+                        "token": "SYNTHETIC",
+                        "expirationTimestamp": datetime.fromtimestamp(700, UTC).isoformat(),
+                    }
+                },
+            ),
+            patch.object(scenario.ssl, "create_default_context"),
+            patch.object(scenario, "BaoClient"),
+            patch.object(scenario, "process", side_effect=running),
+            patch.object(scenario, "watch_connection", side_effect=watch, create=True),
+            patch.object(scenario, "diagnostic_connection", side_effect=running, create=True),
+            patch.object(scenario, "publisher_operations", create=True),
+            patch.object(scenario, "coordinator_window", side_effect=running, create=True),
+            patch.object(scenario, "assert_caller_refresh", create=True),
+            patch.object(scenario, "read_url", side_effect=[200, 200, 0, 401, 200]),
+            patch.object(scenario, "kubectl"),
+            patch.object(scenario.time, "sleep"),
+            patch.object(scenario.time, "time", return_value=2000),
+            self.assertRaises(SafeError),
+        ):
+            scenario.lifetime_outage(self.directory, actor)
+        self.assertEqual(calls, ["watch", "watch"])
 
     def test_scope_selection_requires_explicit_operator_context_and_run(self):
         with patch.dict("os.environ", {}, clear=True), self.assertRaises(SafeError):

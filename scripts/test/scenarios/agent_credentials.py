@@ -335,7 +335,7 @@ class MeasuredClient(BaoClient):
         if path.startswith('kubernetes/creds/'):
             part = response['data']['service_account_token'].split('.')[1]
             expires = json.loads(base64.urlsafe_b64decode(part + '=' * (-len(part) % 4)))['exp']
-            record = {'profile': path.split('/')[-1], 'elapsed_ms': (time.monotonic() - started) * 1000, 'expires_at': expires}
+            record = {'profile': path.split('/')[-1], 'elapsed_ms': (time.monotonic() - started) * 1000, 'expires_at': expires, 'issued_at': time.time()}
             fd = os.open(workstation.DIRECTORY / 'events.jsonl', os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
             with os.fdopen(fd, 'a') as out: out.write(json.dumps(record) + '\\n')
         return response
@@ -508,7 +508,120 @@ def read_url(url, *, context=None, token=None):
         return 0
 
 
-def lifetime_outage(root, actor):
+@contextmanager
+def watch_connection(root, actor):
+    # resourceVersion=0 emits initial ADDED events, proving a watch connection.
+    with process(
+        [
+            "kubectl",
+            "--kubeconfig",
+            str(root / ".kube/config"),
+            "--context",
+            "homelab-observer",
+            "get",
+            "nodes",
+            "--watch-only",
+            "--output-watch-events",
+            "--resource-version=0",
+            "-o",
+            "json",
+            "--request-timeout=15m",
+        ],
+        root,
+        actor,
+        stdout=subprocess.PIPE,
+    ) as child:
+        data = b""
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and child.poll() is None:
+            if not select.select([child.stdout], [], [], 1)[0]:
+                continue
+            part = os.read(child.stdout.fileno(), 4096)
+            if not part or len(data) + len(part) > 1048576:
+                break
+            data += part
+            try:
+                event, _ = json.JSONDecoder().raw_decode(data.decode().lstrip())
+            except (ValueError, UnicodeError):
+                continue
+            if event.get("type") != "ADDED" or event.get("object", {}).get("kind") != "Node":
+                break
+            yield child
+            return
+        raise SafeError("invalid-response")
+
+
+@contextmanager
+def diagnostic_connection(root, actor):
+    with process(
+        [
+            "kubectl",
+            "--kubeconfig",
+            str(root / ".kube/config"),
+            "--context",
+            "homelab-diagnostic",
+            "-n",
+            "automation-data",
+            "port-forward",
+            "--address=127.0.0.1",
+            "pod/automation-data-postgresql-0",
+            ":5432",
+        ],
+        root,
+        actor,
+        stdout=subprocess.PIPE,
+    ) as child:
+        if (
+            not select.select([child.stdout], [], [], 20)[0]
+            or not child.stdout.readline().startswith(b"Forwarding from 127.0.0.1:")
+            or child.poll() is not None
+        ):
+            raise SafeError("invalid-response")
+        yield child
+
+
+def publisher_operations(root, actor):
+    kubectl(
+        root,
+        actor,
+        "publisher",
+        "-n",
+        "test-reports",
+        "rollout",
+        "status",
+        "deployment/test-reports",
+        "--timeout=15s",
+    )
+    kubectl(
+        root,
+        actor,
+        "publisher",
+        "-n",
+        "test-reports",
+        "exec",
+        "deployment/test-reports",
+        "-c",
+        "caddy",
+        "--",
+        "test",
+        "-d",
+        "/srv",
+    )
+
+
+def assert_caller_refresh(actor, profiles):
+    events = [
+        json.loads(line) for line in (actor["directory"] / "events.jsonl").read_text().splitlines()
+    ]
+    for profile in profiles:
+        calls = [event for event in events if event["profile"] == profile]
+        if not calls or not any(
+            event["issued_at"] > min(c["expires_at"] for c in calls) for event in calls
+        ):
+            raise SafeError("invalid-response")
+
+
+def lifetime_outage(root, actor, *, coordinator_root=None, coordinator_actor=None):
     config = str(root / ".kube/config")
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -537,27 +650,24 @@ def lifetime_outage(root, actor):
             root,
             actor,
         ) as cached,
-        process(
-            [
-                "kubectl",
-                "--kubeconfig",
-                config,
-                "--context",
-                "homelab-observer",
-                "get",
-                "nodes",
-                "--watch",
-                "--request-timeout=15m",
-            ],
-            root,
-            actor,
-        ) as watch,
+        watch_connection(root, actor) as watch,
+        diagnostic_connection(root, actor) as diagnostic,
+        coordinator_window(coordinator_root or root, coordinator_actor or actor) as coordination,
     ):
         deadline = time.monotonic() + 30
         while read_url(proxy) != 200:
             if cached.poll() is not None or time.monotonic() >= deadline:
                 raise SafeError("invalid-response")
             time.sleep(1)
+        publisher_operations(root, actor)
+        # Include actual initial caller expiries; setup time must not shorten their window.
+        for source in (actor, coordinator_actor or actor):
+            events = source["directory"] / "events.jsonl"
+            if events.exists():
+                expiry = max(
+                    expiry,
+                    *[json.loads(line)["expires_at"] for line in events.read_text().splitlines()],
+                )
         time.sleep(2)
         outage = actor["directory"] / "outage"
         outage.touch(mode=0o600)
@@ -566,7 +676,9 @@ def lifetime_outage(root, actor):
                 raise SafeError("invalid-response")
             kubectl(root, actor, "observer", "get", "nodes", allowed=False)
             while time.time() <= expiry + issuance.API_EXPIRY_LEEWAY + issuance.SKEW + 5:
-                if cached.poll() is not None or watch.poll() is not None:
+                if any(
+                    child.poll() is not None for child in (cached, watch, diagnostic, coordination)
+                ):
                     raise SafeError("invalid-response")
                 time.sleep(
                     min(
@@ -588,51 +700,80 @@ def lifetime_outage(root, actor):
             outage.unlink(missing_ok=True)
         if read_url(proxy) != 200:
             raise SafeError("invalid-response")
-        kubectl(root, actor, "observer", "get", "nodes")
+        # Reconnect real watch/diagnostic transports; process survival is insufficient.
+        with watch_connection(root, actor), diagnostic_connection(root, actor):
+            publisher_operations(root, actor)
+            kubectl(root, actor, "observer", "get", "nodes")
+    assert_caller_refresh(actor, ["observer", "diagnostic", "publisher"])
+    assert_caller_refresh(coordinator_actor or actor, ["campaign-coordinator"])
     return {
         "cached_before_expiry": True,
         "new_command_denied": True,
         "expired_token_denied": True,
         "refresh_failed_then_recovered": True,
-        "long_watch": True,
+        "watch_and_diagnostic_reconnected": True,
+        "publisher_and_lease_across_expiry": True,
     }
 
 
-def coordinator(root, actor, holder):
+@contextmanager
+def coordinator_window(root, actor):
+    holder = (
+        "agent-credentials-" + hashlib.sha256(str(actor["directory"]).encode()).hexdigest()[:16]
+    )
+    stop = actor["directory"] / "coordinator-stop"
+    failed = actor["directory"] / "coordinator-failed"
+    stop.unlink(missing_ok=True)
+    failed.unlink(missing_ok=True)
     credentials.install_kubeconfig(root, actor["directory"], "campaign-coordinator")
     script = """set -euo pipefail
 export TEST_LEASE_NAMESPACE=flux-system TEST_LEASE_NAME=homelab-test-run-lock
+export TEST_LEASE_DURATION_SECONDS=90 TEST_LEASE_RENEW_INTERVAL_SECONDS=15
 unset TEST_LEASE_KUBECTL TEST_LEASE_SLEEP
 source scripts/lib/lease.sh
-# This probe refuses every unrelated holder, including an expired one.
 lease_is_expired() { return 1; }
 acquire_test_lease "$1" "$2" 1 existing-only
 trap 'release_test_lease "$1" "$2" >/dev/null' EXIT
 renew_test_lease "$1" "$2"
 if acquire_test_lease "$1" "$2-contender" 1 existing-only >/dev/null 2>&1; then exit 1; fi
+start_test_lease_renewal "$1" "$2" "$4"
+printf 'READY\n'
+while [[ ! -f "$3" ]]; do [[ ! -f "$4" ]]; sleep 1; done
+[[ ! -f "$4" ]]
+stop_test_lease_renewal
+renew_test_lease "$1" "$2"
 verify_test_lease_holder "$1" "$2"
 release_test_lease "$1" "$2"
 trap - EXIT
 """
     try:
-        subprocess.run(
+        with process(
             [
-                "mise",
-                "exec",
-                "--",
                 "bash",
                 "-c",
                 script,
                 "acceptance",
                 str(root / ".kube/config"),
                 holder,
+                str(stop),
+                str(failed),
             ],
-            cwd=root,
-            env=environment(root, actor),
-            capture_output=True,
-            check=True,
-            timeout=30,
-        )
+            root,
+            actor,
+            stdout=subprocess.PIPE,
+        ) as child:
+            try:
+                if (
+                    not select.select([child.stdout], [], [], 30)[0]
+                    or child.stdout.readline() != b"READY\n"
+                    or child.poll() is not None
+                ):
+                    raise SafeError("invalid-response")
+                yield child
+            finally:
+                stop.touch(mode=0o600)
+                if child.wait(timeout=30) != 0 or failed.exists():
+                    raise SafeError("invalid-response")
     finally:
         credentials.install_kubeconfig(root, actor["directory"])
 
@@ -726,65 +867,10 @@ def main():
                         )
                     )
                 result["profiles_and_parallel_checkouts"] = True
-                kubectl(
-                    primary,
-                    b,
-                    "publisher",
-                    "-n",
-                    "test-reports",
-                    "rollout",
-                    "status",
-                    "deployment/test-reports",
-                    "--timeout=15s",
+                result["lifetime_outage"] = lifetime_outage(
+                    primary, b, coordinator_root=linked, coordinator_actor=a
                 )
-                kubectl(
-                    primary,
-                    b,
-                    "publisher",
-                    "-n",
-                    "test-reports",
-                    "exec",
-                    "deployment/test-reports",
-                    "-c",
-                    "caddy",
-                    "--",
-                    "test",
-                    "-d",
-                    "/srv",
-                )
-                with process(
-                    [
-                        "kubectl",
-                        "--kubeconfig",
-                        str(primary / ".kube/config"),
-                        "--context",
-                        "homelab-diagnostic",
-                        "-n",
-                        "automation-data",
-                        "port-forward",
-                        "--address=127.0.0.1",
-                        "pod/automation-data-postgresql-0",
-                        ":5432",
-                    ],
-                    primary,
-                    b,
-                    stdout=subprocess.PIPE,
-                ) as forward:
-                    if (
-                        not select.select([forward.stdout], [], [], 20)[0]
-                        or not forward.stdout.readline().startswith(b"Forwarding from 127.0.0.1:")
-                        or forward.poll() is not None
-                    ):
-                        raise SafeError("invalid-response")
-                result["caller_transports"] = True
-                result["lifetime_outage"] = lifetime_outage(primary, b)
-                # No operator holder is active while the coordinator owns the Lease.
-                coordinator(
-                    primary,
-                    b,
-                    "agent-credentials-" + hashlib.sha256(run_dir.name.encode()).hexdigest()[:16],
-                )
-                result["coordinator_lease"] = True
+                result["caller_transports_and_coordinator"] = True
                 with lease(kubeconfig):
                     revocation(scope, a, b)
                     old = credentials.load_workstation(b["directory"])
@@ -802,7 +888,8 @@ def main():
                 kubectl(primary, b, "observer", "get", "nodes")
                 events = [
                     json.loads(line)
-                    for line in (b["directory"] / "events.jsonl").read_text().splitlines()
+                    for actor in (a, b)
+                    for line in (actor["directory"] / "events.jsonl").read_text().splitlines()
                 ]
                 result.update(
                     issuance_count=len(events),

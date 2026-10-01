@@ -365,9 +365,10 @@ expired holder. It releases only its own holder.
 
 The test checks four identities and allowed/denied requests from both checkout
 forms, repeated/parallel commands, watch/port-forward/publisher transports,
-actual expiry, cached-client and new-command outage behavior, refresh/recovery,
+actual expiry and new watch/diagnostic connections afterward, cached-client and new-command outage behavior, refresh/recovery,
 revocation of an unexpired session, an unaffected second workstation, and
-rotation. Outage injection is limited to the fixture client transport. Production
+rotation. Coordinator renewal runs across the same expiry window through the
+second test identity, which stays available during the fixture outage. Outage injection is limited to the fixture client transport. Production
 OpenBao remains available. Test credentials stay in memory/private files; retained
 results contain only assertions, issuance counts and timing.
 
