@@ -187,6 +187,12 @@ selection_digest() {
 
 campaign_uses_test_lease() {
   [[ "$scoped_mode" != 'true' ]] || return 1
+  # This standalone acceptance owns checked Lease sections and must release them
+  # before testing the coordinator's acquire/renew/release behavior.
+  if [[ "$record_mode" == 'true' && "$selection_type" == 'suite' &&
+    "$selection" == 'test.agent-credentials' ]]; then
+    return 1
+  fi
   [[ "$record_mode" != 'true' || "$record_scoped" != 'true' ]]
 }
 

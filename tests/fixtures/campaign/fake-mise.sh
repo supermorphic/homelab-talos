@@ -58,6 +58,13 @@ case "$target" in
     suite_id='test.ntfy-publish'
     command=(true)
     ;;
+  acceptance-agent)
+    # Run the real wrapper and scenario up to its missing-authority boundary.
+    # The record coordinator must leave this suite's Lease ownership to the scenario.
+    unset OPENBAO_OPERATOR_KUBECONFIG
+    suite_id='test.agent-credentials'
+    command=(uv run --locked python -m scripts.test.scenarios.agent_credentials)
+    ;;
   acceptance-shared)
     suite_id='test.nocodb-local-integration'
     command=(true)
