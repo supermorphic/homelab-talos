@@ -379,12 +379,19 @@ bare source-provisioning value. Keep that bare token outside Git for
 and access test add the `Bearer` prefix. Bind:
 
 - **Automation Data Provisioner** to every Postgres node;
-- **NocoDB Operator API** to every HTTP Request node; and
+- **NocoDB Operator API** to every HTTP Request node except **Observe Mutation Inventory**;
+- **Automation Data Inventory Header** to **Observe Mutation Inventory**; and
 - **NocoDB Source Provisioning Header** to **Source Webhook**.
 
 Keep execution order `v1` and all saved manual, successful, failed, and progress
 execution data disabled. Publish **NocoDB Source Provisioner** only after checking every
 binding. Do not add credential IDs or values to the Git template.
+
+The [discovery installer](automation-data-operations.md#private-credential-discovery-installation)
+creates the inventory header. Follow the
+[mutation workflow upgrade procedure](automation-data-operations.md#upgrade-existing-mutation-workflows)
+for initial publication or updating an existing published workflow; the installer does
+not upgrade this source workflow.
 
 ### Configure a domain with custom NocoDB schemas
 

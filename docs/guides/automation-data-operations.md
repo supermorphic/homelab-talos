@@ -48,6 +48,10 @@ workflow, and verifies its independent metadata readback. It removes only its ow
 temporary Jobs, ConfigMaps, and Secrets. Workflow execution persistence is disabled.
 The inventory path is absent from the public webhook route.
 
+The installer does not update either existing mutation workflow. Complete the
+[mutation workflow upgrade](#upgrade-existing-mutation-workflows) before declaring
+lifecycle readback ready.
+
 Keep the protected `pending/operation.json` and candidate files until installation
 and recovery evidence is accepted. Retry with the same directory and candidates.
 Existing active readers must authenticate with the retained candidate; a rerun never
@@ -70,6 +74,42 @@ restricted reader and reapply the reviewed discovery SQL with retained protected
 before exposing inventory. This also supports older backups that predate discovery.
 Application records are unchanged. Lost enrollment material requires attended replacement;
 discovery does not export n8n passwords or reset credentials to make recovery succeed.
+
+### Upgrade existing mutation workflows
+
+On a new installation, NocoDB bootstrap requires platform provisioning and restore
+acceptance before its database is initialized. For that first platform bootstrap only,
+disable **Observe Mutation Inventory** in the platform provisioner and bind its three
+existing credentials to their other nodes. Provisioning can then run with readback
+reported as `unavailable`. Do not substitute another credential on the disabled node.
+This temporary state does not satisfy discovery acceptance.
+
+After the inventory installer passes, use the separately authorized private n8n editor
+to update **Automation Data Provisioner** and **NocoDB Source Provisioner** from the
+reviewed templates. ConfigMap deployment alone does not update published workflows.
+
+1. Retain the existing workflow graphs, IDs, and credential bindings as protected
+   rollback evidence. Unpublish the selected workflow and let in-flight mutations finish
+   before replacing its graph. Update the existing workflow; do not publish a second workflow
+   with the same webhook path.
+2. Restore the existing Postgres and webhook bindings. Bind **Automation Data n8n API**
+   in the platform provisioner, or **NocoDB Operator API** in the source provisioner,
+   to HTTP Request nodes except **Observe Mutation Inventory**.
+3. Bind the installer's **Automation Data Inventory Header** credential to
+   **Observe Mutation Inventory** in both workflows and enable the node. It uses
+   `X-Automation-Data-Inventory`; do not substitute either broader API credential or
+   the mutation webhook header.
+4. Verify these bindings and the disabled execution-data persistence settings, then
+   publish each updated workflow. For first-time setup, apply the same bindings before
+   its first publication, after the inventory installer has completed.
+5. During separately authorized lifecycle acceptance, check that successful platform
+   provisioning and NocoDB source mutations return `inventoryReadback.status=observed`
+   for their exact targets. A readback failure does not undo a successful mutation:
+   inspect the binding and retry inventory observation without repeating the mutation.
+
+If rollback is required, restore the retained graph and bindings on the same workflow
+before republishing. Older workflows can continue their existing mutation behavior, but
+they do not establish the new lifecycle-readback acceptance criterion.
 
 ### Bind an installed migrator profile
 
@@ -249,14 +289,22 @@ Import
 Bind:
 
 - **Automation Data Provisioner** to every Postgres node;
-- **Automation Data n8n API** to every HTTP Request node; and
+- **Automation Data n8n API** to every HTTP Request node except **Observe Mutation Inventory**;
+- **Automation Data Inventory Header** to **Observe Mutation Inventory**; and
 - **Automation Data Provisioning Header** to **Provisioning Webhook**.
 
-Keep the workflow's execution-data settings unchanged, then publish it. Do not add
+The [discovery installer](#private-credential-discovery-installation) creates the inventory
+header after the databases are initialized. For first platform bootstrap, disable
+**Observe Mutation Inventory** and proceed with the three existing credentials until
+NocoDB is initialized. Follow the
+[mutation workflow procedure](#upgrade-existing-mutation-workflows) to finish enrollment.
+Keep the workflow's execution-data settings unchanged. Do not add
 credential IDs or values to the template in Git.
 
-**Expected result:** **Automation Data Provisioner** is published with all three named
+**Expected result:** **Automation Data Provisioner** is published with all four named
 credentials bound, and its execution-data settings remain unchanged.
+During first platform bootstrap, the inventory node remains disabled and readback is
+`unavailable` until the later discovery enrollment and workflow upgrade.
 
 ### 5. Validate provisioning and rotation
 

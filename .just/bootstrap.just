@@ -3262,8 +3262,11 @@ automation-data:
     3. Create a separate Header Auth credential named
        "Automation Data Provisioning Header" with header
        X-Automation-Data-Provisioning. Retain its private value outside Git.
-    4. Import automation-data-provisioner.json. Bind the three credentials exactly as its
-       setup note specifies, then publish the provisioning workflow.
+    4. Import automation-data-provisioner.json and bind the three credentials above as
+       its setup note specifies, excluding Observe Mutation Inventory. During first
+       platform bootstrap, disable that node until NocoDB is initialized and discovery
+       installation passes. Later bind Automation Data Inventory Header to that node,
+       enable it, and republish using the guide's mutation workflow upgrade procedure.
     5. Run the attended provisioning test. It creates or reconciles
        automation_data_acceptance and returns the stable scoped n8n migrator/runtime
        credential IDs without returning either generated password.
