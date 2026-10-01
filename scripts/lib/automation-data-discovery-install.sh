@@ -7,8 +7,10 @@ discovery_resource_owned() {
 }
 
 discovery_backup_ready() {
-	discovery_resource_owned "$1" "$2" &&
-		yq -e '([.status.conditions[]? | select(.type == "Complete" and .status == "True")] | length) == 1 and
+	[[ "$#" -eq 2 ]] || return 2
+	# Callers supply process substitution: evaluate ownership and status in one read.
+	RUN_ID="$2" yq -e '.metadata.labels."homelab-talos/run-id" == strenv(RUN_ID) and
+      ([.status.conditions[]? | select(.type == "Complete" and .status == "True")] | length) == 1 and
       ([.status.conditions[]? | select(.type == "Failed" and .status == "True")] | length) == 0' "$1" >/dev/null 2>&1
 }
 
