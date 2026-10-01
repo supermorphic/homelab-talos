@@ -32,7 +32,7 @@ confirmation_expected="$(yq -r '.confirmation.expected // ""' - <<<"$entry_json"
 scenario_lease=false
 if [[ "$suite_id" == 'test.agent-credentials' ]]; then
   [[ "$*" == 'uv run --locked python -m scripts.test.scenarios.agent_credentials' ||
-    "$*" == 'uv run --locked python scripts/test/scenarios/agent_credentials.py' ]] || {
+    "$*" == 'uv run --locked --no-dev python scripts/test/scenarios/agent_credentials.py' ]] || {
     echo 'Agent credential acceptance requires its canonical guarded entrypoint.' >&2
     exit 2
   }

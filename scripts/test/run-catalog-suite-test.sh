@@ -212,3 +212,14 @@ set -e
 mapfile -t agent_runs < <(find "$fixture_root/agent-no-authority" -mindepth 1 -maxdepth 1 -type d)
 [[ "${#agent_runs[@]}" -eq 1 ]]
 [[ "$(yq -r '.result' "${agent_runs[0]}/summary.json")" == 'failed' ]]
+
+# Typed catalog dispatch uses --no-dev and the file path, as test record does.
+set +e
+(env -u OPENBAO_OPERATOR_KUBECONFIG -u TEST_CAMPAIGN_LEASE_HOLDER \
+  TEST_RESULTS_ROOT="$fixture_root/agent-typed-dispatch" \
+  TEST_KUBECONFIG="$fixture_root/kubeconfig" \
+  scripts/test/run-live-suite.sh integration openbao workstation-profiles-lifecycles-callers) >/dev/null 2>&1
+agent_typed_exit="$?"
+set -e
+printf 'Typed agent dispatch authority rejection: %s\n' "$agent_typed_exit"
+[[ "$agent_typed_exit" -eq 1 ]]
