@@ -8,8 +8,10 @@ import os
 import re
 import ssl
 import stat
+import subprocess
+import sys
 import time
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,6 +23,7 @@ from automation_data_client import (
 from automation_data_inventory import (
     DEADLINE_SECONDS,
     DOMAIN,
+    ERROR_CODES,
     MAX_RESPONSE_BYTES,
     SMALL_NAME,
     DiscoveryRequest,
@@ -133,6 +136,45 @@ def load_access_config() -> AccessConfig:
 
 
 def fetch_observations(config: AccessConfig, request: DiscoveryRequest) -> list[SourceObservation]:
+    """Bound the whole fetch, including DNS/TLS and continuously arriving headers.
+
+    Socket timeouts only bound inactivity. A disposable process lets the caller
+    terminate and reap stalled work without changing process-wide signal handlers
+    or leaving a thread holding a credential. IPC contains locators and validated
+    metadata only; the worker reads the inventory header itself.
+    """
+    deadline = time.monotonic() + DEADLINE_SECONDS
+    payload = json.dumps(
+        {
+            "config": {key: str(value) for key, value in asdict(config).items()},
+            "request": asdict(request),
+        }
+    ).encode()
+    try:
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve())],
+            input=payload,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=max(0.001, deadline - time.monotonic()),
+            check=False,
+        )
+        if result.returncode or len(result.stdout) > MAX_RESPONSE_BYTES:
+            raise InventoryError("source_unavailable")
+        data = json.loads(result.stdout)
+        if "errorCode" in data:
+            code = data["errorCode"]
+            raise InventoryError(code if code in ERROR_CODES else "source_unavailable")
+        return [SourceObservation(**item) for item in data["sources"]]
+    except InventoryError:
+        raise
+    except Exception:  # noqa: BLE001 - discard worker/transport diagnostics
+        raise InventoryError("source_unavailable") from None
+
+
+def _fetch_observations(
+    config: AccessConfig, request: DiscoveryRequest
+) -> list[SourceObservation]:
     """Read one inventory-only token into a fixed TLS header. Never follow redirects."""
     deadline = time.monotonic() + DEADLINE_SECONDS
     connection = None
@@ -390,3 +432,23 @@ def lifecycle_readback(mutation: dict) -> dict:
         return lifecycle_evidence(mutation, build_inventory(fetch_observations(config, request)))
     except Exception:  # noqa: BLE001 - return only a fixed evidence status
         return {"status": "unavailable", "observedAt": None, "errorCode": "source_unavailable"}
+
+
+def _inventory_worker():
+    """Private subprocess entry point; never emit raw exceptions or remote output."""
+    try:
+        payload = json.loads(sys.stdin.buffer.read(65536))
+        config = AccessConfig(**{key: Path(value) for key, value in payload["config"].items()})
+        request = DiscoveryRequest(**payload["request"])
+        validate_request(request)
+        result = {"sources": [asdict(item) for item in _fetch_observations(config, request)]}
+    except InventoryError as error:
+        code = str(error)
+        result = {"errorCode": code if code in ERROR_CODES else "source_unavailable"}
+    except Exception:  # noqa: BLE001 - private inputs and errors stay in the worker
+        result = {"errorCode": "source_unavailable"}
+    print(json.dumps(result, separators=(",", ":")))
+
+
+if __name__ == "__main__":
+    _inventory_worker()

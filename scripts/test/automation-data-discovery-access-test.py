@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
 """Protected metadata selection and bounded transport, with synthetic retained files."""
 
+import http.client
 import json
 import os
+import socket
+import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+import automation_data_access as access
+
 try:
-    from automation_data_access import fetch_observations, inspect_profile, load_access_config
+    from automation_data_access import _fetch_observations, inspect_profile, load_access_config
 except ImportError:
     raise AssertionError("Protected access implementation missing") from None
 from automation_data_client import PrivateFileError
@@ -188,7 +195,7 @@ class AccessTests(unittest.TestCase):
             patch("automation_data_access.http.client.HTTPSConnection", Connection),
             self.assertRaisesRegex(InventoryError, "source_unavailable"),
         ):
-            fetch_observations(load_access_config(), DiscoveryRequest())
+            _fetch_observations(load_access_config(), DiscoveryRequest())
 
     def transport(self, *, status=200, content=b"", length=None):
         class Response:
@@ -218,7 +225,7 @@ class AccessTests(unittest.TestCase):
                 pass
 
         with patch("automation_data_access.http.client.HTTPSConnection", Connection):
-            return fetch_observations(load_access_config(), DiscoveryRequest())
+            return _fetch_observations(load_access_config(), DiscoveryRequest())
 
     def test_missing_and_revoked_header_have_bounded_reasons(self):
         self.token.unlink()
@@ -264,6 +271,125 @@ class AccessTests(unittest.TestCase):
             self.assertRaisesRegex(InventoryError, "source_unavailable"),
         ):
             self.transport(content=b"{}")
+
+    def test_worker_preserves_missing_authentication_reason(self):
+        self.token.unlink()
+        with self.assertRaisesRegex(InventoryError, "^authentication_required$"):
+            access.fetch_observations(load_access_config(), DiscoveryRequest())
+
+    def test_total_deadline_terminates_and_reaps_stalled_dns(self):
+        original_popen = subprocess.Popen
+        children = []
+
+        def stalled_worker(command, **kwargs):
+            script = (
+                "import socket, runpy, sys, time; "
+                f"sys.path.insert(0, {str(Path(access.__file__).parent)!r}); "
+                "socket.getaddrinfo = lambda *a, **k: time.sleep(3); "
+                f"runpy.run_path({command[1]!r}, run_name='__main__')"
+            )
+            child = original_popen([sys.executable, "-c", script], **kwargs)
+            children.append(child)
+            return child
+
+        started = time.monotonic()
+        with (
+            patch.object(access, "DEADLINE_SECONDS", 0.3),
+            patch.object(subprocess, "Popen", stalled_worker),
+            self.assertRaisesRegex(InventoryError, "^source_unavailable$"),
+        ):
+            access.fetch_observations(load_access_config(), DiscoveryRequest())
+        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertEqual(len(children), 1)
+        self.assertIsNotNone(children[0].poll())
+
+    def test_worker_returns_validated_metadata(self):
+        self.worker_exchange(slow=False)
+
+    def test_total_deadline_stops_continuously_arriving_headers(self):
+        self.worker_exchange(slow=True)
+
+    def worker_exchange(self, *, slow):
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        listener.settimeout(3)
+        self.addCleanup(listener.close)
+        port = listener.getsockname()[1]
+        stopped = threading.Event()
+
+        def serve():
+            try:
+                with listener.accept()[0] as peer:
+                    peer.recv(4096)
+                    peer.sendall(b"HTTP/1.1 200 OK\r\n")
+                    if slow:
+                        for _ in range(70):
+                            if stopped.wait(0.03):
+                                return
+                            peer.sendall(b"X-Synthetic: yes\r\n")
+                    body = json.dumps(
+                        {
+                            "schemaVersion": 1,
+                            "sources": [
+                                {
+                                    "source": source,
+                                    "complete": False,
+                                    "status": "unavailable",
+                                    "errorCode": "unsupported_schema",
+                                }
+                                for source in ("platform", "nocodb", "n8n")
+                            ],
+                        }
+                    ).encode()
+                    peer.sendall(f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+            except OSError:
+                pass  # Deadline termination closes the connection.
+
+        server = threading.Thread(target=serve)
+        server.start()
+        original_popen = subprocess.Popen
+        children = []
+
+        def local_worker(command, **kwargs):
+            # Keep the production worker and HTTP parser; substitute only the
+            # external TLS endpoint with this synthetic loopback server.
+            script = (
+                "import http.client, runpy, sys; "
+                f"sys.path.insert(0, {str(Path(access.__file__).parent)!r}); "
+                "http.client.HTTPSConnection = lambda *a, **k: "
+                f"http.client.HTTPConnection('127.0.0.1', {port}, timeout=3); "
+                f"runpy.run_path({command[1]!r}, run_name='__main__')"
+            )
+            child = original_popen([sys.executable, "-c", script], **kwargs)
+            children.append(child)
+            return child
+
+        started = time.monotonic()
+        try:
+            with (
+                patch.object(access, "DEADLINE_SECONDS", 0.3 if slow else 3),
+                patch.object(subprocess, "Popen", local_worker),
+                patch.object(
+                    http.client,
+                    "HTTPSConnection",
+                    side_effect=lambda *a, **k: http.client.HTTPConnection(
+                        "127.0.0.1", port, timeout=3
+                    ),
+                ),
+            ):
+                if slow:
+                    with self.assertRaisesRegex(InventoryError, "^source_unavailable$"):
+                        access.fetch_observations(load_access_config(), DiscoveryRequest())
+                    self.assertLess(time.monotonic() - started, 1.5)
+                else:
+                    observed = access.fetch_observations(load_access_config(), DiscoveryRequest())
+                    self.assertEqual([s.source for s in observed], ["platform", "nocodb", "n8n"])
+                    self.assertTrue(all(s.error_code == "unsupported_schema" for s in observed))
+            self.assertTrue(all(child.poll() is not None for child in children))
+        finally:
+            stopped.set()
+            server.join(timeout=4)
 
 
 if __name__ == "__main__":
