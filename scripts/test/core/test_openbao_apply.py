@@ -183,6 +183,14 @@ class ApplyTest(unittest.TestCase):
 
 
 class ApplyBoundaryTest(unittest.TestCase):
+    def test_existing_approle_omits_creation_only_control(self):
+        from unittest.mock import Mock
+
+        client = Mock()
+        spec = next(o for o in load_document(DESIRED)["objects"] if o.kind == "approle-role")
+        apply._write(spec, spec.fields, client, "synthetic-token")
+        self.assertNotIn("local_secret_ids", client.post.call_args.args[1])
+
     def test_mount_creation_uses_pinned_server_write_path(self):
         from unittest.mock import Mock
 

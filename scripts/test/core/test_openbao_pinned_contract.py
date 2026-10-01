@@ -110,6 +110,43 @@ class PinnedServerContract(unittest.TestCase):
             ]:
                 self.assertEqual(request(method, path, body, token=reader_token)[0], 403)
             self.assertEqual(request("POST", "auth/token/revoke-self", {}, token=reader_token)[0], 204)
+            # Local AppRole contract: bound alias, exact session lifetime and
+            # disabling the entity invalidates authority of an issued session.
+            role_path = "auth/homelab-approle/role/agent-workstation"
+            role_id = request("GET", role_path + "/role-id")[1]["data"]["role_id"]
+            secret = request("POST", role_path + "/secret-id", {})[1]["data"]
+            self.assertEqual(secret["secret_id_ttl"], 7776000)
+            self.assertEqual(secret["secret_id_num_uses"], 0)
+            auth = request("POST", "auth/homelab-approle/login", {
+                "role_id": role_id, "secret_id": secret["secret_id"]})[1]["auth"]
+            self.assertEqual(auth["lease_duration"], 60)
+            self.assertEqual(auth["policies"], ["agent-profiles"])
+            self.assertEqual(auth.get("identity_policies", []), [])
+            entity_id = auth["entity_id"]
+            entity = request("GET", "identity/entity/id/" + entity_id)[1]["data"]
+            self.assertEqual(entity["aliases"][0]["name"], role_id)
+            self.assertEqual(entity["aliases"][0]["mount_path"], "auth/homelab-approle/")
+            # Never reach the real cluster from a loopback server contract.
+            self.assertEqual(request("POST", "kubernetes/config", {
+                "kubernetes_host": "http://127.0.0.1:1",
+                "service_account_jwt": "synthetic-local-issuer"})[0], 204)
+            for profile in ("observer", "diagnostic", "publisher", "campaign-coordinator"):
+                self.assertEqual(request("POST", "kubernetes/creds/" + profile,
+                    {}, token=auth["client_token"])[0], 500)
+            self.assertEqual(request("POST", "identity/entity/id/" + entity_id,
+                                    {"disabled": True})[0], 204)
+            for profile in ("observer", "diagnostic", "publisher", "campaign-coordinator"):
+                self.assertEqual(request("POST", "kubernetes/creds/" + profile,
+                    {}, token=auth["client_token"])[0], 403)
+            # Applying source configuration touches roles, never entities.
+            for spec in load_document(apply.DESIRED)["objects"]:
+                if spec.kind == "approle-role":
+                    apply._write(spec, request("GET", spec.path)[1]["data"], writer, "synthetic-local-root", "unused")
+            self.assertTrue(request("GET", "identity/entity/id/" + entity_id)[1]["data"]["disabled"])
+            # Restore the configuration readback for the original drift assertion.
+            engine = next(o for o in load_document(apply.DESIRED)["objects"]
+                          if o.kind == "kubernetes-config")
+            apply._write(engine, None, writer, "synthetic-local-root", "unused")
             self.assertEqual(request("POST", "auth/token/revoke-self", {})[0], 204)
             self.assertEqual(request("GET", raw_path)[0], 403)
             raw_status, raw_body = request("GET", raw_path, token=operator)

@@ -37,9 +37,10 @@ LIVE_INVENTORIES = {
     'auth-method': list(AUTH_MOUNTS), 'secret-mount': list(SECRET_MOUNTS),
     'jwt-role': ['openbao-backup', 'openbao-acceptance', 'openbao-config-reader'],
     'userpass-user': ['openbao-operator'],
+    'approle-role': ['agent-workstation'],
     'policy': ['default', 'root', 'openbao-operator', 'openbao-backup',
-               'openbao-acceptance', 'openbao-config-reader'],
-    'issuance-role': ['openbao-acceptance'],
+               'openbao-acceptance', 'openbao-config-reader', 'agent-profiles'],
+    'issuance-role': ['openbao-acceptance', 'observer', 'diagnostic', 'publisher', 'campaign-coordinator'],
 }
 
 
@@ -64,10 +65,11 @@ class FakeReader:
         if path == self.fail_path:
             raise SafeError('read-denied')
         if path in {'sys/auth', 'sys/mounts', 'auth/homelab-jwt/role',
-                    'auth/homelab-userpass/users', 'sys/policies/acl', 'kubernetes/roles'}:
+                    'auth/homelab-userpass/users', 'auth/homelab-approle/role', 'sys/policies/acl', 'kubernetes/roles'}:
             kind = next(kind for kind, endpoint in {
                 'auth-method': 'sys/auth', 'secret-mount': 'sys/mounts',
                 'jwt-role': 'auth/homelab-jwt/role', 'userpass-user': 'auth/homelab-userpass/users',
+                'approle-role': 'auth/homelab-approle/role',
                 'policy': 'sys/policies/acl', 'issuance-role': 'kubernetes/roles'}.items()
                 if endpoint == path)
             if kind in {'auth-method', 'secret-mount'}:

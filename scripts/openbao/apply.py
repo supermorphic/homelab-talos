@@ -25,6 +25,7 @@ def _safe_source(document):
             "secret-mount": "sys/mounts/",
             "jwt-config": "auth/",
             "jwt-role": "auth/homelab-jwt/role/",
+            "approle-role": "auth/homelab-approle/role/",
             "userpass-user": "auth/homelab-userpass/users/",
             "policy": "sys/policies/acl/",
             "kubernetes-config": "",
@@ -45,6 +46,7 @@ def snapshot(desired_path, client):
         # Role endpoints do not exist until their parent backend is mounted.
         parent = {
             "jwt-role": ("auth-method", "homelab-jwt/"),
+            "approle-role": ("auth-method", "homelab-approle/"),
             "userpass-user": ("auth-method", "homelab-userpass/"),
             "issuance-role": ("secret-mount", "kubernetes/"),
         }.get(kind)
@@ -111,6 +113,10 @@ def _changes(document, states):
 def _write(spec, actual, client, token, password=None):
     payload = copy.deepcopy(spec.fields)
     path = spec.path.rstrip("/")
+    if spec.kind == "approle-role" and actual is not None:
+        if actual.get("local_secret_ids", False) != payload.get("local_secret_ids", False):
+            raise SafeError("invalid-source")
+        payload.pop("local_secret_ids", None)
     if spec.kind == "policy":
         payload["policy"] = canonical_json(payload["policy"]).decode()
     if spec.kind == "userpass-user" and password is not None:

@@ -12,6 +12,7 @@ from .drift import compare, compare_inventory, sanitize
 INVENTORY_ENDPOINTS = {
     'auth-method': 'sys/auth',
     'secret-mount': 'sys/mounts',
+    'approle-role': 'auth/homelab-approle/role',
     'jwt-role': 'auth/homelab-jwt/role',
     'userpass-user': 'auth/homelab-userpass/users',
     'policy': 'sys/policies/acl',

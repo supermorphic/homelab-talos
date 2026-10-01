@@ -2,6 +2,67 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
+  name: homelab-campaign-coordinator
+  namespace: kube-system
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-campaign-coordinator
+  namespace: flux-system
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    resourceNames: [homelab-test-run-lock]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-campaign-coordinator
+  namespace: flux-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-campaign-coordinator
+subjects:
+  - kind: ServiceAccount
+    name: homelab-campaign-coordinator
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: openbao-agent-tokenrequest
+  namespace: kube-system
+rules:
+  - apiGroups: [""]
+    resources: [serviceaccounts/token]
+    resourceNames:
+      - homelab-observer
+      - homelab-diagnostic
+      - homelab-report-publisher
+      - homelab-campaign-coordinator
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openbao-agent-tokenrequest
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: openbao-agent-tokenrequest
+subjects:
+  - kind: ServiceAccount
+    name: openbao
+    namespace: openbao
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
   name: homelab-observer
   namespace: kube-system
 ---

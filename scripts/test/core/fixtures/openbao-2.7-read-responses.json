@@ -42,6 +42,26 @@
     },
     "token/": {
       "type": "token"
+    },
+    "homelab-approle/": {
+      "accessor": "synthetic-approle-accessor",
+      "config": {
+        "default_lease_ttl": 60,
+        "force_no_cache": false,
+        "max_lease_ttl": 7776000,
+        "token_type": "default-service"
+      },
+      "deprecation_status": "supported",
+      "description": "Homelab workstation authentication",
+      "external_entropy_access": false,
+      "local": false,
+      "options": {},
+      "plugin_version": "",
+      "running_plugin_version": "v2.7.0+builtin.bao",
+      "running_sha256": "",
+      "seal_wrap": false,
+      "type": "approle",
+      "uuid": "synthetic-approle-uuid"
     }
   },
   "GET sys/mounts": {
@@ -249,9 +269,9 @@
     "allow_slashes_in_identity_templates": false,
     "allow_wildcards_in_identity_templates": false,
     "cas_required": false,
-    "modified": "2026-01-01T00:00:00Z",
+    "modified": "2026-10-01T11:57:05.019314-06:00",
     "name": "openbao-config-reader",
-    "policy": "{\"path\": {\"sys/auth\": {\"capabilities\": [\"read\"]}, \"sys/mounts\": {\"capabilities\": [\"read\"]}, \"sys/storage/raft/configuration\": {\"capabilities\": [\"read\"]}, \"sys/policies/acl\": {\"capabilities\": [\"list\"]}, \"sys/policies/acl/openbao-operator\": {\"capabilities\": [\"read\"]}, \"sys/policies/acl/openbao-backup\": {\"capabilities\": [\"read\"]}, \"sys/policies/acl/openbao-acceptance\": {\"capabilities\": [\"read\"]}, \"sys/policies/acl/openbao-config-reader\": {\"capabilities\": [\"read\"]}, \"auth/homelab-jwt/config\": {\"capabilities\": [\"read\"]}, \"auth/homelab-jwt/role\": {\"capabilities\": [\"list\"]}, \"auth/homelab-jwt/role/openbao-backup\": {\"capabilities\": [\"read\"]}, \"auth/homelab-jwt/role/openbao-acceptance\": {\"capabilities\": [\"read\"]}, \"auth/homelab-jwt/role/openbao-config-reader\": {\"capabilities\": [\"read\"]}, \"auth/homelab-userpass/users\": {\"capabilities\": [\"list\"]}, \"auth/homelab-userpass/users/openbao-operator\": {\"capabilities\": [\"read\"]}, \"kubernetes/config\": {\"capabilities\": [\"read\"]}, \"kubernetes/roles\": {\"capabilities\": [\"list\"]}, \"kubernetes/roles/openbao-acceptance\": {\"capabilities\": [\"read\"]}, \"auth/token/revoke-self\": {\"capabilities\": [\"update\"]}}}",
+    "policy": "{\"path\":{\"auth/homelab-approle/role\":{\"capabilities\":[\"list\"]},\"auth/homelab-approle/role/agent-workstation\":{\"capabilities\":[\"read\"]},\"auth/homelab-jwt/config\":{\"capabilities\":[\"read\"]},\"auth/homelab-jwt/role\":{\"capabilities\":[\"list\"]},\"auth/homelab-jwt/role/openbao-acceptance\":{\"capabilities\":[\"read\"]},\"auth/homelab-jwt/role/openbao-backup\":{\"capabilities\":[\"read\"]},\"auth/homelab-jwt/role/openbao-config-reader\":{\"capabilities\":[\"read\"]},\"auth/homelab-userpass/users\":{\"capabilities\":[\"list\"]},\"auth/homelab-userpass/users/openbao-operator\":{\"capabilities\":[\"read\"]},\"auth/token/revoke-self\":{\"capabilities\":[\"update\"]},\"kubernetes/config\":{\"capabilities\":[\"read\"]},\"kubernetes/roles\":{\"capabilities\":[\"list\"]},\"kubernetes/roles/campaign-coordinator\":{\"capabilities\":[\"read\"]},\"kubernetes/roles/diagnostic\":{\"capabilities\":[\"read\"]},\"kubernetes/roles/observer\":{\"capabilities\":[\"read\"]},\"kubernetes/roles/openbao-acceptance\":{\"capabilities\":[\"read\"]},\"kubernetes/roles/publisher\":{\"capabilities\":[\"read\"]},\"sys/auth\":{\"capabilities\":[\"read\"]},\"sys/mounts\":{\"capabilities\":[\"read\"]},\"sys/policies/acl\":{\"capabilities\":[\"list\"]},\"sys/policies/acl/agent-profiles\":{\"capabilities\":[\"read\"]},\"sys/policies/acl/openbao-acceptance\":{\"capabilities\":[\"read\"]},\"sys/policies/acl/openbao-backup\":{\"capabilities\":[\"read\"]},\"sys/policies/acl/openbao-config-reader\":{\"capabilities\":[\"read\"]},\"sys/policies/acl/openbao-operator\":{\"capabilities\":[\"read\"]},\"sys/storage/raft/configuration\":{\"capabilities\":[\"read\"]}}}",
     "version": 1
   },
   "GET kubernetes/config": {
@@ -272,6 +292,110 @@
     "name": "openbao-acceptance",
     "name_template": "",
     "service_account_name": "openbao-issued-reader",
+    "token_default_audiences": [
+      "https://192.168.90.20:6443"
+    ],
+    "token_default_ttl": 600,
+    "token_max_ttl": 600
+  },
+  "GET auth/homelab-approle/role/agent-workstation": {
+    "bind_secret_id": true,
+    "local_secret_ids": false,
+    "secret_id_bound_cidrs": [],
+    "secret_id_num_uses": 0,
+    "secret_id_ttl": 7776000,
+    "token_bound_cidrs": [],
+    "token_explicit_max_ttl": 60,
+    "token_max_ttl": 60,
+    "token_no_default_policy": true,
+    "token_num_uses": 0,
+    "token_period": 0,
+    "token_policies": [
+      "agent-profiles"
+    ],
+    "token_strictly_bind_ip": false,
+    "token_ttl": 60,
+    "token_type": "service"
+  },
+  "GET sys/policies/acl/agent-profiles": {
+    "allow_slashes_in_identity_templates": false,
+    "allow_wildcards_in_identity_templates": false,
+    "cas_required": false,
+    "modified": "2026-10-01T11:57:05.027287-06:00",
+    "name": "agent-profiles",
+    "policy": "{\"path\":{\"auth/token/revoke-self\":{\"capabilities\":[\"update\"]},\"kubernetes/creds/campaign-coordinator\":{\"capabilities\":[\"update\"]},\"kubernetes/creds/diagnostic\":{\"capabilities\":[\"update\"]},\"kubernetes/creds/observer\":{\"capabilities\":[\"update\"]},\"kubernetes/creds/publisher\":{\"capabilities\":[\"update\"]}}}",
+    "version": 1
+  },
+  "GET kubernetes/roles/observer": {
+    "allowed_kubernetes_namespace_selector": "",
+    "allowed_kubernetes_namespaces": [
+      "kube-system"
+    ],
+    "extra_annotations": null,
+    "extra_labels": null,
+    "generated_role_rules": "",
+    "kubernetes_role_name": "",
+    "kubernetes_role_type": "Role",
+    "name": "observer",
+    "name_template": "",
+    "service_account_name": "homelab-observer",
+    "token_default_audiences": [
+      "https://192.168.90.20:6443"
+    ],
+    "token_default_ttl": 600,
+    "token_max_ttl": 600
+  },
+  "GET kubernetes/roles/diagnostic": {
+    "allowed_kubernetes_namespace_selector": "",
+    "allowed_kubernetes_namespaces": [
+      "kube-system"
+    ],
+    "extra_annotations": null,
+    "extra_labels": null,
+    "generated_role_rules": "",
+    "kubernetes_role_name": "",
+    "kubernetes_role_type": "Role",
+    "name": "diagnostic",
+    "name_template": "",
+    "service_account_name": "homelab-diagnostic",
+    "token_default_audiences": [
+      "https://192.168.90.20:6443"
+    ],
+    "token_default_ttl": 600,
+    "token_max_ttl": 600
+  },
+  "GET kubernetes/roles/publisher": {
+    "allowed_kubernetes_namespace_selector": "",
+    "allowed_kubernetes_namespaces": [
+      "kube-system"
+    ],
+    "extra_annotations": null,
+    "extra_labels": null,
+    "generated_role_rules": "",
+    "kubernetes_role_name": "",
+    "kubernetes_role_type": "Role",
+    "name": "publisher",
+    "name_template": "",
+    "service_account_name": "homelab-report-publisher",
+    "token_default_audiences": [
+      "https://192.168.90.20:6443"
+    ],
+    "token_default_ttl": 600,
+    "token_max_ttl": 600
+  },
+  "GET kubernetes/roles/campaign-coordinator": {
+    "allowed_kubernetes_namespace_selector": "",
+    "allowed_kubernetes_namespaces": [
+      "kube-system"
+    ],
+    "extra_annotations": null,
+    "extra_labels": null,
+    "generated_role_rules": "",
+    "kubernetes_role_name": "",
+    "kubernetes_role_type": "Role",
+    "name": "campaign-coordinator",
+    "name_template": "",
+    "service_account_name": "homelab-campaign-coordinator",
     "token_default_audiences": [
       "https://192.168.90.20:6443"
     ],

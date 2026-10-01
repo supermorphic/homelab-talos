@@ -1,0 +1,29 @@
+{
+  "path": {
+    "kubernetes/creds/observer": {
+      "capabilities": [
+        "update"
+      ]
+    },
+    "kubernetes/creds/diagnostic": {
+      "capabilities": [
+        "update"
+      ]
+    },
+    "kubernetes/creds/publisher": {
+      "capabilities": [
+        "update"
+      ]
+    },
+    "kubernetes/creds/campaign-coordinator": {
+      "capabilities": [
+        "update"
+      ]
+    },
+    "auth/token/revoke-self": {
+      "capabilities": [
+        "update"
+      ]
+    }
+  }
+}
