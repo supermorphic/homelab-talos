@@ -36,7 +36,10 @@ if [[ "$suite_id" == 'test.agent-credentials' ]]; then
     echo 'Agent credential acceptance requires its canonical guarded entrypoint.' >&2
     exit 2
   }
-  [[ -z "${TEST_CAMPAIGN_LEASE_HOLDER:-}" ]] || exit 2
+  [[ -z "${TEST_CAMPAIGN_LEASE_HOLDER:-}" ]] || {
+    echo 'Agent credential acceptance manages its own Lease; it cannot join a campaign-held Lease.' >&2
+    exit 2
+  }
   scenario_lease=true
 fi
 

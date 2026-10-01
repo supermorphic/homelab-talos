@@ -199,6 +199,21 @@ set -e
 [[ "$agent_invalid_exit" -eq 2 ]]
 [[ ! -e "$fixture_root/agent-invalid-entrypoint" ]]
 
+# An inherited parent holder must still fail before the scenario starts, with
+# an actionable explanation rather than an unexplained exit 2.
+set +e
+TEST_CAMPAIGN_LEASE_HOLDER=campaign:fixture \
+TEST_RESULTS_ROOT="$fixture_root/agent-parent-holder" \
+TEST_KUBECONFIG="$fixture_root/kubeconfig" \
+  scripts/test/run-catalog-suite.sh test.agent-credentials -- \
+    uv run --locked python -m scripts.test.scenarios.agent_credentials \
+  >"$fixture_root/agent-parent-holder.log" 2>&1
+agent_parent_exit="$?"
+set -e
+[[ "$agent_parent_exit" -eq 2 ]]
+[[ ! -e "$fixture_root/agent-parent-holder" ]]
+rg -q 'manages its own Lease' "$fixture_root/agent-parent-holder.log"
+
 # Its real entrypoint rejects absent operator authority before any broker/Lease action.
 set +e
 (env -u OPENBAO_OPERATOR_KUBECONFIG -u TEST_CAMPAIGN_LEASE_HOLDER \

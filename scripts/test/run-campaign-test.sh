@@ -511,6 +511,39 @@ run_acceptance() {
     "$@"
 }
 
+# Exercise record -> catalog wrapper -> real agent scenario without operator authority.
+# Unlike most record fixtures, keep campaign Lease handling enabled so an accidental
+# parent holder is observable before the scenario can create its canonical result.
+agent_record_root="$fixture/agent-record"
+mkdir -p "$agent_record_root"
+yq -i '(.suites[] | select(.metadata.id == "test.agent-credentials") |
+  .runner.command) = "mise exec -- just fixture acceptance-agent"' "$acceptance_catalog"
+set +e
+CAMPAIGN_TEST_LEASE_STATE="$agent_record_root/lease.json" \
+CAMPAIGN_TEST_LEASE_CALLS="$agent_record_root/lease-calls" \
+TEST_LEASE_KUBECTL="$repo_root/tests/fixtures/campaign/fake-lease-kubectl.sh" \
+  run_acceptance "$agent_record_root" false \
+  env -u OPENBAO_OPERATOR_KUBECONFIG -u TEST_CAMPAIGN_LEASE_HOLDER \
+    TEST_CAMPAIGN_SKIP_LEASE=false \
+  "$repo_root/scripts/test/run-campaign.sh" record test.agent-credentials \
+  >"$agent_record_root/run.log" 2>&1
+agent_record_exit="$?"
+set -e
+[[ "$agent_record_exit" -eq 1 ]] || {
+  cat "$agent_record_root/run.log" >&2
+  exit 1
+}
+agent_record_manifest="$(find "$agent_record_root/campaigns" -name campaign.json -print)"
+[[ "$(yq -r '.status + ":" + .result' "$agent_record_manifest")" == 'completed:failed' ]]
+[[ "$(yq -r '.runs[0].suite_id + ":" + .runs[0].publish_status' \
+  "$agent_record_manifest")" == 'test.agent-credentials:published' ]]
+[[ "$(cat "$agent_record_root/commands")" == acceptance-agent ]]
+[[ "$(wc -l <"$agent_record_root/publishes" | tr -d ' ')" == 1 ]]
+if rg -q ' (create|replace) --filename -$' "$agent_record_root/lease-calls"; then
+  echo 'Agent acceptance record must not take a parent Lease.' >&2
+  exit 1
+fi
+
 acceptance_single_root="$fixture/acceptance-single"
 mkdir -p "$acceptance_single_root"
 run_acceptance "$acceptance_single_root" true \
