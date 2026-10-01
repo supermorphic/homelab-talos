@@ -29,7 +29,9 @@ for (const bad of [{...mapping, readerSchema: 'other'}, {...mapping, readerRole:
 const route = graph.connections['Configure Requested'].main[0][0].node;
 assert.equal(route, 'Configure Schema Mapping');
 assert.equal(graph.connections['Configure Schema Mapping'].main[0][0].node, 'Prepare Mapping Response');
-assert.equal(graph.connections['Prepare Mapping Response'].main[0][0].node, 'Respond');
+assert.equal(graph.connections['Prepare Mapping Response'].main[0][0].node, 'Inventory Readback Required');
+assert.equal(graph.connections['Inventory Readback Required'].main[1][0].node, 'Respond');
+assert.equal(graph.connections['Attach Inventory Readback'].main[0][0].node, 'Respond');
 assert.equal(nodes.get('Configure Schema Mapping').parameters.query, 'SELECT platform_operations.configure_nocodb_schema_mapping($1, $2, $3) AS result;');
 
 for (const [kind, schema] of [['Reader', 'reporting'], ['Operator', 'requests']]) {

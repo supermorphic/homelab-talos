@@ -96,6 +96,7 @@ if [[ "$source_suspend" == true && -z "$declared_phase" ]]; then
   [[ -z "$staged_deployment" ]] ||
     fail 'Staged NocoDB has an active Deployment; declare attended only for the reviewed temporary activation.'
   echo 'NocoDB read-only verification passed: phase=staged-absent; Git and live suspension agree, no application Deployment is active, and monitoring remains unenrolled.'
+  echo 'credential-discovery evidence: not_observed (staged application absent).'
   exit 0
 elif [[ "$source_suspend" == true ]]; then
   [[ "$live_suspend" == false ]] || fail 'Attended NocoDB verification requires a live active Kustomization.'
@@ -305,3 +306,7 @@ if [[ "$monitoring_required" == true ]]; then
 else
   echo "NocoDB read-only verification passed: phase=$phase; the temporary workload, private Service and route, policy, and automation-data logical backup freshness match their direct contracts; monitoring remains intentionally unenrolled."
 fi
+
+# Dedicated inventory-only access; no new Kubernetes or database authority.
+echo 'credential-discovery evidence (separate from service health):'
+uv run --locked python scripts/operations/automation-data-discovery-summary.py

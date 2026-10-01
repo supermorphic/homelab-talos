@@ -1,5 +1,8 @@
 # Automation-data PostgreSQL operations
 
+Use [credential discovery for approved work](nocodb-operations.md#credential-discovery-for-approved-work)
+for task selection, readiness decisions, and autonomous helper use.
+
 ## Private credential-discovery installation
 
 Credential discovery uses a dedicated private n8n workflow and three restricted
@@ -23,7 +26,9 @@ non-secret configuration in `access.json`, replacing the marked placeholders:
 }
 ```
 
-`inventoryAuthFile` must select `inventory-auth` in the access directory. Supply the
+`applicationProfileRoot` must match the protected root used by the existing
+`AUTOMATION_DATA_LOGIN_DIRECTORY` application lifecycle; retain its current domain and
+application subdirectories. `inventoryAuthFile` must select `inventory-auth` in the access directory. Supply the
 attended n8n enrollment API key through its protected `n8n-api-key` file. Do not paste
 it into chat or put it in a command argument. Select the administrative kubeconfig
 already authorized for installation using the existing `kubeconfig` Just variable.
@@ -65,6 +70,31 @@ restricted reader and reapply the reviewed discovery SQL with retained protected
 before exposing inventory. This also supports older backups that predate discovery.
 Application records are unchanged. Lost enrollment material requires attended replacement;
 discovery does not export n8n passwords or reset credentials to make recovery succeed.
+
+### Bind an installed migrator profile
+
+For automatic migration selection, separately authorize one-time enrollment on clean
+deployed main after private inventory acceptance. Retain the already authorized migrator
+material under `<migratorProfileRoot>/<domain>/service.conf` and `credential.pgpass`
+through the existing protected installation procedure. Do not export it from n8n or
+send it through chat. Use owned 0700 directories and 0600 files outside checkouts.
+Select that exact service file with `AUTOMATION_DATA_SERVICE_FILE`, its section with
+`AUTOMATION_DATA_SERVICE`, and the matching fixed local port with
+`AUTOMATION_DATA_LOCAL_PORT` when the default is unsuitable. Set the target guard
+`AUTOMATION_DATA_LOGIN_ENROLL_CONFIRM=enroll:automation-data:sample:migrator` for the
+synthetic domain below, then run:
+
+```sh
+mise exec -- just kube automation-data-login-enroll-migrator sample
+```
+
+The helper verifies deployed source, current domain metadata, profile identity and
+permissions, and authentication through its fixed tunnel. It writes only non-secret
+`binding.json` with the current retained n8n credential ID/update marker, service, and
+port. It leaves the installed service/password files intact and invents no generation.
+Reconcile a changed or lost binding through this attended procedure before automatic
+selection; never relabel old material as current without those checks. Explicitly
+selected protected profiles remain supported by the connection helper.
 
 This guide activates and operates the shared PostgreSQL platform used by n8n domain
 workflows. The platform database is separate from n8n's own PostgreSQL database.

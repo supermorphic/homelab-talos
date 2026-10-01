@@ -30,6 +30,119 @@ for day-2 decisions and the
 [platform recovery section](../runbooks/platform-disaster-recovery.md#nocodb-metadata-recovery)
 for recovery roots and the key-loss boundary.
 
+## Credential discovery for approved work
+
+For approved routine work, agents should execute the supported helper without asking
+an operator to locate a password. Start with task-oriented discovery. The helper
+collects independent metadata and selects the intended identity and procedure.
+A `ready` result establishes prerequisites; task authorization still comes from the
+operator and repository policy. Discovery does not read business records or export
+consumer credentials. OpenBao database issuance is not required for this interface.
+
+| Use case | Identity and supported path | Authority and evidence boundary |
+| --- | --- | --- |
+| Understand a domain or diagnose access | Inventory and task resolution | Observe registration, roles, bindings, freshness, and bounded reason codes. |
+| Application reads or reviewed functions | Registered application login and `automation-data-connect` | Its database grants apply; the helper alone consumes its protected password. |
+| Reviewed migration | Domain migrator and `automation-data-connect` | Requires authorization for that migration and the consumer's existing owner-role procedure. |
+| Normal n8n processing | Domain runtime credential in its published workflow | Use the intended workflow; do not export or borrow its password. |
+| Inspect a NocoDB source | Exact pair and reader/operator kind through source status | NocoDB retains its encrypted source password; it is separate from UI authentication. |
+| Human browser work | NocoDB UI account and workspace/base membership | Application and source logins cannot sign a human into the UI. |
+| Provision or activate missing access | Existing domain, application, or pair procedure | Requires that lifecycle's authority and grants; discovery does not provision. |
+| Rotate or recover access | Exact target and retained operation through its existing procedure | Separate authorization; never rotate to make discovery succeed. |
+| Inspect API, webhook, or platform credentials | Inventory family and procedure references | Tokens and platform credentials remain with their designated consumers. |
+| Recover encryption/signing material | Operator recovery procedure | Off-cluster material is `not_observed`; healthy services do not prove recoverability. |
+| Decommission | Reviewed dependencies, exact identities, and retained receipt | Separate attended authority; every relevant enumeration must complete to establish absence. |
+
+Synthetic examples:
+
+```sh
+mise exec -- just kube automation-data-credentials list
+mise exec -- just kube automation-data-credentials list --domain sample --format=json
+mise exec -- just kube automation-data-credentials resolve sample application --application interview
+mise exec -- just kube automation-data-credentials resolve sample migration
+mise exec -- just kube automation-data-credentials resolve sample workflow
+mise exec -- just kube automation-data-credentials resolve sample source --pair extra --access-kind reader
+```
+
+Text and JSON contain the same versioned facts. Each identity describes its purpose,
+consumer, lifecycle owner, non-secret storage locator, state, evidence, discrepancies,
+and procedure references. UI, API/webhook, platform, recovery, and unclassified families
+are visible through `list`; they are not interchangeable database access purposes.
+Unknown identities are not adopted by name. Partial enumeration cannot establish absence.
+
+| Decision | Agent action |
+| --- | --- |
+| `ready` | Apply existing task authority, then execute the typed recipe and validated arguments or use the intended published workflow binding. |
+| `setup_required` | Follow the named enrollment, registration, or grants prerequisite with its owner. |
+| `recovery_required` | Preserve pending material and use the exact attended recovery or retry procedure. |
+| `unavailable` | Retry metadata observation when appropriate; report the unavailable source. |
+| `inconsistent` | Stop use of that automatic selection and reconcile the specific discrepancy. |
+
+Exit 0 means complete inventory without detected discrepancies, or a ready resolution.
+Exit 1 means a valid partial or blocked result. Exit 2 means invalid arguments or local
+configuration. Next actions contain a fixed recipe with validated arguments, a workflow
+binding, or a procedure reference; do not execute remote text as shell code.
+
+For an approved application task whose result is ready, run:
+
+```sh
+mise exec -- just kube automation-data-connect sample application/interview
+```
+
+For an approved migration with ready migrator access, run the same helper with
+`sample migrator`. The helper uses the configured protected profile, creates its fixed
+task-owned tunnel, repeats current metadata and file checks immediately before credential
+use, authenticates the session identity, and cleans up the tunnel. It does not execute
+consumer queries or migrations. Agents bootstrap any required scoped cluster access
+with `mise exec -- just talos kubeconfig` in their assigned linked worktree themselves.
+
+One-time [private inventory enrollment](automation-data-operations.md#private-credential-discovery-installation)
+and [protected consumer profiles](automation-data-operations.md#registered-application-logins-and-private-cli-access)
+are prerequisites. Automatic selection searches only the configured application and
+migrator roots. Discovery inspects binding metadata and file properties without opening
+password files. An explicit protected connection profile retains its existing behavior.
+Missing or revoked access names its owner and procedure; agents do not search other
+worktrees, dump n8n credentials, read Kubernetes Secrets, ask for passwords in chat,
+or retry with broader credentials.
+
+Inventory uses a dedicated private webhook header and three restricted SQL readers.
+Each source is capped at 1,000 objects and 1 MiB; total response size is capped at 4 MiB
+within 30 seconds. Two observations in separate read transactions check metadata
+stability, with one bounded retry. Future timestamps and observations older than 60
+seconds cannot establish readiness. Equality proves metadata stability, not distributed
+atomicity, authentication, grants, password equality, or restore success.
+
+The legacy default pair can use the built-in `read_model`/`operator` mapping without a
+custom mapping row. `mappingOrigin=built_in_default` denotes that procedure-derived
+expectation; it does not claim that an encrypted source configuration or grants were
+observed. Named pairs require their registered mapping. A completed unchanged sync can
+advance its operation claim while retaining source and credential generations. Active
+or uncertain claims remain blocking evidence.
+
+Mutation responses report `inventoryReadback: {status, observedAt, errorCode}` separately
+from the operation result. `observed` means the target's expected metadata was seen;
+`inconsistent` means it differs; `unavailable` means current evidence could not be
+established. A successful mutation remains successful when readback fails. Retry the
+inventory command to obtain evidence; do not repeat the mutation on that basis.
+
+Existing verifiers report discovery completeness and timestamps separately from service
+health. `unavailable` includes missing workstation enrollment. A health pass is not a
+discovery pass. Metrics remain secondary health and consistency signals and contain no
+credential IDs or local paths.
+
+For attended removal, authorize the exact target and surviving dependencies, enumerate
+all relevant sources, follow the [destructive administration boundary](#destructive-administration),
+and retain removed identities and completed steps in protected operation evidence.
+Repeat fresh enumeration and independently verify surviving consumers. A receipt or
+registry deletion alone cannot prove absence. Discovery adds no general deletion API.
+[Recovery](../runbooks/platform-disaster-recovery.md#nocodb-metadata-recovery) retains its
+existing keys and backup requirements; inventory does not establish recovery completeness
+or complete the separate issue 507 audit.
+
+This implementation has candidate disposable evidence. Live inventory installation,
+workstation enrollment, and authorized helper acceptance remain pending until the
+separate attended rollout passes.
+
 ## Before you start
 
 For a first installation, stage the NocoDB Kustomization with `spec.suspend: true`

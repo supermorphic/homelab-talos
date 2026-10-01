@@ -86,8 +86,8 @@ rg -Fq -- "scripts/upgrade/automation-data.sh '.kube/config'" <<<"$recipe" ||
   select(.kind == "Kustomization") |
   [.configMapGenerator[] | select(.name == "automation-data-postgresql-upgrade") |
     (.files | sort | join(","))] | join("")
-' "$kustomization")" == 'application-login.sql=scripts/application-login.sql,domain-validation.sql=scripts/domain-validation.sql,nocodb-extension.sql=scripts/nocodb-extension.sql,nocodb-metadata.sql=scripts/nocodb-metadata.sql,upgrade-nocodb.sql=scripts/upgrade-nocodb.sql' ]] ||
-  fail 'upgrade ConfigMap does not contain the five fixed reviewed SQL sources'
+' "$kustomization")" == 'application-login.sql=scripts/application-login.sql,credential-discovery.sql=scripts/credential-discovery.sql,domain-validation.sql=scripts/domain-validation.sql,nocodb-discovery.sql=scripts/nocodb-discovery.sql,nocodb-extension.sql=scripts/nocodb-extension.sql,nocodb-metadata.sql=scripts/nocodb-metadata.sql,upgrade-nocodb.sql=scripts/upgrade-nocodb.sql' ]] ||
+  fail 'upgrade ConfigMap does not contain the seven fixed reviewed SQL sources'
 
 rg -Fq '\ir nocodb-extension.sql' "$control_sql" ||
 	fail 'fresh initialization does not load the shared NocoDB definitions'
@@ -126,7 +126,7 @@ jq -e '
   [.[] | select(
     .kind == "ConfigMap" and
     (.metadata.name | startswith("automation-data-postgresql-upgrade-")) and
-    ((.data | keys | sort) == ["application-login.sql", "domain-validation.sql", "nocodb-extension.sql", "nocodb-metadata.sql", "upgrade-nocodb.sql"])
+    ((.data | keys | sort) == ["application-login.sql", "credential-discovery.sql", "domain-validation.sql", "nocodb-discovery.sql", "nocodb-extension.sql", "nocodb-metadata.sql", "upgrade-nocodb.sql"])
   )] | if length == 1 then .[0] else error("expected one rendered upgrade ConfigMap") end
 ' "$rendered_package_json" >"$UPGRADE_TEST_EXPECTED_CONFIGMAP"
 export UPGRADE_TEST_EXPECTED_CONFIGMAP_NAME

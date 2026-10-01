@@ -18,6 +18,7 @@ Current source and `AGENTS.md` remain authoritative for implementation and polic
   [private lab-domain access](guides/tailscale-lab-domain-access.md),
   [ntfy](guides/ntfy-operations.md), and
   [Portainer](guides/portainer-operations.md).
+- [Credential discovery for approved work](guides/nocodb-operations.md#credential-discovery-for-approved-work): task identities, readiness, and supported helpers.
 - Applications: [automation-data PostgreSQL](guides/automation-data-operations.md),
   [n8n](guides/n8n-operations.md), [NocoDB](guides/nocodb-operations.md),
   [media startup](guides/media-automation-setup.md),

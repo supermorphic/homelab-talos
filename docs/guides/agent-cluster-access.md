@@ -155,6 +155,13 @@ The fixed connection helper validates the scoped context, protected profile, Pod
 PostgreSQL session identity, then holds a loopback tunnel until exit. Activation/rotation
 uses that tunnel to authenticate before installing credentials. Follow the
 [application and migration connection procedure](automation-data-operations.md#registered-application-logins-and-private-cli-access).
+Start with [credential discovery for approved work](nocodb-operations.md#credential-discovery-for-approved-work)
+to select the task identity and supported helper. When enrolled access is ready and the
+task is authorized, run that helper without asking the operator to locate a password.
+The agent runs `mise exec -- just talos kubeconfig` itself when approved scoped cluster
+access is required. Missing enrollment names an attended prerequisite, not a broader
+credential fallback.
+
 Connectivity does not authorize consumer queries or migrations; missing migration
 credentials require separately authorized recovery.
 

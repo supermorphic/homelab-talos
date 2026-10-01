@@ -85,6 +85,7 @@ helm template nocodb "$temp_dir/nocodb" \
 
 scripts/test/nocodb-manifest-contract-test.sh "$temp_dir/source.yaml" "$temp_dir/helm.yaml"
 scripts/test/nocodb-workflow-contract-test.sh
+# Source workflow/response tests own the separate lifecycle inventory readback.
 node scripts/test/nocodb-source-response-test.mjs
 node scripts/test/nocodb-schema-mapping-workflow-test.mjs
 node scripts/test/nocodb-pair-workflow-test.mjs

@@ -946,10 +946,11 @@ and credential installation, browser access, and recorded recovery are separate 
 
 ## Task-oriented credential discovery (issue 506)
 
-Status: proposed design for [issue 506](https://github.com/supermorphic/homelab-talos/issues/506).
-The operator agreed to task-oriented discovery as the primary interface, with metrics
-supporting freshness and consistency checks. The interfaces below are not implemented
-or live-validated. This section owns the shared discovery and access contract;
+Status: implemented on the issue 506 candidate branch, with focused source checks and
+real disposable lifecycle/restore evidence. Live installation, workstation enrollment,
+and approved helper acceptance remain pending separate attended rollout after merge.
+Task-oriented discovery is the primary interface; metrics support health and consistency.
+This section owns the shared discovery and access contract;
 [specification 028](028-nocodb-operator-ui.md#credential-discovery-and-source-evidence-issue-506)
 owns NocoDB-specific observations. Existing lifecycle and authority rules still apply.
 
@@ -980,7 +981,7 @@ migration, rotation, or deletion. Confirmation remains an execution-intent guard
 
 ### Public command and response
 
-Add one observational command family, with text output by default and equivalent
+The implementation provides one observational command family, with text output by default and equivalent
 versioned JSON selected by `--format=json`:
 
 ```text
@@ -1061,7 +1062,9 @@ denials, not just the names of installed views.
 Cap each source at 1,000 objects and 1 MiB, and the complete response at 4 MiB with a
 30-second overall deadline. Overflow reports `limit_exceeded`; truncation cannot count as
 complete. Apply source limits before aggregation and enforce byte limits while receiving.
-Use one consistent read transaction per database. Compute a fingerprint of each complete,
+Use one REPEATABLE READ, READ ONLY transaction per projection. The pinned n8n
+Postgres node owns commit/rollback through transaction batching, with local statement
+timeouts; an observation failure cannot leave an aborted pooled transaction. Compute a fingerprint of each complete,
 canonically sorted, allowlisted projection, including row counts, identities, relevant role
 attributes, lifecycle state, and bindings. After all sources are collected, repeat each
 projection in a fresh transaction and compare fingerprints. An incomplete projection has
@@ -1072,7 +1075,7 @@ authoritative checks at the execution boundary.
 
 Metrics supply health/freshness and consistency summaries, not credential IDs, local paths,
 or the task-resolution data model. Preserve each source's observation time, response receipt
-time, and completeness. A result over 60 seconds old, with an invalid timestamp, or with
+time, and completeness. A result over 60 seconds old, with a future or invalid timestamp, or with
 unresolved source changes cannot establish current readiness. Profile generation and live
 identity are rechecked by the connection helper immediately before use.
 
@@ -1107,7 +1110,7 @@ credential ID/update marker, and service section. Do not fabricate a credential 
 where the domain registry has none. Existing explicitly selected profiles remain usable
 through the current helper, but unbound profiles cannot claim automatic readiness.
 
-Extend the existing connection helper to resolve a profile when explicit profile variables
+The existing connection helper resolves a profile when explicit profile variables
 are absent. Reuse its fixed tunnel, profile validation, authentication, and cleanup. Only
 that approved helper consumes the selected secret. Keep profile files owned and protected;
 never expose passwords in discovery output, errors, saved transcripts, reports, or Git.
@@ -1125,6 +1128,11 @@ workflows remain available under their existing rules; discovery does not change
 Provisioning, activation, and rotation perform targeted independent metadata readback after
 their existing postconditions. Failure after mutation must report the operation outcome
 separately from unavailable inventory evidence; retrying discovery must not repeat mutation.
+The bounded `inventoryReadback` object carries `status`, `observedAt`, and `errorCode`;
+statuses are `observed`, `inconsistent`, or `unavailable`. Discovery retries do not invoke
+provisioning. Verifiers emit only source completeness, timestamps, object counts, and
+bounded errors plus discrepancy count; their existing service-health exit status remains
+separate and unavailable enrollment is explicit.
 During rotation, pending and acknowledged generations remain distinct. Older protected
 profiles are retained for recovery but are never selected automatically as current.
 
@@ -1145,8 +1153,8 @@ retained artifacts. Run ready authorized access with closed stdin and no termina
 helper invocations to prove it requires no interactive prompt and never invokes a provisioning
 or rotation fallback.
 
-Update the canonical credential-discovery section in the NocoDB operations guide and link
-it from repository navigation, automation-data onboarding, and agent access documentation.
+The [canonical discovery guide](../guides/nocodb-operations.md#credential-discovery-for-approved-work)
+is linked from repository navigation, automation-data onboarding, and agent access documentation.
 Keep role/grant contracts here, NocoDB evidence rules in specification 028, executable
 procedures in their existing guides, and tests in the existing catalog. Coordinate evidence
 boundaries with issue 507 without importing private audit findings into public artifacts.
@@ -1156,6 +1164,15 @@ and private enrollment, then CLI/profile resolution, lifecycle readback, and doc
 Use synthetic validation and an independent final review before publication. Hosted merge
 validation and separately authorized live installation/acceptance remain required; source
 tests do not establish that an operator's access is installed or working.
+
+Candidate assurance includes actual pinned application schemas, published workflow
+bindings, targeted rotations, failure recovery after reader timeouts, attended synthetic
+removal with incomplete-enumeration rejection, and isolated restored projection access
+and base-table denials. The registered `test.nocodb-local-integration` owns this assurance;
+offline tests belong to existing automation-data, n8n, and NocoDB validation owners.
+Candidate evidence does not establish installed live access. n8n backups exclude the
+derived discovery schema, which must be reconstructed with retained restricted readers
+before private inventory is exposed after restore.
 
 OpenBao is not required for this interface. Its agent Kubernetes issuance work remains in
 issue 450. Future database issuance may implement an access provider only after its own

@@ -33,6 +33,10 @@ The repository pins its tools in `.mise.toml` and `mise.lock`. Run established
 workflows with `mise exec -- just …`; `mise exec -- just` lists the available
 command namespaces. Operator inputs and decisions belong in the relevant guide.
 
+Agent database tasks start with [credential discovery](docs/guides/nocodb-operations.md#credential-discovery-for-approved-work).
+Approved routine work uses the supported helper and enrolled profiles without asking
+an operator to locate a password.
+
 ## Changes and assurance
 
 Use an isolated worktree and a pull request for implementation work. The

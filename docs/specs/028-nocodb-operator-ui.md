@@ -769,7 +769,8 @@ returned roles, grant/connection prerequisites, and evidence IDs.
 
 ## Credential discovery and source evidence (issue 506)
 
-Status: proposed, not implemented or live-validated. The
+Status: implemented on the issue 506 candidate branch with focused and real disposable
+application/lifecycle/restore checks. Live installation and acceptance remain pending. The
 [shared discovery contract](026-automation-data-postgresql-platform.md#task-oriented-credential-discovery-issue-506)
 defines the command, protected local access, bounds, and autonomous helper use. This
 section defines which NocoDB facts support an agent's decision. It does not change source
@@ -777,7 +778,8 @@ permissions, introduce automatic repair, or authorize credential export.
 
 ### Credential families and ownership
 
-The canonical discovery section in the operations guide must distinguish these families:
+The [canonical discovery guide](../guides/nocodb-operations.md#credential-discovery-for-approved-work)
+distinguishes these families:
 
 | Family | Purpose and retention | Lifecycle owner and supported access |
 | --- | --- | --- |
@@ -829,6 +831,13 @@ be NOLOGIN with no integration/source. Conversely, a ready registered source req
 exact observed integration, base, source, and matching editing flags. Incomplete creation,
 uncertain claims, and partial rotation remain visible; never call them ready because an
 object with a matching name exists.
+
+The legacy default pair can have no registered mapping row: its built-in
+`read_model`/`operator` expectation is explicitly labeled `mappingOrigin=built_in_default`.
+This is procedure-derived intent, not observation of encrypted source configuration or
+grants. Custom named pairs require their retained mapping. A completed unchanged sync
+advances its claim generation while retaining source and credential generations; compare
+those identities separately. Active/uncertain claims still block readiness.
 
 Compare source and operation-claim state/generations where the existing lifecycle defines
 a relationship, and compare application registry acknowledgment with protected local binding

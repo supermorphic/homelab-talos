@@ -1697,4 +1697,6 @@ n8n_env_query='select(.kind == "Deployment") | .spec.template.spec.containers[0]
   exit 1
 }
 
+node scripts/test/automation-data-discovery-workflow-test.mjs
+
 echo 'n8n standalone external-PostgreSQL render, private route, retained storage, metrics, and containment passed validation.'
