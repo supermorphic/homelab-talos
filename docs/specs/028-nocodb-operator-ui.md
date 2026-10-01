@@ -435,7 +435,17 @@ identity-free candidate state. Registered sources use sync or targeted rotation 
 
 Each enabled domain has one base, a reader source, and an optional operator source.
 Deterministic names aid reconciliation, while retained base, workspace, integration,
-and source IDs are the durable identities. Workspace titles are not recovery roots.
+and source IDs are the durable identities. Base display names are editable labels:
+domain-only creation defaults to `<domain>` and named-pair creation defaults to
+`<domain>--<pair>`. Once registered, resolve a base only by its retained ID, require
+one matching base with a workspace ID, and retain source/base/integration binding
+checks. Missing or ambiguous IDs fail closed. A changed title, including another
+base using the original title, does not select or recreate the registered base.
+Before registration, generated-title collisions still block creation and never
+authorize adoption. Renaming a base changes no PostgreSQL database, schema, role,
+or registered pair. Rename followed by sync preserves credentials, IDs, tables,
+and saved views; explicit rotation changes only the selected credential as usual.
+Workspace titles are not recovery roots.
 Creation within a base is serialized, completing reader creation before operator
 creation where both are needed.
 
@@ -692,7 +702,7 @@ Worker deployment is independent and belongs to [#483](https://github.com/superm
 | Registration | Identical requests are idempotent; changed mappings, unrelated existing roles, and collisions are refused. |
 | Role names | `nocodb_<md5(domain + ':' + pair)>_reader` and `_operator`; validate full binding and global uniqueness. The digest is only an identifier. |
 | Initial access | Registration creates `NOLOGIN` grant targets. Consumer migrations supply schemas and explicit grants, including future objects; prepare checks eligibility and sync activates eligible roles. |
-| Presentation | Each named pair has base `<domain>--<pair>`, a reader source, and optional operator source. Separate bases preserve independent tables/views without aliasing the managed database. |
+| Presentation | Each named pair has a base initially titled `<domain>--<pair>`, a reader source, and optional operator source. The base display name is editable. Separate bases preserve independent tables/views without aliasing the managed database. |
 
 The reader establishes the pair's base ID. Integration titles include domain, pair, and
 access kind; default names remain unchanged. Title matches never authorize adoption of

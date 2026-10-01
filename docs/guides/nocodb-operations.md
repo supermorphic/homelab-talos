@@ -427,6 +427,31 @@ Source sync never accepts a hostname, database, schema, table, column, grant, or
 fragment. More than one deterministic source is a hard stop. An unchanged sync keeps
 ready passwords, integrations, source IDs, job IDs, and generations unchanged.
 
+#### Rename a base display name
+
+Base names are editable labels. Initial creation uses `<domain>` for domain-only
+calls or `<domain>--<pair>` for a named pair. Later sync and rotation use the
+registered base ID. A display-name edit does not rename a PostgreSQL database,
+schema, role, or registered pair.
+
+After updating the source workflow through the
+[mutation workflow procedure](automation-data-operations.md#upgrade-existing-mutation-workflows),
+perform this attended check on the intended base:
+
+1. Record its base, integration, and source IDs, credential generations, reflected
+   tables, and saved views. Do not record passwords or tokens.
+2. Edit the base display name in NocoDB and retain the same base URL/ID.
+3. Run the same `nocodb-source-sync` or `nocodb-pair-sync` command for its registered
+   domain and pair. Require readiness, the edited display name, unchanged IDs and
+   credential generations, and usable existing tables and saved views.
+4. When credential rotation is due, run the targeted rotation procedure below.
+   Require unchanged base/integration/source IDs, the edited name, and usable tables
+   and views. Only the selected credential generation should advance.
+
+Missing registered bases or mismatched source bindings remain errors. A different
+base with the old title must never be adopted. Record the deployed workflow revision
+and attended results before claiming live rename/sync acceptance.
+
 #### Refresh metadata after reviewed additive DDL
 
 After a reviewed domain migration adds a reflected table or column, validate its grants
@@ -746,8 +771,9 @@ for naming and schema restrictions.
      mise exec -- just kube nocodb-pair-sync sample extra
    ```
 
-   Sync creates base `sample--extra`, integrations, and asynchronous sources, refusing
-   unrelated matching titles. Retain returned IDs and require readiness. Repeated sync
+   Sync creates a base initially titled `sample--extra`, integrations, and asynchronous
+   sources, refusing unrelated matching titles during creation. The base display name
+   can then be edited. Retain returned IDs and require readiness. Repeated sync
    must preserve identities, credentials, generations, and saved views for all pairs.
 
 4. After additive DDL, [refresh metadata](#refresh-metadata-after-reviewed-additive-ddl)

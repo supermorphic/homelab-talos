@@ -122,6 +122,41 @@ const existingBase = invoke('Resolve Domain Base', {list: [
 assert.equal(existingBase.baseId, 'retained-base');
 assert.throws(() => invoke('Resolve Domain Base', {list: [
   {id: 'foreign-base', title: 'sample--interviews', fk_workspace_id: 'workspace'}]}, retainedContext));
+// A display-name edit must never switch a registered base onto the creation path,
+// even when unrelated bases now have its original generated title.
+for (const pair of [undefined, 'interviews']) {
+  const title = pair ? 'sample--interviews' : 'sample';
+  const renamed = {id: 'retained-base', title: 'Interview tracker', fk_workspace_id: 'workspace'};
+  const collisions = [
+    {id: 'foreign-base', title, fk_workspace_id: 'workspace'},
+    {id: 'another-base', title, fk_workspace_id: 'workspace'},
+  ];
+  for (const operation of ['sync', 'rotate']) {
+    const request = {...claimed, pair, operation,
+      requestedAccessKind: operation === 'rotate' ? 'reader' : null};
+    const lookup = {...retainedContext, 'Keep Source Claim': request};
+    for (const list of [[renamed], [renamed, ...collisions]]) {
+      const resolved = invoke('Resolve Domain Base', {list}, lookup);
+      assert.deepEqual(resolved, {...request, baseId: 'retained-base',
+        workspaceId: 'workspace', createBase: false});
+    }
+    for (const list of [[], collisions, [renamed, renamed],
+      [{...renamed, fk_workspace_id: null}]]) {
+      assert.throws(() => invoke('Resolve Domain Base', {list}, lookup),
+        /base_identity_mismatch/);
+    }
+  }
+  const unregistered = {...baseContext, 'Keep Source Claim': {...claimed, pair}};
+  assert.throws(() => invoke('Resolve Domain Base', {list: collisions.slice(0, 1)}, unregistered),
+    /base_title_collision/);
+  assert.throws(() => invoke('Resolve Domain Base', {list: collisions}, unregistered),
+    /duplicate_domain_base/);
+  assert.equal(invoke('Resolve Domain Base', {list: [renamed]}, unregistered).createBase, true);
+  const creationBody = nodes.get('Create Domain Base').parameters.jsonBody;
+  const payload = JSON.parse(new Function('$', `return ${creationBody.slice(3, -2)};`)(
+    () => ({first: () => ({json: {domain: 'sample', pair}})})));
+  assert.equal(payload.title, title);
+}
 const observedClaim = invoke('Keep Source Claim', {result: {...claim, canExecute: false}},
   {'Keep Access Plan': context});
 assert.equal(observedClaim.observeOnly, true);
@@ -134,7 +169,7 @@ assert.deepEqual(graph.connections['Claim Executable'].main[1].map(edge => edge.
 assert.throws(() => invoke('Resolve Domain Base', {list: []},
   {...baseContext, 'Keep Source Claim': observedClaim}));
 const observedBase = invoke('Resolve Domain Base', {list: [
-  {id: 'retained-base', title: 'sample--interviews', fk_workspace_id: 'workspace'}]},
+  {id: 'retained-base', title: 'Interview tracker', fk_workspace_id: 'workspace'}]},
   {...retainedContext, 'Keep Source Claim': observedClaim});
 assert.equal(observedBase.observeOnly, true);
 const sourceContext = {...observedBase, accessKind: 'reader', alias: 'Read Model',
@@ -165,6 +200,17 @@ for (const kind of ['Reader', 'Operator']) {
     [`Discover ${kind} Source`]:selection});
   assert.equal(validated.registryOperation,'rotate',`${kind} read-back must retain the registry operation`);
   assert.equal(validated.operation,'rotate');
+  // Renamed-base resolution still feeds the same strict source binding checks.
+  for (const mismatch of [
+    {id: 'foreign-source'}, {base_id: 'foreign-base'},
+    {fk_integration_id: 'foreign-integration'},
+  ]) {
+    assert.throws(() => invoke(`Validate ${kind} Source`, {...sourceMetadata, ...mismatch}, {
+      [kind === 'Reader' ? 'Start Reader' : 'Prepare Operator']: base,
+      [`Read ${kind} State`]: {result: {state: 'rotating', operation: 'rotate'}},
+      [`Discover ${kind} Source`]: selection,
+    }), new RegExp(`${accessKind}_source_identity_invalid`));
+  }
   const partial = nodes.get(`${kind} Error Rotation`).parameters.conditions.conditions;
   const acceptsPartialState = state => partial.every(condition => {
     const values = {state, registryOperation: 'rotate', operation: 'rotate', requestedAccessKind: kind.toLowerCase()};
