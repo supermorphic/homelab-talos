@@ -335,6 +335,12 @@ class ClassificationTests(unittest.TestCase):
             "docs/README.md": ("core", "automation"),
             "docs/guides/n8n-operations.md": ("core", "automation"),
             "docs/guides/automation-data-operations.md": ("core", "automation"),
+            "tests/fixtures/automation-data-discovery/complete.json": ("core", "automation"),
+            "tests/fixtures/automation-data-discovery/partial.json": ("core", "automation"),
+            "tests/fixtures/automation-data-discovery/schema-contract.json": (
+                "core",
+                "automation",
+            ),
             "docs/runbooks/platform-disaster-recovery.md": ("core", "automation"),
         }
         for path, expected in cases.items():

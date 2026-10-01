@@ -171,6 +171,7 @@ conditional_paths:
     - scripts/test/scenarios/automation-data-*
     - scripts/test/scenarios/nocodb-*
     - tests/fixtures/n8n-failure-notifications/**
+    - tests/fixtures/automation-data-discovery/**
     - tests/chainsaw/smoke/platform/n8n/chainsaw-test.yaml
   ci-framework:
     - README.md
