@@ -946,8 +946,9 @@ and credential installation, browser access, and recorded recovery are separate 
 
 ## Task-oriented credential discovery (issue 506)
 
-Implemented with focused and real disposable lifecycle/restore evidence. Live installation,
-workstation enrollment, and approved helper acceptance remain pending after merge.
+Live installation, workstation inventory enrollment, provisioner readback, and recorded
+verification passed on 2026-10-01. [Issue 506](https://github.com/supermorphic/homelab-talos/issues/506)
+retains the closeout evidence; consumer-profile enrollment remains a separate prerequisite.
 
 Task-oriented discovery is the primary interface; metrics provide health and consistency
 summaries. Extend the existing platform without another registry, scheduled collector, or
