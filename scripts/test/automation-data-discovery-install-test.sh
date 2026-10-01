@@ -7,6 +7,14 @@ trap 'rm -r -- "$scratch"' EXIT
 chmod 700 "$scratch"
 printf '%s\n' '{"metadata":{"labels":{"homelab-talos/run-id":"fixture-run"}},"status":{"conditions":[{"type":"Complete","status":"True"}]}}' >"$scratch/state.json"
 discovery_backup_ready "$scratch/state.json" fixture-run
+if ! discovery_backup_ready <(cat "$scratch/state.json") fixture-run; then
+	echo 'Completed owned backup rejected through the installer input pipe.' >&2
+	exit 1
+fi
+if discovery_backup_ready <(cat "$scratch/state.json") wrong-run; then
+	echo 'Foreign backup accepted through the installer input pipe.' >&2
+	exit 1
+fi
 if discovery_backup_ready "$scratch/state.json" wrong-run; then
 	echo 'Wrong backup ownership accepted.' >&2
 	exit 1
@@ -16,9 +24,13 @@ if discovery_resource_owned "$scratch/state.json" fixture-run; then
 	echo 'Foreign cleanup accepted.' >&2
 	exit 1
 fi
-printf '%s\n' '{"status":{"conditions":[{"type":"Failed","status":"True"}]}}' >"$scratch/state.json"
+printf '%s\n' '{"metadata":{"labels":{"homelab-talos/run-id":"fixture-run"}},"status":{"conditions":[{"type":"Complete","status":"True"},{"type":"Failed","status":"True"}]}}' >"$scratch/state.json"
 if discovery_backup_ready "$scratch/state.json" fixture-run; then
 	echo 'Failed backup accepted.' >&2
+	exit 1
+fi
+if discovery_backup_ready <(cat "$scratch/state.json") fixture-run; then
+	echo 'Failed backup accepted through the installer input pipe.' >&2
 	exit 1
 fi
 # Actual guard dependencies are mocked; each failure must stop before the mutation call.
