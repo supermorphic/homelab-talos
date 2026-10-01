@@ -946,238 +946,80 @@ and credential installation, browser access, and recorded recovery are separate 
 
 ## Task-oriented credential discovery (issue 506)
 
-Status: implemented on the issue 506 candidate branch, with focused source checks and
-real disposable lifecycle/restore evidence. Live installation, workstation enrollment,
-and approved helper acceptance remain pending separate attended rollout after merge.
-Task-oriented discovery is the primary interface; metrics support health and consistency.
-This section owns the shared discovery and access contract;
-[specification 028](028-nocodb-operator-ui.md#credential-discovery-and-source-evidence-issue-506)
-owns NocoDB-specific observations. Existing lifecycle and authority rules still apply.
+Implemented with focused and real disposable lifecycle/restore evidence. Live installation,
+workstation enrollment, and approved helper acceptance remain pending after merge.
 
-### Intended outcome and authority
+Task-oriented discovery is the primary interface; metrics provide health and consistency
+summaries. Extend the existing platform without another registry, scheduled collector, or
+credential broker. OpenBao issuance and the issue 507 audit remain separate work.
+[The discovery guide](../guides/nocodb-operations.md#credential-discovery-for-approved-work)
+owns use cases, commands, result interpretation, and agent actions;
+[installation](../guides/automation-data-operations.md#private-credential-discovery-installation)
+and [recovery](../runbooks/platform-disaster-recovery.md#credential-discovery-recovery)
+own the operational procedures.
 
-When a task is authorized and its required access is already provisioned, the agent
-runs the supported helper autonomously. It does not ask the operator to locate, copy,
-or reveal a password, or repeat authorization already supplied for that task.
+### Observation boundary
 
-The interface answers: which identity fits this task, why it fits, where it is retained,
-which helper uses it, what prerequisites are satisfied, and which exact step remains.
-Discovery, credential availability, and authorization are separate facts. Possessing a
-profile, knowing a locator, or receiving a `ready` result does not authorize a query,
-migration, rotation, or deletion. Confirmation remains an execution-intent guard.
+A private, authenticated n8n workflow uses its own header and three restricted SQL readers:
+platform registries/PostgreSQL roles, NocoDB object metadata, and n8n credential identities
+and published workflow bindings. Fixed projections accept no arbitrary SQL or destinations.
+Readers cannot access business records, credential payloads, password verifiers, or mutation
+functions. Projection owners have only required column privileges; definer functions fix
+`search_path` and revoke PUBLIC execution. Project bindings inside PostgreSQL without
+returning workflow parameters. Disable all execution persistence and exclude the inventory
+path from public webhook routing. Routine inventory needs no administrator credential,
+Kubernetes Secret read, exec, or tunnel.
 
-| Task | Selected identity and supported path | Boundary |
-| --- | --- | --- |
-| Understand a domain | Metadata inventory and task resolution | No credential retrieval or business-record reads. |
-| Application reads and functions | Registered application login through the private connection helper | Consumer grants define access; never substitute runtime, source, or migrator credentials. |
-| Normal n8n processing | The domain runtime credential bound to the intended workflow | No password export to an agent or another consumer. |
-| Reviewed schema migration | The domain migrator through the private connection helper and consumer migration procedure | Task authorization and the existing owner-role procedure remain required. |
-| NocoDB source operation | Registered pair/access kind through its source lifecycle | Source credentials belong to NocoDB, independently of UI and application identities. |
-| Human UI access | NocoDB account and base/workspace membership | Neither a source password nor an application login signs a human into the UI. |
-| Provision a missing identity | Existing domain/application/pair registration and activation procedures | Discovery never provisions, grants, or activates automatically. |
-| Rotate or recover | Exact target, retained operation, generation, and supported retry procedure | Never use rotation to make discovery or onboarding succeed. |
-| Diagnose access | Independent observations, local profile status, and bounded reason codes | No credential dumping or broader-credential retry. |
-| Decommission | Exact dependencies, attended procedure, and completed-step receipt | Removal requires separate authority; current inventory then reports observed absence. |
+Enumerate observed objects independently of registration, then join retained IDs to detect
+missing, duplicate, unregistered, and inconsistent objects without repair or adoption.
+Pin projections to tested application schemas; drift returns `unsupported_schema`, never a
+raw-table/API fallback. [Specification 028](028-nocodb-operator-ui.md#credential-discovery-and-source-evidence-issue-506)
+defines NocoDB-specific evidence rules.
 
-### Public command and response
+Each source is limited to 1,000 objects and 1 MiB; the total response to 4 MiB and 30 seconds,
+including connection and response handling. Overflow returns `limit_exceeded`, never a
+complete truncated result. Read each projection in a REPEATABLE READ, READ ONLY transaction
+with local statement timeouts and n8n-managed commit/rollback. Compare fingerprints from
+two separate observations of every source, with one retry within the deadline; continued
+change returns `unstable`. Equality proves metadata stability, not a distributed snapshot.
+Take no provisioning lock. Preserve observation/receipt times and completeness; future,
+invalid, or more than 60-second-old observations cannot establish readiness.
 
-The implementation provides one observational command family, with text output by default and equivalent
-versioned JSON selected by `--format=json`:
+Output is versioned, bounded metadata with fixed error codes. Return neither raw remote
+errors nor secret-bearing fields. Unknown facts remain unknown; partial enumeration cannot
+prove absence. Metrics carry counts, freshness, and consistency, not credential IDs or paths.
 
-```text
-mise exec -- just kube automation-data-credentials list
-mise exec -- just kube automation-data-credentials list --domain sample --format=json
-mise exec -- just kube automation-data-credentials resolve sample application --application interview
-mise exec -- just kube automation-data-credentials resolve sample migration --format=json
-mise exec -- just kube automation-data-credentials resolve sample workflow
-mise exec -- just kube automation-data-credentials resolve sample source --pair extra --access-kind reader
-```
+### Access and lifecycle invariants
 
-Names in examples are synthetic. Resolution accepts only these four purposes and their
-applicable selectors. UI, platform, API/webhook, and recovery families remain discoverable
-through `list` and procedure links; they are not interchangeable database access purposes.
-Do not select a similarly named identity when the requested target is absent or ambiguous.
+Discovery, credential availability, and task authorization are separate. Next actions contain
+fixed recipe identifiers and validated arguments, not executable remote text. Missing access
+names an existing prerequisite; discovery never provisions, rotates, or retries with broader
+credentials. UI, source, application, runtime, migrator, platform, and recovery identities
+remain distinct.
 
-Each item carries a family and stable identity, logical purpose, consumer, lifecycle owner,
-domain/pair/application where applicable, PostgreSQL role, non-secret storage locator,
-registered state and generations, independently observed bindings, observation times,
-completeness, discrepancies, and provisioning/rotation/recovery/decommission references.
-Unavailable facts are null with a reason, never invented generations or an empty inventory.
-Distinguish an operation generation from a credential generation and from an application's
-own update timestamp. No one of these proves password equality or successful authentication.
+Local configuration contains only the inventory-header locator and approved profile roots,
+outside checkouts under existing ownership/file-permission rules. Discovery inspects binding
+metadata and file properties without opening consumer password files. Automatic selection
+requires current application generation or migrator credential ID/update marker; unbound,
+stale, or pending material cannot be selected. Only the connection helper consumes the
+selected password, repeats metadata/file checks immediately before use, authenticates the
+session identity, and owns tunnel cleanup. Explicitly supplied profiles retain their existing
+behavior and authority. Ready, authorized routine work requires no password handoff.
 
-Resolution adds a decision, prerequisites, and a typed next action. Supported decisions are
-`ready`, `setup_required`, `recovery_required`, `unavailable`, and `inconsistent`.
-`ready` means the selected access path has the required observed prerequisites, not that
-the task has been authorized. Authorization requirements are described separately from
-technical readiness; the resolver does not infer operator consent from task text or Git state.
-The agent applies repository policy and existing task authorization before execution.
+Lifecycle readback is independent of mutation success. Observation failure cannot trigger
+another mutation. Pending and acknowledged generations remain distinct. Current absence
+requires complete independent enumeration; retained removal receipts alone cannot prove it.
+Verifiers report discovery evidence separately from service-health results.
 
-Actions use a fixed recipe identifier and separately validated arguments, not executable
-shell text from a remote response. For application and migration access, the action selects
-the existing `automation-data-connect` helper. Missing grants or installation name their
-owner and existing procedure. Authentication failures return a bounded recovery reason;
-they do not initiate a password change. Unknown or unsupported facts cannot produce `ready`.
+### Assurance
 
-Exit status 0 means complete inventory with no detected discrepancies, or a ready resolution;
-1 means a valid but incomplete, inconsistent, or blocked result; 2 means invalid arguments
-or local configuration. Machine-readable failure output follows the same versioned envelope.
-Source errors use fixed codes; raw SQL, HTTP bodies, headers, stack traces, and remote free
-text never become diagnostics. A partial result identifies each unavailable source and
-cannot assert absence on that source.
-
-### Metadata acquisition and scope
-
-Use an on-demand, authenticated private n8n workflow for bounded metadata collection.
-It is separate from mutation webhooks, uses a dedicated inventory-only header credential,
-and accepts only validated discovery selectors. It has no arbitrary SQL, host, URL, file,
-credential-ID lookup, or operation argument. The public webhook route must not expose it.
-All manual/success/error/progress execution persistence is disabled. No new service,
-scheduled collector, second inventory registry, or credential broker is introduced.
-
-Install fixed SQL projections for three independent sources: platform registries and
-PostgreSQL role attributes in the control database; NocoDB object identity metadata in its
-metadata database; and n8n credential identity/type plus workflow credential bindings in
-the n8n database. Use dedicated non-superuser reader logins with only the necessary database
-CONNECT, schema USAGE, and projection access. They receive no business-table access,
-mutation-function execution, base credential-table access, or password-verifier access.
-Projection owners receive only their required column privileges; any definer function fixes
-its search path, revokes PUBLIC execution, and has no caller-supplied query or identifier.
-Project JSON bindings inside the database without returning workflow nodes or parameters.
-
-The workflow binds these restricted credentials in n8n. It does not use the provisioner,
-backup, application database owner, or general n8n/NocoDB API token. Operator installation
-creates these access credentials once through protected handling; they stay in the existing
-credential store and have documented replacement/recovery procedures. Installation and
-grants are separately authorized administration. Routine inventory does not need those
-administrative credentials or Kubernetes Secret reads, exec, or port-forward.
-
-Enumerate observed objects independently of registry rows, then join by retained identity.
-Otherwise registry-only and installed-only objects cannot both be detected. Pin projections
-to tested application schema versions; schema drift returns `unsupported_schema` and blocks
-affected readiness until a reviewed adapter update. Do not fall back to raw table exports
-or credential-bearing application APIs. Bootstrap validates actual column privileges and
-denials, not just the names of installed views.
-
-Cap each source at 1,000 objects and 1 MiB, and the complete response at 4 MiB with a
-30-second overall deadline. Overflow reports `limit_exceeded`; truncation cannot count as
-complete. Apply source limits before aggregation and enforce byte limits while receiving.
-Use one REPEATABLE READ, READ ONLY transaction per projection. The pinned n8n
-Postgres node owns commit/rollback through transaction batching, with local statement
-timeouts; an observation failure cannot leave an aborted pooled transaction. Compute a fingerprint of each complete,
-canonically sorted, allowlisted projection, including row counts, identities, relevant role
-attributes, lifecycle state, and bindings. After all sources are collected, repeat each
-projection in a fresh transaction and compare fingerprints. An incomplete projection has
-no usable fingerprint. One bounded retry is allowed within the deadline, after which
-changed observations report `unstable`. Equality establishes observed metadata stability,
-not password equality or a distributed snapshot. No provisioning lock is taken. Repeat
-authoritative checks at the execution boundary.
-
-Metrics supply health/freshness and consistency summaries, not credential IDs, local paths,
-or the task-resolution data model. Preserve each source's observation time, response receipt
-time, and completeness. A result over 60 seconds old, with a future or invalid timestamp, or with
-unresolved source changes cannot establish current readiness. Profile generation and live
-identity are rechecked by the connection helper immediately before use.
-
-### Protected local access and autonomous execution
-
-Use one owned private workstation configuration outside every checkout, defaulting to
-`$XDG_CONFIG_HOME/homelab/automation-data/access.json`, falling back to
-`$HOME/.config/homelab/automation-data/access.json` when XDG_CONFIG_HOME is unset.
-Require an absolute configuration directory. It records only the inventory-auth file locator,
-application-profile root, and migrator-profile root. This is access configuration, not a
-manually maintained list of credentials or registered identities. It contains no secret
-values or arbitrary endpoint overrides. Validate ownership, regular files, parent directories,
-and permissions using the existing protected-file rules; reject symlinks and checkout paths.
-
-The inventory helper reads its dedicated header from the configured protected file directly
-into the fixed TLS request. Never return it to the agent, place it in process arguments, or
-print it. Missing/revoked authentication returns `setup_required` or `recovery_required`
-with the named enrollment procedure, not an instruction to paste a token into chat.
-Inventory-only enrollment cannot invoke provisioning or other mutation webhooks.
-
-Application profiles retain the existing `<root>/<domain>/<application>/` layout.
-Migrator profiles use `<migrator-root>/<domain>/service.conf` after explicit protected
-installation; an already supplied explicit profile remains supported and takes precedence.
-Automatic resolution searches only those configured locations. It never searches other
-worktrees, shell history, arbitrary home directories, n8n exports, or NocoDB integrations.
-Registration state comes from the live inventory, not directory enumeration.
-
-Discovery inspects only allowlisted binding metadata and file ownership/modes/existence;
-it does not open password files or return protected profile contents. A migrator profile
-installed for automatic selection needs a non-secret binding to domain, role, current n8n
-credential ID/update marker, and service section. Do not fabricate a credential generation
-where the domain registry has none. Existing explicitly selected profiles remain usable
-through the current helper, but unbound profiles cannot claim automatic readiness.
-
-The existing connection helper resolves a profile when explicit profile variables
-are absent. Reuse its fixed tunnel, profile validation, authentication, and cleanup. Only
-that approved helper consumes the selected secret. Keep profile files owned and protected;
-never expose passwords in discovery output, errors, saved transcripts, reports, or Git.
-Discovery must not start a tunnel or authenticate as a business-data identity. Connection
-readback checks session identity; it does not run consumer queries or migrations.
-
-An authorized agent with ready access runs that helper without another operator handoff.
-Initial profile installation, lost-material recovery, new grants, and unavailable authority
-remain explicit prerequisites. An unavailable metadata service does not permit a fallback
-to broader credentials or stale automatic selection. Existing explicitly selected connection
-workflows remain available under their existing rules; discovery does not change their authority.
-
-### Lifecycle evidence and acceptance
-
-Provisioning, activation, and rotation perform targeted independent metadata readback after
-their existing postconditions. Failure after mutation must report the operation outcome
-separately from unavailable inventory evidence; retrying discovery must not repeat mutation.
-The bounded `inventoryReadback` object carries `status`, `observedAt`, and `errorCode`;
-statuses are `observed`, `inconsistent`, or `unavailable`. Discovery retries do not invoke
-provisioning. Verifiers emit only source completeness, timestamps, object counts, and
-bounded errors plus discrepancy count; their existing service-health exit status remains
-separate and unavailable enrollment is explicit.
-During rotation, pending and acknowledged generations remain distinct. Older protected
-profiles are retained for recovery but are never selected automatically as current.
-
-Attended removal retains the reviewed target identities, completed steps, and final observations
-in the existing protected operation/test evidence, not a new registry or public Git inventory.
-Fresh inventory reports absence only when every relevant enumeration completed. A receipt
-alone does not prove absence; missing observations or surviving dependencies keep removal
-incomplete. Synthetic removal exercises this contract without adding a self-service delete API.
-
-Required tests cover every use case above, both directions of missing objects, duplicate and
-wrong bindings, state/generation mismatches, absent local material, stale/partial/oversized
-observations, concurrent changes, and create/rotate/attended-remove sequences. Real disposable
-PostgreSQL tests prove reader access to only projected metadata and denial of secret/business
-tables, verifier catalogs, mutation functions, and unauthorized SQL. Pinned NocoDB/n8n fixtures
-prove actual projection shapes. Place sentinel secrets in success, error, malformed, and
-oversized inputs and prove no disclosure through stdout/stderr, workflow persistence, or
-retained artifacts. Run ready authorized access with closed stdin and no terminal; count
-helper invocations to prove it requires no interactive prompt and never invokes a provisioning
-or rotation fallback.
-
-The [canonical discovery guide](../guides/nocodb-operations.md#credential-discovery-for-approved-work)
-is linked from repository navigation, automation-data onboarding, and agent access documentation.
-Keep role/grant contracts here, NocoDB evidence rules in specification 028, executable
-procedures in their existing guides, and tests in the existing catalog. Coordinate evidence
-boundaries with issue 507 without importing private audit findings into public artifacts.
-
-Roll out shared projections and their guarded migration first, then the inventory workflow
-and private enrollment, then CLI/profile resolution, lifecycle readback, and documentation.
-Use synthetic validation and an independent final review before publication. Hosted merge
-validation and separately authorized live installation/acceptance remain required; source
-tests do not establish that an operator's access is installed or working.
-
-Candidate assurance includes actual pinned application schemas, published workflow
-bindings, targeted rotations, failure recovery after reader timeouts, attended synthetic
-removal with incomplete-enumeration rejection, and isolated restored projection access
-and base-table denials. The registered `test.nocodb-local-integration` owns this assurance;
-offline tests belong to existing automation-data, n8n, and NocoDB validation owners.
-Candidate evidence does not establish installed live access. n8n backups exclude the
-derived discovery schema, which must be reconstructed with retained restricted readers
-before private inventory is exposed after restore.
-
-OpenBao is not required for this interface. Its agent Kubernetes issuance work remains in
-issue 450. Future database issuance may implement an access provider only after its own
-identity, grant, rotation, lease, and recovery design. This work neither moves existing
-secrets to OpenBao nor introduces a second owner for their rotation.
+Focused tests cover missing/duplicate/wrong bindings, state and generation mismatches,
+profile selection, stale/partial/oversized/unstable observations, bounded failures, secret
+sentinels, noninteractive helper use, and create/rotate/removal sequences. Registered
+`test.nocodb-local-integration` proves actual pinned schemas and published bindings,
+restricted-reader authentication and denials, targeted rotations, pooled-transaction recovery
+after timeout, synthetic attended removal, and restored projections. Candidate evidence does
+not establish deployed access or replace hosted validation and attended live acceptance.
 
 ## Review triggers
 

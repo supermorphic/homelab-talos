@@ -32,31 +32,26 @@ for recovery roots and the key-loss boundary.
 
 ## Credential discovery for approved work
 
-For approved routine work, agents should execute the supported helper without asking
-an operator to locate a password. Start with task-oriented discovery. The helper
-collects independent metadata and selects the intended identity and procedure.
-A `ready` result establishes prerequisites; task authorization still comes from the
-operator and repository policy. Discovery does not read business records or export
-consumer credentials. OpenBao database issuance is not required for this interface.
+For approved routine work with enrolled access, agents execute the supported helper
+without asking an operator to locate a password. Discovery selects the identity and
+procedure from live metadata; `ready` establishes prerequisites, not task authorization.
 
-| Use case | Identity and supported path | Authority and evidence boundary |
-| --- | --- | --- |
-| Understand a domain or diagnose access | Inventory and task resolution | Observe registration, roles, bindings, freshness, and bounded reason codes. |
-| Application reads or reviewed functions | Registered application login and `automation-data-connect` | Its database grants apply; the helper alone consumes its protected password. |
-| Reviewed migration | Domain migrator and `automation-data-connect` | Requires authorization for that migration and the consumer's existing owner-role procedure. |
-| Normal n8n processing | Domain runtime credential in its published workflow | Use the intended workflow; do not export or borrow its password. |
-| Inspect a NocoDB source | Exact pair and reader/operator kind through source status | NocoDB retains its encrypted source password; it is separate from UI authentication. |
-| Human browser work | NocoDB UI account and workspace/base membership | Application and source logins cannot sign a human into the UI. |
-| Provision or activate missing access | Existing domain, application, or pair procedure | Requires that lifecycle's authority and grants; discovery does not provision. |
-| Rotate or recover access | Exact target and retained operation through its existing procedure | Separate authorization; never rotate to make discovery succeed. |
-| Inspect API, webhook, or platform credentials | Inventory family and procedure references | Tokens and platform credentials remain with their designated consumers. |
-| Recover encryption/signing material | Operator recovery procedure | Off-cluster material is `not_observed`; healthy services do not prove recoverability. |
-| Decommission | Reviewed dependencies, exact identities, and retained receipt | Separate attended authority; every relevant enumeration must complete to establish absence. |
+| Task | Identity and supported path |
+| --- | --- |
+| Understand a domain or diagnose access | Metadata inventory and task resolution. |
+| Application reads or reviewed functions | Registered application login through `automation-data-connect`; its database grants apply. |
+| Reviewed migration | Domain migrator through `automation-data-connect`, with migration authorization and the consumer's owner-role procedure. |
+| Normal n8n processing | Runtime credential in its intended published workflow; no password export. |
+| Inspect a NocoDB source | Registered pair and reader/operator kind through source status; NocoDB retains the encrypted password. |
+| Human browser work | NocoDB UI account and workspace/base membership, separate from database logins. |
+| Provision, activate, rotate, or recover | The target's existing lifecycle procedure and required authority; never a discovery fallback. |
+| Inspect API, webhook, or platform credentials | Inventory locator and owner procedure; credentials stay with their designated consumers. |
+| Recover encryption/signing material | Operator recovery procedure; off-cluster material is `not_observed`. |
+| Decommission | Separately authorized [destructive administration](#destructive-administration); retain removed identities and verify fresh absence and surviving consumers. |
 
 Synthetic examples:
 
 ```sh
-mise exec -- just kube automation-data-credentials list
 mise exec -- just kube automation-data-credentials list --domain sample --format=json
 mise exec -- just kube automation-data-credentials resolve sample application --application interview
 mise exec -- just kube automation-data-credentials resolve sample migration
@@ -64,84 +59,48 @@ mise exec -- just kube automation-data-credentials resolve sample workflow
 mise exec -- just kube automation-data-credentials resolve sample source --pair extra --access-kind reader
 ```
 
-Text and JSON contain the same versioned facts. Each identity describes its purpose,
-consumer, lifecycle owner, non-secret storage locator, state, evidence, discrepancies,
-and procedure references. UI, API/webhook, platform, recovery, and unclassified families
-are visible through `list`; they are not interchangeable database access purposes.
-Unknown identities are not adopted by name. Partial enumeration cannot establish absence.
+Omit `--domain` to list all identities; omit `--format=json` for text. Both formats report
+purpose, consumer, owner, storage locator, state, evidence, discrepancies, and procedures.
+Only application, migration, workflow, and source are resolution purposes; other credential
+families are discoverable through `list`.
 
 | Decision | Agent action |
 | --- | --- |
-| `ready` | Apply existing task authority, then execute the typed recipe and validated arguments or use the intended published workflow binding. |
+| `ready` | Apply existing task authority and execute the returned recipe/arguments or use the published workflow binding. |
 | `setup_required` | Follow the named enrollment, registration, or grants prerequisite with its owner. |
-| `recovery_required` | Preserve pending material and use the exact attended recovery or retry procedure. |
-| `unavailable` | Retry metadata observation when appropriate; report the unavailable source. |
-| `inconsistent` | Stop use of that automatic selection and reconcile the specific discrepancy. |
+| `recovery_required` | Preserve pending material and follow the exact recovery/retry procedure. |
+| `unavailable` | Report the unavailable source; retry observation when appropriate. |
+| `inconsistent` | Stop automatic selection and reconcile the reported discrepancy. |
 
-Exit 0 means complete inventory without detected discrepancies, or a ready resolution.
-Exit 1 means a valid partial or blocked result. Exit 2 means invalid arguments or local
-configuration. Next actions contain a fixed recipe with validated arguments, a workflow
-binding, or a procedure reference; do not execute remote text as shell code.
+Exit 0 means complete inventory without discrepancies or ready resolution; 1 means a
+partial or blocked result; 2 means invalid arguments or local configuration. Next actions
+are typed recipes, workflow bindings, or procedure references. Never execute remote text
+as shell code or substitute a broader credential.
 
-For an approved application task whose result is ready, run:
+For ready, authorized application access, run:
 
 ```sh
 mise exec -- just kube automation-data-connect sample application/interview
 ```
 
-For an approved migration with ready migrator access, run the same helper with
-`sample migrator`. The helper uses the configured protected profile, creates its fixed
-task-owned tunnel, repeats current metadata and file checks immediately before credential
-use, authenticates the session identity, and cleans up the tunnel. It does not execute
-consumer queries or migrations. Agents bootstrap any required scoped cluster access
-with `mise exec -- just talos kubeconfig` in their assigned linked worktree themselves.
+Use `sample migrator` for approved migration access. The helper selects the enrolled
+profile, rechecks current metadata and files, authenticates, and holds its fixed tunnel;
+it does not execute consumer queries or migrations. Agents obtain required scoped cluster
+access themselves with `mise exec -- just talos kubeconfig` in their assigned worktree.
 
-One-time [private inventory enrollment](automation-data-operations.md#private-credential-discovery-installation)
-and [protected consumer profiles](automation-data-operations.md#registered-application-logins-and-private-cli-access)
-are prerequisites. Automatic selection searches only the configured application and
-migrator roots. Discovery inspects binding metadata and file properties without opening
-password files. An explicit protected connection profile retains its existing behavior.
-Missing or revoked access names its owner and procedure; agents do not search other
-worktrees, dump n8n credentials, read Kubernetes Secrets, ask for passwords in chat,
-or retry with broader credentials.
+[Inventory enrollment](automation-data-operations.md#private-credential-discovery-installation)
+and [consumer profiles](automation-data-operations.md#registered-application-logins-and-private-cli-access)
+are prerequisites; migrators also need [profile binding](automation-data-operations.md#bind-an-installed-migrator-profile).
+Discovery inspects metadata, not consumer passwords. Missing access requires the named
+prerequisite, not credential searches, exports, Kubernetes Secret reads, or password requests.
 
-Inventory uses a dedicated private webhook header and three restricted SQL readers.
-Each source is capped at 1,000 objects and 1 MiB; total response size is capped at 4 MiB
-within 30 seconds. Two observations in separate read transactions check metadata
-stability, with one bounded retry. Future timestamps and observations older than 60
-seconds cannot establish readiness. Equality proves metadata stability, not distributed
-atomicity, authentication, grants, password equality, or restore success.
-
-The legacy default pair can use the built-in `read_model`/`operator` mapping without a
-custom mapping row. `mappingOrigin=built_in_default` denotes that procedure-derived
-expectation; it does not claim that an encrypted source configuration or grants were
-observed. Named pairs require their registered mapping. A completed unchanged sync can
-advance its operation claim while retaining source and credential generations. Active
-or uncertain claims remain blocking evidence.
-
-Mutation responses report `inventoryReadback: {status, observedAt, errorCode}` separately
-from the operation result. `observed` means the target's expected metadata was seen;
-`inconsistent` means it differs; `unavailable` means current evidence could not be
-established. A successful mutation remains successful when readback fails. Retry the
-inventory command to obtain evidence; do not repeat the mutation on that basis.
-
-Existing verifiers report discovery completeness and timestamps separately from service
-health. `unavailable` includes missing workstation enrollment. A health pass is not a
-discovery pass. Metrics remain secondary health and consistency signals and contain no
-credential IDs or local paths.
-
-For attended removal, authorize the exact target and surviving dependencies, enumerate
-all relevant sources, follow the [destructive administration boundary](#destructive-administration),
-and retain removed identities and completed steps in protected operation evidence.
-Repeat fresh enumeration and independently verify surviving consumers. A receipt or
-registry deletion alone cannot prove absence. Discovery adds no general deletion API.
-[Recovery](../runbooks/platform-disaster-recovery.md#nocodb-metadata-recovery) retains its
-existing keys and backup requirements; inventory does not establish recovery completeness
-or complete the separate issue 507 audit.
-
-This implementation has candidate disposable evidence. Live inventory installation,
-workstation enrollment, and authorized helper acceptance remain pending until the
-separate attended rollout passes.
+Mutation responses carry `inventoryReadback: {status, observedAt, errorCode}` separately:
+`observed` confirms expected metadata, `inconsistent` reports a mismatch, and `unavailable`
+means evidence could not be established. Retry observation, not a successful mutation.
+Verifiers likewise separate discovery evidence from service health. Partial inventory or a
+removal receipt cannot prove absence; consistent metadata cannot prove authentication or
+recovery. See the [design and rollout status](../specs/026-automation-data-postgresql-platform.md#task-oriented-credential-discovery-issue-506)
+and [recovery procedure](../runbooks/platform-disaster-recovery.md#credential-discovery-recovery).
 
 ## Before you start
 
@@ -376,22 +335,11 @@ Header Auth credential named **NocoDB Source Provisioning Header**. Set its head
 to `Authorization` and its value to `Bearer <token>`, where `<token>` is the retained
 bare source-provisioning value. Keep that bare token outside Git for
 `NOCODB_SOURCE_PROVISIONING_HEADER` and `NOCODB_SOURCE_PROVISIONING_TOKEN`; the command
-and access test add the `Bearer` prefix. Bind:
-
-- **Automation Data Provisioner** to every Postgres node;
-- **NocoDB Operator API** to every HTTP Request node except **Observe Mutation Inventory**;
-- **Automation Data Inventory Header** to **Observe Mutation Inventory**; and
-- **NocoDB Source Provisioning Header** to **Source Webhook**.
-
-Keep execution order `v1` and all saved manual, successful, failed, and progress
-execution data disabled. Publish **NocoDB Source Provisioner** only after checking every
-binding. Do not add credential IDs or values to the Git template.
-
-The [discovery installer](automation-data-operations.md#private-credential-discovery-installation)
-creates the inventory header. Follow the
-[mutation workflow upgrade procedure](automation-data-operations.md#upgrade-existing-mutation-workflows)
-for initial publication or updating an existing published workflow; the installer does
-not upgrade this source workflow.
+and access test add the `Bearer` prefix. Complete
+[inventory installation](automation-data-operations.md#private-credential-discovery-installation),
+then follow the [mutation workflow procedure](automation-data-operations.md#upgrade-existing-mutation-workflows)
+for all bindings and publication. Keep execution order `v1` and execution-data persistence
+disabled. Do not add credential IDs or values to the Git template.
 
 ### Configure a domain with custom NocoDB schemas
 
