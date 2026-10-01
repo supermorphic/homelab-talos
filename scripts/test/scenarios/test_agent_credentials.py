@@ -155,6 +155,7 @@ class AcceptanceGuardTests(unittest.TestCase):
 
     def test_lifetime_cannot_pass_when_watch_reconnection_fails(self):
         actor = {"directory": self.directory}
+        diagnostics = {}
 
         @contextmanager
         def running(*args, **kwargs):
@@ -204,12 +205,55 @@ class AcceptanceGuardTests(unittest.TestCase):
             patch.object(scenario.time, "time", return_value=2000),
             self.assertRaises(SafeError),
         ):
-            scenario.lifetime_outage(self.directory, actor)
+            scenario.lifetime_outage(self.directory, actor, diagnostics=diagnostics)
         self.assertEqual(calls, ["watch", "watch"])
+        self.assertEqual(diagnostics["caller_stage"], "reconnect-callers")
 
     def test_scope_selection_requires_explicit_operator_context_and_run(self):
         with patch.dict("os.environ", {}, clear=True), self.assertRaises(SafeError):
             scenario.run_inputs()
+
+    def test_cleanup_error_does_not_replace_original_caller_failure(self):
+        scope = Mock()
+        scope.cleanup.side_effect = SafeError("source-mismatch")
+        output = io.StringIO()
+
+        @contextmanager
+        def session(*args):
+            yield "SYNTHETIC"
+
+        with (
+            patch.object(scenario, "run_inputs", return_value=(
+                Path("/synthetic/operator"), self.directory,
+            )),
+            patch.object(scenario.workstation, "target", return_value=self.approved),
+            patch.dict("os.environ", {"AGENT_CREDENTIALS_CONFIRM":
+                f"agent-credentials:openbao:{'a' * 40}:{self.directory.name}"}),
+            patch.object(scenario, "install_interrupt_handlers"),
+            patch.object(scenario.workstation, "ensure_private_directory"),
+            patch.object(scenario.tempfile, "mkdtemp", return_value=str(self.directory)),
+            patch.object(scenario, "OperatorClient"),
+            patch.object(scenario, "private_prompt", return_value="SYNTHETIC"),
+            patch.object(scenario, "operator_password_session", side_effect=session),
+            patch.object(scenario, "lease", side_effect=session),
+            patch.object(scenario, "BrokerScope", return_value=scope),
+            patch.object(scenario.apply, "verify_configuration", return_value={"differences": []}),
+            patch.object(scenario.workstation, "cluster_metadata", return_value={}),
+            patch.object(scenario, "fixtures", return_value=(self.directory, self.directory)),
+            patch.object(scenario, "permissions"),
+            patch.object(scenario, "kubectl"),
+            patch.object(scenario, "lifetime_outage", side_effect=SafeError("timeout")),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(scenario.main(), 1)
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["classification"], "timeout")
+        self.assertEqual(result["cleanup_classification"], "source-mismatch")
+        self.assertEqual(result["failure_stage"], "lifetime-outage")
+        self.assertEqual(result["cleanup"], "failed")
+        self.assertEqual(json.loads(
+            (self.directory / "diagnostics/agent-credentials.json").read_text()
+        ), result)
 
     def test_preflight_failure_retains_safe_reason_without_exception_text(self):
         for error, classification in (

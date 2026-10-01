@@ -616,7 +616,12 @@ def assert_caller_refresh(actor, profiles):
             raise SafeError("invalid-response")
 
 
-def lifetime_outage(root, actor, *, coordinator_root=None, coordinator_actor=None):
+def lifetime_outage(
+    root, actor, *, coordinator_root=None, coordinator_actor=None, diagnostics=None
+):
+    if diagnostics is None:
+        diagnostics = {}
+    diagnostics["caller_stage"] = "start-callers"
     config = str(root / ".kube/config")
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -654,6 +659,7 @@ def lifetime_outage(root, actor, *, coordinator_root=None, coordinator_actor=Non
             if cached.poll() is not None or time.monotonic() >= deadline:
                 raise SafeError("invalid-response")
             time.sleep(1)
+        diagnostics["caller_stage"] = "publisher-before-expiry"
         publisher_operations(root, actor)
         # Include actual initial caller expiries; setup time must not shorten their window.
         for source in (actor, coordinator_actor or actor):
@@ -667,13 +673,20 @@ def lifetime_outage(root, actor, *, coordinator_root=None, coordinator_actor=Non
         outage = actor["directory"] / "outage"
         outage.touch(mode=0o600)
         try:
+            diagnostics["caller_stage"] = "outage-before-expiry"
             if read_url(proxy) != 200:
                 raise SafeError("invalid-response")
             kubectl(root, actor, "observer", "get", "nodes", allowed=False)
+            diagnostics["caller_stage"] = "wait-through-expiry"
             while time.time() <= expiry + issuance.API_EXPIRY_LEEWAY + issuance.SKEW + 5:
-                if any(
-                    child.poll() is not None for child in (cached, watch, diagnostic, coordination)
-                ):
+                exited = [
+                    name for name, child in (
+                        ("proxy", cached), ("watch", watch),
+                        ("diagnostic", diagnostic), ("coordinator", coordination),
+                    ) if child.poll() is not None
+                ]
+                if exited:
+                    diagnostics["exited_callers"] = exited
                     raise SafeError("invalid-response")
                 time.sleep(
                     min(
@@ -686,6 +699,7 @@ def lifetime_outage(root, actor, *, coordinator_root=None, coordinator_actor=Non
                 )
             # Fresh request forces the cached process to refresh; an open stream
             # alone cannot prove credential refresh or server-side expiry.
+            diagnostics["caller_stage"] = "expired-token-denial"
             if (
                 read_url(proxy) == 200
                 or read_url(upstream, context=context, token=raw["status"]["token"]) != 401
@@ -693,14 +707,19 @@ def lifetime_outage(root, actor, *, coordinator_root=None, coordinator_actor=Non
                 raise SafeError("invalid-response")
         finally:
             outage.unlink(missing_ok=True)
+        diagnostics["caller_stage"] = "cached-client-recovery"
         if read_url(proxy) != 200:
             raise SafeError("invalid-response")
         # Reconnect real watch/diagnostic transports; process survival is insufficient.
+        diagnostics["caller_stage"] = "reconnect-callers"
         with watch_connection(root, actor), diagnostic_connection(root, actor):
             publisher_operations(root, actor)
             kubectl(root, actor, "observer", "get", "nodes")
+        diagnostics["caller_stage"] = "stop-callers"
+    diagnostics["caller_stage"] = "verify-caller-refresh"
     assert_caller_refresh(actor, ["observer", "diagnostic", "publisher"])
     assert_caller_refresh(coordinator_actor or actor, ["campaign-coordinator"])
+    diagnostics.pop("caller_stage", None)
     return {
         "cached_before_expiry": True,
         "new_command_denied": True,
@@ -825,6 +844,7 @@ def main():
     result = {"status": "fail", "cleanup": "not-required"}
     client = scope = run_dir = None
     private = None
+    stage = "preflight"
     try:
         kubeconfig, run_dir = run_inputs()
         approved = workstation.target(kubeconfig)
@@ -844,6 +864,7 @@ def main():
             client.set_token(token)
             scope = BrokerScope(kubeconfig, run_dir.name, private, client, approved)
             try:
+                stage = "create-identities"
                 with lease(kubeconfig):
                     if apply.verify_configuration(apply.DESIRED, client) != {"differences": []}:
                         raise SafeError("source-mismatch")
@@ -851,6 +872,7 @@ def main():
                     a, b = scope.actor("a"), scope.actor("b")
                     for actor in (a, b):
                         scope.create(actor, metadata)
+                stage = "profiles-and-parallel-checkouts"
                 primary, linked = fixtures(private, b)
                 for root in (primary, linked):
                     permissions(root, b)
@@ -862,10 +884,12 @@ def main():
                         )
                     )
                 result["profiles_and_parallel_checkouts"] = True
+                stage = "lifetime-outage"
                 result["lifetime_outage"] = lifetime_outage(
-                    primary, b, coordinator_root=linked, coordinator_actor=a
+                    primary, b, coordinator_root=linked, coordinator_actor=a, diagnostics=result
                 )
                 result["caller_transports_and_coordinator"] = True
+                stage = "revocation-and-rotation"
                 with lease(kubeconfig):
                     revocation(scope, a, b)
                     old = credentials.load_workstation(b["directory"])
@@ -893,13 +917,28 @@ def main():
                     rotation=True,
                     status="pass",
                 )
+            except BaseException as error:
+                result["failure_stage"] = stage
+                result["classification"] = (
+                    str(error) if isinstance(error, SafeError) else "invalid-response"
+                )
+                raise
             finally:
-                with lease(kubeconfig):
-                    scope.cleanup()
-                result["cleanup"] = "passed"
+                try:
+                    with lease(kubeconfig):
+                        scope.cleanup()
+                    result["cleanup"] = "passed"
+                except BaseException as error:
+                    result["cleanup_classification"] = (
+                        str(error) if isinstance(error, SafeError) else "invalid-response"
+                    )
+                    result.setdefault("failure_stage", "cleanup")
+                    raise
     except BaseException as error:  # noqa: BLE001 -- Includes interrupt cleanup; never expose secret-bearing exceptions.
         result["status"] = "fail"
-        result["classification"] = str(error) if isinstance(error, SafeError) else "invalid-response"
+        result.setdefault(
+            "classification", str(error) if isinstance(error, SafeError) else "invalid-response"
+        )
         if scope and result["cleanup"] != "passed":
             result["cleanup"] = "failed"
     finally:
