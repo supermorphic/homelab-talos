@@ -86,7 +86,7 @@ def expect_acceptance(
         f"{name}: expected acceptance, got exit {completed.returncode}\n"
         f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
     )
-    assert completed.stdout == "Test catalog passed validation: suites=133.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=134.\n"
     assert completed.stderr == ""
 
 
@@ -467,7 +467,12 @@ def dispatch_contract(root: Path, canonical: dict[str, Any]) -> None:
 
 def campaign_contract(root: Path, canonical: dict[str, Any]) -> None:
     assert all(
-        not {"test.openbao-restore-drill", "test.openbao-issuance", "test.openbao-ha"}
+        not {
+            "test.openbao-restore-drill",
+            "test.openbao-issuance",
+            "test.openbao-ha",
+            "test.agent-credentials",
+        }
         & set(campaign.get("members", []))
         for campaign in canonical["campaigns"].values()
     ), "OpenBao acceptance requires attended operator authority, never periodic execution."
@@ -1120,7 +1125,7 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
 def main() -> int:
     completed = run_validator(CATALOG)
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout == "Test catalog passed validation: suites=133.\n"
+    assert completed.stdout == "Test catalog passed validation: suites=134.\n"
     assert completed.stderr == ""
     canonical = yaml.safe_load(CATALOG.read_text(encoding="utf-8"))
     groups = {

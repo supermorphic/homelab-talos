@@ -23,6 +23,7 @@ from scripts.openbao import apply, restore, workstation
 from scripts.openbao.client import AmbiguousWrite, NotFound
 from scripts.openbao.configuration import SafeError, load_document
 from scripts.test.scenarios.openbao_restore import ScratchClient
+from scripts.test.scenarios.agent_credentials import BrokerScope
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -125,6 +126,12 @@ class PinnedServerContract(unittest.TestCase):
                         raise SafeError("read-denied")
                     return body
 
+                def delete(self, path, *, token=None):
+                    status, body = request("DELETE", path, token=token or self.token)
+                    if status not in (200, 204):
+                        raise AmbiguousWrite(http_status=status)
+                    return body
+
                 def post(self, path, payload, *, token=None):
                     status, body = request("POST", path, payload, token=token or self.token)
                     if status not in (200, 204):
@@ -160,6 +167,28 @@ class PinnedServerContract(unittest.TestCase):
                         action, workstation.ROLE, confirm=plan["confirmation"], **args
                     )
                     self.assertEqual(result, {"status": "pass", "action": action})
+
+            # The temporary acceptance lifecycle also matches pinned APIs, with
+            # no real caller/network use. Only the cleanup wait uses a test clock.
+            class CleanupClock:
+                value = 1000
+                def monotonic(self):
+                    return self.value
+                def sleep(self, seconds):
+                    self.value += seconds
+
+            acceptance_private = Path(directory).resolve() / "acceptance"
+            workstation.ensure_private_directory(acceptance_private)
+            approved = {"source_revision": "a" * 40, "cluster_uid": "synthetic-cluster"}
+            scope = BrokerScope(Path("/synthetic/operator"), "synthetic-acceptance", acceptance_private,
+                                local_client, approved, clock=CleanupClock())
+            with (patch("scripts.openbao.guards.assert_mutation_allowed"),
+                  patch("scripts.openbao.workstation.target", return_value=approved),
+                  patch("scripts.test.scenarios.agent_credentials.credentials.issue_exec_credential", return_value={} )):
+                for suffix in ("a", "b"):
+                    scope.create(scope.actor(suffix), metadata)
+                scope.cleanup()
+                self.assertGreaterEqual(scope.clock.value, 1090)
 
             # Local AppRole contract: bound alias, exact session lifetime and
             # disabling the entity invalidates authority of an issued session.

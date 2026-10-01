@@ -81,6 +81,16 @@ class FakeReader:
 
 
 class VerifyTest(unittest.TestCase):
+    def test_complete_keys_with_pagination_hint_are_not_a_complete_inventory(self):
+        reader = FakeReader()
+        original = reader.request
+        def partial(method, path):
+            value = original(method, path)
+            return {**value, 'next_page': 'synthetic-next'} if path == 'auth/homelab-approle/role' else value
+        reader.request = partial
+        with self.assertRaisesRegex(SafeError, 'incomplete-list'):
+            run(DESIRED, reader)
+
     def test_active_preflight_uses_independent_health_placement_monitoring(self):
         with tempfile.TemporaryDirectory() as directory:
             kubeconfig = Path(directory) / 'config'

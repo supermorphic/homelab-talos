@@ -179,6 +179,9 @@ class OperatorClient:
             return self.peer("openbao-0").post(path, payload)
         return self.peer(self.active).post(path, payload, token=token)
 
+    def delete(self, path, token=None):
+        return self.peer(self.active).delete(path, token=token)
+
     def wait_quorum(self, token):
         self.token = token
         deadline = time.monotonic() + 180

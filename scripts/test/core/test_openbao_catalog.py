@@ -13,7 +13,7 @@ from scripts.test import catalog_validator
 
 ROOT = Path(__file__).resolve().parents[3]
 CATALOG = ROOT / "tests/catalog.yaml"
-MUTATING = {"test.openbao-issuance", "test.openbao-ha", "test.openbao-restore-drill"}
+MUTATING = {"test.openbao-issuance", "test.openbao-ha", "test.openbao-restore-drill", "test.agent-credentials"}
 
 
 class OpenBaoCatalogTests(unittest.TestCase):

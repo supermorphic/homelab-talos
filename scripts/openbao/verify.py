@@ -23,6 +23,8 @@ INVENTORY_ENDPOINTS = {
 def _keys(value: object, kind: str) -> set[str]:
     if not isinstance(value, dict):
         raise SafeError('incomplete-list')
+    if kind not in {'auth-method', 'secret-mount'} and set(value) != {'keys'}:
+        raise SafeError('incomplete-list')
     # sys/auth and sys/mounts return maps, while LIST endpoints return `keys`.
     keys = list(value) if kind in {'auth-method', 'secret-mount'} and 'keys' not in value else value.get('keys')
     if (not isinstance(keys, list) or not all(isinstance(key, str) and key for key in keys)

@@ -345,3 +345,37 @@ token until expiry. A new command can fail immediately because it needs a new
 OpenBao login. Expired clients must refresh and can fail until OpenBao recovers.
 There is no shared cache or daemon. The existing Talos setup remains unchanged
 until caller acceptance and the later cutover.
+
+## Agent profile acceptance
+
+`mise exec -- just test record test.agent-credentials` is attended acceptance
+and stays outside periodic campaigns. Use deployed, clean `main`, the explicit
+operator kubeconfig, retained operator password, and the exact confirmation
+printed by the test. It takes about 15 minutes because it waits for actual token
+expiry and the Kubernetes API's validation leeway. Do not run it concurrently
+with another state-changing workflow.
+
+The test creates two run-owned temporary AppRoles from the reviewed workstation
+role settings and existing issuance policy. It uses separate private auth and
+task-owned standalone/linked checkout fixtures. It never replaces the normal
+workstation enrollment. Its checked operator Lease sections end before the
+coordinator acquisition/renewal/contention/release probe. That probe requires the
+pre-created campaign Lease and refuses every unrelated holder, including an
+expired holder. It releases only its own holder.
+
+The test checks four identities and allowed/denied requests from both checkout
+forms, repeated/parallel commands, watch/port-forward/publisher transports,
+actual expiry, cached-client and new-command outage behavior, refresh/recovery,
+revocation of an unexpired session, an unaffected second workstation, and
+rotation. Outage injection is limited to the fixture client transport. Production
+OpenBao remains available. Test credentials stay in memory/private files; retained
+results contain only assertions, issuance counts and timing.
+
+Cleanup disables each owned entity, destroys its SecretIDs, waits through the hard
+session lifetime, then removes owned aliases/entities/roles. An interruption or
+failed cleanup leaves private recovery records under
+`~/.config/homelab-talos/acceptance/`. Stop and inspect those records through
+explicit operator authority before another run; do not retry ambiguous writes or
+remove another holder's Lease. A passing offline test does not establish live
+acceptance. Legacy Kubernetes minting and final caller migration remain gated on
+reviewed deployment and successful live acceptance.

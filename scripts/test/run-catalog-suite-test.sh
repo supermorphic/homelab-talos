@@ -188,3 +188,27 @@ TEST_EXECUTION_ORIGIN=agent \
 [[ ! -e "$read_only_lease_marker" ]]
 
 echo 'Single-suite result coordinator tests passed.'
+
+# This sole self-managed suite must not turn an arbitrary command into a Lease bypass.
+set +e
+TEST_RESULTS_ROOT="$fixture_root/agent-invalid-entrypoint" \
+TEST_KUBECONFIG="$fixture_root/kubeconfig" \
+  scripts/test/run-catalog-suite.sh test.agent-credentials -- true >/dev/null 2>&1
+agent_invalid_exit="$?"
+set -e
+[[ "$agent_invalid_exit" -eq 2 ]]
+[[ ! -e "$fixture_root/agent-invalid-entrypoint" ]]
+
+# Its real entrypoint rejects absent operator authority before any broker/Lease action.
+set +e
+(env -u OPENBAO_OPERATOR_KUBECONFIG -u TEST_CAMPAIGN_LEASE_HOLDER \
+  TEST_RESULTS_ROOT="$fixture_root/agent-no-authority" \
+  TEST_KUBECONFIG="$fixture_root/kubeconfig" \
+  scripts/test/run-catalog-suite.sh test.agent-credentials -- \
+    uv run --locked python -m scripts.test.scenarios.agent_credentials) >/dev/null 2>&1
+agent_missing_authority_exit="$?"
+set -e
+[[ "$agent_missing_authority_exit" -eq 1 ]]
+mapfile -t agent_runs < <(find "$fixture_root/agent-no-authority" -mindepth 1 -maxdepth 1 -type d)
+[[ "${#agent_runs[@]}" -eq 1 ]]
+[[ "$(yq -r '.result' "${agent_runs[0]}/summary.json")" == 'failed' ]]
