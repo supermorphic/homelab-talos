@@ -304,6 +304,7 @@ done
 	--label "homelab-talos.test-run=$run_marker" \
 	--network "$network" \
 	--network-alias automation-data-postgresql.automation-data.svc.cluster.local \
+	--network-alias n8n-postgresql.automation.svc.cluster.local \
 	--env-file "$integration_root/postgres.env" \
 	--volume "$postgres_volume:/var/lib/postgresql/data" \
 	--volume "$repo_root/kubernetes/apps/automation-data/postgresql/app/scripts:/scripts:ro" \
@@ -552,16 +553,66 @@ install_discovery_projection nocodb nocodb_inventory "$nocodb_inventory_password
 	kubernetes/apps/automation-data/postgresql/app/scripts/nocodb-discovery.sql
 install_discovery_projection n8n n8n_inventory "$n8n_inventory_password" \
 	kubernetes/apps/automation/n8n-postgresql/app/scripts/credential-discovery.sql
-inventory_pg_credential() { # <name> <database> <reader> <candidate>
-	local data
-	data="$(jq -cn --arg database "$2" --arg user "$3" --arg password "$4" \
-		'{host:"automation-data-postgresql.automation-data.svc.cluster.local",port:5432,database:$database,user:$user,password:$password,ssl:"disable"}')"
-	create_n8n_credential "$1" postgres "$data"
+# Exercise the production CLI enrollment against the real pinned application.
+# New synthetic credentials enter only through stdin; existing values are not exported.
+platform_inventory_id="$(openssl rand -hex 16)"
+nocodb_inventory_id="$(openssl rand -hex 16)"
+n8n_inventory_id="$(openssl rand -hex 16)"
+inventory_header_id="$(openssl rand -hex 16)"
+inventory_workflow_id="$(openssl rand -hex 16)"
+native_project="$("$podman_bin" exec "$postgres_name" psql -X -U postgres -d n8n -Atc 'SELECT id FROM project;')"
+[[ "$native_project" =~ ^[A-Za-z0-9_-]{1,128}$ ]] || fail 'Disposable n8n project is ambiguous.'
+PLATFORM_PASSWORD="$platform_inventory_password" NOCODB_PASSWORD="$nocodb_inventory_password" \
+	N8N_PASSWORD="$n8n_inventory_password" HEADER="$inventory_webhook_secret" \
+	uv run --locked python - "$native_project" "$platform_inventory_id" "$nocodb_inventory_id" "$n8n_inventory_id" "$inventory_header_id" "$inventory_workflow_id" \
+	>"$integration_root/native-input.json" <<'PYTHON'
+import json,os,sys,uuid
+from pathlib import Path
+sys.path.insert(0,'scripts/lib')
+from automation_data_enrollment import SOURCES, WORKFLOW
+project,*identities=sys.argv[1:]
+ids=dict(zip(SOURCES,identities[:4],strict=True))
+credentials=[]
+for source,env in zip(SOURCES,['PLATFORM_PASSWORD','NOCODB_PASSWORD','N8N_PASSWORD','HEADER'],strict=True):
+    ns,host,database,user,name=SOURCES[source]
+    data=({'name':'X-Automation-Data-Inventory','value':os.environ[env]} if source=='header' else
+          {'host':f'{host}.{ns}.svc.cluster.local','port':5432,'database':database,'user':user,'password':os.environ[env],'ssl':'disable'})
+    credentials.append({'id':ids[source],'name':name,'type':'httpHeaderAuth' if source=='header' else 'postgres','data':data})
+workflow=json.loads(WORKFLOW.read_text())
+workflow={key:workflow[key] for key in ('name','nodes','connections','settings')}
+workflow.update(id=identities[4],active=False)
+for node in workflow['nodes']:
+    if node['type']=='n8n-nodes-base.webhook':
+        node['webhookId']=str(uuid.UUID(hex=identities[4]))
+    for binding in node.get('credentials',{}).values():
+        binding['id']=ids[next(s for s,entry in SOURCES.items() if entry[4]==binding['name'])]
+print(json.dumps({'projectId':project,'verifyOnly':False,'credentials':credentials,'workflow':workflow}))
+PYTHON
+native_enroll_name="${run_marker}-native-enroll"
+created_containers+=("$native_enroll_name")
+native_enroll() {
+	"$podman_bin" run --rm --interactive --name "$native_enroll_name" --label "homelab-talos.test-run=$run_marker" \
+		--network "$network" --env-file "$integration_root/n8n.env" --env N8N_USER_FOLDER=/tmp/n8n \
+		--read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges \
+		--volume "$repo_root/scripts/lib/automation-data-discovery-enroll.cjs:/enroll.cjs:ro" \
+		--entrypoint node "$n8n_image" /enroll.cjs /dev/stdin "${2:-import}" <"$1"
 }
-platform_inventory_id="$(inventory_pg_credential 'Automation Data Inventory Reader' automation_data_control automation_data_inventory "$platform_inventory_password")"
-nocodb_inventory_id="$(inventory_pg_credential 'NocoDB Inventory Reader' nocodb nocodb_inventory "$nocodb_inventory_password")"
-n8n_inventory_id="$(inventory_pg_credential 'n8n Inventory Reader' n8n n8n_inventory "$n8n_inventory_password")"
-inventory_header_id="$(create_n8n_credential 'Automation Data Inventory Header' httpHeaderAuth "$(jq -cn --arg value "$inventory_webhook_secret" '{name:"X-Automation-Data-Inventory",value:$value}')")"
+native_enroll "$integration_root/native-input.json" preflight >"$integration_root/native-preflight.log"
+rg -Fxq 'discovery_native_preflight=verified' "$integration_root/native-preflight.log" || fail 'Native preflight failed.'
+jq '.projectId="synthetic-missing-project"' "$integration_root/native-input.json" >"$integration_root/native-missing-project.json"
+if native_enroll "$integration_root/native-missing-project.json" preflight >"$integration_root/native-missing-project.log" 2>&1; then
+	fail 'Native preflight accepted a missing project.'
+fi
+[[ "$("$podman_bin" exec "$postgres_name" psql -X -U postgres -d n8n -Atc 'SELECT (SELECT count(*) FROM credentials_entity)+(SELECT count(*) FROM workflow_entity);')" == 0 ]] || fail 'Native preflight created credentials or workflows.'
+native_enroll "$integration_root/native-input.json" >"$integration_root/native-import.log"
+rg -Fxq 'discovery_native_enrollment=verified' "$integration_root/native-import.log" || fail 'Native enrollment failed.'
+# The CLI normally upserts. The wrapper must refuse even an identical second creation.
+if native_enroll "$integration_root/native-input.json" >"$integration_root/native-collision.log" 2>&1; then
+	fail 'Native enrollment overwrote existing credentials.'
+fi
+jq '.verifyOnly=true' "$integration_root/native-input.json" >"$integration_root/native-verify.json"
+native_enroll "$integration_root/native-verify.json" >"$integration_root/native-verify.log"
+rg -Fxq 'discovery_native_enrollment=verified' "$integration_root/native-verify.log" || fail 'Retained native enrollment verification failed.'
 
 provisioner_pg_data="$(jq -cn --arg password "$provisioner_password" '{host:"automation-data-postgresql.automation-data.svc.cluster.local",port:5432,database:"automation_data_control",user:"automation_data_provisioner",password:$password,ssl:"disable"}')"
 provisioner_pg_id="$(create_n8n_credential 'Automation Data Provisioner' postgres "$provisioner_pg_data")"
@@ -625,13 +676,10 @@ import_and_publish() { # <local-file> <workflow-name>
 }
 
 phase='workflow-import'
-jq --arg platform "$platform_inventory_id" --arg nocodb "$nocodb_inventory_id" --arg n8n "$n8n_inventory_id" --arg header "$inventory_header_id" '
-    .nodes |= map(if .type == "n8n-nodes-base.postgres" then
-      .credentials.postgres.id = (if .credentials.postgres.name == "Automation Data Inventory Reader" then $platform
-        elif .credentials.postgres.name == "NocoDB Inventory Reader" then $nocodb else $n8n end)
-      elif .type == "n8n-nodes-base.webhook" then .credentials.httpHeaderAuth.id = $header else . end)
-    ' kubernetes/apps/automation/n8n/app/workflows/automation-data-credential-inventory.json >"$integration_root/inventory-workflow.json"
-inventory_workflow_id="$(import_and_publish "$integration_root/inventory-workflow.json" 'Automation Data Credential Inventory')"
+http_request POST "$n8n_url/api/v1/workflows/$inventory_workflow_id/publish" n8n-key - "$integration_root/native-publish.json"
+jq -e '.active == true' "$integration_root/native-publish.json" >/dev/null || fail 'Native inventory publication failed.'
+printf '{"action":"list"}\n' >"$integration_root/native-probe.json"
+http_request POST "$n8n_url/webhook/automation-data-credential-inventory" inventory-webhook "$integration_root/native-probe.json" "$integration_root/native-probe-response.json"
 import_and_publish "$integration_root/automation-data-provisioner.json" 'Automation Data Provisioner' >/dev/null
 import_and_publish "$integration_root/nocodb-source-provisioner.json" 'NocoDB Source Provisioner' >/dev/null
 

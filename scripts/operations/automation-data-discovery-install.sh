@@ -10,13 +10,14 @@ source scripts/lib/n8n-verification.sh
 source scripts/lib/automation-data-discovery-install.sh
 require_bash
 
-[[ "$#" -eq 1 || ("$#" -eq 3 && "$2" == guard) ]] || exit 2
+[[ "$#" -eq 1 || ("$#" -eq 2 && "$2" == finalize) || ("$#" -eq 3 && "$2" == guard) ]] || exit 2
 [[ "${AUTOMATION_DATA_DISCOVERY_INSTALL_CONFIRM:-}" == install:automation-data:discovery ]] || {
 	echo 'Operator installation requires AUTOMATION_DATA_DISCOVERY_INSTALL_CONFIRM=install:automation-data:discovery.' >&2
 	exit 1
 }
 kubeconfig="$1"
-directory="${AUTOMATION_DATA_DISCOVERY_INSTALL_DIRECTORY:?Select the protected access directory.}"
+directory="${AUTOMATION_DATA_DISCOVERY_INSTALL_DIRECTORY:-${XDG_CONFIG_HOME:-$HOME/.config}/homelab/automation-data}"
+export AUTOMATION_DATA_DISCOVERY_INSTALL_DIRECTORY="$directory"
 [[ -f "$kubeconfig" && "$directory" == /* ]] || exit 2
 enrollment() { uv run --locked python scripts/lib/automation_data_enrollment.py "$@"; }
 run_id="${3:-$(date -u +%Y%m%dt%H%M%Sz)-$(openssl rand -hex 4)}"
@@ -63,7 +64,22 @@ if [[ "${2:-}" == guard ]]; then
 fi
 
 source_guard
+enrollment initialize
+if [[ "${2:-}" == finalize ]]; then
+	enrollment finalize
+	enrollment report
+	exit
+fi
 enrollment prepare
+native_project="${AUTOMATION_DATA_DISCOVERY_N8N_PROJECT_ID:-}"
+if [[ -z "$native_project" ]]; then
+	# Fail before reader mutation when the selected API path lacks authentication.
+	if [[ ! -f "$directory/n8n-api-key" ]]; then
+		echo 'Select the existing n8n project ID from native n8n metadata with AUTOMATION_DATA_DISCOVERY_N8N_PROJECT_ID; no API-key file is needed for native enrollment.' >&2
+		exit 1
+	fi
+	enrollment api-preflight
+fi
 temp_dir="$(mktemp -d "$directory/run.XXXXXXXX")"
 lease_acquired=false
 created=()
@@ -98,6 +114,9 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+if [[ -n "$native_project" ]]; then
+	enrollment native-input "$native_project" "$temp_dir/native-input.json"
+fi
 acquire_test_lease "$kubeconfig" "$run_id" >/dev/null
 lease_acquired=true
 start_test_lease_renewal "$kubeconfig" "$run_id" "$temp_dir/lease-failed"
@@ -115,6 +134,39 @@ for namespace in automation-data automation; do
 	kc "$namespace" create --filename "$temp_dir/backup.json" >/dev/null
 	discovery_wait_job "$kubeconfig" "$namespace" "$backup" 1800
 done
+
+if [[ -n "$native_project" ]]; then
+	mutation_guard
+	discovery_require_lease "$kubeconfig" "$run_id" "$temp_dir"
+	config="discovery-native-${run_id}"
+	secret="discovery-native-input-${run_id}"
+	for target in "configmap:$config" "secret:$secret"; do
+		[[ -z "$(kc automation get "${target%:*}" "${target#*:}" --ignore-not-found --output name)" ]]
+	done
+	kc automation create configmap "$config" --from-file=enroll.cjs=scripts/lib/automation-data-discovery-enroll.cjs --dry-run=client --output json |
+		RUN_ID="$run_id" yq -o=json '.metadata.labels."homelab-talos/run-id" = strenv(RUN_ID)' >"$temp_dir/native-config.json"
+	kc automation create secret generic "$secret" --from-file="bundle.json=$temp_dir/native-input.json" --dry-run=client --output json |
+		RUN_ID="$run_id" yq -o=json '.metadata.labels."homelab-talos/run-id" = strenv(RUN_ID)' >"$temp_dir/native-secret.json"
+	created+=("automation:configmap:$config" "automation:secret:$secret")
+	kc automation create --filename "$temp_dir/native-config.json" >/dev/null
+	kc automation create --filename "$temp_dir/native-secret.json" >/dev/null
+	native_job() {
+		local mode="$1" job="discovery-native-${1}-${run_id}"
+		[[ -z "$(kc automation get job "$job" --ignore-not-found --output name)" ]]
+		mutation_guard
+		discovery_require_lease "$kubeconfig" "$run_id" "$temp_dir"
+		enrollment native-manifest "$job" "$run_id" "$config" "$secret" "$mode" >"$temp_dir/native-job.json"
+		if [[ "$mode" == import ]]; then enrollment native-start; fi
+		created+=("automation:job:$job")
+		kc automation create --filename "$temp_dir/native-job.json" >/dev/null
+		discovery_wait_job "$kubeconfig" automation "$job" 330
+		local expected=discovery_native_enrollment=verified
+		[[ "$mode" != preflight ]] || expected=discovery_native_preflight=verified
+		[[ "$(kc automation logs "job/$job" --tail=1)" == "$expected" ]]
+	}
+	# Resolve project, Secret mounts, DB authentication, and collisions before DDL.
+	native_job preflight
+fi
 
 for source in platform nocodb n8n; do
 	namespace=automation-data
@@ -163,6 +215,16 @@ PYTHON
 	discovery_wait_job "$kubeconfig" "$namespace" "$job" 150
 	[[ "$(kc "$namespace" logs "job/$job" --tail=1)" == discovery_installation=applied ]]
 done
+if [[ -n "$native_project" ]]; then
+	# Reader loops change config/secret variables; use the retained native inputs.
+	config="discovery-native-${run_id}"
+	secret="discovery-native-input-${run_id}"
+	native_job import
+	enrollment native-complete
+	enrollment publication
+	echo 'Publish the retained inventory workflow with native n8n, then run automation-data-discovery-install finalize.'
+	exit
+fi
 for source in platform nocodb n8n header; do
 	mutation_guard
 	enrollment enroll "$source" "$kubeconfig" "$run_id"

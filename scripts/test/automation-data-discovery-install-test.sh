@@ -34,11 +34,69 @@ if discovery_require_lease /unused fixture-run "$scratch"; then
 fi
 uv run --locked python - "$scratch" <<'PY'
 import contextlib,io,json,sys
+import os
 from pathlib import Path
 sys.path.insert(0,'scripts/lib')
 from automation_data_enrollment import prepare, make_job, state, save_state, N8nEnrollment, SOURCES
 from automation_data_client import PrivateFileError, write_private_file_exclusive
 root=Path(sys.argv[1]).resolve()
+import automation_data_enrollment as enrollment
+assert hasattr(enrollment, 'initialize_access'), 'Installer must create protected access/profile directories'
+os.environ['XDG_CONFIG_HOME']=str(root/'config')
+access=root/'config/homelab/automation-data'
+enrollment.initialize_access(access)
+config=json.loads((access/'access.json').read_text())
+for key in ('applicationProfileRoot','migratorProfileRoot'):
+    assert Path(config[key]).is_dir()
+    assert Path(config[key]).stat().st_mode & 0o777 == 0o700
+assert (access/'access.json').stat().st_mode & 0o777 == 0o600
+before=(access/'access.json').read_bytes()
+enrollment.initialize_access(access)
+assert (access/'access.json').read_bytes()==before, 'Existing enrollment overwritten'
+for unsafe in ('symlink','checkout'):
+    selected=root/unsafe
+    if unsafe=='symlink': selected.symlink_to(root/'config', target_is_directory=True)
+    else:
+        selected.mkdir(mode=0o700)
+        (selected/'.git').write_text('synthetic worktree marker')
+    os.environ['XDG_CONFIG_HOME']=str(selected/'new-config')
+    try: enrollment.initialize_access(selected/'new-config/homelab/automation-data')
+    except PrivateFileError: pass
+    else: raise AssertionError('Unsafe bootstrap location accepted')
+    assert not (selected/'new-config').exists(), 'Bootstrap created files through an unsafe ancestor'
+os.environ['XDG_CONFIG_HOME']=str(root/'config')
+assert not (access/'n8n-api-key').exists()
+try:
+    manifest=enrollment.make_native_job('fixture-job','fixture-run','fixture-config','fixture-candidates','preflight')
+except TypeError as exc:
+    raise AssertionError('Native enrollment needs a read-only preflight before reader mutation') from exc
+pod=manifest['spec']['template']['spec']
+assert pod['automountServiceAccountToken'] is False
+assert pod['containers'][0]['args'][-1]=='preflight'
+assert pod['securityContext']['runAsUser']==1000
+assert {v['valueFrom']['secretKeyRef']['key'] for v in pod['containers'][0]['env'] if 'valueFrom' in v}=={'n8n-password','N8N_ENCRYPTION_KEY'}
+assert hasattr(enrollment, 'native_input'), 'Native enrollment must work without an API-key file'
+enrollment.prepare(access)
+enrollment.native_input(access, 'fixture-project', root/'native-input.json')
+bundle=json.loads((root/'native-input.json').read_text())
+assert bundle['projectId']=='fixture-project' and bundle['verifyOnly'] is False
+assert len(bundle['credentials'])==4
+assert {c['name'] for c in bundle['credentials']}=={entry[4] for entry in SOURCES.values()}
+assert bundle['workflow']['active'] is False
+assert all(node.get('webhookId') for node in bundle['workflow']['nodes'] if node['type']=='n8n-nodes-base.webhook'), 'CLI import requires explicit webhook IDs'
+assert not (access/'n8n-api-key').exists()
+enrollment.native_start(access)
+try: enrollment.native_input(access, 'fixture-project', root/'retry.json')
+except PrivateFileError: pass
+else: raise AssertionError('Ambiguous native import retried')
+enrollment.native_complete(access)
+enrollment.native_input(access, 'fixture-project', root/'native-verify.json')
+verified=json.loads((root/'native-verify.json').read_text())
+assert verified['verifyOnly'] is True
+assert verified['credentials']==bundle['credentials']
+try: enrollment.native_input(access, 'other-project', root/'wrong-project.json')
+except PrivateFileError: pass
+else: raise AssertionError('Retained credentials moved between projects')
 with contextlib.redirect_stdout(io.StringIO()) as captured:
     first=prepare(root);second=prepare(root)
 assert first['operationId']==second['operationId']
@@ -111,6 +169,24 @@ try:prepare(root)
 except PrivateFileError:pass
 else:raise AssertionError('Ambiguous prior installation accepted')
 PY
+node - "$scratch/native-input.json" <<'JS'
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const filename = './scripts/lib/automation-data-discovery-enroll.cjs';
+assert(fs.existsSync(filename), 'Pinned CLI enrollment must reject overwrite before import');
+const { checkExisting } = require(process.cwd() + '/' + filename);
+const bundle = JSON.parse(fs.readFileSync(process.argv[2]));
+checkExisting(bundle, [], []);
+const rows = bundle.credentials.map(({ id, name, type }) => ({ id, name, type, projectId: bundle.projectId }));
+const workflows = [{ id: bundle.workflow.id, name: bundle.workflow.name, projectId: bundle.projectId }];
+assert.throws(() => checkExisting(bundle, rows, workflows), 'Import must never upsert an existing ID');
+const retry = { ...bundle, verifyOnly: true };
+checkExisting(retry, rows, workflows);
+assert.throws(() => checkExisting(retry, rows.slice(1), workflows), 'Missing retained credential must stop');
+assert.throws(() => checkExisting(retry, [...rows, { ...rows[0], id: 'foreign' }], workflows));
+assert.throws(() => checkExisting(retry, rows.map(r => ({ ...r, projectId: 'foreign' })), workflows));
+assert.throws(() => checkExisting(retry, rows, [{ ...workflows[0], id: 'foreign' }]));
+JS
 printf '%s\n' 'Discovery installation preconditions, retained candidates, and owned cleanup passed.'
 if [[ "${1:-}" == --with-sql ]]; then
 	bash scripts/test/automation-data-discovery-sql-test.sh

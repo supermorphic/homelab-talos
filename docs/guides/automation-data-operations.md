@@ -5,27 +5,19 @@ for task selection, readiness decisions, and autonomous helper use.
 
 ## Private credential-discovery installation
 
-Installation is separately authorized operator administration on clean deployed main,
-after NocoDB and n8n initialize their databases. Prepare owned 0700 directories and 0600
-regular files outside checkouts, without symlinks or hard links. The access directory is
-`$XDG_CONFIG_HOME/homelab/automation-data`, falling back to
-`$HOME/.config/homelab/automation-data`. Create its non-secret `access.json`:
+Installation is separately authorized administration on clean deployed main, after NocoDB
+and n8n initialize their databases. An agent with that authorization performs the supported
+bootstrap; it does not ask the operator to locate passwords or invent profile paths.
 
-```json
-{
-  "schemaVersion": 1,
-  "inventoryAuthFile": "/path/to/private/access/inventory-auth",
-  "applicationProfileRoot": "/path/to/private/application-profiles",
-  "migratorProfileRoot": "/path/to/private/migrator-profiles"
-}
-```
+The installer creates owned 0700 directories and 0600 configuration files at
+`$XDG_CONFIG_HOME/homelab/automation-data` (default `$HOME/.config/homelab/automation-data`).
+It preserves existing `access.json` and profiles. New profile roots are `applications/`
+(or the existing `AUTOMATION_DATA_LOGIN_DIRECTORY`) and `migrators/` under that directory.
+Creating these roots does not enroll consumers or recover their passwords.
 
-Replace the placeholders. `inventoryAuthFile` must select `inventory-auth` in the access
-directory; `applicationProfileRoot` must match `AUTOMATION_DATA_LOGIN_DIRECTORY`, retaining
-its domain/application subdirectories. Supply the enrollment API key in the access
-directory's protected `n8n-api-key` file, never in chat or command arguments. Select the
-already-authorized administrative kubeconfig with the `kubeconfig` Just variable. Set
-`AUTOMATION_DATA_DISCOVERY_INSTALL_DIRECTORY` to the absolute access directory and
+Select the already-authorized administrative kubeconfig with the `kubeconfig` Just variable.
+Use native n8n credential metadata to obtain the existing **Automation Data Provisioner**
+owner project ID and set `AUTOMATION_DATA_DISCOVERY_N8N_PROJECT_ID` to it. Set
 `AUTOMATION_DATA_DISCOVERY_INSTALL_CONFIRM=install:automation-data:discovery`, then run:
 
 ```sh
@@ -33,14 +25,22 @@ mise exec -- just kube automation-data-discovery-install
 ```
 
 The installer checks deployed source, holds the shared mutation Lease, takes fresh backups,
-installs and tests restricted readers, and enrolls/publishes the private inventory workflow.
-It verifies readback and removes its temporary resources. It does not update the mutation
-workflows; complete [their upgrade](#upgrade-existing-mutation-workflows) below.
+and checks native prerequisites before installing restricted readers. The pinned n8n CLI
+imports only retained new discovery credentials and an unpublished inventory workflow.
+Database access and encryption use
+existing cluster Secret references; no existing credential is exported. CLI output is suppressed,
+and independent metadata/graph checks establish import success. Name or ID collisions stop
+creation; a completed import is verified without reimporting it.
 
-Retain `pending/operation.json` and candidates until installation/recovery evidence is
-accepted. Retry with the same material; reruns do not rotate active readers. Conflicting
-credentials or uncertain API creation require attended reconciliation, not receipt deletion
-and repeated creation. Remove `n8n-api-key` when enrollment is complete.
+Publish the returned workflow ID through native n8n, then run
+`mise exec -- just kube automation-data-discovery-install finalize` for live inventory acceptance.
+Complete [the mutation workflow upgrade](#upgrade-existing-mutation-workflows) below.
+The alternative API enrollment path remains available when a protected `n8n-api-key` file
+already exists in the access directory and no native project is selected; it publishes directly.
+
+Retain `pending/` until installation/recovery evidence is accepted. Uncertain creation requires
+attended reconciliation, not receipt deletion or repeated import. Reruns retain reader passwords.
+Remove any enrollment-only `n8n-api-key` file when complete.
 
 For separately authorized replacement/revocation, deactivate the inventory workflow and
 drain executions. Confirm retained IDs/roles, revoke only the selected header or reader,

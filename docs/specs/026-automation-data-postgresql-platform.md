@@ -956,7 +956,10 @@ credential broker. OpenBao issuance and the issue 507 audit remain separate work
 owns use cases, commands, result interpretation, and agent actions;
 [installation](../guides/automation-data-operations.md#private-credential-discovery-installation)
 and [recovery](../runbooks/platform-disaster-recovery.md#credential-discovery-recovery)
-own the operational procedures.
+own the operational procedures. Authorized bootstrap can use the pinned n8n CLI with
+cluster-held encryption and native n8n publication, without a workstation API-key copy.
+It creates only retained discovery credentials, refuses overwrite, and separates unpublished
+installation from live acceptance. Existing consumer credential ownership does not change.
 
 ### Observation boundary
 
