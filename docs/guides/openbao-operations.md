@@ -271,3 +271,54 @@ improvise a rollback.
   [upgrade script](../../scripts/operations/openbao-upgrade.sh), and
   [acceptance scenarios](../../scripts/test/scenarios/openbao_issuance.py) own guarded
   execution and detailed assertions.
+
+## Workstation AppRole lifecycle
+
+The additive #450 commands require the reviewed agent profile configuration to
+be deployed and applied first. Existing credential setup remains available until
+caller acceptance permits cutover. Use a clean checkout of deployed `main` and
+an explicitly authorized `OPENBAO_OPERATOR_KUBECONFIG`. The command prompts
+privately for the retained non-root OpenBao operator password, shows a confirmation
+bound to the source and target, and holds the existing operations Lease for writes.
+It does not accept ambient OpenBao tokens.
+
+```sh
+mise exec -- just kube openbao-workstation enroll
+mise exec -- just kube openbao-workstation rotate
+mise exec -- just kube openbao-workstation revoke
+```
+
+The one reviewed role slot is `agent-workstation`. Enrollment requires an unused
+role alias and an empty SecretID inventory. It binds that alias to an entity with
+no additional identity or group policies, then tests login through the normal
+HTTPS route. Connection metadata comes from the explicitly supplied operator
+kubeconfig. Private `workstation.json`, `cluster.json`, and `operator.json` live
+under `~/.config/homelab-talos/openbao/`, outside checkouts. The directory is `0700`
+and files are `0600`; unsafe ownership, modes, links, or repository destinations
+are rejected. Protect the operator sidecar alongside workstation authentication.
+No identifier, accessor, or credential is printed by the command.
+
+SecretIDs are reusable for 90 days. Rotate before expiry. Rotation installs a
+validated replacement atomically before destroying previous SecretIDs. A failed
+validation leaves the previous file intact and retains accessors for cleanup.
+If old-ID destruction fails after replacement, the result is incomplete: the new
+file is usable, but cleanup remains required. Do not retry an ambiguous write
+blindly. Inspect the private state and run guarded revocation when enrollment or
+rotation cannot be completed safely. A lost entity/alias creation response may
+need attended identity inspection; do not invent or adopt a different mapping.
+
+Revocation first disables and reads back the exact entity, then destroys every
+SecretID and verifies an empty inventory. The entity stays disabled even if
+cleanup fails. Removing SecretIDs alone does not prevent issuance from existing
+OpenBao sessions. Sessions have a hard 60-second bound. Re-enrollment of the same
+recorded entity requires empty SecretID inventory and at least 90 seconds after
+the confirmed disable barrier (60 seconds plus a 30-second clock margin). Missing
+lifecycle history or an unexpected alias requires attended recovery or a new
+reviewed role slot; configuration apply never re-enables entities.
+
+Existing Kubernetes profile tokens can remain valid until their expiry, including
+the API's validation leeway; established streams can continue longer. All four
+profiles belong to the same workstation trust boundary. Any process able to use
+that workstation SecretID can request any profile. Context choice does not isolate
+agents running as the same operating-system user. Talos reader issuance stays
+separate.

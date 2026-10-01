@@ -15,11 +15,13 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 
-from scripts.openbao import apply, restore
-from scripts.openbao.configuration import load_document
+from scripts.openbao import apply, restore, workstation
+from scripts.openbao.client import AmbiguousWrite, NotFound
+from scripts.openbao.configuration import SafeError, load_document
 from scripts.test.scenarios.openbao_restore import ScratchClient
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -110,6 +112,55 @@ class PinnedServerContract(unittest.TestCase):
             ]:
                 self.assertEqual(request(method, path, body, token=reader_token)[0], 403)
             self.assertEqual(request("POST", "auth/token/revoke-self", {}, token=reader_token)[0], 204)
+            class LocalClient:
+                token = "synthetic-local-root"
+
+                def read(self, path, *, token=None, list_request=False):
+                    status, body = request(
+                        "LIST" if list_request else "GET", path, token=token or self.token
+                    )
+                    if status == 404:
+                        raise NotFound()
+                    if status != 200:
+                        raise SafeError("read-denied")
+                    return body
+
+                def post(self, path, payload, *, token=None):
+                    status, body = request("POST", path, payload, token=token or self.token)
+                    if status not in (200, 204):
+                        raise AmbiguousWrite(http_status=status)
+                    return body
+
+            local_client = LocalClient()
+            private = Path(directory).resolve() / "workstation"
+            metadata = {
+                "schema_version": 1,
+                "server": "https://cluster.example.test:6443",
+                "certificate_authority_data": "synthetic-ca",
+                "openbao_server": workstation.ENDPOINT,
+                "profiles": workstation.PROFILES,
+            }
+            with (
+                patch(
+                    "scripts.openbao.workstation.target",
+                    return_value={"source_revision": "a" * 40, "cluster_uid": "synthetic-cluster"},
+                ),
+                patch(
+                    "scripts.openbao.apply.verify_configuration", return_value={"differences": []}
+                ),
+                patch("scripts.openbao.guards.assert_mutation_allowed"),
+                patch("scripts.openbao.workstation.cluster_metadata", return_value=metadata),
+            ):
+                args = dict(
+                    directory=private, client=local_client, kubeconfig=Path("/synthetic/operator")
+                )
+                for action in ("enroll", "rotate"):
+                    plan = workstation.run(action, workstation.ROLE, confirm="", **args)
+                    result = workstation.run(
+                        action, workstation.ROLE, confirm=plan["confirmation"], **args
+                    )
+                    self.assertEqual(result, {"status": "pass", "action": action})
+
             # Local AppRole contract: bound alias, exact session lifetime and
             # disabling the entity invalidates authority of an issued session.
             role_path = "auth/homelab-approle/role/agent-workstation"

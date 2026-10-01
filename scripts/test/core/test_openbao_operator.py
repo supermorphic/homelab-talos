@@ -9,6 +9,21 @@ from scripts.openbao import operator
 
 
 class OperatorTunnelTest(unittest.TestCase):
+    def test_workstation_can_list_with_explicit_operator_session(self):
+        client = operator.OperatorClient(Path("/synthetic/kubeconfig"))
+        peer = Mock()
+        with patch.object(client, "peer", return_value=peer):
+            client.read(
+                "auth/homelab-approle/role/agent-workstation/secret-id",
+                token="synthetic-operator",
+                list_request=True,
+            )
+        peer.read.assert_called_once_with(
+            "auth/homelab-approle/role/agent-workstation/secret-id",
+            token="synthetic-operator",
+            list_request=True,
+        )
+
     def test_dead_tunnel_is_reopened_before_next_read(self):
         client = operator.OperatorClient(Path("/synthetic/kubeconfig"))
         dead, fresh = Mock(), Mock()

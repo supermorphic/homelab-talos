@@ -1253,3 +1253,7 @@ nocodb-source-status domain: require-bash
 
 nocodb-pair-status domain pair: require-bash
     @scripts/nocodb/source-operation.sh pair-status {{quote(domain)}} {{quote(pair)}}
+
+# Attended workstation AppRole lifecycle; explicit operator credential required.
+openbao-workstation action slot="agent-workstation": require-bash
+    @uv run --locked python -m scripts.openbao.workstation {{quote(action)}} {{quote(slot)}}
