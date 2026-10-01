@@ -105,6 +105,7 @@ SQL
 query n8n postgres <kubernetes/apps/automation/n8n-postgresql/app/scripts/credential-discovery.sql >"$scratch/n8n-install.out"
 # Run the production installer entrypoint with SCRAM authentication in the disposable server.
 mkdir "$scratch/client-scripts" "$scratch/candidates"
+client_scripts="$scratch/client-scripts"
 cp scripts/lib/automation-data-discovery-reader.sh "$scratch/client-scripts/install-reader.sh"
 cp kubernetes/apps/automation/n8n-postgresql/app/scripts/credential-discovery.sql "$scratch/client-scripts/projection.sql"
 python - "$scratch" <<'PY'
@@ -119,7 +120,7 @@ environment=dict(line.split('=',1) for line in (root/'postgres.env').read_text()
 PY
 install_reader() {
 	podman run --rm --name "$client" --label "homelab-talos.test-run=$marker" --network "container:$container" --env-file "$scratch/client.env" \
-		--volume "$scratch/client-scripts:/scripts:ro" --volume "$scratch/candidates:/candidates:ro" \
+		--volume "$client_scripts:/scripts:ro" --volume "$scratch/candidates:/candidates:ro" \
 		--entrypoint /bin/sh postgres:17.11-alpine3.24 /scripts/install-reader.sh
 }
 install_reader >"$scratch/reader-install.out" 2>&1
@@ -139,11 +140,33 @@ fi
 cp "$scratch/original-candidate" "$scratch/candidates/candidate"
 install_reader >"$scratch/unchanged-reader.out" 2>&1
 [[ "$(tail -1 "$scratch/unchanged-reader.out")" == discovery_installation=applied ]]
-query automation_data_control postgres >/dev/null <<'SQL'
-ALTER ROLE automation_data_inventory LOGIN;
-ALTER ROLE nocodb_inventory LOGIN;
-ALTER ROLE n8n_inventory LOGIN;
-SQL
+# Exercise every production entrypoint, including the private platform schema.
+for source in platform nocodb; do
+	python - "$scratch/client.env" "$source" <<'PY'
+import sys
+from pathlib import Path
+path=Path(sys.argv[1]);source=sys.argv[2]
+env=dict(line.split('=',1) for line in path.read_text().splitlines())
+env.update(PGDATABASE='automation_data_control' if source=='platform' else 'nocodb',
+           DISCOVERY_SOURCE=source,
+           DISCOVERY_READER='automation_data_inventory' if source=='platform' else 'nocodb_inventory')
+path.write_text(''.join(f'{k}={v}\n' for k,v in env.items()))
+PY
+	projection=credential-discovery.sql
+	[[ "$source" != nocodb ]] || projection=nocodb-discovery.sql
+	client_scripts="$scratch/$source-scripts"
+	mkdir "$client_scripts"
+	cp scripts/lib/automation-data-discovery-reader.sh "$client_scripts/install-reader.sh"
+	cp "kubernetes/apps/automation-data/postgresql/app/scripts/$projection" "$client_scripts/projection.sql"
+	if ! install_reader >"$scratch/$source-reader-install.out" 2>&1; then
+		cat "$scratch/$source-reader-install.out" >&2
+		exit 1
+	fi
+	[[ "$(tail -1 "$scratch/$source-reader-install.out")" == discovery_installation=applied ]]
+	install_reader >"$scratch/$source-reader-rerun.out" 2>&1
+	[[ "$(tail -1 "$scratch/$source-reader-rerun.out")" == discovery_installation=applied ]]
+done
+[[ "$(printf '%s\n' "SELECT has_schema_privilege('automation_data_inventory','platform_operations','USAGE');" | query automation_data_control postgres)" == f ]]
 for target in automation_data_control:automation_data_inventory nocodb:nocodb_inventory n8n:n8n_inventory; do
 	database="${target%:*}"
 	reader="${target#*:}"

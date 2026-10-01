@@ -5,6 +5,15 @@ source scripts/lib/automation-data-discovery-install.sh
 scratch="$(mktemp -d)"
 trap 'rm -r -- "$scratch"' EXIT
 chmod 700 "$scratch"
+kubectl() { printf '%s\n' "$job_marker"; }
+job_marker='discovery_installation=failed stage=privileges'
+[[ "$(discovery_job_failure_marker unused fixture fixture 2>&1)" == "$job_marker" ]]
+for job_marker in 'SYNTHETIC_SECRET_PAYLOAD' \
+	'discovery_installation=failed stage=SYNTHETIC_SECRET_PAYLOAD' \
+	'discovery_installation=failed stage=privileges SYNTHETIC_SECRET_PAYLOAD'; do
+	[[ -z "$(discovery_job_failure_marker unused fixture fixture 2>&1)" ]]
+done
+unset -f kubectl
 printf '%s\n' '{"metadata":{"labels":{"homelab-talos/run-id":"fixture-run"}},"status":{"conditions":[{"type":"Complete","status":"True"}]}}' >"$scratch/state.json"
 discovery_backup_ready "$scratch/state.json" fixture-run
 if ! discovery_backup_ready <(cat "$scratch/state.json") fixture-run; then
