@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import ssl
+import stat
 import sys
 import uuid
 from pathlib import Path
@@ -37,6 +38,72 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = (
     ROOT / "kubernetes/apps/automation/n8n/app/workflows/automation-data-credential-inventory.json"
 )
+
+
+def initialize_access(root: Path):
+    """Create enrollment outputs; preserve every existing profile/configuration."""
+    from automation_data_access import load_access_config
+
+    expected = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    if (
+        root != expected / "homelab" / "automation-data"
+        or not root.is_absolute()
+        or ".." in root.parts
+    ):
+        raise PrivateFileError("inventory_access_location_mismatch")
+
+    def create_directory(path):
+        # Validate ancestors before creating anything through them. A missing final
+        # private directory is an output, not a reason to ask for a password path.
+        missing = []
+        parent = path
+        while not parent.exists() and not parent.is_symlink():
+            missing.append(parent)
+            parent = parent.parent
+        for ancestor in [parent, *parent.parents]:
+            info = ancestor.lstat()
+            if (
+                not stat.S_ISDIR(info.st_mode)
+                or (ancestor / ".git").exists()
+                or (ancestor / ".git").is_symlink()
+                or (info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX)
+            ):
+                raise PrivateFileError("unsafe_private_path")
+        for directory in reversed(missing):
+            directory.mkdir(mode=0o700)
+        safe_path(path, directory=True)
+
+    create_directory(root)
+    config = root / "access.json"
+    if not config.exists() and not config.is_symlink():
+        application = Path(
+            os.environ.get("AUTOMATION_DATA_LOGIN_DIRECTORY") or root / "applications"
+        )
+        migrator = root / "migrators"
+        for directory in (application, migrator):
+            if not directory.is_absolute() or ".." in directory.parts:
+                raise PrivateFileError("unsafe_private_path")
+            create_directory(directory)
+        write_private_file_exclusive(
+            config,
+            (
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "inventoryAuthFile": str(root / "inventory-auth"),
+                        "applicationProfileRoot": str(application),
+                        "migratorProfileRoot": str(migrator),
+                    }
+                )
+                + "\n"
+            ).encode(),
+        )
+    configured = load_access_config()
+    if configured.inventory_auth_file != root / "inventory-auth":
+        raise PrivateFileError("inventory_auth_location_mismatch")
+    selected_application = os.environ.get("AUTOMATION_DATA_LOGIN_DIRECTORY")
+    if selected_application and configured.application_profile_root != Path(selected_application):
+        raise PrivateFileError("application_profile_location_mismatch")
 
 
 def state(root: Path) -> dict:
@@ -223,10 +290,176 @@ def make_job(source: str, name: str, run: str, configmap: str, candidates: str) 
     }
 
 
+def credential_body(root: Path, source: str):
+    if source == "header":
+        body = {"name": "X-Automation-Data-Inventory", "value": candidate(root, source)}
+    else:
+        _, host, database, reader, _ = SOURCES[source]
+        body = {
+            "host": host
+            + (
+                ".automation-data.svc.cluster.local"
+                if source != "n8n"
+                else ".automation.svc.cluster.local"
+            ),
+            "database": database,
+            "user": reader,
+            "password": candidate(root, source),
+            "port": 5432,
+            "ssl": "disable",
+        }
+    return body
+
+
+def native_ids(root: Path):
+    path = safe_path(root / "pending" / "native-ids.json")
+    if path.stat().st_size > 4096:
+        raise PrivateFileError("native_enrollment_invalid")
+    data = json.loads(path.read_text())
+    if (
+        not isinstance(data, dict)
+        or set(data) != {"projectId", "credentials", "workflowId"}
+        or not isinstance(data["credentials"], dict)
+        or set(data["credentials"]) != set(SOURCES)
+        or any(
+            not isinstance(v, str) or not re.fullmatch("[A-Za-z0-9_-]{1,128}", v)
+            for v in [data["projectId"], data["workflowId"], *data["credentials"].values()]
+        )
+        or len(set(data["credentials"].values())) != len(SOURCES)
+    ):
+        raise PrivateFileError("native_enrollment_invalid")
+    return data
+
+
+def native_input(root: Path, project: str, output: Path):
+    data = state(root)
+    if data["creating"] or data["workflowCreating"]:
+        raise PrivateFileError("ambiguous_native_enrollment")
+    if not re.fullmatch("[A-Za-z0-9_-]{1,128}", project):
+        raise PrivateFileError("native_project_required")
+    path = root / "pending" / "native-ids.json"
+    if not path.exists() and not path.is_symlink():
+        if data["credentials"] or data["workflowId"]:
+            raise PrivateFileError("unrelated_enrollment")
+        write_private_file_exclusive(
+            path,
+            json.dumps(
+                {
+                    "projectId": project,
+                    "credentials": {s: uuid.uuid4().hex for s in SOURCES},
+                    "workflowId": uuid.uuid4().hex,
+                }
+            ).encode(),
+        )
+    ids = native_ids(root)
+    if ids["projectId"] != project:
+        raise PrivateFileError("native_project_mismatch")
+    complete = (
+        data["credentials"] == ids["credentials"] and data["workflowId"] == ids["workflowId"]
+    )
+    if not complete and (data["credentials"] or data["workflowId"]):
+        raise PrivateFileError("ambiguous_native_enrollment")
+    template = json.loads(WORKFLOW.read_text())
+    for node in template["nodes"]:
+        if node["type"] == "n8n-nodes-base.webhook":
+            node["webhookId"] = str(uuid.UUID(hex=ids["workflowId"]))
+        for binding in node.get("credentials", {}).values():
+            source = next(s for s, entry in SOURCES.items() if entry[4] == binding["name"])
+            binding["id"] = ids["credentials"][source]
+    body = {
+        "projectId": project,
+        "verifyOnly": complete,
+        "credentials": [
+            {
+                "id": ids["credentials"][source],
+                "name": SOURCES[source][4],
+                "type": "httpHeaderAuth" if source == "header" else "postgres",
+                "data": credential_body(root, source),
+            }
+            for source in SOURCES
+        ],
+        "workflow": {
+            **{key: template[key] for key in ("name", "nodes", "connections", "settings")},
+            "id": ids["workflowId"],
+            "active": False,
+        },
+    }
+    safe_path(output.parent, directory=True)
+    write_private_file_exclusive(output, json.dumps(body).encode())
+
+
+def native_start(root: Path):
+    data = state(root)
+    native_ids(root)
+    if data["creating"] or data["workflowCreating"]:
+        raise PrivateFileError("ambiguous_native_enrollment")
+    # A lost Job response is uncertain, just like a lost API creation response.
+    # Never automatically replay an import (the n8n CLI supports upsert).
+    data["creating"] = "header"
+    data["workflowCreating"] = True
+    save_state(root, data)
+
+
+def native_complete(root: Path):
+    data = state(root)
+    ids = native_ids(root)
+    if data["creating"] != "header" or data["workflowCreating"] is not True:
+        raise PrivateFileError("native_enrollment_not_started")
+    data.update(
+        credentials=ids["credentials"],
+        workflowId=ids["workflowId"],
+        creating=None,
+        workflowCreating=False,
+    )
+    save_state(root, data)
+
+
+def make_native_job(name: str, run: str, configmap: str, candidates: str, mode="import"):
+    if mode not in {"import", "preflight"}:
+        raise ValueError("invalid_native_mode")
+    job = make_job("n8n", name, run, configmap, candidates)
+    job["spec"]["activeDeadlineSeconds"] = 300
+    pod = job["spec"]["template"]["spec"]
+    pod["securityContext"].update(runAsUser=1000, runAsGroup=1000, fsGroup=1000)
+    container = pod["containers"][0]
+    container.update(
+        name="enroll-discovery",
+        image="docker.n8n.io/n8nio/n8n:2.36.7",
+        command=["node"],
+        args=["/scripts/enroll.cjs", "/candidates/bundle.json", mode],
+        resources={"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"memory": "1Gi"}},
+        env=[
+            {"name": k, "value": v}
+            for k, v in {
+                "DB_TYPE": "postgresdb",
+                "DB_POSTGRESDB_HOST": "n8n-postgresql",
+                "DB_POSTGRESDB_DATABASE": "n8n",
+                "DB_POSTGRESDB_USER": "n8n",
+                "DB_POSTGRESDB_PORT": "5432",
+                "DB_POSTGRESDB_SCHEMA": "public",
+                "N8N_USER_FOLDER": "/tmp/n8n",
+                "N8N_DIAGNOSTICS_ENABLED": "false",
+                "N8N_VERSION_NOTIFICATIONS_ENABLED": "false",
+                "N8N_PERSONALIZATION_ENABLED": "false",
+            }.items()
+        ]
+        + [
+            {"name": name, "valueFrom": {"secretKeyRef": {"name": secret, "key": key}}}
+            for name, secret, key in [
+                ("DB_POSTGRESDB_PASSWORD", "postgresql-credentials", "n8n-password"),
+                ("N8N_ENCRYPTION_KEY", "n8n-runtime", "N8N_ENCRYPTION_KEY"),
+            ]
+        ],
+    )
+    return job
+
+
 class N8nEnrollment:
     def __init__(self, root: Path, guard):
         self.root = root
         self.guard = guard
+        if (root / "pending" / "native-ids.json").exists():
+            raise PrivateFileError("native_enrollment_requires_native_path")
         path = safe_path(root / "n8n-api-key")
         if path.stat().st_size > 4096:
             raise PrivateFileError("n8n_enrollment_auth_invalid")
@@ -297,23 +530,7 @@ class N8nEnrollment:
             return
         if matches:
             raise PrivateFileError("unrelated_credential_collision")
-        if source == "header":
-            body = {"name": "X-Automation-Data-Inventory", "value": candidate(self.root, source)}
-        else:
-            _, host, database, reader, _ = SOURCES[source]
-            body = {
-                "host": host
-                + (
-                    ".automation-data.svc.cluster.local"
-                    if source != "n8n"
-                    else ".automation.svc.cluster.local"
-                ),
-                "database": database,
-                "user": reader,
-                "password": candidate(self.root, source),
-                "port": 5432,
-                "ssl": "disable",
-            }
+        body = credential_body(self.root, source)
         data["creating"] = source
         save_state(self.root, data)
         result = self.request(
@@ -446,8 +663,26 @@ def main(argv):
     try:
         command = argv[0]
         root = Path(os.environ["AUTOMATION_DATA_DISCOVERY_INSTALL_DIRECTORY"])
-        if command == "prepare":
+        if command == "initialize":
+            initialize_access(root)
+        elif command == "prepare":
             prepare(root)
+        elif command == "native-input":
+            native_input(root, argv[1], Path(argv[2]))
+        elif command == "native-manifest":
+            print(json.dumps(make_native_job(*argv[1:])))
+        elif command == "native-start":
+            native_start(root)
+        elif command == "native-complete":
+            native_complete(root)
+        elif command == "publication":
+            print(
+                json.dumps(
+                    {"status": "publication_required", "workflowId": state(root)["workflowId"]}
+                )
+            )
+        elif command == "api-preflight":
+            N8nEnrollment(root, lambda: None)
         elif command == "manifest":
             print(json.dumps(make_job(*argv[1:])))
         elif command in {"enroll", "workflow"}:
