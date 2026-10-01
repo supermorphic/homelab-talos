@@ -275,9 +275,45 @@ improvise a rollback.
 ## Workstation AppRole lifecycle
 
 The additive #450 commands require the reviewed agent profile configuration to
-be deployed and applied first. Existing credential setup remains available until
-caller acceptance permits cutover. Use a clean checkout of deployed `main` and
-an explicitly authorized `OPENBAO_OPERATOR_KUBECONFIG`. The command prompts
+be deployed first. Existing credential setup remains available until caller
+acceptance permits cutover. From your clean primary checkout of deployed `main`, run:
+
+```sh
+mise exec -- just bootstrap openbao-agent /absolute/path/to/operator-kubeconfig
+```
+
+Replace the path with your existing, explicitly authorized operator kubeconfig.
+This command applies the reviewed configuration, enrolls this workstation, and
+records `test.agent-credentials`. It sets the required environment for its child
+commands, reads the public recovery recipient from the encrypted seal artifact,
+and uses the retained operator password through private prompts. It stops at the
+first failure; each operation still checks deployed source and asks for its own
+exact confirmation. Acceptance takes about 15 minutes. No setup variables need
+to be exported in your shell, and the command does not save operator credentials.
+
+After resolving a failure, resume at the first unfinished step:
+
+```sh
+# Configuration apply succeeded; enrollment has not started.
+mise exec -- just bootstrap openbao-agent /absolute/path/to/operator-kubeconfig enroll
+# Enrollment succeeded; run acceptance without enrolling again.
+mise exec -- just bootstrap openbao-agent /absolute/path/to/operator-kubeconfig test
+```
+
+If enrollment or test cleanup reports an incomplete mutation, follow its recovery
+procedure before retrying. The starting step does not infer or repair partial state.
+
+If acceptance passed and only evidence publication failed, do not rerun the test.
+Use the `record-resume` command printed by the failed run, with the same explicit
+operator kubeconfig:
+
+```sh
+KUBECONFIG=/absolute/path/to/operator-kubeconfig \
+  mise exec -- just test record-resume <session-id>
+```
+
+For individual lifecycle commands, set `OPENBAO_OPERATOR_KUBECONFIG` explicitly
+and use the same clean deployed checkout. The command prompts
 privately for the retained non-root OpenBao operator password, shows a confirmation
 bound to the source and target, and holds the existing operations Lease for writes.
 It does not accept ambient OpenBao tokens.

@@ -409,6 +409,11 @@ def main(argv):
         selected = os.environ.get("OPENBAO_OPERATOR_KUBECONFIG", "")
         kubeconfig = Path(selected)
         if not selected or not kubeconfig.is_absolute() or not kubeconfig.is_file():
+            print(
+                "Set OPENBAO_OPERATOR_KUBECONFIG to an existing absolute operator kubeconfig path. "
+                "For agent setup, use: mise exec -- just bootstrap openbao-agent <path>",
+                file=sys.stderr,
+            )
             raise SafeError("invalid-source")
         # Never adopt .kube/config or ambient administrative credentials implicitly.
         guards.freeze_target(kubeconfig, "config-apply" if phase in {"finalize", "restart-staged"} else phase)

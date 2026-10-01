@@ -1264,5 +1264,5 @@ kubeconfig profile="observer": require-bash
 
 # Attended profile/caller acceptance with isolated temporary workstation identities.
 agent-credentials-test: require-bash
-    @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}"
+    @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}" || { echo 'Set OPENBAO_OPERATOR_KUBECONFIG to an absolute operator kubeconfig path, or use just bootstrap openbao-agent <path> test.' >&2; exit 1; }
     @TEST_KUBECONFIG="$OPENBAO_OPERATOR_KUBECONFIG" scripts/test/run-catalog-suite.sh test.agent-credentials -- uv run --locked python -m scripts.test.scenarios.agent_credentials

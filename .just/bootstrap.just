@@ -3292,3 +3292,36 @@ openbao phase:
 # Operator-owned reset for an unused, staged OpenBao initialization.
 openbao-reset-staged:
     @uv run --locked python -m scripts.openbao.reset reset-staged
+
+# Apply agent profiles, enroll this workstation, and record acceptance; resume with enroll or test.
+openbao-agent operator_kubeconfig start="apply":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    set +x
+    source scripts/lib/common.sh
+    require_bash
+    operator_config={{quote(operator_kubeconfig)}}
+    start={{quote(start)}}
+    if [[ "$operator_config" != /* || ! -f "$operator_config" ]]; then
+      echo 'Supply an existing absolute operator kubeconfig path: just bootstrap openbao-agent /absolute/path/to/operator-kubeconfig' >&2
+      exit 1
+    fi
+    case "$start" in
+      apply|enroll|test) ;;
+      *) echo 'Starting step must be apply, enroll, or test.' >&2; exit 1 ;;
+    esac
+    export OPENBAO_OPERATOR_KUBECONFIG="$operator_config"
+    export TEST_KUBECONFIG="$operator_config"
+    export KUBECONFIG="$operator_config"
+    export OPENBAO_CONFIG_AUTH=userpass
+    # Read public metadata only. Existing source/target guards validate the recipient.
+    OPENBAO_RECOVERY_RECIPIENT="$(yq -er '.sops.age[0].recipient' kubernetes/apps/security/openbao/app/openbao-seal.sops.yaml)"
+    export OPENBAO_RECOVERY_RECIPIENT
+    unset OPENBAO_CONFIG_CONFIRM
+    if [[ "$start" == apply ]]; then
+      just kube openbao-config-apply
+    fi
+    if [[ "$start" != test ]]; then
+      just kube openbao-workstation enroll
+    fi
+    just test record test.agent-credentials
