@@ -391,6 +391,13 @@ printed by the test. It takes about 15 minutes because it waits for actual token
 expiry and the Kubernetes API's validation leeway. Do not run it concurrently
 with another state-changing workflow.
 
+After a merge, wait for the `flux-system` GitRepository and `cluster-apps`
+Kustomization to report that revision before starting acceptance. A preflight
+`source-mismatch` means the checkout or deployed revision does not match current
+`main`; check that the checkout is clean and current, then wait for reconciliation
+before retrying the `test` step. Completed workstation enrollment does not need
+to be repeated.
+
 The test creates two run-owned temporary AppRoles from the reviewed workstation
 role settings and existing issuance policy. It uses separate private auth and
 task-owned standalone/linked checkout fixtures. It never replaces the normal
