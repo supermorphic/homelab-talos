@@ -165,6 +165,7 @@ contracts:
       - kubernetes/apps/security/openbao/backup/serviceaccount.yaml
       - kubernetes/apps/security/openbao/config/desired.json
       - kubernetes/apps/security/openbao/config/policies/acceptance.json
+      - kubernetes/apps/security/openbao/config/policies/agent-profiles.json
       - kubernetes/apps/security/openbao/config/policies/backup.json
       - kubernetes/apps/security/openbao/config/policies/config-reader.json
       - kubernetes/apps/security/openbao/config/policies/operator.json
@@ -182,6 +183,7 @@ contracts:
       - scripts/openbao/backup_retrieve.py
       - scripts/openbao/client.py
       - scripts/openbao/configuration.py
+      - scripts/openbao/credentials.py
       - scripts/openbao/drift.py
       - scripts/openbao/guards.py
       - scripts/openbao/issuance.py
@@ -197,6 +199,7 @@ contracts:
       - scripts/openbao/restore.py
       - scripts/openbao/secrets.py
       - scripts/openbao/verify.py
+      - scripts/openbao/workstation.py
       - scripts/operations/openbao-upgrade.sh
       - scripts/secrets/openbao.sh
       - scripts/test/core/fixtures/openbao-2.7-jwt-config.json
@@ -212,6 +215,7 @@ contracts:
       - scripts/test/core/test_openbao_catalog.py
       - scripts/test/core/test_openbao_client.py
       - scripts/test/core/test_openbao_drift.py
+      - scripts/test/core/test_openbao_credentials.py
       - scripts/test/core/test_openbao_issuer.py
       - scripts/test/core/test_openbao_issuer_rollout.py
       - scripts/test/core/test_openbao_manifests.py
@@ -220,6 +224,7 @@ contracts:
       - scripts/test/core/test_openbao_secrets.py
       - scripts/test/core/test_openbao_snapshot.py
       - scripts/test/core/test_openbao_verify.py
+      - scripts/test/core/test_openbao_workstation.py
       - scripts/test/scenarios/openbao_ha.py
       - scripts/test/scenarios/openbao_issuance.py
       - scripts/test/scenarios/openbao_restore.py
