@@ -34,13 +34,26 @@ class KubernetesStub(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = urlsplit(self.path).path
-        if path == "/version":
+        if path in {"/version", "/api/v1/nodes"}:
             header = self.headers.get("Authorization", "")
             assert header.startswith("Bearer synthetic."), "exec token missing"
             part = header.split(".")[1]
             claims = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
             self.credential_profiles.append(claims["sub"].split(":")[-1])
-            self.respond({"gitVersion": "v1.35.6"})
+            if path == "/version":
+                self.respond({"gitVersion": "v1.35.6"})
+            else:
+                assert "watch=true" in self.path and "resourceVersion=0" in self.path
+                self.respond(
+                    {
+                        "type": "ADDED",
+                        "object": {
+                            "apiVersion": "v1",
+                            "kind": "Node",
+                            "metadata": {"name": "synthetic-node"},
+                        },
+                    }
+                )
         elif path == "/api":
             self.respond(
                 {"kind": "APIVersions", "versions": ["v1"], "serverAddressByClientCIDRs": []}
@@ -239,6 +252,24 @@ def _exec_contract(server: ThreadingHTTPServer, directory: Path) -> None:
         invoke(config)
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(invoke, configs))
+    watch = subprocess.run(
+        [
+            "kubectl",
+            "--kubeconfig",
+            str(configs[0]),
+            "get",
+            "--raw=/api/v1/nodes?watch=true&resourceVersion=0&timeoutSeconds=900",
+            "--request-timeout=15m",
+        ],
+        cwd=directory,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert watch.returncode == 0, watch.stderr
+    assert json.loads(watch.stdout)["type"] == "ADDED"
+    assert json.loads(watch.stdout)["object"]["kind"] == "Node"
     assert sorted(KubernetesStub.credential_profiles) == sorted(
         [
             "homelab-observer",
@@ -247,6 +278,7 @@ def _exec_contract(server: ThreadingHTTPServer, directory: Path) -> None:
             "homelab-campaign-coordinator",
         ]
         * 2
+        + ["homelab-observer"]
     )
 
 

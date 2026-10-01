@@ -510,7 +510,7 @@ def read_url(url, *, context=None, token=None):
 
 @contextmanager
 def watch_connection(root, actor):
-    # resourceVersion=0 emits initial ADDED events, proving a watch connection.
+    # A raw watch emits actual server ADDED events, proving the streaming request.
     with process(
         [
             "kubectl",
@@ -519,12 +519,7 @@ def watch_connection(root, actor):
             "--context",
             "homelab-observer",
             "get",
-            "nodes",
-            "--watch-only",
-            "--output-watch-events",
-            "--resource-version=0",
-            "-o",
-            "json",
+            "--raw=/api/v1/nodes?watch=true&resourceVersion=0&timeoutSeconds=900",
             "--request-timeout=15m",
         ],
         root,
