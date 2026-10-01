@@ -24,12 +24,25 @@ discovery_require_lease() {
 	[[ ! -e "$3/lease-failed" ]] && verify_test_lease_holder "$1" "$2"
 }
 
-# Installer Jobs print only their fixed final marker. Never fetch raw failure logs.
+# Emit only known fixed markers; never expose SQL errors or arbitrary Job output.
+discovery_job_failure_marker() {
+	local marker
+	marker="$(kubectl --kubeconfig "$1" --namespace "$2" logs "job/$3" --tail=1 2>/dev/null)" || return 0
+	case "$marker" in
+	discovery_installation=failed\ stage=inputs | discovery_installation=failed\ stage=existing-reader | \
+		discovery_installation=failed\ stage=projection | discovery_installation=failed\ stage=reader-login | \
+		discovery_installation=failed\ stage=snapshot | discovery_installation=failed\ stage=password-denial | \
+		discovery_installation=failed\ stage=privileges | discovery_installation=failed\ stage=role-authority)
+		printf '%s\n' "$marker" >&2 ;;
+	esac
+}
+
 discovery_wait_job() {
 	local kubeconfig="$1" namespace="$2" name="$3" timeout="$4" deadline="$((SECONDS + $4))" state
 	while ((SECONDS < deadline)); do
 		state="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get job "$name" --output json)" || return 1
 		if yq -e '([.status.conditions[]? | select(.type == "Failed" and .status == "True")] | length) > 0' <<<"$state" >/dev/null; then
+			discovery_job_failure_marker "$kubeconfig" "$namespace" "$name"
 			echo 'Discovery installation Job failed; retain the protected installation receipt.' >&2
 			return 1
 		fi
