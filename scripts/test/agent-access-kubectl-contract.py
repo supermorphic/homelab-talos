@@ -7,7 +7,6 @@ import json
 import socket
 import ssl
 import subprocess
-import sys
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -203,8 +202,17 @@ def _exec_contract(server: ThreadingHTTPServer, directory: Path) -> None:
                             "user": {
                                 "exec": {
                                     "apiVersion": "client.authentication.k8s.io/v1",
-                                    "command": sys.executable,
-                                    "args": [str(plugin), profile],
+                                    "command": "uv",
+                                    "args": [
+                                        "run",
+                                        "--locked",
+                                        "--no-dev",
+                                        "--project",
+                                        str(root),
+                                        "python",
+                                        str(plugin),
+                                        profile,
+                                    ],
                                     "interactiveMode": "Never",
                                 }
                             },
