@@ -218,6 +218,9 @@ class InstallationTests(unittest.TestCase):
         self.clock = patch("scripts.openbao.credentials.time.time", return_value=NOW)
         self.clock.start()
         self.addCleanup(self.clock.stop)
+        directory = patch("scripts.openbao.workstation.DIRECTORY", self.auth)
+        directory.start()
+        self.addCleanup(directory.stop)
 
     def install(self, repo=None):
         return credentials.install_kubeconfig(repo or self.repo, self.auth)
@@ -237,6 +240,39 @@ class InstallationTests(unittest.TestCase):
         credentials.validate_scoped_kubeconfig(path, self.repo)
         self.assertNotIn("SECRET_MARKER", path.read_text())
         self.assertNotIn("synthetic-role", path.read_text())
+
+    def test_changed_kubeconfig_ca_fails_before_authentication(self):
+        path = self.install()
+        config = yaml.safe_load(path.read_text())
+        config["clusters"][0]["cluster"]["certificate-authority-data"] = base64.b64encode(
+            b"-----BEGIN CERTIFICATE-----\nstale-ca\n-----END CERTIFICATE-----"
+        ).decode()
+        path.write_text(json.dumps(config))
+        output = io.StringIO()
+        with (
+            patch(
+                "scripts.openbao.credentials.__file__",
+                str(self.repo / "scripts/openbao/credentials.py"),
+            ),
+            patch.dict(
+                "os.environ",
+                {
+                    "KUBERNETES_EXEC_INFO": json.dumps(
+                        {
+                            "apiVersion": credentials.API_VERSION,
+                            "kind": "ExecCredential",
+                            "spec": {"interactive": False},
+                        }
+                    )
+                },
+            ),
+            patch("scripts.openbao.credentials.BaoClient") as broker,
+            redirect_stdout(output),
+            redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(credentials.main(["exec", "observer"]), 1)
+        broker.assert_not_called()
+        self.assertEqual(output.getvalue(), "")
 
     def test_primary_and_linked_checkout_have_independent_configs(self):
         subprocess.run(

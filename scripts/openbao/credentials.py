@@ -223,17 +223,9 @@ def _config(repo_root, cluster, profile):
     }
 
 
-def _validate_config(config, repo_root, *, legacy=False):
+def _validate_config(config, repo_root, metadata, *, legacy=False):
+    _cluster(metadata)
     try:
-        cluster = config["clusters"][0]["cluster"]
-        metadata = {
-            "schema_version": 1,
-            "server": cluster["server"],
-            "certificate_authority_data": cluster["certificate-authority-data"],
-            "openbao_server": workstation.ENDPOINT,
-            "profiles": list(PROFILES),
-        }
-        _cluster(metadata)
         context = config["current-context"]
         profile = next(name for name, account in PROFILES.items() if account == context)
         expected = _config(repo_root, metadata, profile)
@@ -273,7 +265,11 @@ def validate_scoped_kubeconfig(path, repo_root):
         raise SafeError("invalid-source")
     fd = _config_directory(repo_root)
     try:
-        _validate_config(_read_config(fd), repo_root)
+        _validate_config(
+            _read_config(fd),
+            repo_root,
+            workstation.read_private(workstation.DIRECTORY / "cluster.json"),
+        )
     finally:
         os.close(fd)
 
@@ -290,7 +286,7 @@ def install_kubeconfig(repo_root, directory, profile="observer"):
         except FileNotFoundError:
             pass
         else:
-            _validate_config(_read_config(fd), repo_root, legacy=True)
+            _validate_config(_read_config(fd), repo_root, local["cluster"], legacy=True)
         out = os.open(
             temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=fd
         )
