@@ -369,7 +369,20 @@ standalone checkout fixtures without touching another task's checkout.
 Register the acceptance with `tests/catalog.yaml` and retain intentional
 completion evidence through `mise exec -- just test record <suite-id>`.
 Coordinator tests must use the existing-only Lease protocol and respect any
-current holder. The campaign runner's future multi-credential architecture,
+current holder. Runtime Lease updates use Flux's documented
+`flux-client-side-apply` field manager so reconciliation preserves fields absent
+from the metadata-only manifest.
+
+An interrupted acceptance retains a private run-owned journal. Attended
+`bootstrap openbao-agent <operator-kubeconfig> recover <failed-run-id>` validates
+current deployed main and the recorded cluster, reconstructs only the two
+deterministic run-owned roles with reviewed permissions, and repeats ownership
+checks and the full disable/SecretID destruction/session-expiry barrier. It never
+uses a prior process's monotonic timestamp as proof of elapsed time. It retains
+the journal on failure and starts fresh recorded acceptance only after cleanup
+succeeds. Ordinary acceptance refuses outstanding recovery journals.
+
+The campaign runner's future multi-credential architecture,
 test-specific write profiles, and privileged disruption remain outside scope.
 
 Complete focused tests, staged secret checks, independent final implementation

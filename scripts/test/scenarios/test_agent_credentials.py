@@ -5,7 +5,7 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, nullcontext, redirect_stdout
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -19,6 +19,9 @@ class AcceptanceGuardTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name).resolve()
+        directory_patch = patch.object(scenario, "ACCEPTANCE_DIRECTORY", self.directory)
+        directory_patch.start()
+        self.addCleanup(directory_patch.stop)
         self.client = Mock()
         self.client.token = "OPERATOR_MARKER"
         self.approved = {"source_revision": "a" * 40, "cluster_uid": "synthetic-cluster"}
@@ -137,6 +140,148 @@ class AcceptanceGuardTests(unittest.TestCase):
         post.assert_called_once_with("identity/entity/id/synthetic-entity", {"disabled": True})
         self.assertNotIn("disabled_at", actor)
 
+    def recovery_record(self):
+        actor = self.scope.actor("a")
+        actor["fields"] = copy.deepcopy(next(
+            obj.fields for obj in scenario.load_document(scenario.apply.DESIRED)["objects"]
+            if obj.kind == "approle-role"
+        ))
+        actor.update(role_id="synthetic-role", entity_id="synthetic-entity",
+                     mount_accessor="synthetic-mount", disabled_at=999999999)
+        self.scope.persist()
+        return json.loads((self.scope.directory / "operator.json").read_text())
+
+    def test_recovery_rebinds_source_but_never_cluster_or_run_owned_roles(self):
+        record = self.recovery_record()
+        current = {**self.approved, "source_revision": "b" * 40}
+        recovered = scenario.load_recovery_scope(
+            self.directory, "synthetic-run", self.scope.kubeconfig, self.client, current,
+        )
+        self.assertEqual(recovered.approved, current)
+        self.assertEqual(recovered.actors[0]["role"], record["actors"][0]["role"])
+        # A monotonic clock value from another process cannot shorten the barrier.
+        self.assertNotIn("disabled_at", recovered.actors[0])
+        for change in ("cluster", "run", "role", "path", "policy", "unexpected-field"):
+            changed = copy.deepcopy(record)
+            if change == "cluster":
+                changed["target"]["cluster_uid"] = "foreign-cluster"
+            elif change == "run":
+                changed["run_id"] = "another-run"
+            elif change == "role":
+                changed["actors"][0]["role"] = "agent-workstation"
+            elif change == "path":
+                changed["actors"][0]["path"] = "auth/homelab-approle/role/agent-workstation"
+            elif change == "policy":
+                changed["actors"][0]["fields"]["token_policies"] = ["root"]
+            else:
+                changed["actors"][0]["directory"] = "/foreign"
+            scenario.workstation.write_private(self.directory / "operator.json", changed)
+            with self.subTest(change=change), self.assertRaises(scenario.SafeError):
+                scenario.load_recovery_scope(
+                    self.directory, "synthetic-run", self.scope.kubeconfig, self.client, current,
+                )
+
+    def test_cleanup_rejects_alias_without_recorded_or_live_role_binding(self):
+        actor = self.scope.actor("a")
+        self.client.read.return_value = {"data": {
+            "name": actor["role"], "id": "synthetic-entity",
+            "metadata": {"test_run": "synthetic-run"},
+            "aliases": [{"id": "foreign-alias"}],
+        }}
+        with self.assertRaises(SafeError):
+            self.scope.owned_entity(actor, allow_unbound=True)
+
+    def test_recovered_cleanup_disables_destroys_waits_and_verifies_deletion(self):
+        record = self.recovery_record()
+        scope = scenario.load_recovery_scope(
+            self.directory, "synthetic-run", self.scope.kubeconfig, self.client, self.approved,
+        )
+        actor = record["actors"][0]
+        entity = {"id": "synthetic-entity", "name": actor["role"], "disabled": False,
+                  "metadata": {"test_run": "synthetic-run"}, "aliases": [{
+                      "id": "synthetic-alias", "name": "synthetic-role",
+                      "mount_accessor": "synthetic-mount", "canonical_id": "synthetic-entity",
+                  }]}
+        state = {actor["path"]: actor["fields"],
+                 actor["path"] + "/role-id": {"role_id": "synthetic-role"},
+                 actor["path"] + "/secret-id": {"keys": ["synthetic-accessor"]},
+                 "identity/entity/name/" + actor["role"]: entity,
+                 "sys/auth": {"homelab-approle/": {"accessor": "synthetic-mount"}}}
+        elapsed = [0]
+        clock = Mock()
+        clock.monotonic.side_effect = lambda: elapsed[0]
+        clock.sleep.side_effect = lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds)
+        scope.clock = clock
+
+        def read(path, **kwargs):
+            if path not in state:
+                raise scenario.NotFound()
+            return {"data": copy.deepcopy(state[path])}
+
+        def post(path, payload, **kwargs):
+            if path == "identity/entity/id/synthetic-entity":
+                self.assertEqual(payload, {"disabled": True})
+                entity["disabled"] = True
+            elif path == actor["path"] + "/secret-id-accessor/destroy":
+                self.assertTrue(entity["disabled"])
+                self.assertEqual(payload, {"secret_id_accessor": "synthetic-accessor"})
+                state[actor["path"] + "/secret-id"]["keys"].clear()
+            else:
+                self.fail("Unexpected recovery mutation")
+
+        def delete(path, **kwargs):
+            self.assertGreaterEqual(elapsed[0], 90)
+            self.assertTrue(entity["disabled"])
+            self.assertEqual(state[actor["path"] + "/secret-id"]["keys"], [])
+            if path == "identity/entity-alias/id/synthetic-alias":
+                entity["aliases"].clear()
+            elif path == "identity/entity/id/synthetic-entity":
+                del state["identity/entity/name/" + actor["role"]]
+            elif path == actor["path"]:
+                del state[path]
+            else:
+                self.fail("Unexpected recovery deletion")
+
+        self.client.read.side_effect = read
+        self.client.post.side_effect = post
+        self.client.delete.side_effect = delete
+        with (patch.object(scenario.guards, "assert_mutation_allowed"),
+              patch.object(scenario.workstation, "target", return_value=self.approved)):
+            scope.cleanup()
+        self.assertNotIn(actor["path"], state)
+        self.assertNotIn("identity/entity/name/" + actor["role"], state)
+        self.assertEqual(elapsed[0], 90)
+
+    def test_recovery_keeps_journal_on_failure_and_removes_it_only_after_cleanup(self):
+        owned = self.directory / "agent-synthetic"
+        owned.mkdir(mode=0o700)
+        self.scope.directory = owned
+        self.scope.run_id = "20261001T000000Z-aaaaaaaaaaaa-operator-bbbbbbbb"
+        self.recovery_record()
+        config = self.directory / "operator"
+        config.write_text("SYNTHETIC")
+        for error in (RuntimeError("SECRET_MARKER"), None):
+            output = io.StringIO()
+            with (
+                patch.object(scenario, "ACCEPTANCE_DIRECTORY", self.directory, create=True),
+                patch.dict("os.environ", {"OPENBAO_OPERATOR_KUBECONFIG": str(config),
+                                          "TEST_KUBECONFIG": str(config)}),
+                patch.object(scenario.workstation, "target", return_value=self.approved),
+                patch.object(scenario, "OperatorClient", return_value=self.client),
+                patch.object(scenario, "private_prompt", side_effect=lambda text:
+                    text.removeprefix("Exact confirmation ").removesuffix(": ")
+                    if text.startswith("Exact confirmation ") else "SECRET_MARKER"),
+                patch.object(scenario, "operator_password_session", return_value=nullcontext("SYN")),
+                patch.object(scenario, "lease", return_value=nullcontext()),
+                patch.object(scenario.BrokerScope, "cleanup", side_effect=error),
+                patch.object(scenario, "install_interrupt_handlers"),
+                redirect_stdout(output),
+            ):
+                self.assertEqual(scenario.recover(self.scope.run_id), 1 if error else 0)
+            self.assertEqual(owned.exists(), bool(error))
+            self.assertEqual(json.loads(output.getvalue())["status"], "fail" if error else "pass")
+            self.assertNotIn("SECRET_MARKER", output.getvalue())
+
     def test_each_caller_requires_issuance_after_its_observed_expiry(self):
         events = self.directory / "events.jsonl"
         actor = {"directory": self.directory}
@@ -212,6 +357,22 @@ class AcceptanceGuardTests(unittest.TestCase):
     def test_scope_selection_requires_explicit_operator_context_and_run(self):
         with patch.dict("os.environ", {}, clear=True), self.assertRaises(SafeError):
             scenario.run_inputs()
+
+    def test_new_acceptance_refuses_an_unrecovered_run_before_prompting(self):
+        pending = self.directory / "agent-prior"
+        pending.mkdir(mode=0o700)
+        (pending / "operator.json").write_text("{}")
+        output = io.StringIO()
+        with (
+            patch.object(scenario, "run_inputs", return_value=(self.directory / "config", self.directory)),
+            patch.object(scenario.workstation, "target", return_value=self.approved),
+            patch.object(scenario, "private_prompt", side_effect=AssertionError("must not prompt")),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(scenario.main(), 1)
+        result = json.loads(output.getvalue())
+        self.assertIs(result["recovery_required"], True)
+        self.assertEqual(result["cleanup"], "not-required")
 
     def test_cleanup_error_does_not_replace_original_caller_failure(self):
         scope = Mock()

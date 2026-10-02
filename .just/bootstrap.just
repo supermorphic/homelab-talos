@@ -3293,8 +3293,8 @@ openbao phase:
 openbao-reset-staged:
     @uv run --locked python -m scripts.openbao.reset reset-staged
 
-# Apply agent profiles, enroll this workstation, and record acceptance; resume with enroll or test.
-openbao-agent operator_kubeconfig start="apply":
+# Apply/enroll/test agent profiles, or recover a failed run before recording a new test.
+openbao-agent operator_kubeconfig start="apply" run_id="":
     #!/usr/bin/env bash
     set -euo pipefail
     set +x
@@ -3302,13 +3302,19 @@ openbao-agent operator_kubeconfig start="apply":
     require_bash
     operator_config={{quote(operator_kubeconfig)}}
     start={{quote(start)}}
+    run_id={{quote(run_id)}}
     if [[ "$operator_config" != /* || ! -f "$operator_config" ]]; then
       echo 'Supply an existing absolute operator kubeconfig path: just bootstrap openbao-agent /absolute/path/to/operator-kubeconfig' >&2
       exit 1
     fi
     case "$start" in
-      apply|enroll|test) ;;
-      *) echo 'Starting step must be apply, enroll, or test.' >&2; exit 1 ;;
+      apply|enroll|test) [[ -z "$run_id" ]] || exit 1 ;;
+      recover)
+        [[ "$run_id" =~ ^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{12}-operator-[a-f0-9]{8}$ ]] || {
+          echo 'Recovery requires the failed acceptance run ID.' >&2; exit 1;
+        }
+        ;;
+      *) echo 'Starting step must be apply, enroll, test, or recover.' >&2; exit 1 ;;
     esac
     export OPENBAO_OPERATOR_KUBECONFIG="$operator_config"
     export TEST_KUBECONFIG="$operator_config"
@@ -3321,7 +3327,10 @@ openbao-agent operator_kubeconfig start="apply":
     if [[ "$start" == apply ]]; then
       just kube openbao-config-apply
     fi
-    if [[ "$start" != test ]]; then
+    if [[ "$start" == apply || "$start" == enroll ]]; then
       just kube openbao-workstation enroll
+    fi
+    if [[ "$start" == recover ]]; then
+      uv run --locked --no-dev python -m scripts.test.scenarios.agent_credentials recover "$run_id"
     fi
     just test record test.agent-credentials
