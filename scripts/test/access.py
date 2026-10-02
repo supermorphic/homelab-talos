@@ -2,6 +2,8 @@
 
 import hashlib
 import os
+import re
+import sys
 from pathlib import Path
 
 import yaml
@@ -122,3 +124,68 @@ def resolve_suite_access(repo_root: Path, suite_id: str) -> dict:
         "catalog_digest": hashlib.sha256(raw).hexdigest(),
         **entry["access"],
     }
+
+
+def prepare_invocation(repo_root: Path, suite_id: str, run_id: str) -> Path | None:
+    from scripts.openbao import credentials, workstation
+
+    declaration = resolve_suite_access(repo_root, suite_id)
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", run_id):
+        raise SafeError("invalid-source")
+    if declaration["profile"] is None:
+        return None
+    binding = {"schema_version": 1, "run_id": run_id, **declaration}
+    return credentials.install_invocation_kubeconfig(repo_root, workstation.DIRECTORY, binding)
+
+
+def validate_invocation(repo_root: Path, config_path: Path) -> dict:
+    from scripts.openbao import credentials, workstation
+
+    binding, config = credentials.read_invocation(repo_root, config_path)
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", str(binding.get("run_id", ""))):
+        raise SafeError("invalid-source")
+    expected = {
+        "schema_version": 1,
+        "run_id": binding["run_id"],
+        **resolve_suite_access(repo_root, binding.get("suite_id")),
+    }
+    if binding != expected or binding["profile"] is None:
+        raise SafeError("invalid-source")
+    local = credentials.load_workstation(workstation.DIRECTORY)
+    if local["cluster"]["schema_version"] != 2 or config != credentials._invocation_config(
+        repo_root, local["cluster"], binding, config_path
+    ):
+        raise SafeError("invalid-source")
+    return binding
+
+
+def remove_invocation(repo_root: Path, config_path: Path) -> None:
+    from scripts.openbao import credentials
+
+    # Source drift can invalidate refresh, but must not prevent removal of owned config files.
+    credentials.remove_invocation_files(repo_root, config_path)
+
+
+def main(argv: list[str]) -> int:
+    root = Path(__file__).resolve().parents[2]
+    try:
+        if len(argv) == 4 and argv[1] == "prepare":
+            path = prepare_invocation(root, argv[2], argv[3])
+            if path is not None:
+                print(path)
+        elif len(argv) == 3 and argv[1] == "validate":
+            import json
+
+            print(json.dumps(validate_invocation(root, Path(argv[2]))))
+        elif len(argv) == 3 and argv[1] == "remove":
+            remove_invocation(root, Path(argv[2]))
+        else:
+            raise SafeError("invalid-source")
+        return 0
+    except Exception:  # noqa: BLE001 -- Credential-bearing exceptions must never be rendered.
+        print("Test credential unavailable: invalid-source", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))
