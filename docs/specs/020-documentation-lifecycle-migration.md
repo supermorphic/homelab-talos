@@ -29,11 +29,12 @@ Essential independent recovery knowledge remains in the owning specs.
 
 Original specs, alternatives, design intent, historical outcomes, and essential later
 changes are retained. Later repeated PR execution details may be compressed, but completed
-or superseded designs are not deleted merely because they are historical. No routine fix
-requires a new specification or prose update. Read the relevant source/tests and only the
-needed spec sections. Root policy's change classification governs new durable design
-subjects; changes to an existing contract update its owner without erasing the reasoning
-behind earlier decisions.
+or superseded designs are not deleted merely because they are historical. A fix that restores
+documented behavior normally needs no spec edit; changes to a contract, procedure, or meaning
+update the affected content while preserving surrounding intent. Read the relevant
+source/tests and only the needed spec sections. Root policy's change classification governs
+new durable design subjects; changes to an existing contract update its owner without
+erasing the reasoning behind earlier decisions.
 
 The existing link checker also enforces sanctioned document paths through a small explicit
 allowlist with a functional test-fixture category. Review establishes actual fixture use;

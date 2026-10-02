@@ -828,9 +828,9 @@ The semantic moves update all repository-owned consumers in one change:
 - catalog entries and campaign membership;
 - focused tests and validators;
 - actual root README examples;
-- testing references;
+- the owning test-reporting specification;
 - retained spec examples and recovery instructions; and
-- the current repository command-lifecycle reference where needed.
+- the repository command-lifecycle specification where needed.
 
 Old public names, deprecated aliases, and parallel confirmation terminology are removed.
 `plex-node-reboot` source, catalog registration, tests, and campaign references are also
