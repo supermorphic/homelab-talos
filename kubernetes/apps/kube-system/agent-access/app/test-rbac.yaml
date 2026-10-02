@@ -9,6 +9,84 @@ automountServiceAccountToken: false
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
+  name: homelab-test-flux-reconcile
+  namespace: flux-system
+rules:
+  - apiGroups: [source.toolkit.fluxcd.io]
+    resources: [gitrepositories]
+    resourceNames: [flux-system]
+    verbs: [patch, update]
+  - apiGroups: [kustomize.toolkit.fluxcd.io]
+    resources: [kustomizations]
+    resourceNames: [flux-canary]
+    verbs: [patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-flux-reconcile
+  namespace: flux-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-flux-reconcile
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-runner
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-flux-canary
+  namespace: flux-system
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [flux-canary]
+    verbs: [get, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-flux-canary
+  namespace: flux-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-flux-canary
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-runner
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-flux-fixtures
+  namespace: flux-system
+rules:
+  - apiGroups: [kustomize.toolkit.fluxcd.io]
+    resources: [kustomizations]
+    verbs: [create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-flux-fixtures
+  namespace: flux-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-flux-fixtures
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-runner
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
   name: homelab-test-application-fixtures
   namespace: automation
 rules:

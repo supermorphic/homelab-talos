@@ -270,6 +270,10 @@ The same separation applies to application credentials outside OpenBao.
 supplies `N8N_CANARY_TOKEN` for its authenticated canary request. Its catalog entry
 declares `application-credential` and retains human execution ownership. The
 Kubernetes issuer does not supply or replace that application token.
+`test.e2e.flux-alert-delivery` likewise retains the protected
+`NTFY_FLUX_ALERT_TOKEN_FILE` supplied through the ntfy operator workflow. Its
+Kubernetes profile is `test-runner`, and its catalog entry declares
+`application-credential` with human execution ownership.
 
 The OpenBao server's own Kubernetes **issuer credential** is a third, distinct
 credential. It is not a workstation test token and must not be distributed in a

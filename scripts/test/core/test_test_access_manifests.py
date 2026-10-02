@@ -1048,3 +1048,162 @@ class TestAccessPolicyTests(unittest.TestCase):
             ]
             self.assertEqual({d["roleRef"]["name"] for d in bindings}, refs)
             self.assertTrue(all(d["roleRef"]["kind"] == "Role" for d in bindings))
+
+    def test_flux_canary_keeps_named_encrypted_secret_recreation(self):
+        roles = [
+            d
+            for d in self.documents
+            if d["kind"] == "Role"
+            and d["metadata"] == {"name": "homelab-test-flux-canary", "namespace": "flux-system"}
+        ]
+        self.assertEqual(len(roles), 1)
+        self.assertEqual(
+            roles[0]["rules"],
+            [
+                {
+                    "apiGroups": [""],
+                    "resources": ["secrets"],
+                    "resourceNames": ["flux-canary"],
+                    "verbs": ["get", "delete"],
+                }
+            ],
+        )
+        canary = yaml.safe_load(
+            (ROOT / "kubernetes/apps/flux-system/flux-canary/app/secret.sops.yaml").read_text()
+        )
+        self.assertEqual(canary["kind"], "Secret")
+        self.assertEqual(canary["metadata"]["name"], "flux-canary")
+        self.assertIn("sops", canary)
+        self.assertTrue(canary["stringData"]["marker"].startswith("ENC["))
+        recipe = (
+            (ROOT / "kubernetes/mod.just")
+            .read_text()
+            .split("_flux-canary-test-raw: flux-verify", 1)[1]
+            .split("\n# Validate the Longhorn", 1)[0]
+        )
+        self.assertIn('"$new_uid" != "$old_uid"', recipe)
+        self.assertIn("delete secret flux-canary", recipe)
+        self.assertIn("--with-source", recipe)
+
+    def test_flux_alert_fixture_cannot_choose_a_real_source_or_privileged_fields(self):
+        name = "flux-alert-e2e-20261002120000-12345"
+        req = self.request("kustomizations", "flux-system", name=name)
+        req["resource"]["group"] = "kustomize.toolkit.fluxcd.io"
+        obj = {
+            "metadata": {"name": name, "labels": {"homelab-talos/test": "flux-alert-delivery"}},
+            "spec": {
+                "interval": "1m",
+                "retryInterval": "30s",
+                "timeout": "30s",
+                "prune": False,
+                "wait": True,
+                "path": "./.homelab-talos-tests/" + name,
+                "sourceRef": {
+                    "apiVersion": "source.toolkit.fluxcd.io/v1",
+                    "kind": "GitRepository",
+                    "name": name + "-source-does-not-exist",
+                },
+            },
+        }
+        self.assertTrue(self.admits("homelab-test-flux-fixtures", req, obj))
+        for change in (
+            "source",
+            "path",
+            "serviceaccount",
+            "decryption",
+            "kubeconfig",
+            "patches",
+            "postbuild",
+            "target",
+            "prune",
+            "owner",
+            "namespace",
+        ):
+            bad, request = copy.deepcopy(obj), copy.deepcopy(req)
+            if change == "source":
+                bad["spec"]["sourceRef"]["name"] = "flux-system"
+            elif change == "path":
+                bad["spec"]["path"] = "./kubernetes/apps"
+            elif change == "serviceaccount":
+                bad["spec"]["serviceAccountName"] = "kustomize-controller"
+            elif change == "decryption":
+                bad["spec"]["decryption"] = {"provider": "sops", "secretRef": {"name": "sops-age"}}
+            elif change == "kubeconfig":
+                bad["spec"]["kubeConfig"] = {"secretRef": {"name": "other"}}
+            elif change == "patches":
+                bad["spec"]["patches"] = [{"patch": "{}"}]
+            elif change == "postbuild":
+                bad["spec"]["postBuild"] = {
+                    "substituteFrom": [{"kind": "Secret", "name": "other"}]
+                }
+            elif change == "target":
+                bad["spec"]["targetNamespace"] = "openbao"
+            elif change == "prune":
+                bad["spec"]["prune"] = True
+            elif change == "owner":
+                bad["metadata"]["ownerReferences"] = [
+                    {"kind": "Secret", "name": "other", "uid": "synthetic"}
+                ]
+            else:
+                request["namespace"] = "openbao"
+            with self.subTest(change=change):
+                self.assertFalse(self.admits("homelab-test-flux-fixtures", request, bad))
+        deleting = copy.deepcopy(obj)
+        deleting["metadata"]["finalizers"] = ["finalizers.fluxcd.io"]
+        self.assertTrue(
+            self.admits(
+                "homelab-test-flux-fixtures", {**req, "operation": "DELETE"}, None, deleting
+            )
+        )
+
+    def test_flux_reconciliation_changes_only_named_request_annotation(self):
+        for group, resource, name in (
+            ("source.toolkit.fluxcd.io", "gitrepositories", "flux-system"),
+            ("kustomize.toolkit.fluxcd.io", "kustomizations", "flux-canary"),
+        ):
+            req = self.request(resource, "flux-system", "UPDATE", name)
+            req["resource"]["group"] = group
+            old = {
+                "metadata": {
+                    "name": name,
+                    "namespace": "flux-system",
+                    "labels": {"app": "fixture"},
+                    "annotations": {"fixture.example/keep": "fixed"},
+                    "finalizers": ["finalizers.fluxcd.io"],
+                },
+                "spec": {"interval": "1m"},
+            }
+            obj = copy.deepcopy(old)
+            obj["metadata"]["annotations"]["reconcile.fluxcd.io/requestedAt"] = (
+                "2026-10-02T12:00:00.123456789-06:00"
+            )
+            self.assertTrue(self.admits("homelab-test-flux-reconcile", req, obj, old))
+            for change in (
+                "spec",
+                "labels",
+                "finalizers",
+                "annotation",
+                "remove",
+                "timestamp",
+                "name",
+                "namespace",
+            ):
+                bad, request = copy.deepcopy(obj), copy.deepcopy(req)
+                if change == "spec":
+                    bad["spec"]["interval"] = "1s"
+                elif change == "labels":
+                    bad["metadata"]["labels"]["app"] = "other"
+                elif change == "finalizers":
+                    bad["metadata"]["finalizers"] = []
+                elif change == "annotation":
+                    bad["metadata"]["annotations"]["fixture.example/keep"] = "other"
+                elif change == "remove":
+                    del bad["metadata"]["annotations"]["fixture.example/keep"]
+                elif change == "timestamp":
+                    bad["metadata"]["annotations"]["reconcile.fluxcd.io/requestedAt"] = "payload"
+                elif change == "name":
+                    bad["metadata"]["name"] = request["name"] = "other"
+                else:
+                    request["namespace"] = "openbao"
+                with self.subTest(group=group, change=change):
+                    self.assertFalse(self.admits("homelab-test-flux-reconcile", request, bad, old))

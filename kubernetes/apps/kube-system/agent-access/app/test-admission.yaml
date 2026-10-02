@@ -834,3 +834,120 @@ metadata:
 spec:
   policyName: homelab-test-network-policies
   validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-flux-fixtures
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [kustomize.toolkit.fluxcd.io]
+        apiVersions: [v1]
+        operations: [CREATE, DELETE]
+        resources: [kustomizations]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+  variables:
+    - name: fixture
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: name
+      expression: variables.fixture.metadata.name
+  validations:
+    - expression: >-
+        request.namespace == 'flux-system' &&
+        variables.name.matches('^flux-alert-e2e-[0-9]{14}-[0-9]+$') &&
+        variables.fixture.metadata.labels['homelab-talos/test'] == 'flux-alert-delivery' &&
+        !has(variables.fixture.metadata.ownerReferences) && !has(variables.fixture.metadata.annotations) &&
+        (!has(variables.fixture.metadata.finalizers) ||
+          (request.operation == 'DELETE' && variables.fixture.metadata.finalizers == ['finalizers.fluxcd.io'])) &&
+        variables.fixture.spec.interval == '1m' && variables.fixture.spec.retryInterval == '30s' &&
+        variables.fixture.spec.timeout == '30s' && !variables.fixture.spec.prune && variables.fixture.spec.wait &&
+        variables.fixture.spec.path == './.homelab-talos-tests/' + variables.name &&
+        variables.fixture.spec.sourceRef.apiVersion == 'source.toolkit.fluxcd.io/v1' &&
+        variables.fixture.spec.sourceRef.kind == 'GitRepository' &&
+        variables.fixture.spec.sourceRef.name == variables.name + '-source-does-not-exist' &&
+        (!has(variables.fixture.spec.sourceRef.namespace) || variables.fixture.spec.sourceRef.namespace == 'flux-system')
+      message: Only the canonical missing-source Flux alert fixture is permitted.
+    - expression: >-
+        !has(variables.fixture.spec.buildMetadata) && !has(variables.fixture.spec.commonMetadata) &&
+        !has(variables.fixture.spec.components) && !has(variables.fixture.spec.decryption) &&
+        !has(variables.fixture.spec.deletionPolicy) && !has(variables.fixture.spec.dependsOn) &&
+        (!has(variables.fixture.spec.force) || !variables.fixture.spec.force) &&
+        !has(variables.fixture.spec.healthCheckExprs) && !has(variables.fixture.spec.healthChecks) &&
+        !has(variables.fixture.spec.ignore) && !has(variables.fixture.spec.ignoreMissingComponents) &&
+        !has(variables.fixture.spec.images) && !has(variables.fixture.spec.kubeConfig) &&
+        !has(variables.fixture.spec.namePrefix) && !has(variables.fixture.spec.nameSuffix) &&
+        !has(variables.fixture.spec.patches) && !has(variables.fixture.spec.postBuild) &&
+        !has(variables.fixture.spec.serviceAccountName) &&
+        (!has(variables.fixture.spec.suspend) || !variables.fixture.spec.suspend) &&
+        !has(variables.fixture.spec.targetNamespace)
+      message: Alert fixtures cannot add deployment, credential, transformation, or alternate controller behavior.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-flux-fixtures
+spec:
+  policyName: homelab-test-flux-fixtures
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-flux-reconcile
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [source.toolkit.fluxcd.io]
+        apiVersions: [v1]
+        operations: [UPDATE]
+        resources: [gitrepositories]
+      - apiGroups: [kustomize.toolkit.fluxcd.io]
+        apiVersions: [v1]
+        operations: [UPDATE]
+        resources: [kustomizations]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+  variables:
+    - name: annotations
+      expression: "has(object.metadata.annotations) ? object.metadata.annotations : {}"
+    - name: previous
+      expression: "has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}"
+    - name: requestedAt
+      expression: "'reconcile.fluxcd.io/requestedAt'"
+  validations:
+    - expression: >-
+        request.namespace == 'flux-system' && (
+          (request.resource.group == 'source.toolkit.fluxcd.io' && request.resource.resource == 'gitrepositories' && request.name == 'flux-system') ||
+          (request.resource.group == 'kustomize.toolkit.fluxcd.io' && request.resource.resource == 'kustomizations' && request.name == 'flux-canary')) &&
+        object.metadata.name == oldObject.metadata.name && object.metadata.namespace == oldObject.metadata.namespace &&
+        object.spec == oldObject.spec &&
+        (has(object.metadata.labels) == has(oldObject.metadata.labels)) &&
+        (!has(object.metadata.labels) || object.metadata.labels == oldObject.metadata.labels) &&
+        (has(object.metadata.ownerReferences) == has(oldObject.metadata.ownerReferences)) &&
+        (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences == oldObject.metadata.ownerReferences) &&
+        (has(object.metadata.finalizers) == has(oldObject.metadata.finalizers)) &&
+        (!has(object.metadata.finalizers) || object.metadata.finalizers == oldObject.metadata.finalizers) &&
+        (has(object.metadata.generateName) == has(oldObject.metadata.generateName)) &&
+        (!has(object.metadata.generateName) || object.metadata.generateName == oldObject.metadata.generateName)
+      message: Tests may request reconciliation only on the named source and encrypted canary, preserving their specification and ownership.
+    - expression: >-
+        variables.requestedAt in variables.annotations &&
+        variables.annotations[variables.requestedAt].matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$') &&
+        variables.annotations.all(k, k == variables.requestedAt ||
+          (k in variables.previous && variables.annotations[k] == variables.previous[k])) &&
+        variables.previous.all(k, k == variables.requestedAt || k in variables.annotations)
+      message: The reconciliation timestamp is the only annotation a test may change.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-flux-reconcile
+spec:
+  policyName: homelab-test-flux-reconcile
+  validationActions: [Deny]

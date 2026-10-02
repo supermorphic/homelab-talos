@@ -156,3 +156,10 @@ class AccessContractTests(unittest.TestCase):
         self.assertEqual(entry["access"]["profile"], "test-runner")
         self.assertIn("application-credential", entry["access"]["prerequisites"])
         self.assertEqual(entry["confirmation"]["expected"], "chaos:n8n-persistence")
+
+    def test_flux_alert_retains_attended_ntfy_credential(self):
+        entry = self.entry("test.e2e.flux-alert-delivery")
+        self.assertEqual(entry["metadata"]["execution_owner"], "human")
+        self.assertEqual(entry["access"]["profile"], "test-runner")
+        self.assertIn("application-credential", entry["access"]["prerequisites"])
+        self.assertEqual(entry["confirmation"]["expected"], "test:flux-alert:firing-resolved")
