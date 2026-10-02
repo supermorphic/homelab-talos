@@ -19,10 +19,12 @@ IDENTITY = "system:serviceaccount:kube-system:homelab-test-runner"
 class TestAccessPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        rendered = subprocess.run(
-            ["kustomize", "build", str(PACKAGE)], capture_output=True, text=True, check=True
-        )
-        cls.documents = list(yaml.safe_load_all(rendered.stdout))
+        cls.documents = []
+        for package in (PACKAGE, ROOT / "kubernetes/apps/monitoring/test-reports/app"):
+            rendered = subprocess.run(
+                ["kustomize", "build", str(package)], capture_output=True, text=True, check=True
+            )
+            cls.documents.extend(yaml.safe_load_all(rendered.stdout))
         cls.env = celpy.Environment()
         cls.programs = {}
 
@@ -90,6 +92,7 @@ class TestAccessPolicyTests(unittest.TestCase):
                 "homelab-test-n8n-restore-jobs",
                 "homelab-test-n8n-persistence-jobs",
                 "homelab-test-n8n-request-jobs",
+                "homelab-test-workload-security",
             )
         )
 
@@ -777,3 +780,271 @@ class TestAccessPolicyTests(unittest.TestCase):
                 }
             ],
         )
+
+    def test_n8n_application_cannot_select_production_database_or_hooks(self):
+        source = (ROOT / "scripts/test/scenarios/n8n-restore-drill.sh").read_text()
+        function = source.split("application_manifests() {", 1)[1].split(
+            "\nrequest_job_manifest() {", 1
+        )[0]
+        script = (
+            "set -euo pipefail\nrun_hash=0123456789ab\ndeployment=n8n-restore-$run_hash\n"
+            "database_name=n8n_restore_$run_hash\napplication_manifests() {"
+            + function
+            + "\napplication_manifests\n"
+        )
+        rendered = subprocess.run(
+            ["bash", "-c", script], capture_output=True, text=True, check=True, cwd=ROOT
+        )
+        obj = next(d for d in yaml.safe_load_all(rendered.stdout) if d["kind"] == "Deployment")
+        req = self.request("deployments", "automation", name="n8n-restore-0123456789ab")
+        req["resource"]["group"] = "apps"
+        self.assertEqual(obj["spec"]["replicas"], 1)
+        self.assertEqual(obj["spec"]["strategy"]["type"], "Recreate")
+
+        def allowed(candidate):
+            return all(
+                self.admits(name, req, candidate)
+                for name in ("homelab-test-workload-security", "homelab-test-n8n-applications")
+            )
+
+        self.assertTrue(allowed(obj))
+        for change in (
+            "database",
+            "secret",
+            "image",
+            "command",
+            "env",
+            "probe",
+            "identity",
+            "token",
+            "hostpath",
+            "labels",
+            "selector",
+        ):
+            bad = copy.deepcopy(obj)
+            ps = bad["spec"]["template"]["spec"]
+            app = ps["containers"][0]
+            if change == "database":
+                next(e for e in app["env"] if e["name"] == "DB_POSTGRESDB_DATABASE")["value"] = (
+                    "n8n"
+                )
+            elif change == "secret":
+                next(e for e in app["env"] if e["name"] == "N8N_ENCRYPTION_KEY")["valueFrom"][
+                    "secretKeyRef"
+                ]["name"] = "other"
+            elif change == "image":
+                app["image"] = "busybox:latest"
+            elif change == "command":
+                app["command"] = ["sh", "-c", "env"]
+            elif change == "env":
+                app["env"].append({"name": "NODE_OPTIONS", "value": "--require=/tmp/injected.js"})
+            elif change == "probe":
+                app["readinessProbe"] = {"exec": {"command": ["sh", "-c", "env"]}}
+            elif change == "identity":
+                ps["serviceAccountName"] = "n8n"
+            elif change == "token":
+                ps["automountServiceAccountToken"] = True
+            elif change == "hostpath":
+                ps["volumes"][0] = {"name": "data", "hostPath": {"path": "/"}}
+            elif change == "labels":
+                bad["spec"]["template"]["metadata"]["labels"]["app.kubernetes.io/name"] = "n8n"
+            else:
+                bad["spec"]["selector"]["matchLabels"] = {"app.kubernetes.io/name": "n8n"}
+            with self.subTest(change=change):
+                self.assertFalse(allowed(bad))
+
+    def test_n8n_service_cannot_select_production_or_external_endpoint(self):
+        req = self.request("services", "automation", name="n8n-restore-0123456789ab")
+        obj = {
+            "metadata": {
+                "name": req["name"],
+                "labels": {
+                    "homelab-talos/test": "n8n-restore-drill",
+                    "homelab-talos/run-id": "0123456789ab",
+                },
+            },
+            "spec": {
+                "type": "ClusterIP",
+                "selector": {
+                    "homelab-talos/test": "n8n-restore-drill",
+                    "homelab-talos/run-id": "0123456789ab",
+                    "homelab-talos/role": "n8n",
+                },
+                "ports": [{"name": "http", "port": 5678, "targetPort": "http", "protocol": "TCP"}],
+            },
+        }
+        self.assertTrue(self.admits("homelab-test-services", req, obj))
+        for change in (
+            "selector",
+            "external",
+            "nodeport",
+            "port",
+            "protocol",
+            "owner",
+            "namespace",
+            "annotations",
+        ):
+            bad, request = copy.deepcopy(obj), copy.deepcopy(req)
+            if change == "selector":
+                bad["spec"]["selector"] = {"app.kubernetes.io/name": "n8n"}
+            elif change == "external":
+                bad["spec"]["externalIPs"] = ["192.0.2.1"]
+            elif change == "nodeport":
+                bad["spec"]["type"] = "NodePort"
+            elif change == "port":
+                bad["spec"]["ports"][0]["targetPort"] = 5432
+            elif change == "protocol":
+                bad["spec"]["ports"][0]["protocol"] = "UDP"
+            elif change == "owner":
+                bad["metadata"]["ownerReferences"] = [
+                    {"kind": "Secret", "name": "other", "uid": "synthetic"}
+                ]
+            elif change == "namespace":
+                request["namespace"] = "openbao"
+            else:
+                bad["metadata"]["annotations"] = {
+                    "external-dns.alpha.kubernetes.io/hostname": "outside.example"
+                }
+            with self.subTest(change=change):
+                self.assertFalse(self.admits("homelab-test-services", request, bad))
+        self.assertFalse(
+            self.admits("homelab-test-services", {**req, "operation": "UPDATE"}, obj, obj)
+        )
+        self.assertTrue(
+            self.admits("homelab-test-services", {**req, "operation": "DELETE"}, None, obj)
+        )
+
+    def test_n8n_network_policy_cannot_widen_peers_or_selectors(self):
+        source = (ROOT / "scripts/test/scenarios/n8n-restore-drill.sh").read_text()
+        function = source.split("policy_manifest() {", 1)[1].split(
+            "\ndatabase_job_manifest() {", 1
+        )[0]
+        script = (
+            "set -euo pipefail\nrun_hash=0123456789ab\n"
+            "automation_policy=n8n-restore-$run_hash-automation\nrequest_policy=n8n-restore-$run_hash-request\n"
+            "policy_manifest() {" + function + "\npolicy_manifest\n"
+        )
+        rendered = subprocess.run(
+            ["bash", "-c", script], capture_output=True, text=True, check=True, cwd=ROOT
+        )
+        policies = list(yaml.safe_load_all(rendered.stdout))
+        self.assertEqual(len(policies), 2)
+        for obj in policies:
+            req = self.request(
+                "ciliumnetworkpolicies", obj["metadata"]["namespace"], name=obj["metadata"]["name"]
+            )
+            req["resource"].update({"group": "cilium.io", "version": "v2"})
+            self.assertTrue(self.admits("homelab-test-network-policies", req, obj))
+            self.assertTrue(
+                self.admits(
+                    "homelab-test-network-policies", {**req, "operation": "DELETE"}, None, obj
+                )
+            )
+            self.assertFalse(
+                self.admits(
+                    "homelab-test-network-policies", {**req, "operation": "UPDATE"}, obj, obj
+                )
+            )
+            for change in (
+                "selector",
+                "world",
+                "port",
+                "peer",
+                "requires",
+                "default-deny",
+                "tls",
+                "rule",
+            ):
+                bad = copy.deepcopy(obj)
+                rule = bad["specs"][0] if "specs" in bad else bad["spec"]
+                if change == "selector":
+                    rule["endpointSelector"] = {"matchLabels": {}}
+                elif change == "world":
+                    rule["egress"][0] = {"toEntities": ["world"]}
+                elif change == "port":
+                    rule["egress"][0]["toPorts"][0]["ports"][0]["port"] = "443"
+                elif change == "peer":
+                    rule["egress"][0]["toEndpoints"][0]["matchLabels"] = {}
+                elif change == "requires":
+                    rule["egress"][0]["toRequires"] = [{"matchLabels": {"app": "other"}}]
+                elif change == "default-deny":
+                    rule["enableDefaultDeny"] = {"egress": False}
+                elif change == "tls":
+                    rule["egress"][0]["toPorts"][0]["terminatingTLS"] = {
+                        "secret": {"namespace": "automation", "name": "other-secret"}
+                    }
+                else:
+                    bad.setdefault("specs", []).append(copy.deepcopy(rule))
+                with self.subTest(namespace=req["namespace"], change=change):
+                    self.assertFalse(self.admits("homelab-test-network-policies", req, bad))
+
+    def test_n8n_fixture_grants_are_namespace_and_resource_limited(self):
+        expected = {
+            ("homelab-test-application-fixtures", "automation"): [
+                {
+                    "apiGroups": ["apps"],
+                    "resources": ["deployments"],
+                    "verbs": ["create", "delete"],
+                },
+                {"apiGroups": [""], "resources": ["services"], "verbs": ["create", "delete"]},
+            ],
+            ("homelab-test-network-policies", "automation"): [
+                {
+                    "apiGroups": ["cilium.io"],
+                    "resources": ["ciliumnetworkpolicies"],
+                    "verbs": ["create", "delete"],
+                }
+            ],
+            ("homelab-test-network-policies", "gatus"): [
+                {
+                    "apiGroups": ["cilium.io"],
+                    "resources": ["ciliumnetworkpolicies"],
+                    "verbs": ["create", "delete"],
+                }
+            ],
+        }
+        for (name, namespace), rules in expected.items():
+            roles = [
+                d
+                for d in self.documents
+                if d["kind"] == "Role" and d["metadata"] == {"name": name, "namespace": namespace}
+            ]
+            self.assertEqual(len(roles), 1)
+            self.assertEqual(roles[0]["rules"], rules)
+            bindings = [
+                d
+                for d in self.documents
+                if d["kind"] == "RoleBinding" and d["metadata"] == roles[0]["metadata"]
+            ]
+            self.assertEqual(len(bindings), 1)
+            self.assertEqual(
+                bindings[0]["subjects"],
+                [
+                    {
+                        "kind": "ServiceAccount",
+                        "name": "homelab-test-runner",
+                        "namespace": "kube-system",
+                    }
+                ],
+            )
+
+    def test_publisher_and_coordinator_do_not_inherit_test_or_observer_grants(self):
+        allowed = {
+            "homelab-report-publisher": {
+                "homelab-report-publisher-flux-system",
+                "homelab-report-publisher-test-reports",
+            },
+            "homelab-campaign-coordinator": {"homelab-campaign-coordinator"},
+        }
+        for account, refs in allowed.items():
+            bindings = [
+                d
+                for d in self.documents
+                if d["kind"] in {"RoleBinding", "ClusterRoleBinding"}
+                and any(
+                    s.get("name") == account and s.get("namespace") == "kube-system"
+                    for s in d.get("subjects", [])
+                )
+            ]
+            self.assertEqual({d["roleRef"]["name"] for d in bindings}, refs)
+            self.assertTrue(all(d["roleRef"]["kind"] == "Role" for d in bindings))

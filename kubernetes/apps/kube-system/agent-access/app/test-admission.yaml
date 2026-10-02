@@ -502,3 +502,335 @@ metadata:
 spec:
   policyName: homelab-test-disruption
   validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-workload-security
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [batch]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [jobs]
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [deployments]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+  variables:
+    - name: workload
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: pod
+      expression: variables.workload.spec.template.spec
+    - name: container
+      expression: variables.pod.containers[0]
+  validations:
+    - expression: >-
+        !has(variables.workload.metadata.ownerReferences) &&
+        (!has(variables.workload.metadata.finalizers) || variables.workload.metadata.finalizers.size() == 0) &&
+        !has(variables.workload.metadata.annotations) &&
+        !has(variables.workload.spec.template.metadata.annotations) &&
+        !has(variables.workload.spec.template.metadata.ownerReferences) &&
+        variables.pod.automountServiceAccountToken == false &&
+        (!has(variables.pod.serviceAccountName) || variables.pod.serviceAccountName == '' || variables.pod.serviceAccountName == 'default') &&
+        variables.pod.containers.size() == 1 && !has(variables.pod.initContainers) && !has(variables.pod.ephemeralContainers) &&
+        (!has(variables.pod.hostNetwork) || !variables.pod.hostNetwork) &&
+        (!has(variables.pod.hostPID) || !variables.pod.hostPID) &&
+        (!has(variables.pod.hostIPC) || !variables.pod.hostIPC) &&
+        !has(variables.pod.hostAliases) && !has(variables.pod.dnsConfig) &&
+        (!has(variables.pod.dnsPolicy) || variables.pod.dnsPolicy == 'ClusterFirst') &&
+        !has(variables.pod.imagePullSecrets) && !has(variables.pod.priorityClassName) &&
+        (!has(variables.pod.schedulerName) || variables.pod.schedulerName == 'default-scheduler') &&
+        variables.pod.securityContext.seccompProfile.type == 'RuntimeDefault' &&
+        !has(variables.pod.securityContext.sysctls) && !has(variables.pod.securityContext.supplementalGroups) &&
+        !has(variables.pod.securityContext.seLinuxOptions) && !has(variables.pod.securityContext.windowsOptions) &&
+        !has(variables.pod.securityContext.appArmorProfile)
+      message: Test workload parents cannot select a wider identity, network, or host security context.
+    - expression: >-
+        !has(variables.container.envFrom) && !has(variables.container.lifecycle) &&
+        !has(variables.container.workingDir) && !has(variables.container.volumeDevices) &&
+        (!has(variables.container.stdin) || !variables.container.stdin) &&
+        (!has(variables.container.tty) || !variables.container.tty) &&
+        variables.container.securityContext.allowPrivilegeEscalation == false &&
+        variables.container.securityContext.capabilities.drop == ['ALL'] &&
+        !has(variables.container.securityContext.capabilities.add) &&
+        (!has(variables.container.securityContext.privileged) || !variables.container.securityContext.privileged) &&
+        !has(variables.container.securityContext.seccompProfile) &&
+        !has(variables.container.securityContext.procMount) &&
+        !has(variables.container.securityContext.seLinuxOptions) &&
+        !has(variables.container.securityContext.windowsOptions) &&
+        !has(variables.container.securityContext.appArmorProfile) &&
+        (!has(variables.container.securityContext.runAsNonRoot) || variables.container.securityContext.runAsNonRoot) &&
+        (!has(variables.container.readinessProbe) || has(variables.container.readinessProbe.httpGet)) &&
+        (!has(variables.container.livenessProbe) || has(variables.container.livenessProbe.httpGet)) &&
+        (!has(variables.container.startupProbe) || has(variables.container.startupProbe.httpGet))
+      message: Test containers cannot add executable hooks or broader privileges.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-workload-security
+spec:
+  policyName: homelab-test-workload-security
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-n8n-applications
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [deployments]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+  variables:
+    - name: workload
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: pod
+      expression: variables.workload.spec.template.spec
+    - name: container
+      expression: variables.pod.containers[0]
+    - name: run
+      expression: variables.workload.metadata.labels['homelab-talos/run-id']
+    - name: labels
+      expression: >-
+        {'homelab-talos/test': 'n8n-restore-drill', 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'n8n'}
+    - name: expectedValues
+      expression: >-
+        {'DB_TYPE': 'postgresdb', 'DB_POSTGRESDB_HOST': 'n8n-postgresql.automation.svc.cluster.local',
+          'DB_POSTGRESDB_PORT': '5432', 'DB_POSTGRESDB_DATABASE': 'n8n_restore_' + variables.run,
+          'DB_POSTGRESDB_USER': 'n8n', 'DB_POSTGRESDB_SCHEMA': 'public', 'N8N_PORT': '5678', 'N8N_PROTOCOL': 'http',
+          'N8N_HOST': 'n8n-restore-' + variables.run + '.automation.svc.cluster.local',
+          'N8N_WEBHOOK_URL': 'http://n8n-restore-' + variables.run + '.automation.svc.cluster.local:5678/',
+          'N8N_EDITOR_BASE_URL': 'http://n8n-restore-' + variables.run + '.automation.svc.cluster.local:5678/',
+          'N8N_DIAGNOSTICS_ENABLED': 'false', 'N8N_VERSION_NOTIFICATIONS_ENABLED': 'false', 'N8N_PERSONALIZATION_ENABLED': 'false'}
+  validations:
+    - expression: >-
+        request.namespace == 'automation' && request.operation != 'UPDATE' &&
+        variables.run.matches('^[0-9a-f]{12}$') && variables.workload.metadata.name == 'n8n-restore-' + variables.run &&
+        variables.workload.metadata.labels['homelab-talos/test'] == 'n8n-restore-drill' &&
+        variables.workload.spec.replicas == 1 && variables.workload.spec.strategy.type == 'Recreate' &&
+        variables.workload.spec.selector.matchLabels == variables.labels &&
+        !has(variables.workload.spec.selector.matchExpressions) &&
+        variables.workload.spec.template.metadata.labels == variables.labels &&
+        (!has(variables.pod.restartPolicy) || variables.pod.restartPolicy == 'Always') &&
+        variables.pod.securityContext.fsGroup == 1000 &&
+        variables.container.name == 'n8n' && variables.container.image == 'docker.n8n.io/n8nio/n8n:2.36.7' &&
+        !has(variables.container.command) && !has(variables.container.args) &&
+        variables.container.securityContext.runAsUser == 1000 &&
+        variables.container.securityContext.runAsGroup == 1000 && variables.container.securityContext.runAsNonRoot
+      message: Only the isolated n8n restore application template is permitted.
+    - expression: >-
+        variables.container.env.size() == 16 &&
+        variables.expectedValues.all(k, variables.container.env.exists(e, e.name == k && !has(e.valueFrom) && e.value == variables.expectedValues[k])) &&
+        variables.container.env.exists(e, e.name == 'DB_POSTGRESDB_PASSWORD' && (!has(e.value) || e.value == '') &&
+          has(e.valueFrom.secretKeyRef) && e.valueFrom.secretKeyRef.name == 'postgresql-credentials' && e.valueFrom.secretKeyRef.key == 'n8n-password' &&
+          !has(e.valueFrom.configMapKeyRef) && !has(e.valueFrom.fieldRef) && !has(e.valueFrom.resourceFieldRef)) &&
+        variables.container.env.exists(e, e.name == 'N8N_ENCRYPTION_KEY' && (!has(e.value) || e.value == '') &&
+          has(e.valueFrom.secretKeyRef) && e.valueFrom.secretKeyRef.name == 'n8n-runtime' && e.valueFrom.secretKeyRef.key == 'N8N_ENCRYPTION_KEY' &&
+          !has(e.valueFrom.configMapKeyRef) && !has(e.valueFrom.fieldRef) && !has(e.valueFrom.resourceFieldRef)) &&
+        variables.pod.volumes.size() == 1 && variables.pod.volumes[0].name == 'data' && has(variables.pod.volumes[0].emptyDir) &&
+        variables.container.volumeMounts.size() == 1 && variables.container.volumeMounts[0].name == 'data' &&
+        variables.container.volumeMounts[0].mountPath == '/home/node/.n8n' &&
+        !has(variables.container.volumeMounts[0].subPath) && !has(variables.container.volumeMounts[0].subPathExpr)
+      message: The restore application must use the scratch database, fixed credentials, and empty application storage.
+    - expression: >-
+        variables.container.ports.size() == 1 && variables.container.ports[0].name == 'http' &&
+        variables.container.ports[0].containerPort == 5678 &&
+        (!has(variables.container.ports[0].hostPort) || variables.container.ports[0].hostPort == 0) &&
+        variables.container.readinessProbe.httpGet.path == '/healthz' && variables.container.readinessProbe.httpGet.port == 'http' &&
+        (!has(variables.container.readinessProbe.httpGet.host) || variables.container.readinessProbe.httpGet.host == '') &&
+        (!has(variables.container.readinessProbe.httpGet.scheme) || variables.container.readinessProbe.httpGet.scheme == 'HTTP') &&
+        !has(variables.container.readinessProbe.httpGet.httpHeaders) &&
+        !has(variables.container.livenessProbe) && !has(variables.container.startupProbe)
+      message: The restore application exposes only its fixed readiness endpoint.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-n8n-applications
+spec:
+  policyName: homelab-test-n8n-applications
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-services
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [services]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+  variables:
+    - name: service
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: run
+      expression: variables.service.metadata.labels['homelab-talos/run-id']
+  validations:
+    - expression: >-
+        request.namespace == 'automation' && request.operation != 'UPDATE' &&
+        variables.run.matches('^[0-9a-f]{12}$') && variables.service.metadata.name == 'n8n-restore-' + variables.run &&
+        variables.service.metadata.labels['homelab-talos/test'] == 'n8n-restore-drill' &&
+        !has(variables.service.metadata.ownerReferences) && !has(variables.service.metadata.annotations) &&
+        (!has(variables.service.metadata.finalizers) || variables.service.metadata.finalizers.size() == 0) &&
+        variables.service.spec.type == 'ClusterIP' &&
+        variables.service.spec.selector == {'homelab-talos/test': 'n8n-restore-drill', 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'n8n'} &&
+        !has(variables.service.spec.externalIPs) && !has(variables.service.spec.externalName) &&
+        !has(variables.service.spec.loadBalancerIP) && !has(variables.service.spec.loadBalancerClass) &&
+        !has(variables.service.spec.loadBalancerSourceRanges) &&
+        (!has(variables.service.spec.sessionAffinity) || variables.service.spec.sessionAffinity == 'None') &&
+        (!has(variables.service.spec.publishNotReadyAddresses) || !variables.service.spec.publishNotReadyAddresses) &&
+        !has(variables.service.spec.trafficDistribution)
+      message: Services may select only the isolated n8n application and expose only an internal cluster endpoint.
+    - expression: >-
+        variables.service.spec.ports.size() == 1 && variables.service.spec.ports[0].name == 'http' &&
+        variables.service.spec.ports[0].port == 5678 && variables.service.spec.ports[0].targetPort == 'http' &&
+        variables.service.spec.ports[0].protocol == 'TCP' &&
+        (!has(variables.service.spec.ports[0].nodePort) || variables.service.spec.ports[0].nodePort == 0) &&
+        !has(variables.service.spec.ports[0].appProtocol)
+      message: The n8n restore Service exposes only its canonical HTTP port.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-services
+spec:
+  policyName: homelab-test-services
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-network-policies
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [cilium.io]
+        apiVersions: [v2]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [ciliumnetworkpolicies]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+  variables:
+    - name: policy
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: run
+      expression: variables.policy.metadata.labels['homelab-talos/run-id']
+    - name: automation
+      expression: request.namespace == 'automation'
+    - name: rules
+      expression: "variables.automation ? variables.policy.specs : [variables.policy.spec]"
+    - name: outbound
+      expression: "variables.automation ? [variables.rules[0], variables.rules[1]] : variables.rules"
+    - name: dns
+      expression: "{'k8s:io.kubernetes.pod.namespace': 'kube-system', 'k8s:k8s-app': 'kube-dns'}"
+    - name: application
+      expression: >-
+        {'homelab-talos/test': 'n8n-restore-drill', 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'n8n'}
+    - name: helper
+      expression: >-
+        {'homelab-talos/test': 'n8n-restore-drill', 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'database-helper'}
+    - name: requester
+      expression: >-
+        {'homelab-talos/test': 'n8n-restore-drill', 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'request'}
+    - name: databasePeer
+      expression: "{'k8s:io.kubernetes.pod.namespace': 'automation', 'app.kubernetes.io/name': 'n8n-postgresql'}"
+    - name: applicationPeer
+      expression: >-
+        {'k8s:io.kubernetes.pod.namespace': 'automation', 'homelab-talos/test': 'n8n-restore-drill',
+          'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'n8n'}
+    - name: requestPeer
+      expression: >-
+        {'k8s:io.kubernetes.pod.namespace': 'gatus', 'homelab-talos/test': 'n8n-restore-drill',
+          'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'request'}
+    - name: databaseClientPeer
+      expression: >-
+        {'k8s:io.kubernetes.pod.namespace': 'automation', 'homelab-talos/test': 'n8n-restore-drill', 'homelab-talos/run-id': variables.run}
+  validations:
+    - expression: >-
+        request.namespace in ['automation', 'gatus'] && request.operation != 'UPDATE' &&
+        variables.run.matches('^[0-9a-f]{12}$') &&
+        variables.policy.metadata.name == 'n8n-restore-' + variables.run + (variables.automation ? '-automation' : '-request') &&
+        variables.policy.metadata.labels['homelab-talos/test'] == 'n8n-restore-drill' &&
+        !has(variables.policy.metadata.ownerReferences) && !has(variables.policy.metadata.annotations) &&
+        (variables.automation ? (!has(variables.policy.spec) && variables.rules.size() == 3) :
+          (!has(variables.policy.specs) && variables.rules.size() == 1)) &&
+        variables.rules.all(r, !has(r.nodeSelector) && !has(r.ingressDeny) && !has(r.egressDeny) &&
+          !has(r.enableDefaultDeny) && !has(r.log) && !has(r.labels) && !has(r.description) &&
+          !has(r.endpointSelector.matchExpressions)) &&
+        (variables.automation ? (
+          variables.rules[0].endpointSelector.matchLabels == variables.application &&
+          variables.rules[1].endpointSelector.matchLabels == variables.helper &&
+          variables.rules[2].endpointSelector.matchLabels == {'app.kubernetes.io/name': 'n8n-postgresql'} &&
+          !has(variables.rules[2].egress) && variables.rules[1].ingress.size() == 0) : (
+          variables.rules[0].endpointSelector.matchLabels == variables.requester && variables.rules[0].ingress.size() == 0))
+      message: Only the complete run-specific n8n restore policy allocation is permitted.
+    - expression: >-
+        variables.rules.all(r,
+          (!has(r.ingress) || r.ingress.all(i,
+            !has(i.fromCIDR) && !has(i.fromCIDRSet) && !has(i.fromEntities) && !has(i.fromGroups) &&
+            !has(i.fromNodes) && !has(i.fromRequires) && !has(i.authentication) && !has(i.icmps) &&
+            i.fromEndpoints.size() == 1 && !has(i.fromEndpoints[0].matchExpressions) && i.toPorts.size() == 1 &&
+            i.toPorts.all(p, !has(p.listener) && !has(p.originatingTLS) && !has(p.rules) && !has(p.serverNames) && !has(p.terminatingTLS)))) &&
+          (!has(r.egress) || r.egress.all(e,
+            !has(e.toCIDR) && !has(e.toCIDRSet) && !has(e.toEntities) && !has(e.toFQDNs) &&
+            !has(e.toGroups) && !has(e.toNodes) && !has(e.toRequires) && !has(e.toServices) &&
+            !has(e.authentication) && !has(e.icmps) &&
+            e.toEndpoints.size() == 1 && !has(e.toEndpoints[0].matchExpressions) && e.toPorts.size() == 1 &&
+            e.toPorts.all(p, !has(p.listener) && !has(p.originatingTLS) && !has(p.rules) && !has(p.serverNames) && !has(p.terminatingTLS)))))
+      message: Restore policy rules cannot add alternative peers, authentication, ICMP, L7, TLS, or listener behavior.
+    - expression: >-
+        variables.outbound.all(r, r.egress.size() == 2 &&
+          r.egress[0].toEndpoints[0].matchLabels == variables.dns &&
+          r.egress[0].toPorts[0].ports.size() == 2 &&
+          r.egress[0].toPorts[0].ports.all(p, p.port == '53' && p.protocol in ['UDP', 'TCP'] && !has(p.endPort)) &&
+          r.egress[0].toPorts[0].ports.exists(p, p.protocol == 'UDP') &&
+          r.egress[0].toPorts[0].ports.exists(p, p.protocol == 'TCP') &&
+          r.egress[1].toEndpoints[0].matchLabels == (variables.automation ? variables.databasePeer : variables.applicationPeer) &&
+          r.egress[1].toPorts[0].ports.size() == 1 &&
+          r.egress[1].toPorts[0].ports[0].port == (variables.automation ? '5432' : '5678') &&
+          r.egress[1].toPorts[0].ports[0].protocol == 'TCP' && !has(r.egress[1].toPorts[0].ports[0].endPort))
+      message: Restore egress permits only cluster DNS and the canonical database or run application peer.
+    - expression: >-
+        !variables.automation || (
+          variables.rules[0].ingress.size() == 1 &&
+          variables.rules[0].ingress[0].fromEndpoints[0].matchLabels == variables.requestPeer &&
+          variables.rules[0].ingress[0].toPorts[0].ports.size() == 1 &&
+          variables.rules[0].ingress[0].toPorts[0].ports[0].port == '5678' &&
+          variables.rules[0].ingress[0].toPorts[0].ports[0].protocol == 'TCP' &&
+          !has(variables.rules[0].ingress[0].toPorts[0].ports[0].endPort) &&
+          variables.rules[2].ingress.size() == 1 &&
+          variables.rules[2].ingress[0].fromEndpoints[0].matchLabels == variables.databaseClientPeer &&
+          variables.rules[2].ingress[0].toPorts[0].ports.size() == 1 &&
+          variables.rules[2].ingress[0].toPorts[0].ports[0].port == '5432' &&
+          variables.rules[2].ingress[0].toPorts[0].ports[0].protocol == 'TCP' &&
+          !has(variables.rules[2].ingress[0].toPorts[0].ports[0].endPort))
+      message: Restore ingress permits only the matching request and database helper peers on their fixed ports.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-network-policies
+spec:
+  policyName: homelab-test-network-policies
+  validationActions: [Deny]
