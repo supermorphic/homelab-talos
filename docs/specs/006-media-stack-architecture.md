@@ -1,75 +1,267 @@
 # Media Stack Architecture
 
-## Intent and ownership
+## Purpose
 
-Media acquisition, automation, serving, requests, and analytics share one GitOps
-architecture. [Media source](../../kubernetes/apps/media/) owns exact workloads, images,
-paths, routes, dependencies, and policy values. Git owns deployment shape and encrypted
-integration Secrets; supported application UIs/APIs own runtime settings on retained
-claims. Editing application SQLite databases from Git would race the writer and couple
-reconciliation to private schemas.
+Define one GitOps-native architecture for media serving, acquisition, automation,
+requests, analytics, and operational visibility. The design keeps download traffic
+behind a fail-closed VPN, uses hardlinks instead of duplicate bulk data, and gives each
+stateful application a recoverable single-writer configuration volume.
 
-Only qBittorrent shares Gluetun's VPN namespace. Media managers use internal Service
-DNS; optional FlareSolverr follows Prowlarr's direct egress because challenge sessions
-need the same effective source address. It is a per-indexer helper, not a global proxy.
-Ordinary media routes remain internal; [Plex direct access](013-plex-direct-remote-access.md)
-is the separately controlled exception. The namespace's privileged Pod Security label
-does not grant every container privileges: only Gluetun receives route-changing
-capability, while Plex receives its scheduled GPU resource.
+## Effective application set
 
-## Storage and hardlinks
+The `media` namespace and its parent Kustomization contain these active units:
 
-Downloads and organized libraries are sibling trees on one NAS-backed RWX SMB filesystem.
-qBittorrent and the media managers see the same `/data` paths. Imports must hardlink
-rather than copy: independent filesystem acceptance requires shared inode identity and
-link count two. Separate shares cannot satisfy this contract. qbit_manage sees only
-`/data/downloads`, so cleanup cannot directly write organized library names.
+| Unit | Role | Persistent storage | User-facing route |
+| --- | --- | --- | --- |
+| `media-storage` | Static shared SMB PV and `media-data` claim | NAS-backed RWX | None |
+| `plex` | Media server | Retained Longhorn config, read-only SMB library | Internal Gateway; separate direct-access exception |
+| `qbittorrent` | VPN download client with Gluetun sidecar | Retained Longhorn config and shared SMB downloads | Internal Gateway |
+| `qbit-manage` | Torrent classification, seeding, and cleanup policy | Generated config plus download-only SMB view | None |
+| `prowlarr` | Indexer manager | Retained Longhorn config | Internal Gateway |
+| `sonarr` | Television automation | Retained Longhorn config and shared SMB data | Internal Gateway |
+| `radarr` | Movie automation | Retained Longhorn config and shared SMB data | Internal Gateway |
+| `lidarr` | Music automation | Retained Longhorn config and shared SMB data | Internal Gateway |
+| `seerr` | Household request interface | Retained Longhorn config | Internal Gateway |
+| `tautulli` | Plex history and analytics | Retained Longhorn config | Internal Gateway |
+| `flaresolverr` | Optional per-indexer Cloudflare solver | Stateless | ClusterIP only |
+| `media-alerts` | Media Prometheus rules | None | None |
+| `encode-benchmark` | Run-owned encoding evaluation Jobs | Shared media and test artifacts as defined by each Job | None |
 
-Plex mounts media read-only at `/Volumes/Prometheus` to preserve its migrated database
-paths, and uses node-local transcode scratch. Application databases remain on retained
-Longhorn single-writer claims with `Recreate` Deployments. Plex's `ReadWriteOncePod`
-claim supplies a stronger exclusive-writer boundary. Replication permits rescheduling
-with an outage; it is not a backup or an active-active application model. Hard node
-failure can leave attachment blocked until node-down pod deletion completes; reducing
-failover time requires a fresh hard-node test rather than an assumed timing guarantee.
+The namespace is labeled for privileged Pod Security because Gluetun requires
+`NET_ADMIN` and `/dev/net/tun`, and Plex consumes the Intel GPU device. This namespace
+setting does not grant those privileges to every workload; each container still has an
+explicit security context.
 
-The `media-data` PV's `nolease` option is a candidate mitigation for Plex open failures
-while qBittorrent holds the hardlinked name open. Its cause and post-remount result
-remain unverified. Changing PV options does not change existing node mounts: an
-operator must coordinate a mount cycle on every consuming node, then test both
-concurrent-open orders and representative playback/NAS throughput. Removing leases
-reduces client caching; inode-only evidence cannot establish this mitigation.
+## Storage model and hardlink contract
 
-## Torrent lifecycle
+The SMB CSI driver runs one controller Deployment and a Linux node DaemonSet.
+Its Helm values disable the chart's default Windows DaemonSet because all cluster
+nodes run Talos Linux. The source validator checks the rendered workloads to retain
+the controller and Linux plugin while excluding the unused Windows component.
 
-qBittorrent downloads and seeds. Sonarr, Radarr, and Lidarr own their categories, imports,
-renaming, and organized libraries. qbit_manage owns successful-torrent classification,
-seed limits, stopping, and download-side cleanup. Media-manager **Remove Completed**
-stays disabled and **Post-Import Category** stays blank. Global qBittorrent seed limits
-must not stop private torrents earlier than the selected policy.
+Bulk downloads and libraries use one static `ReadWriteMany` SMB volume named
+`media-data`. The `downloads/` and `media/` trees are siblings on that one server
+filesystem. qBittorrent writes below `/data/downloads`; Sonarr, Radarr, and Lidarr import
+to `/data/media/{tv,movies,music}`. Matching mount paths let the applications create
+hardlinks rather than copies. Acceptance established shared inode identity and link
+count two across the two names.
 
-[The policy configuration](../../kubernetes/apps/media/qbit-manage/app/config.yml)
-owns exact groups, ratios, times, and priorities. Generic private tagging protects even
-unmapped trackers; tracker-specific tags select dedicated policy. Highest precedence for
-private groups and private-tag exclusions in every cleanup group protect independent
-failure cases. Categories never change, priorities are unique, private cleanup and
-finite private time cutoffs remain disabled, and stop actions remain reversible.
-Orphan, unregistered, and tracker-error deletion are outside the policy.
+The media-data PV requests `nolease` in addition to its established mount options.
+The change is a candidate for intermittent Plex `Invalid argument` failures when
+qBittorrent keeps a download file open and Plex opens the hardlinked library name.
+The registered media-hardlink test now checks both concurrent-open orders using the
+actual application containers. The original inode-only result did not test this case.
+The live baseline and post-remount result remain unverified; the SMB protocol response
+was not captured. `nolease` removes client lease requests and related caching, so
+representative playback and NAS throughput must be checked during rollout. The
+PV edits do not change existing mounts: an operator must coordinate a mount cycle on
+every consuming node before evaluating the mitigation.
 
-CZTeam's dedicated group must retain both generic and tracker-specific protection.
-Local seed time and per-torrent ratio do not prove tracker credit or account-wide
-compliance. Before policy or qBittorrent compatibility changes, the operator checks the
-tracker's current rules, account/H&R status, and accepted client list privately. Prowlarr
-indexer priority is unrelated to qbit_manage group priority and is no H&R safeguard.
+Plex mounts the same SMB share read-only at `/Volumes/Prometheus` because its migrated
+database retains those historical paths. It uses node-local `emptyDir` for transcode
+scratch. qbit_manage sees only the downloads subtree, so cleanup authority cannot write
+the organized library directly.
 
-Accept the first real private torrent only after its tags, selected group, unchanged
-category, minimum seed floor, absence of finite cutoff, absence of cleanup, and tracker
-credit after an announce interval agree. On rollback, preserve private tags/exclusions,
-return only that group's policy to no-limit/no-cleanup, deliberately clear any persisted
-limits on affected torrents, resume them, and check credited seeding. Never fall back to
-public cleanup or mass-reset unrelated limits. New private trackers need independently
-reviewed rules and generalized validation before another dedicated group is introduced.
-Use only bare announce hostnames; full URLs may contain passkeys.
+Application databases and settings use retained Longhorn single-writer claims. Stateful
+Deployments use `Recreate`; Plex uses the stronger `ReadWriteOncePod` mode for its
+database, while the other application claims use `ReadWriteOnce`. Bulk media does not
+use Longhorn or node-local host paths. This separation gives configuration state
+replication and backup without forcing large shared files through block storage.
+
+The alternatives fail different requirements. Separate download and library shares
+would make hardlinks impossible and double data during import. Longhorn would turn the
+large shared library into replicated block storage, while node-local host paths would
+bind the library to one worker. Multiple active replicas were rejected because these
+applications use single-writer databases and do not supply an active-active state model.
+The static SMB volume accepts NAS availability as an external dependency in exchange for
+one shared, hardlink-capable filesystem.
+
+The hardlink contract was proven rather than inferred from matching paths: a guarded
+test created download and library names that reported the same inode with link count
+two. Plex recovery supplied a separate result. A planned replacement could close the
+database cleanly, while a hard node failure required Longhorn's node-down pod-deletion
+policy before the old `ReadWriteOncePod` attachment stopped blocking replacement. The
+observed hard-node recovery time was approximately eight minutes, fully automatic. The
+default 300-second unreachable toleration dominated that result; Longhorn force-deleted
+the stuck pod after approximately 235 seconds before the replacement attached the
+surviving replica. If faster recovery becomes necessary, lowering the Plex pod's
+unreachable toleration and repeating the hard-node gate is the evidence-based lever.
+That result did not prove a Longhorn restore, a complete NAS outage, or service through
+loss of one volume replica.
+
+## qBittorrent and Gluetun network namespace
+
+qBittorrent and Gluetun share one Pod and therefore one network namespace. Gluetun is a
+native sidecar with `restartPolicy: Always`; its startup probe gates the main container
+until the WireGuard tunnel and firewall are ready. Gluetun owns `NET_ADMIN`, mounts
+`/dev/net/tun`, manages ProtonVPN port forwarding, and denies non-tunnel Internet egress.
+qBittorrent runs as UID/GID `568`, drops all capabilities, and cannot alter routes.
+
+Inside that shared namespace, qBittorrent intentionally resolves through Gluetun's
+resolver rather than node or ISP DNS. The resilience evidence combined that structural
+resolver boundary with DNS-independent IP reachability probes and the observed home-WAN
+address as a hard never-leak oracle. This separation matters because DNS failure alone
+does not prove that Internet egress failed closed.
+
+The Web UI is available through the internal Gateway. Gluetun's control Service is
+ClusterIP-only. Its unauthenticated health route supports Gatus, while mutating control
+routes require the per-consumer API key. The control API has no HTTPRoute or
+LoadBalancer.
+
+Startup gating and the ongoing firewall are separate safety layers. Live resilience
+acceptance interrupts the VPN and uses the observed public route as an independent
+oracle: traffic must fail closed and must never fall back to the residential path. The
+test also covers recovery and forwarded-port reacquisition.
+
+The live test measured from qBittorrent's own network namespace, not from Gluetun, and
+used both name-independent IP reachability and the observed exit path. It established
+that a stopped or interrupted tunnel produced no fallback egress and that a newly
+created Pod reacquired the tunnel and forwarded port. It also found a bounded recovery
+gap: Gluetun could restore data-plane egress while its DNS health loop and port-forward
+state remained unhealthy. Pod recreation was the known clean recovery. The current slow
+container liveness fallback detects that partial state, but whether a same-namespace
+container restart always clears it remains unproven.
+
+## Application communication and routing
+
+Service-to-service calls use cluster DNS. Internal applications do not hairpin through
+the Gateway:
+
+```text
+Prowlarr -> Sonarr / Radarr / Lidarr
+Seerr -> Plex / Sonarr / Radarr
+Tautulli -> Plex
+Sonarr / Radarr / Lidarr -> qBittorrent
+qBittorrent -> shared download tree
+Sonarr / Radarr / Lidarr -> shared library tree -> Plex
+```
+
+Prowlarr, Sonarr, Radarr, Lidarr, qBittorrent, Plex, Seerr, and Tautulli each have an
+HTTPS route on the internal Gateway. FlareSolverr remains in-cluster only because it is
+an implementation detail of selected Prowlarr indexers. Plex also has a separately
+specified direct remote-access path on port `32400`; that exception does not turn the
+other media routes public.
+
+The effective Flux dependency graph is:
+
+```text
+media [cilium]
+├── media-storage [media, csi-driver-smb]
+│   ├── plex [media-storage, internal-gateway]
+│   ├── qbittorrent [media-storage, internal-gateway]
+│   ├── sonarr [media-storage, internal-gateway]
+│   ├── radarr [media-storage, internal-gateway]
+│   └── lidarr [media-storage, internal-gateway]
+├── prowlarr [media, internal-gateway]
+├── seerr [media, internal-gateway]
+├── tautulli [media, internal-gateway]
+├── flaresolverr [media]
+├── qbit-manage [media-storage, qbittorrent]
+├── encode-benchmark [media-storage, intel-gpu-plugin, qbit-manage]
+└── media-alerts [kube-prometheus-stack]
+```
+
+Runtime API relationships are not encoded as Flux dependencies. A request application
+can reconcile before a downstream API becomes available and report that integration
+failure through health monitoring.
+
+## Plex and Seerr choices
+
+Plex runs as one active instance and requests `gpu.intel.com/i915: 1`. The Intel device
+plugin injects `/dev/dri` and schedules Plex only on a GPU-capable node. The container
+runs non-root as UID/GID `568`, drops all capabilities, and uses a 120-second termination
+grace period to close its SQLite database during planned replacement. GPU scheduling
+does not make Plex active-active; Longhorn reattachment and Kubernetes rescheduling
+provide recovery with an expected outage.
+
+Seerr is the request interface because it is the maintained successor to Overseerr and
+Jellyseerr. The source pins `ghcr.io/seerr-team/seerr:v3.0.1`, and media policy prevents
+a compatible legacy image from silently replacing it. Seerr is config-only and stores
+its request database and runtime API links under `/app/config`.
+
+Declarative automation of every application's internal database was rejected. Plex,
+the `*arr` applications, Seerr, and Tautulli own runtime configuration formats and API
+keys that change independently of Kubernetes manifests. Git remains authoritative for
+workload shape, security, storage, routes, and encrypted integration Secrets; the
+applications retain their own supported runtime settings on Longhorn.
+
+Patching SQLite databases or other application internals from Git was not treated as
+configuration management: it would couple reconciliation to private schemas and could
+race the application's writer. Supported application APIs and attended first-run state
+therefore remain the integration boundary. Seerr was selected as the maintained
+successor to the older request interfaces, and the optional FlareSolverr unit remains a
+direct-egress, per-indexer helper rather than a namespace-wide proxy or VPN consumer.
+It follows Prowlarr's direct egress because a Cloudflare-protected indexer session depends
+on the solver and Prowlarr presenting the same effective egress identity; routing the
+solver independently through the VPN can invalidate that session.
+
+## Security and secrets
+
+Only Gluetun receives route-changing capability. Plex receives one GPU device resource.
+The other application containers run non-root where supported, disable privilege
+escalation, and drop all capabilities. No media workload uses host networking, a host
+port, a container-runtime socket, or a public Gateway.
+
+SMB, VPN, widget, and integration credentials use SOPS-encrypted per-consumer Secrets.
+Sharing an upstream credential does not imply sharing one Kubernetes Secret across
+unrelated consumers. Plex's Cilium policy restricts ingress and egress around its
+implemented client and direct-access paths; specialized Plex exposure and detection
+decisions remain separate specifications.
+
+## Observability and validation
+
+Homepage discovers the user-facing applications and injects independently rotatable
+widget credentials. Gatus checks every active user-facing media service, the
+cluster-internal FlareSolverr service, and the Gluetun VPN state. Authenticated Gatus
+checks also cover native `*arr` health and Seerr's reads of Sonarr and Radarr.
+
+Prometheus rules cover sustained Media endpoint failure, missing probe series, important
+PVCs, integration-health failures, qBittorrent VPN loss and Gluetun restart loops, and
+the separately designed Plex direct-access signals. The isolated `media-alerts`
+Kustomization keeps Prometheus Operator CRD ordering out of application reconciliation.
+
+Offline checks validate source, rendered charts, storage and security invariants, route
+wiring, dependency order, network-policy shape, and Prometheus rule behavior. Read-only
+verifiers check the deployed resources and endpoints. Controlled integration and
+resilience tests supply independent evidence for hardlinks, GPU use, VPN fail-closed
+behavior, and recovery. Functional acceptance was deliberately split into two levels: a
+direct Sonarr/Radarr to qBittorrent, hardlink-import, and Plex gate was defined to prove
+the acquisition path without Seerr; the household request gate then added Seerr ahead of
+the same pipeline. Keeping those gates separate prevents a request-layer integration
+failure from obscuring whether acquisition and import work. The source and live verifiers
+establish component paths but do not submit media requests. The current operator
+acceptance gate remains one authorized TV request and one movie request through Seerr,
+their expected Sonarr or Radarr service and qBittorrent category, import into Plex, and
+accepted media naming. No durable record yet proves that both request-to-library paths
+completed.
+
+## Deferred work and reconsideration
+
+The original acceptance did not complete a throwaway Longhorn restore, a full NAS-outage
+exercise, or the one-replica-loss case for Plex. Those remain evidence gaps, not claims
+that recovery would fail. Resource values for the media managers and request service are
+inherited starting points; change them when measured scans, history growth, or request
+load justify it. Revisit runtime configuration automation only when an application
+offers a supported, idempotent interface with safe credential and rollback behavior.
+
+Optional dashboards and deeper continuous transactions do not change the architecture.
+The notification delivery spine belongs to the ntfy design, integration-health depth to
+specifications 018–019, and Plex direct exposure and detection to specifications 013 and
+014. Those later lineages must not be inferred from this common storage and application
+design.
+
+## Consequences
+
+The design localizes VPN privilege, keeps bulk data on one hardlink-capable filesystem,
+and makes configuration recovery independent of the NAS media path. Each stateful
+application remains single-active, so failover includes an outage while its Longhorn
+claim reattaches. External metadata providers, trackers, the NAS, and the VPN provider
+remain real dependencies that a healthy Kubernetes Deployment cannot eliminate.
+
+Source and supported application settings own current configuration; independent recovery
+is described below.
+VPN credential and operating procedure belongs in
+`docs/specs/006-media-stack-architecture.md`.
 
 ## qbit_manage containment and mistaken-clean recovery
 
@@ -104,45 +296,6 @@ or failed guarded state checks. A library hardlink can survive recycle expiry, b
 seedable download path then needs a separately reviewed recovery decision. Bootstrap
 failure re-suspends reconciliation while preserving resources; a running scheduler can
 survive, so contain it again when necessary. Keep torrent activity and raw logs private.
-
-## VPN contract and recovery
-
-Gluetun owns the shared Pod's routes, firewall, resolver, WireGuard tunnel, and dynamic
-forwarded port. Startup gating and the ongoing kill switch are separate requirements.
-VPN failure must block Internet egress without falling back to the home WAN; DNS failure
-alone is not proof. The registered resilience test measures qBittorrent's own namespace
-using DNS-independent reachability and an independent home-WAN never-leak oracle.
-
-Use Proton's port-forward-capable native provider selection. Retain only the generated
-private key through the operator SOPS writer. Do not mount `wg0.conf`: its precedence
-would override native endpoint selection and failover. Moderate NAT is incompatible
-with this port-forwarding setup. The temporary forwarded port is owned by Gluetun's
-hooks, not a fixed qBittorrent preference. Those localhost hooks require narrowly scoped
-localhost authentication bypass; broader private-network bypass would defeat WebUI login.
-
-WebUI verification does not prove VPN health, exit identity, resolver confinement, or
-port parity. The stronger registered qBittorrent probe uses exec and a temporary
-non-VPN Pod; it remains a separately authorized mutation workflow.
-
-For private-key rotation, keep the previous Proton credential valid, record the old
-qBittorrent Pod UID, and use `mise exec -- just repo protonvpn-secrets` under operator
-custody. Review both encrypted Secret and rollout-stamp changes through Git. After
-reconciliation, an operator must compare the new Pod UID, its `sops-hash` annotation
-against `git hash-object` of the encrypted Proton Secret, and a private SHA-256 digest
-of the running Gluetun `WIREGUARD_PRIVATE_KEY` against the intended new key. Perform
-that comparison with tracing off, non-echoing input, no printed key/digests, and immediate
-input cleanup. There is no guarded command for this complete uptake check; ad hoc exec
-requires explicit operator authority. Run the registered VPN probe before retiring the
-previous credential. A Secret change without startup replacement is insufficient.
-
-On failure retain the kill switch; revert through reviewed Git while the old credential
-is valid, or obtain and publish another valid key. Never bypass the VPN. Gluetun can
-restore traffic while DNS health or forwarded-port state remains unhealthy. Pod
-recreation is the known clean recovery; a same-namespace container restart is not proven
-to clear every partial state. If slow liveness recovery/restart alerts persist, escalate
-for an attended operator Pod replacement; no dedicated guarded recovery recipe exists.
-Proactive expiry reminders belong outside the cluster because no Proton expiry metric
-is available. Extending an unchanged valid key needs no Secret or rollout change.
 
 ## Application-state recovery
 
@@ -189,18 +342,24 @@ require actual widget data. [Gatus integration credentials](019-media-integratio
 have the same process-replacement boundary. Supported UI/API settings and human gates
 remain necessary; they are not inferred from YAML renders.
 
-## Encoding decision boundary
+## VPN credential rotation and failure recovery
 
-The removed encoding benchmark did not establish a production encoder. LA-ICQ was
-rejected because eligible nodes selected ICQ rather than the required look-ahead mode;
-that was a capability no-go, not a measured quality verdict. The distinct corrected
-`qsv-hevc-icq-v1` evaluation produced no qualifying AVC, VC-1, or HDR10 setting under its
-predeclared quality gates. Independent failures ruled out every setting despite separate
-unresolved measurement anomalies. Neither result authorizes FileFlows, media replacement,
-threshold relaxation, or another run of the closed strategy.
+For private-key rotation, keep the previous Proton credential valid, record the old
+qBittorrent Pod UID, and use `mise exec -- just repo protonvpn-secrets` under operator
+custody. Review both encrypted Secret and rollout-stamp changes through Git. After
+reconciliation, an operator must compare the new Pod UID, its `sops-hash` annotation
+against `git hash-object` of the encrypted Proton Secret, and a private SHA-256 digest
+of the running Gluetun `WIREGUARD_PRIVATE_KEY` against the intended new key. Perform
+that comparison with tracing off, non-echoing input, no printed key/digests, and immediate
+input cleanup. There is no guarded command for this complete uptake check; ad hoc exec
+requires explicit operator authority. Run the registered VPN probe before retiring the
+previous credential. A Secret change without startup replacement is insufficient.
 
-A future encoder needs a new strategy decision, independent measurement oracles, and
-predeclared quality/throughput gates before execution. Preserve torrent hashes and
-hardlink economics: active payloads cannot be rewritten, retained private downloads can
-make an encode increase storage, and public cleanup delays realized savings. Production
-library replacement requires a separate accepted implementation and operator authority.
+On failure retain the kill switch; revert through reviewed Git while the old credential
+is valid, or obtain and publish another valid key. Never bypass the VPN. Gluetun can
+restore traffic while DNS health or forwarded-port state remains unhealthy. Pod
+recreation is the known clean recovery; a same-namespace container restart is not proven
+to clear every partial state. If slow liveness recovery/restart alerts persist, escalate
+for an attended operator Pod replacement; no dedicated guarded recovery recipe exists.
+Proactive expiry reminders belong outside the cluster because no Proton expiry metric
+is available. Extending an unchanged valid key needs no Secret or rollout change.

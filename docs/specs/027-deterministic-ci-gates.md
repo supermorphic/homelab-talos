@@ -1,11 +1,19 @@
 # Deterministic CI Gates — Stage 2
 
-## Purpose
+## Purpose and authorization
 
-Select expensive offline validation only when changed inputs can affect it, then reconcile
-fresh exact-candidate evidence through one hosted gate. [Coverage ownership](024-ci-runtime-and-merge-throughput-optimization.md)
-owns deduplication and optimization; a small deterministic category selector avoids a
-generalized dependency planner's maintenance cost.
+Reduce recomputation of expensive, unrelated validation after a candidate is rebased onto
+current main. [Specification 024](024-ci-runtime-and-merge-throughput-optimization.md)
+records the Stage 1 cleanup, retained correctness, final runtime evidence, and measured
+decision that authorized selective execution for
+[issue 303](https://github.com/supermorphic/homelab-talos/issues/303).
+
+This specification owns the Stage 2 architecture. It does not repeat the Stage 1 audit
+or authorize runner placement, live tests, a merge queue, or post-merge substitution.
+
+The design favors a small category selector over a generalized dependency planner.
+Its value is safely avoiding unrelated work with bounded configuration and maintenance
+cost—not achieving an arbitrary two-minute runtime.
 
 ## Goals and constraints
 
@@ -122,9 +130,25 @@ change already validated on main does not make all candidate evidence affected.
 Relevant shared inputs broaden the selection, and every selected target still executes
 against the complete rebased tree.
 
+### Impact reassessment after validation cleanup
+
+CI selection follows actual executable consumers. General documentation selects `core`
+for structural/link checks; it no longer selects framework or automation groups merely
+because tests formerly inspected guide prose. Chainsaw test documents still select their
+lint/catalog owners, and n8n smoke selects automation as an actual consumer.
+
+Shared bootstrap/repository modules, CI gate code, catalog inputs, and unknown paths
+remain fail-broad. The ownership fixture independently identifies required evidence;
+planner tests keep `core` mandatory and full selection equal to the ordered group union.
+[The earlier reassessment](https://github.com/supermorphic/homelab-talos/pull/471)
+records the initial reductions; `tests/impact.yaml` owns the current mapping.
+
 ## Harness decomposition and exact-once ownership
 
-The general harness and standalone validations are assigned to executable catalog groups.
+The general harness is part of CI, not the whole CI flow. Its decomposed catalog identities
+are `validation.test-harness-core`, `validation.test-harness-observability`,
+`validation.test-harness-automation`, and `validation.test-harness-ci-framework`.
+Each group combines its harness work with existing standalone catalog suites.
 
 Each retained work unit has one owner. Full execution and the group union must contain
 the same evidence exactly once. Decomposition does not delete tests or duplicate them
@@ -175,7 +199,7 @@ without reevaluating validators.
 
 ## Merge enforcement and contributor trust
 
-Branch protection requires one static `merge-gate`,
+After the authorized transition, branch protection requires one static `merge-gate`,
 not separate conditional branch checks. The workflow always starts; top-level path
 filters must not skip the required workflow entirely.
 
@@ -201,13 +225,28 @@ deployment and runner-isolation initiatives must prove their own PR execution an
 credential boundaries before Forgejo becomes authoritative. No author label, agent
 judgment, or risk declaration can de-escalate the repository's plan.
 
-## Rollback
+## Rollout and rollback
 
-Force full selection through the existing groups and reconciler when selective planning
-is suspect. If grouped execution itself is defective, restore the known full workflow
-with an explicitly authorized, coordinated protection change. Never bypass validation
-or leave a nonexistent required check. Protection changes require their own operator
-authorization and live read-back; implementation approval does not authorize them.
+The rollout establishes correctness before skipping validation:
+
+1. **Shadow planning:** full `ci` remains authoritative while the planner reports its
+   proposed groups. Review natural PR plans and use local fixtures for absent change classes.
+2. **Split-all parity:** run all four groups in isolated provider jobs with advisory
+   reconciliation. Temporarily retain the required full job. Prove equivalent evidence,
+   failure handling, artifact identity, and reporting before relying on the replacement.
+3. **Protection transition:** after the split workflow is merged and proven, change
+   protection only with explicit operator authorization and verify strict-main readback.
+4. **Selective enforcement:** use the actual plan for PR jobs only after `merge-gate`
+   is required. Remove the temporary duplicate full job. Manual full escalation remains.
+5. **Post-enable review:** measure savings, skip frequency, overhead, and maintenance cost.
+
+Provider evidence follows publication; protection proof covers the merged workflow.
+Keep the temporary full-plus-split phase bounded to parity work. No merge or protection
+change is implied by general implementation approval.
+
+Rollback selection by forcing full through the same groups and reconciler. If grouped
+execution itself is defective, restore the known full workflow with a coordinated
+protection change; never bypass validation or leave a nonexistent required check.
 
 ## Measurement and acceptance
 
@@ -216,8 +255,10 @@ authorization and live read-back; implementation approval does not authorize the
 The optional local `ci-publish` command reuses the hosted planner, grouped execution,
 and canonical reconciliation. Its receipt binds the clean candidate and freshly fetched
 base, so an edited branch or newer main needs fresh validation. This shared selection
-path avoids a second classification system. The [CI impact map](../../tests/impact.yaml) and
-[planner](../../scripts/test/ci_plan.py) own the executable contract.
+path avoids a second classification system. Current contributor procedure is in the
+[repository validation policy](../../AGENTS.md#validation);
+the executable contract is in the [CI impact map](../../tests/impact.yaml) and
+[planner](../../scripts/test/ci_plan.py).
 
 ### Evidence requirements
 
@@ -248,22 +289,32 @@ Acceptance requires:
 If core becomes the bottleneck, continue intrinsic optimization rather than multiplying
 categories. No runtime number overrides correctness or justifies unnecessary machinery.
 
-## Execution boundary
+## Implementation status
 
-Pull requests plan affected groups; manual dispatch escalates to full. Hosted
-`merge-gate` for the exact candidate and required base is authoritative. Local full CI
-and publication validation are optional reproductions and never replace hosted proof.
-Selective execution can reduce aggregate work more than wall time when core dominates
-the critical path; optimize core before adding categories. Local groups share a host,
-so parallelism needs measured aggregate resource use and isolation rather than adopting
-the hosted runner count.
+Stage 2 rollout is complete: pull requests plan affected groups, manual dispatch selects
+full validation, and protection requires `merge-gate` with strict current-main checks.
+The optional local publisher uses the same planner and checks candidate/base identity.
+The [rollout closeout](https://github.com/supermorphic/homelab-talos/pull/402) records
+full/grouped equivalence, cancellation failing the gate, selective execution, protection
+readback, and local publication acceptance.
+
+Initial provider observations showed comparable core and longest-group durations.
+Selection can save aggregate validation work while providing smaller wall-time savings;
+optimize core when it limits the critical path. Long-term variance and skip-frequency
+observations are ongoing tuning, not unfinished rollout requirements.
+
+Local groups execute sequentially with bounded parallelism inside each harness. Increasing
+local group concurrency needs host-wide resource and wall-time measurements because
+worktrees share the host; isolated provider runners do not have that same boundary.
+Command help owns invocation details; retained reports and PRs own execution evidence.
 
 ## Deferred work
 
 Runner placement and advanced evidence reuse are outside this implementation.
 The Stage 3 boundary and deployment/isolation dependency handoff remain in
 [specification 024](024-ci-runtime-and-merge-throughput-optimization.md).
-A separately approved measured design must authorize that distinct work. This design does not assume an off-cluster runner is faster, prescribe a benchmark protocol,
+A later measured decision and new numbered implementation specification must authorize
+that work. This design does not assume an off-cluster runner is faster, prescribe a benchmark protocol,
 or introduce trusted cross-run attestations.
 
 ## Repository protection recovery

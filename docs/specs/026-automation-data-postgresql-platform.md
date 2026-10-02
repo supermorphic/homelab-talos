@@ -1,246 +1,1014 @@
 # Automation Data PostgreSQL Platform
 
-## Purpose and governing invariants
+## Purpose
 
-Provide durable relational state for automation domains, separately from n8n's own
-runtime database. After bootstrap, domain databases, roles, schemas, grants, and
-credentials are runtime state created by one private n8n provisioning workflow.
-Adding a domain or private application integration requires no per-domain infrastructure,
-SOPS Secret, or policy change. New public webhook exposure still requires a reviewed
-Git-managed route under the [n8n contract](023-n8n-workflow-automation-platform.md).
+This records the implemented PostgreSQL service requested by
+[issue 317](https://github.com/supermorphic/homelab-talos/issues/317). The service stores
+durable relational state owned by n8n automation domains. It is separate from the
+dedicated PostgreSQL instance that stores n8n runtime state.
 
-Use one private PostgreSQL StatefulSet with retained Longhorn data/backup claims.
-It supplies stable identity and rescheduling, not automatic database failover. There is
-no external database endpoint, pooler, operator, or cross-domain transaction guarantee.
-The off-cluster recovery-point objective is 24 hours; recovery remains manual without
-an RTO promise. PostgreSQL major upgrades need an explicit migration design.
+This specification defines the platform once. After initial bootstrap, adding an
+automation-data domain, private repository integration, or workflow-owned database and
+schema state does not require a `homelab-talos` change. n8n creates domain databases,
+roles, grants, and credentials dynamically through one private provisioning workflow.
 
-The [platform package](../../kubernetes/apps/automation-data/postgresql/ks.yaml)
-owns infrastructure, bootstrap/control SQL, logical backup, scoped policy, and monitoring.
-Its [SQL](../../kubernetes/apps/automation-data/postgresql/app/scripts/platform-control.sql)
-and the [provisioner template](../../kubernetes/apps/automation/n8n/app/workflows/automation-data-provisioner.json)
-own exact identifiers, function signatures, fields, and lifecycle implementation.
-Versions, capacity, schedules, and artifact layouts belong in source rather than prose.
+The platform is active, and the most recent attended full-chain restore drill passed on
+2026-09-06. See [Implementation status](#implementation-status) for the delivery and
+acceptance record.
+
+## Existing platform context
+
+The cluster already runs a dedicated native PostgreSQL StatefulSet for n8n. That package
+establishes the repository baseline for a pinned PostgreSQL image, retained Longhorn data
+and logical-backup claims, a private ClusterIP Service, a daily validated `pg_dump`, SQL
+Exporter, a ServiceMonitor, Prometheus alerts, a Grafana dashboard, scoped Cilium policy,
+and an isolated restore drill.
+
+The n8n database remains dedicated to n8n workflows, users, credential ciphertext,
+settings, and execution history. It is not a shared application database. The new
+`automation-data` service generalizes the operational PostgreSQL pattern without sharing
+the n8n database, volume, credentials, backup artifacts, or restore lifecycle.
+
+Longhorn supplies replicated `ReadWriteOnce` storage with daily snapshots and off-cluster
+NAS backups. SOPS-encrypted Secret manifests remain recoverable only with the
+operator-held age identity. The operator also retains access to the off-cluster backup
+target.
+
+## Goals
+
+- Reconcile one private automation-data PostgreSQL service through Flux.
+- Let a dedicated n8n workflow create and reconcile domain databases, schemas, roles,
+  grants, and encrypted n8n credentials without repository changes.
+- Give each domain a stable ownership role, a DDL-capable migration login, and a separate
+  CRUD-only runtime login.
+- Let an optional NocoDB integration add separate read-only and controlled-edit roles
+  without changing ordinary domain readiness or granting NocoDB a core domain login.
+- Keep the platform provisioning credential and n8n credential-management API key away
+  from normal workflows.
+- Preserve all dynamically created databases, database objects, grants, global roles,
+  memberships, and role password verifiers in validated logical backup bundles.
+- Prove that restored n8n credentials can authenticate to a separately restored
+  automation-data instance without plaintext domain-password escrow.
+- Continuously prove that n8n can use a stable scoped automation-data runtime identity
+  through an authenticated webhook and a bounded read-only SQL query.
+- Reuse the established n8n PostgreSQL deployment, storage, backup, monitoring, policy,
+  and testing patterns where the multi-database platform does not require a difference.
+- Keep merge-gating validation fast, cluster-independent, non-duplicated, and
+  proportional to the unique pre-merge evidence it provides.
+
+## Non-goals
+
+- Moving n8n runtime state into automation-data PostgreSQL.
+- Declaring domain databases, schemas, roles, grants, or credentials through Flux, SOPS,
+  or a Git-managed domain list.
+- A PostgreSQL operator, database replica, automatic failover, connection pooler, or
+  externally reachable database endpoint.
+- Redis, Valkey, Supabase, TimescaleDB, InfluxDB, MongoDB, or another data service.
+- Automatic destructive database or role decommissioning.
+- Zero recovery-point loss, a fixed recovery-time objective, or transactionally
+  synchronized snapshots across independent domain databases.
+- Running PostgreSQL, n8n, containerized integration environments, logical dumps, or
+  restore drills in merge-gating CI.
+- Direct Gatus access to PostgreSQL or a PostgreSQL Homepage entry.
+
+## Governing invariants
+
+### No per-domain infrastructure change
+
+Adding an automation-data domain, private repository integration, or workflow-owned
+database and schema state **must not** require a `homelab-talos` change. Domain instances
+are runtime data created through the provisioning workflow. `homelab-talos` changes are
+reserved for automation-data platform changes and other cluster-level changes, including
+public network exposure.
+
+This qualification preserves the existing n8n public-edge contract. A workflow that
+needs a new Internet webhook route still requires a reviewed Git-managed HTTPRoute even
+though its database state does not require an infrastructure change.
+
+### Recovery roots, not plaintext domain passwords
+
+Individual domain plaintext passwords are not operator-held recovery roots. Recovery
+depends on:
+
+- the operator-held SOPS age private key;
+- access to the off-cluster Longhorn backup target;
+- Git history containing the encrypted bootstrap and recovery Secrets;
+- the retained `N8N_ENCRYPTION_KEY`; and
+- validated n8n and automation-data backup artifacts.
+
+The n8n logical backup preserves encrypted PostgreSQL credentials. The retained n8n
+encryption key makes those credentials readable after n8n restore. The automation-data
+globals dump preserves the matching PostgreSQL role password verifiers. A successful
+restore must prove that these two restored sides authenticate without recovering or
+displaying a domain plaintext password.
+
+### CI runtime
+
+Issue 317 follows the CI-runtime objectives of
+[issue 303](https://github.com/supermorphic/homelab-talos/issues/303) and
+[specification 024](024-ci-runtime-and-merge-throughput-optimization.md). Merge-gating CI
+adds only the minimum validation needed to detect repository or configuration regressions
+before merge. A new check must provide unique, essential pre-merge evidence that cannot
+be obtained more cheaply.
+
+New checks reuse existing repository-wide manifest, Flux, security, Secret-handling,
+ShellCheck, formatting, and gitleaks validation. They avoid duplicate evidence and remain
+path-aware where correctness permits. Expensive behavioral proofs remain attended live
+acceptance unless later evidence shows that they are necessary as merge gates.
+
+The decisive issue-317 proof is the attended full-chain restore drill. `mise exec -- just
+ci` proves that the candidate repository is safe and internally coherent enough to
+deploy; it does not reproduce the restore drill.
+
+## Decision summary
+
+| Decision | Selected model |
+| --- | --- |
+| Topology | One private automation-data PostgreSQL StatefulSet, separate from n8n's database |
+| Provisioning | One private n8n workflow creates and reconciles runtime-owned domains |
+| Roles | Per-domain `NOLOGIN` owner, DDL migrator, and CRUD runtime roles |
+| Credentials | PostgreSQL verifiers plus n8n-encrypted migrator and runtime credentials; no plaintext escrow |
+| Backup | Daily validated logical bundle containing globals, the control database, and every discovered database |
+| Recovery | Isolated paired n8n and automation-data restore, authenticated by the shared stable canary |
+| Destructive operations | No self-service database or role deletion; decommissioning remains attended |
+
+## Selected architecture
+
+The implementation adds an `automation-data` namespace and Flux domain:
+
+```text
+private operator
+      |
+      v
+dedicated n8n provisioning workflow
+      |-- automation-data provisioner credential
+      |-- full-access Community-edition n8n API key
+      |
+      +--> automation-data-postgresql.automation-data.svc.cluster.local
+      |       |-- platform control database
+      |       |-- dynamically created domain databases
+      |       |-- stable ownership and privilege roles
+      |       `-- versioned backup bundles
+      |
+      `--> local n8n credential API
+              `-- encrypted migrator and runtime credentials
+
+normal n8n workflow
+      `-- one domain runtime credential --> one domain database
+```
+
+The Flux package owns only platform resources:
+
+- the namespace and Flux Kustomizations;
+- one PostgreSQL StatefulSet and private Service;
+- retained data and logical-backup claims;
+- bootstrap SQL and the platform control schema;
+- SOPS-encrypted platform credentials;
+- the backup CronJob and scripts;
+- SQL Exporter and ServiceMonitor;
+- workload-scoped Cilium policy; and
+- one secret-free provisioning workflow template.
+
+The established monitoring packages own the related PrometheusRule and dashboard.
+Domain-specific objects never appear in these resources.
+
+The optional NocoDB extension adds one `nocodb` metadata database, one
+`managed_nocodb_sources` table in the platform control database, and reader or operator
+roles only for domains that explicitly opt in. It does not add a second domain registry
+or change the core provisioning contract. The reader source row is the canonical base
+identity; an optional operator source row must use that same base.
+
+NocoDB adds no application claim or attachment-volume backup dependency. Its supported
+durable metadata, source state, operator decisions, and artifact references remain in the
+catalog-discovered logical bundle; external artifact bytes remain with their storage owner.
+
+## PostgreSQL runtime
+
+PostgreSQL runs as one StatefulSet replica. The initial implementation uses the same
+`postgres:17.11-alpine3.24` and `burningalchemist/sql_exporter:0.24.6` pins as the current
+n8n PostgreSQL service. It also reuses the n8n baseline for probes, non-root security
+contexts, read-only root filesystems, resource requests and limits, stable service
+identity, and pre-created prune-protected Longhorn claims.
+
+The StatefulSet supplies stable identity and ordered startup, not database high
+availability. Longhorn handles ordinary pod and single-node failure. Logical bundles and
+off-cluster Longhorn backups handle loss of the volume set. Recovery remains manual and
+has a 24-hour off-cluster recovery-point objective with no fixed recovery-time objective.
+
+The service has no HTTPRoute, LoadBalancer, or NodePort. PostgreSQL major-version changes
+require an explicit migration design and restore evidence. They are not ordinary image
+updates.
+
+The platform bootstrap creates a control database containing the
+`platform_operations.managed_domains` registry and operational backup state. This
+database is platform runtime state and is included in every logical backup bundle.
+
+The NocoDB metadata bootstrap uses a fixed platform function to create a separate
+`nocodb` database and `nocodb_metadata` login. The metadata database is not a managed
+automation domain and is not entered in `managed_domains`. Catalog-driven backup
+discovery includes it as an ordinary non-template database.
 
 ## Authority model
 
-The provisioner has no general superuser, role-creation, or database-creation attributes.
-Its authority is a fixed `SECURITY DEFINER` function boundary on the control database.
-Revoke PUBLIC execution and expose no arbitrary platform SQL, caller-supplied grants,
-or database/role deletion. Normal workflows receive only their domain identity.
+The platform has three core operator-visible authority levels. NocoDB opt-in adds the
+optional reader and operator roles described below without changing these core roles.
 
-The selected n8n Community API key has the full authority of its owning account;
-credential-only scope is a workflow contract, not an enforceable key boundary.
-The PostgreSQL provisioning credential can operate across managed domains; compromise
-of the n8n API key affects the full account. This is an accepted tradeoff of direct
-n8n provisioning. Private access, fixed local API calls, isolated bindings, encrypted
-storage, and disabled execution persistence reduce exposure without reducing key authority.
-The design does not claim cryptographic isolation between credentials available to the
-same authorized n8n project operator.
+### Platform provisioning
 
-Each domain separates stable `NOLOGIN` ownership, a DDL migrator, and a runtime login.
-Migrators explicitly assume their owner for reviewed DDL in their own database;
-runtime identities cannot assume that role, change schema, manage roles, or access
-another domain or the control database. Stable ownership survives login rotation.
-Reserved/colliding identifiers cannot adopt unrelated databases or roles.
+The dedicated provisioning workflow uses the `automation_data_provisioner` PostgreSQL
+login. The login is `NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT`; it does not receive
+general database or role-management attributes. It is granted `CONNECT` to
+`automation_data_control`, can read `platform_operations.managed_domains`, and can
+execute this fixed `SECURITY DEFINER` function boundary:
 
-Provisioning supplies initial CRUD grants; applications may narrow object/default grants
-or use controlled functions. Platform validation enforces an authority ceiling rather
-than requiring access to every application object. It covers effective PUBLIC,
-inherited, column, routine, sequence, default, and grant-option authority. Behavioral
-probes use their own temporary objects. Applications own exact grants and business tests.
-Do not use ordinary provision/reconcile to repair intentionally narrowed application grants.
+- `provision_domain(text, text, text)`;
+- `reconcile_domain(text)`;
+- `record_domain_credentials(text, text, text, timestamptz, timestamptz)`;
+- `rotate_domain_credential(text, text, text)`;
+- `record_operation_error(text, text)`; and
+- `validate_domain(text)`.
 
-Optional [NocoDB access](028-nocodb-operator-ui.md) adds distinct reader/operator roles
-and runtime registry state without changing ordinary domain readiness. NocoDB never
-receives core runtime, migrator, provisioner, owner, or backup credentials.
+All public function privileges are revoked, and the login receives no access to the
+`platform_internal` schema. The fixed functions hold the database and role creation
+authority needed to create and reconcile domains. The workflow separately uses an n8n
+API key to create, find, update, and test n8n PostgreSQL credentials.
 
-## Provisioning and rotation
+The deployed chart has `license.enabled: false` and runs the self-hosted Community
+edition. n8n 2.36.7 supports API-key authentication and credential API operations, but
+n8n's documented narrow API-key scopes are an Enterprise feature. A Community-edition
+API key has the full resources and capabilities of its owning account. The implementation
+therefore treats this as a full-access n8n API key, not a credential-only key. The
+workflow uses only credential create, list, read, update, and test behavior, but that is a
+workflow contract rather than an enforceable key boundary.
 
-The private workflow takes structured targets and supported operations, never arbitrary
-SQL or destinations. It reserves ownership durably before separate database changes,
-checks actual catalogs, reconciles structure, establishes encrypted n8n credentials,
-tests authentication and authority, and marks `ready` only after all checks succeed.
-It enumerates the complete credential inventory before checking duplicate names.
+The PostgreSQL provisioner and full-access n8n API credentials are referenced only by the
+dedicated private provisioning workflow. Normal domain workflows are configured only
+with their domain migrator or runtime credential. The design does not claim that n8n
+supplies a workflow-level cryptographic boundary around credentials available to the
+same authorized n8n project operator. A compromise of the n8n API key can affect the
+complete n8n account as well as automation-data credentials. Private UI access, encrypted
+credential storage, local-only API calls, disabled execution persistence, and key
+rotation reduce exposure but do not reduce that authority.
 
-Generated domain passwords exist transiently only while delivered to PostgreSQL and n8n.
-Their retained pair is a PostgreSQL password verifier and an n8n-encrypted credential.
-Disable manual/success/failure/progress execution persistence; outputs and logs contain
-only bounded non-secret identity/state evidence. No domain plaintext-password escrow exists.
+The fixed PostgreSQL function boundary does not expose database or role deletion, and the
+workflow does not accept arbitrary platform SQL. Its safety boundary also includes
+private n8n access, credential isolation, strict target validation, disabled
+execution-data persistence, network policy, audit metadata, and a separate attended
+decommission boundary.
 
-Partial creation retains its ownership reservation and error state; it never compensates
-by deleting resources. Retry before a domain has ever become ready may replace incomplete
-credentials. Active interrupted reservations require the guarded stale-operation interval;
-failed operations can retry under their own lifecycle. Matching names alone do not prove
-ownership. Once ready, ordinary provision/reconcile preserves role passwords, credential
-IDs, and ciphertext. Missing ready-side roles or credentials require reviewed recovery.
+Compromise of the PostgreSQL provisioning credential can invoke the supported operations
+for every automation-data domain, and compromise of the n8n API key can affect the full
+n8n account. These are accepted residual risks of using direct n8n provisioning instead
+of a separate broker or PostgreSQL operator. If a later licensed n8n edition enables
+scoped keys, the key should be reduced to the exact credential scopes after live
+verification.
 
-Rotation is explicit and affects one selected login and its existing n8n credential.
-The two updates converge but are not a distributed transaction; interruption may break
-authentication. A target-bound retry creates a new password and converges both sides only
-while the retained login/credential identities still exist. The provisioning authority
-can recover that pair without retrieving the previous plaintext password.
+### Domain migration
 
-Domain migrations may perform reviewed destructive DDL within their database. Database
-and role decommissioning remains separately attended: establish exact ownership and
-consumers, protect a fresh complete backup, and repeat preconditions before deletion.
-No self-service database/role deletion is exposed.
+Each domain has a scoped migration login for reviewed schema changes. A migration
+workflow may create, alter, or drop objects inside its own database. It cannot manage
+cluster roles or connect to another domain database.
 
-## Backup and recovery
+### Domain runtime
 
-Pre-created claims resist routine Flux pruning, not intentional PVC/namespace deletion
-or storage loss. Off-cluster copies remain essential. Backup discovers all actual
-non-template databases from PostgreSQL catalogs, including unregistered/partial databases
-and NocoDB metadata; no Git-maintained database list is authoritative.
+Each normal workflow uses a restricted runtime login for one database. Initial
+provisioning supplies CRUD defaults. Application migrations may narrow direct object
+and default grants, including using controlled functions instead of direct table writes.
+The runtime login cannot change schema, assume the owner role, manage roles, or connect
+to another domain database.
 
-A logical bundle contains globals with memberships and password verifiers, the control
-registry, and every captured database with ownership, ACLs, and data. Its backup identity
-is isolated from workflows because protected global catalogs require broader authority.
-Never omit role passwords. Treat globals and database artifacts as sensitive even when
-no plaintext password is present; do not publish their contents.
+Platform validation checks a privilege ceiling, not mandatory access to every
+application table or sequence. The existing `runtimePrivilegesValid` and
+`defaultPrivilegesValid` fields retain their names but accept narrower grants. They
+reject forbidden table/column privileges and grant options on application relations,
+sequences, routines, and their corresponding defaults. The CRUD behavior probe grants access only to
+its own temporary table, independently of application default grants. Application
+repositories own exact grants and business-behavior acceptance; no per-domain exception
+or application object list belongs in this platform validator.
 
-Publication validates every archive/checksum and atomically finalizes the whole bundle
-before freshness advances. Capture the database set and platform generation before and
-after dumping; concurrent changes cause bounded retry. Stable incomplete registry rows
-remain recoverable metadata and do not discard otherwise complete database backups.
-Unknown/partial compatibility state blocks publication. Separate database dumps do not
-form a distributed transaction snapshot. Job success, checksum verification, and archive
-listing each supply weaker evidence than an authenticated restore.
+The reviewed validator functions share `domain-validation.sql` between initialization
+and the existing guarded platform upgrade. Updating installed functions preserves
+application grants, data, and credentials; a changed body advances backup freshness
+without changing the schema revision or backup format. NocoDB preflight checks the
+installed validator bodies as well as the metadata function.
 
-### Recovery roots and independent sequence
+This validation correction does not change initial provisioning or reconciliation.
+Do not use provision/reconcile as post-bootstrap application-grant repair: those
+operations retain their initial broad-grant behavior. Application migrations remain
+the authority for intentional restrictions.
 
-Retain the operator age identity, access to off-cluster backup copies, encrypted Secrets
-in remote Git history, the stable `N8N_ENCRYPTION_KEY`, and complete n8n/automation-data
-artifacts independently of the running services. Registered client profiles below are
-an additional root; a globals dump contains verifiers, not recoverable client passwords.
+### Optional NocoDB access
 
-With healthy claims and a pod failure, preserve state and let the StatefulSet recover.
-Unavailable storage follows [platform recovery](010-talos-flux-platform.md). Logical
-replacement first uses an isolated empty destination; production replacement requires
-separate operator authority. Preserve the damaged state and all recovery roots.
+A Noco-enabled domain can add `<domain>_reader` for `read_model` and
+`<domain>_operator` for `operator`. Neither role can assume the owner, migrator, runtime,
+provisioner, metadata, or backup role. The reader receives fixed read-only grants. The
+operator receives only exact DML grants from a reviewed domain migration.
 
-The guarded full-chain restore follows this order:
+Operator adoption is deliberately two-phase. The first source sync creates the operator
+as a `NOLOGIN` grant target when the `operator` schema exists. A reviewed migration then
+grants the intended table, column, sequence, and optional row-policy authority. A second
+source sync enables the login only after catalog validation passes. These roles and the
+source lifecycle are defined in
+[specification 028](028-nocodb-operator-ui.md).
 
-1. Select and checksum-validate a complete automation-data bundle and compatible n8n dump.
-   Default selection is independent; both must contain the same credential generation.
-   An invalid explicit selection fails instead of silently choosing another pair.
-2. Restore globals into isolated PostgreSQL before databases. The empty destination's
-   existing `postgres` role requires omitting only its one `CREATE ROLE postgres;`
-   declaration; preserve all its restored attributes/verifier and fail other SQL errors.
-3. Restore the control database and every manifest database with original ownership/grants.
-   Validate catalog/registry agreement and optional source/application role boundaries.
-4. Restore n8n separately with its unchanged encryption key. Redirect only the isolated
-   n8n instance's automation-data hostname to the isolated database.
-5. Execute the restored authenticated Automation Data Canary using its existing runtime
-   credential. Prove database/session identity without revealing the password. Check
-   restored migrator/runtime separation and compare application permissions with the archive,
-   preserving deliberately absent grants as well as present ones.
-6. Produce and validate a fresh post-recovery bundle, then prove all run-owned workloads,
-   policy, Services, and scratch claims removed. The drill creates no HTTPRoute.
+## Domain role and grant model
 
-Use `mise exec -- just kube automation-data-restore-drill` only with its approved mutation
-credentials, selected artifact inputs, and exact confirmation. Detailed mechanics and
-input validation live in [the scenario](../../scripts/test/scenarios/automation-data-restore-drill.sh).
-Any permission, authentication, or cleanup failure stops acceptance. An isolated drill
-proves its selected pair, not production replacement or application business behavior.
+A valid domain identifier matches `^[a-z][a-z0-9_]{0,47}$`. Its 48-character maximum
+leaves room for the longest `_migrator` suffix within PostgreSQL's 63-byte identifier
+limit. PostgreSQL and platform names are reserved. New domains cannot adopt unrelated
+existing databases or roles. One provisioning request creates or reconciles:
 
-## Platform updates and bootstrap ordering
+| Object | Form | Purpose |
+| --- | --- | --- |
+| database | `<domain>` | Isolate one automation domain |
+| owner role | `<domain>_owner` | Stable `NOLOGIN` owner for database and schema objects |
+| migrator role | `<domain>_migrator` | Scoped `LOGIN` for reviewed DDL |
+| runtime role | `<domain>_runtime` | Scoped `LOGIN` for application CRUD |
+| initial schema | `app` | Stable application schema owned by the owner role |
+| migrator credential | `automation-data/<domain>/migrator` | Encrypted n8n PostgreSQL credential |
+| runtime credential | `automation-data/<domain>/runtime` | Encrypted n8n PostgreSQL credential |
 
-PostgreSQL initialization runs only on an empty data directory. Merge reviewed function
-changes and wait for deployed-source parity; pause the live provisioner and drain
-executions before the guarded `automation-data-control-migrate` workflow. It takes a
-fresh backup, applies shared initialization/upgrade SQL transactionally under the existing
-mutation Lease, and preserves application grants, identities, data, and credentials.
-Keep provisioning paused if the update fails. After success, reconcile the imported graph
-and bindings, publish it, and obtain fresh provisioning, backup, and paired restore evidence.
+The migrator may explicitly `SET ROLE <domain>_owner` for a migration, but does not
+inherit owner authority automatically. Objects created during migrations remain owned by
+the stable `NOLOGIN` role across login-password rotation.
 
-First bootstrap establishes PostgreSQL and private n8n provisioning/restore acceptance
-before NocoDB initialization. Bind **Automation Data Provisioner** to SQL nodes,
-**Automation Data n8n API** to credential API nodes, and **Automation Data Provisioning
-Header** to the webhook. Initially disable **Observe Mutation Inventory** because discovery
-cannot initialize until NocoDB exists. This bootstrap exception returns unavailable
-readback and does not establish discovery acceptance.
+The runtime role receives `CONNECT` only to its database, `USAGE` on approved application
+schemas, CRUD privileges on current tables and sequences, and matching default
+privileges for later owner-created objects. `PUBLIC` does not retain database-connect or
+schema-create authority that bypasses this model. `PUBLIC` also has no `CONNECT` authority
+on the platform control database. Domain owner, migrator, and runtime roles cannot connect
+to that database.
 
-## Registered application logins
+The platform creates both n8n credentials automatically. It never returns a generated
+password to the operator. Domain credentials are stored only as PostgreSQL password
+verifiers and n8n ciphertext.
 
-A ready domain may register a distinct application login for explicit schema reads and
-reviewed function calls. Registration freezes its target mapping and creates a collision-
-checked `NOLOGIN` grant candidate. Consumer migrations grant intended reads and `EXECUTE`;
-activation validates effective permissions. No automatic object grants, direct DML,
-ownership, role assumption, schema/database/role creation, RLS bypass, grant options,
-or cross-schema/database authority are permitted. Consumers review definer function
-safety and own business acceptance. This is not a general SQL API.
+Optional NocoDB roles are not created by ordinary domain provisioning. Their single
+runtime registry is `platform_operations.managed_nocodb_sources`, with one row for each
+requested `(domain, access_kind)`. It references `managed_domains` and records only
+non-secret source lifecycle state and opaque object IDs. Source passwords exist only
+transiently during source sync or targeted rotation; the matching verifier and encrypted
+NocoDB integration credential are the retained pair.
+
+## Provisioning workflow
+
+The secret-free workflow template is imported into the private n8n instance during
+platform bootstrap. Flux does not manage the live workflow or later domain workflows.
+The operator binds three n8n credentials once: **Automation Data Provisioner** for the
+control database, **Automation Data n8n API** with the full-access key in
+`X-N8N-API-KEY`, and **Automation Data Provisioning Header** for the private webhook's
+`X-Automation-Data-Provisioning` authentication.
+
+The workflow accepts `POST /webhook/automation-data-provision`. It calls only the local
+`http://127.0.0.1:5678/api/v1/credentials` collection and its exact credential-ID and
+`/test` children. Each credential-list operation follows `nextCursor` until the complete
+n8n credential inventory is exhausted before it checks exact domain credential names and
+duplicates. Supported operations are `provision`, `reconcile`, `rotate`, and `validate`;
+only `rotate` accepts a `credential` value, which must be `migrator` or `runtime`.
+
+The workflow accepts structured domain identifiers and supported operations. It does not
+accept arbitrary platform SQL. Provisioning follows an idempotent state machine:
+
+1. Validate and canonicalize the domain identifier and requested operation.
+2. Check registry ownership against PostgreSQL catalogs before claiming new names.
+3. Commit a `provisioning` reservation before database or role changes commit on the
+   separate PostgreSQL connection.
+4. Create or reconcile the owner, migrator, and runtime roles.
+5. Create or reconcile the database, initial schema, grants, and default privileges.
+6. For initial creation only, generate migrator and runtime passwords and create the
+   corresponding encrypted n8n credentials through n8n's local API.
+7. For an existing `ready` domain, retain both PostgreSQL password verifiers and both n8n
+   credential objects unchanged.
+8. Test authentication and verify the expected privilege matrix.
+9. Mark the registry record `ready` only after every required check succeeds.
+10. Return only non-secret object identifiers and validation results.
+
+Generated passwords necessarily exist transiently in workflow memory while PostgreSQL
+and n8n receive them. The workflow disables saved manual, successful, and failed
+execution data and execution progress. Both the provisioning template and Automation
+Data Canary use execution order `v1`, `saveDataErrorExecution: none`,
+`saveDataSuccessExecution: none`, `saveManualExecutions: false`, and
+`saveExecutionProgress: false`. Secret-bearing intermediate values do not appear in
+final outputs or logs.
+
+Provisioning never compensates for failure by dropping resources. A partial initial
+creation remains visible as `provisioning` or `error`. Its retry may generate replacement
+credentials while the domain has never reached `ready`, because no completed credential
+contract exists yet. Failed attempts can retry immediately; an interrupted active attempt
+must age past 30 minutes before retry. The reservation survives an outer transaction
+rollback, so retry does not infer ownership from matching names alone. Once a domain
+reaches `ready`, ordinary provisioning and structural
+reconciliation never alter role passwords, rotate credentials, replace credential IDs,
+or update credential ciphertext. Missing login roles or n8n credentials on a `ready`
+domain require reviewed recovery; explicit rotation repairs passwords only while both
+the login and its n8n credential still exist. Ordinary reconciliation does not silently
+replace missing objects.
+
+Credential rotation is an explicit operation separate from provision or reconcile. It
+changes one scoped login and its existing n8n credential, tests the result, and records
+completion. Rotation is convergent but not a distributed transaction. An interruption
+between the PostgreSQL and n8n updates can temporarily break that credential. Retrying
+generates another password and brings both sides back into agreement. The provisioning
+credential remains the recovery authority, so the absent plaintext password does not
+strand the domain.
+
+## Destructive operations
+
+The provisioning workflow does not expose `DROP DATABASE`, `DROP ROLE`, destructive
+schema replacement, or bulk data deletion. A domain migration workflow may perform
+reviewed destructive DDL, including `DROP TABLE`, inside its own database.
+
+Database and role deletion remains an attended administrative/decommission action. A
+future decommission workflow must require an explicit target, current existence and
+ownership validation, a fresh validated backup, and attended execution. It is not part
+of normal self-service provisioning.
+
+## Network policy
+
+Cilium policy is workload-scoped, not domain-scoped:
+
+- PostgreSQL accepts database connections from the n8n workload and backup workload.
+- Prometheus reaches only SQL Exporter's metrics port.
+- SQL Exporter reaches PostgreSQL through localhost.
+- The backup workload reaches cluster DNS and PostgreSQL but has no general Internet
+  access.
+- Temporary restore workloads receive exact run-labeled policies only for the drill.
+
+The existing n8n policy gains one stable egress path to the automation-data Service.
+PostgreSQL roles enforce per-domain isolation because Cilium cannot distinguish workflows
+inside one n8n pod. Adding a domain does not require a NetworkPolicy change.
+
+## Persistence and logical backup
+
+The initial retained Longhorn claims follow the n8n PostgreSQL baseline:
+
+| Purpose | Size | Access | Protection |
+| --- | ---: | --- | --- |
+| PostgreSQL data | 20 GiB | Longhorn `ReadWriteOnce` | Flux prune disabled |
+| logical backup bundles | 20 GiB | Longhorn `ReadWriteOnce` | Flux prune disabled |
+
+The established 70% warning and 85% critical storage alerts drive expansion from
+measured use. Routine Flux pruning does not delete either claim, but deliberate namespace
+or PVC deletion and storage-system loss remain destructive operations covered by the
+off-cluster backups and recovery procedure.
+
+The daily backup CronJob runs at `00:30 Etc/UTC`, before the established Longhorn
+snapshot and off-cluster backup windows. It uses the dedicated SOPS-managed
+`automation_data_backup` login, which is a superuser isolated to the Job because dumping
+all role password verifiers requires protected-catalog access.
+Preserving global roles and password verifiers requires broader protected-catalog access
+than the n8n single-database backup role; that authority is never available to n8n
+workflows.
+
+At the start of one run, the backup job reads the PostgreSQL database catalog, the
+runtime managed-domain registry, and the NocoDB source state held by the control
+database. The PostgreSQL catalog is the fail-safe source for the set of actual
+non-template databases: an unregistered or partially registered database, including the
+NocoDB metadata database, is still included rather than silently omitted. The captured
+manifest records the catalog-derived set, and `registry.tsv` records every managed-domain
+row and its state. NocoDB source rows remain in the control-database dump; their captured
+state also participates in the stable platform generation. The database set is never
+read from Git.
+
+The backup path recognizes three exact control-schema states. The accepted
+specification-025 baseline has no platform revision metadata or NocoDB source registry.
+Revision `026-nocodb-v1` has both and includes the validated source array in the
+captured platform state. Revision `026-nocodb-v2` also captures the immutable custom
+schema mappings. Unknown revision metadata, a missing
+registry at the installed revision, or other partial optional state stops publication.
+The bundle format remains version 1, so pre-extension bundles remain valid restore
+inputs. The extension install leaves the domain registry and platform generation
+unchanged. Its transactional revision metadata changes the full captured state, so the
+existing before/after stability comparison detects a backup that spans the catalog
+upgrade and retries it.
+
+Active provisioning coordinates with backup through a three-attempt stability check.
+The backup captures the catalog set and registry generation before dumping and checks
+them again before publication. A concurrent set or generation change causes a retry
+rather than publication against an ambiguous set. A stable `error`, stale
+`provisioning`, or other incomplete registry record does not block backup publication for
+healthy domains. If that record has a database, the database is dumped with the captured
+set; if it has no database yet, its recoverable metadata is preserved in the platform
+control database and any created roles are preserved in the globals dump.
+Registry/catalog disagreement remains an alerting and repair condition, not an automatic
+reason to discard an otherwise complete recoverable bundle.
+
+Each published `automation-data-YYYYmmddTHHMMSSZ` directory contains `globals.sql`,
+`registry.tsv`, `manifest.tsv`, `SHA256SUMS`, `COMPLETE`, and one
+`databases/db-<base64url-name>.dump` archive for every captured non-template database.
+The manifest format is version 1 and records `captured_at`, `platform_generation`, the
+database-set SHA-256, and the base64 database-name-to-dump mapping.
+
+One successful backup performs these steps:
+
+1. Create a temporary bundle directory on the backup claim.
+2. Run `pg_dumpall --globals-only` for cluster-global roles, memberships, role password
+   verifiers, tablespaces, and related global state.
+3. Never pass `--no-role-passwords`.
+4. Run one custom-format `pg_dump` for the platform control database and every domain
+   database in the captured set.
+5. Preserve each database's schema, ownership, ACLs and grants, and data in its individual
+   dump.
+6. Inspect every database archive with `pg_restore`, calculate checksums for every
+   artifact, and write a manifest containing the captured set and artifact metadata.
+7. Re-read the catalog and registry generation; retry the run when the captured database
+   set changed during backup.
+8. Rename the complete bundle to its final name on the same filesystem.
+9. Recheck the published artifacts and update the operational freshness row only after
+   final validation.
+10. Retain the newest seven complete bundles and remove incomplete temporary artifacts.
+
+The bundle is the retention and recovery unit. Individual files are never considered
+healthy or pruned independently. A Kubernetes Job success is diagnostic evidence, not
+the backup-freshness oracle.
+
+Separate `pg_dump` snapshots are not transactionally synchronized across databases. The
+manifest records the run capture time, generation, and database set, not a shared
+transaction boundary. This is acceptable because domains do not share transactions and
+the off-cluster recovery-point objective is 24 hours.
+
+## Continuous end-to-end canary
+
+The private **Automation Data Canary** workflow is the shared production and recovery
+probe. It replaces the recovery-only workflow rather than adding a second near-duplicate
+n8n workflow. Its authenticated `POST /webhook/automation-data-canary` path uses the
+existing **Platform Canary Header** credential.
+
+The platform provisioner owns a stable `automation_data_canary` domain. The workflow
+binds only its `automation-data/automation_data_canary/runtime` credential. The domain
+remains otherwise empty, and the workflow exposes no caller-controlled SQL. Its Postgres
+node executes only:
+
+```sql
+SELECT current_database() AS database, current_user AS role;
+```
+
+The following code node requires database `automation_data_canary` and role
+`automation_data_canary_runtime`. It returns only `status: ok`, `database`, `role`, and a
+non-empty `executionId`. The workflow keeps execution order `v1` and disables saved
+successful, failed, manual, and progress execution data as defined for the provisioning
+workflow.
+
+Gatus calls the private n8n HTTPS route every five minutes as
+`Automation / automation-data-e2e`. It sends the existing canary authentication header,
+requires HTTP 200, validates every bounded response field, and hides response errors in
+the UI. Gatus has no direct PostgreSQL route, credential, or network-policy permission.
+This probe answers only whether n8n can currently use automation-data; detailed database
+health, backups, storage, resource use, and platform state remain Prometheus and Grafana
+responsibilities.
+
+## Recovery
+
+The [platform recovery section](026-automation-data-postgresql-platform.md#recovery-prerequisites-and-invocation)
+identifies the shared recovery roots and guarded restore boundary. Logical restoration
+uses an isolated destination first and never overwrites the running service as its first
+step.
+
+The attended full-chain restore drill:
+
+1. Selects a complete bundle and validates every checksum.
+2. Starts an isolated empty automation-data PostgreSQL instance using the pinned image.
+3. Restores globals first, including role memberships and password verifiers. The empty
+   destination already contains its `postgres` bootstrap role, so the drill requires
+   exactly one `CREATE ROLE postgres;` declaration and omits only that statement. It
+   applies all remaining global statements with `ON_ERROR_STOP`, including the restored
+   `postgres` attributes and password verifier.
+4. Restores the platform control database and every domain database from the manifest.
+5. Verifies that the registry, PostgreSQL catalog, ownership, grants, and restored
+   database set agree. When optional NocoDB source rows exist, it also validates every
+   ready reader and operator role against the restored catalogs.
+6. Restores the n8n database into an isolated n8n recovery instance with the retained
+   `N8N_ENCRYPTION_KEY`.
+7. Redirects only that temporary n8n instance's automation-data hostname to the isolated
+   restored PostgreSQL Service.
+8. Calls the restored authenticated `POST /webhook/automation-data-canary`. The same
+   **Automation Data Canary** workflow used by Gatus uses the restored
+   `automation-data/automation_data_canary/runtime` credential and returns only `status`,
+   `database`, `role`, and `executionId`.
+9. Proves that the runtime credential authenticates without revealing its password and
+   separately validates restored migrator/runtime permission separation for every ready
+   domain. Before running probes, compare restored application ownership and permissions
+   against the original custom archive; preserve both granted and deliberately absent
+   access. This is generic restore fidelity, not proof of application business behavior.
+   Failed or missing permission assertions report only the domain and fixed
+   check name; validator credential fields are not printed. These diagnostics preserve
+   the failing permission-validation stage and prevent post-recovery backup on failure.
+10. Creates and validates a fresh logical bundle from the restored instance.
+11. Removes and proves absence of all run-owned workloads, policies, Services, and two
+    temporary 20 GiB data claims. It creates no HTTPRoute.
+
+This drill is the independent recovery oracle. Artifact creation, `pg_restore --list`,
+checksums, Longhorn replica health, and retained Secrets do not independently prove the
+complete chain.
+
+The default selects the newest valid bundle and n8n dump independently. Both must contain
+the same credential version. An operator can instead select a known matching retained
+pair; an invalid explicit selection must fail rather than silently restore another pair.
+The guarded restore workflow diagnoses unavailable artifacts without substituting another
+pair.
+
+The globals dump contains password verifiers and remains sensitive even though it does
+not contain plaintext passwords. Repository files, CI output, test evidence, logs, and
+metrics never publish its contents.
+
+## Monitoring and alerts
+
+Monitoring copies the current n8n PostgreSQL pattern and adds only evidence required by
+dynamic provisioning.
+
+SQL Exporter exposes exactly six initial metrics. Four retain the established PostgreSQL
+signals, with a database label where needed:
+
+- connections;
+- committed and rolled-back transactions;
+- database size; and
+- last successful logical-backup time.
+
+It adds two platform-health signals:
+
+- presence of the database and roles recorded for each ready domain; and
+- age of the oldest active provisioning or rotation operation.
+
+Terminal `error` rows remain in the registry for diagnosis and retry; they do not keep
+the active-operation timer running. A failed request returns a bounded error to its
+caller. The retained backup-error acceptance record is deliberately terminal.
+
+The platform grants `pg_monitor` to `automation_data_exporter`, matching the established
+n8n PostgreSQL exporter pattern. This login uses `INHERIT` so the predefined role's
+`pg_read_all_stats` capability is effective without `SET ROLE`. That capability lets
+`pg_database_size()` report dynamically created databases after public `CONNECT` is
+revoked. The exporter does not receive domain-role membership or domain table grants.
+
+The `automation-data-postgresql` Prometheus rule group contains alerts for unavailable
+scrape and StatefulSet targets, repeated restarts and OOM kills, stale or absent logical
+backups, failed or overdue backup Jobs, the two platform-health signals, and the
+established PVC warning and critical thresholds. It also alerts when
+`Automation / automation-data-e2e` fails continuously for five minutes or its success
+series is absent for 15 minutes, matching the existing n8n webhook E2E alert pattern. The
+implementation does not add speculative connection-pressure alerts or redundant
+domain-count and bundle-count metrics.
+
+Read-only verification requires the active PostgreSQL data volume to be attached and
+healthy. The retained backup volume may be attached and healthy while a backup Job uses
+it, or detached with Longhorn robustness `unknown` while idle. In either state, its
+Longhorn identity must match the bound claim, scheduling must be healthy, and restore
+must be inactive.
+
+The 13-panel `automation-data-postgresql` Grafana dashboard generalizes the n8n
+PostgreSQL panels for database-labeled resource use, transactions, connections, storage
+growth, backup freshness, and provisioning health.
+
+## Capacity
+
+The initial workload reuses the measured n8n PostgreSQL resource baseline:
+
+| Workload | CPU request / limit | Memory request / limit |
+| --- | ---: | ---: |
+| PostgreSQL | 50m / none | 256 MiB / 1 GiB |
+| SQL Exporter | 10m / none | 32 MiB / 128 MiB |
+| logical-backup Job | 50m / none | 64 MiB / 512 MiB |
+
+The absence of CPU limits lets dumps, maintenance, and migrations finish without
+artificial throttling. Database growth, dump growth, memory use, and connection counts are
+reviewed after representative automation traffic. Measurements and alerts determine
+later resizing or topology changes.
+
+## Rollout
+
+The platform was staged with reconciliation suspended, then bootstrapped and accepted
+before permanent activation in Git. The operator created the encrypted platform Secret,
+bound the provisioning and recovery workflows in private n8n, and ran the registered
+provisioning and full-chain restore tests. The guarded bootstrap applied the exporter
+monitoring grant to the initialized database and created the first logical bundle.
+
+The [guarded bootstrap](../../.just/bootstrap.just) owns activation mechanics; the bootstrap guard now refuses the active source state.
+Recovery of the active platform follows the
+[platform recovery boundary](026-automation-data-postgresql-platform.md#recovery-prerequisites-and-invocation).
+Private credential handling and privileged live tests remain operator actions; scoped
+observation uses the assigned worktree credentials. The dated results below distinguish
+acceptance from source-only validation.
+
+## Validation strategy
+
+### Cluster-independent merge gate
+
+`mise exec -- just ci` remains the canonical cluster-independent, secret-free gate. Issue
+317 does not materially expand its runtime unless a measured new check supplies unique,
+essential pre-merge evidence that cannot be supplied more cheaply.
+
+The candidate reuses existing checks for YAML and Kustomize structure, Flux wiring,
+Kubernetes schemas, security contexts, Secret shape and ciphertext, shell quality,
+repository policy, links, and gitleaks. Focused issue-317 validation is limited to new
+contracts that those checks do not cover:
+
+- the absence of domain-specific Git configuration;
+- deterministic role and grant templates;
+- the provisioning workflow's fixed operation surface and absence of destructive
+  database or role operations;
+- the stable Automation Data Canary's exact identity query, bounded response, disabled
+  execution-data persistence, and absence of embedded credential data;
+- the exact authenticated Gatus endpoint and absence of direct PostgreSQL probing;
+- ordinary reconciliation's prohibition on password or n8n credential changes;
+- runtime backup discovery rather than a Git-managed database list;
+- recoverable backup publication when a stable incomplete or error record exists;
+- exact `pg_dumpall --globals-only` use and absence of `--no-role-passwords`;
+- atomic bundle publication and freshness ordering; and
+- the two approved monitoring signals.
+
+New provisioning and backup logic is tested at the cheapest layer that provides an
+independent oracle. For example, a synthetic filesystem fixture proves that an incomplete
+bundle cannot advance freshness without starting PostgreSQL or executing a dump. Tests do
+not repeat an existing repository-wide assertion under an issue-specific name.
+
+Merge-gating CI does not start PostgreSQL or n8n, create containers, provision a domain,
+test live database privileges, rotate credentials, generate real dumps, or perform a
+restore. Those behaviors belong to attended live acceptance.
+
+### Read-only live verification
+
+The read-only verifier observes Flux readiness, current workload rollouts, Services,
+workload-scoped policies, Prometheus targets and rules, backup freshness, and Longhorn
+claim health. It does not read Secrets, inspect database contents, invoke n8n credentials,
+or mutate workloads.
+
+### Attended live acceptance
+
+Registered attended workflows prove:
+
+1. Flux reconciles the private PostgreSQL service and monitoring resources.
+2. n8n provisions a new domain without a repository, SOPS, Flux, or NetworkPolicy
+   change.
+3. Repeating an unchanged request reconciles the domain without duplication and without
+   changing role password verifiers, n8n credential IDs, or n8n credential update state.
+4. The owner is `NOLOGIN`, and the migrator can explicitly assume it for reviewed DDL.
+5. The migrator can create, alter, and drop a test table only inside its database.
+6. The runtime credential performs expected CRUD but cannot perform DDL, assume the owner
+   role, manage roles, or access another domain database.
+7. Neither the migrator nor runtime role can connect to the platform control database.
+8. Credential rotation restores a working n8n connection without operator knowledge of
+   the generated password.
+9. A stable incomplete or error provisioning record does not prevent a complete backup
+   of every actual database in the captured catalog set.
+10. A logical backup publishes one complete globals-plus-databases bundle and advances
+   freshness only after final validation.
+11. The isolated full-chain drill restores n8n with its encryption key, restores
+   automation-data globals and databases, and uses the same stable canary workflow to
+   prove that restored n8n credentials authenticate against restored role password
+   verifiers.
+12. The restored instance creates and validates a fresh post-recovery backup.
+13. All temporary resources are removed and their absence is verified.
+
+Provisioning, rotation, privilege enforcement, backup generation, and the restore drill
+remain live acceptance because static or synthetic CI checks cannot reproduce their
+essential evidence. Conversely, live acceptance does not justify duplicating cheap
+repository contracts already proved by CI.
+
+## Implementation status
+
+### Initial deployment
+
+The private PostgreSQL platform, scoped domain credentials, n8n provisioning, dynamic
+backups, and permanent Automation Data Canary are active. Attended acceptance proved
+creation/reconciliation, permission separation, rotation, and isolated full-chain recovery
+without escrow of generated domain plaintext passwords. Restored n8n authenticated to
+restored PostgreSQL, and post-recovery backup and cleanup passed. The
+[acceptance closeout](https://github.com/supermorphic/homelab-talos/pull/374) retains the
+selected-artifact evidence; it establishes that tested chain, not every later consumer.
+
+### Initiative debrief
+
+Interrupted provisioning retains durable ownership reservations; matching object names
+are not ownership proof. Existing databases receive explicit control migrations rather
+than initialization replay. These corrections preserve the original self-service design.
+
+Credential-changing acceptance remains attended and outside periodic recovery campaigns.
+A credential or workflow change needs compatible n8n and automation-data backups before
+restore acceptance; the production canary's retained ciphertext and PostgreSQL verifier
+form one recovery contract. Optional NocoDB and subsequent credential-discovery acceptance
+are separate from the initial platform result and follow their owning contracts below.
+
+## Rejected alternatives
+
+### Internal provisioning service
+
+A private broker could keep generated passwords outside n8n workflow memory and perform
+both PostgreSQL and n8n API calls. It would add a custom security-critical API,
+authentication protocol, workload, monitoring surface, release lifecycle, and recovery
+dependency without reducing the current recovery roots. The direct n8n workflow wins on
+the current scale because it preserves the smallest authority and recovery surface.
+
+### External credential broker
+
+Vault, OpenBao, or another credential broker could own password generation, storage, and
+rotation. This remains deferred because it adds another security-critical platform,
+recovery dependency, and integration contract without a demonstrated need. The current
+SOPS and n8n recovery-root model already satisfies the credential lifecycle.
+
+### PostgreSQL operator and custom resources
+
+An operator could model databases and roles as Kubernetes resources. It adds another
+controller and tends to make consumer creation a Kubernetes or Git control-plane action.
+It loses against the no-per-domain-infrastructure-change invariant and is not justified
+by the current scale.
+
+### Per-domain Git and SOPS resources
+
+Git-managed domain databases, passwords, or NetworkPolicies would give Flux a declarative
+record but would require an infrastructure change for every consumer. That directly
+violates the no-per-domain-infrastructure-change invariant.
+
+### Dedicated bootstrap canary login
+
+A Git-bootstrap canary role could have only the permissions needed for the identity
+query. It would add a separate password, encrypted Secret, rotation path, n8n credential
+bootstrap, and recovery rule outside the platform provisioner. A stable empty managed
+domain uses the existing scoped runtime identity and inherits the platform's provisioning,
+backup, rotation, validation, and restore lifecycle. The fixed workflow query provides no
+caller-controlled database operation, so the dedicated login loses on lifecycle cost
+without a demonstrated reduction in practical authority.
+
+### One shared runtime login
+
+One login across domains would simplify credential management but permit broader database
+access and make independent rotation impossible. It violates per-domain authority
+separation, so separate domain credentials are required.
+
+### Self-service database and role deletion
+
+Adding drop operations to the ordinary provisioning workflow would turn input mistakes
+or workflow misuse into destructive cluster-wide actions. Decommissioning remains a
+separate attended administrative boundary under the destructive-operation invariant.
+
+## Registered application logins (issue 491)
+
+[Issue 491](https://github.com/supermorphic/homelab-talos/issues/491) adds PostgreSQL
+credentials for application-declared reads and functions, alongside the
+[NocoDB source pairs](028-nocodb-operator-ui.md#independently-scoped-source-pairs-issue-491).
+[Career Ops #197](https://github.com/supermorphic/career-ops/issues/197) is the first
+consumer; it owns schemas, grants, function semantics, CLI role selection, migrations,
+and application acceptance. Private CLI access is required now. Worker deployment and
+workload credential delivery remain in [#483](https://github.com/supermorphic/homelab-talos/issues/483).
+The platform supplies no general SQL execution API.
+
+### Registration and authority
+
+`managed_application_logins` binds a ready domain, application name matching
+`^[a-z][a-z0-9_]{0,23}$`, and explicit schema to
+`app_<md5(domain + ':' + application)>_integration`. Registration creates a restricted
+`NOLOGIN` role, freezes the mapping, and rejects role collisions or unrelated existing
+roles. Its schema may also serve a NocoDB operator source; their permissions remain distinct.
+
+Consumer migrations grant reads and `EXECUTE` on reviewed functions. The platform checks
+all effective authority, including PUBLIC, inherited, column, default, and routine grants:
+
+- No direct DML, ownership, role membership, grant options, schema/database/role creation,
+  replication, RLS bypass, or access to another application schema or database.
+- Writes use consumer-declared functions; consumers review definer authority, safe name
+  resolution, exact operations, and grants. Registration supplies no automatic grants.
+- Registry data is limited to identity, role, state, operation ID, credential generation,
+  and bounded timestamps/error codes. States are `awaiting_grants`, `activating`, `ready`,
+  `rotating`, and `error`. Validation never rotates credentials.
 
 ### Protected credential installation and recovery
 
-Register the exact application target, use the separate migrator to apply reviewed grants,
-then activate through the guarded application-login lifecycle. Activation and rotation
-save a candidate and operation record in protected storage outside checkouts before
-submitting it, bind the request to target/operation/prior generation, authenticate over
-the fixed tunnel, acknowledge the generation, then atomically install the profile.
+The existing private provisioner handles register/activate/validate/rotate. The
+[login workflow](../../scripts/operations/automation-data-login.py)
+contains commands and file formats. Activation and rotation:
 
-Retain owned `0700` directories and regular `0600` service/pass/binding files, including
-`pending/` and versioned generations. Reject symlinks, unsafe ownership/modes, mismatched
-targets, inline passwords, and implicit overwrite. Ambiguous failure reuses the same
-command and directory with its retained candidate; never delete `pending/` to force a new
-operation. Missing candidate material needs separately confirmed new rotation. Credentials
-cannot enter arguments, output, errors, saved executions, or repository artifacts.
+1. Save a strong random candidate and operation record in protected storage outside the checkout
+   before submitting the credential through a protected authenticated request body.
+2. Bind the server request to the selected login, operation ID, and prior generation.
+   A retry reuses that candidate and cannot affect another generation.
+3. Authenticate through the private tunnel and read back database/role identity, acknowledge
+   the generation, then atomically install the service/pass profile and binding.
+
+Reject symlinks, unsafe ownership/modes, wrong targets, and implicit overwrite. Credentials
+must not enter arguments, output, errors, saved workflow executions, or repository artifacts.
+Ambiguous failures retain the candidate for retry; missing material requires an explicitly
+confirmed new rotation. This lifecycle neither reads NocoDB credentials nor extracts n8n
+credentials, and leaves other roles unchanged. Backups retain registrations and verifiers;
+the protected client credential is a separate recovery root.
 
 ### Private connection and migration boundary
 
-`mise exec -- just kube automation-data-connect <domain> application/<application>`
-selects an enrolled protected profile, repeats metadata/file checks, validates session
-identity, and holds a loopback-only tunnel to the fixed PostgreSQL Pod. It supports no
-arbitrary target, address, SQL, Secret read, exec, workload mutation, public exposure,
-or administrator fallback. Tunnel teardown is required on interruption, child exit,
-or target replacement. Connectivity does not authorize consumer queries or migrations.
+The helper validates a registered identity and protected profile, then opens a loopback
+port-forward to the fixed PostgreSQL Pod/port using the approved scoped context. It checks
+session identity and cleans up its tunnel. No arbitrary target, database, address, SQL,
+Secret read, exec, workload mutation, public ingress, or fallback to broader credentials
+is allowed. See the [named access grant](031-openbao-agent-credential-profiles.md#profiles-and-kubernetes-authority).
+Connectivity alone does not authorize consumer queries, writes, or migrations.
 
-Migration uses the distinct `<domain> migrator` identity and an explicitly retained
-migrator profile. Missing material requires separately authorized targeted domain rotation,
-backup/binding checks, and protected delivery; onboarding neither exports it from n8n
-nor rotates it automatically. Enroll an existing profile with the guarded
-`automation-data-login-enroll-migrator` helper; an old/lost binding cannot simply be
-relabeled current. Client files and generation markers are recovery roots separate from
-PostgreSQL verifiers. [Lifecycle source](../../scripts/operations/automation-data-login.py)
-and [connection source](../../scripts/operations/automation-data-connect.py) own exact inputs.
+Migration uses an explicitly selected, operator-retained migrator profile. Missing
+credentials require separately authorized recovery through the existing domain rotation
+lifecycle, preserving the n8n binding and arranging protected delivery. Onboarding never
+retrieves that credential from n8n or rotates it automatically.
 
-## Credential discovery for approved work
+### Verification and rollout
 
-Discovery is the primary task-access interface; credential availability and task authority
-remain separate. Authorized routine agents use supported helpers with enrolled access
-without password handoffs. UI accounts, database sources, application/runtime/migrator
-roles, API/header credentials, and recovery identities retain distinct purposes.
+Synthetic tests cover authentication, permitted reads/functions, actual denials for
+withheld objects and excess authority, isolated rotation, interrupted installation,
+credential non-disclosure, unsafe profiles, and fixed tunnel target/context/cleanup.
+Complete isolated restore must authenticate with the retained client credential and prove
+permitted operations and denials; catalog inspection alone is insufficient.
 
-Start with `mise exec -- just kube automation-data-credentials list` or `resolve` for
-the intended domain and purpose. `ready` permits using the typed helper/binding under
-existing authority; `setup_required` names enrollment/grants, `recovery_required` preserves
-pending material for lifecycle recovery, `unavailable` means observation failed, and
-`inconsistent` blocks automatic selection. Never execute remote text as shell code,
-search for another credential, or broaden authority. Missing access follows its named
-prerequisite. The [CLI](../../scripts/operations/automation-data-credentials.py) owns syntax.
+The candidate passed disposable lifecycle and recovery run
+`20260930T143422Z-f6abe9c57ed7-operator-4edbc3f4`. Hosted validation, authorized live upgrade
+and credential installation, browser access, and recorded recovery are separate gates.
 
-A private authenticated inventory workflow uses independent restricted SQL projections
-of registry/role, NocoDB identity, and published n8n binding metadata. Readers cannot
-access business records, credential payloads, password verifiers, or mutation functions.
-Fixed projections reject arbitrary SQL/destinations and fail on unsupported schemas,
-without raw-table/API fallback. Disable persistence and keep the webhook private.
+## Task-oriented credential discovery (issue 506)
 
-Enumerate independently of registration before joining retained identities. Detect missing,
-duplicate, unregistered, and inconsistent objects without adopting or repairing them.
-Bound time, objects, and bytes; overflow never reports complete truncated data. Read-only
-repeatable-read observations with statement deadlines and double fingerprints establish
-metadata stability, not a distributed snapshot. Partial, stale, future, changing, or
-unavailable observations cannot establish readiness or absence. Unknown facts stay unknown.
-Metrics expose bounded counts/freshness, not identifiers or credential paths.
+Live installation, workstation inventory enrollment, provisioner readback, and recorded
+verification passed on 2026-10-01. [Issue 506](https://github.com/supermorphic/homelab-talos/issues/506)
+retains the closeout evidence; consumer-profile enrollment remains a separate prerequisite.
 
-Local selection reads binding metadata/file properties without opening consumer passwords.
-Automatic access requires a current acknowledged application generation or migrator
-credential ID/update marker. Unbound, stale, and pending profiles cannot be selected.
-Only the connection helper consumes the selected password and proves authentication.
-Lifecycle readback is independent of mutation success: retry observation after readback
-failure, never repeat a successful mutation. Removal receipts alone do not prove absence.
+Task-oriented discovery is the primary interface; metrics provide health and consistency
+summaries. Extend the existing platform without another registry, scheduled collector, or
+credential broker. OpenBao issuance and the issue 507 audit remain separate work.
+[The task-access section](026-automation-data-postgresql-platform.md#credential-discovery-for-approved-work)
+owns use cases, commands, result interpretation, and agent actions;
+[installation](026-automation-data-postgresql-platform.md#private-credential-discovery-installation)
+and [recovery](026-automation-data-postgresql-platform.md#upgrade-existing-mutation-workflows)
+own the operational procedures. Authorized bootstrap can use the pinned n8n CLI with
+cluster-held encryption and native n8n publication, without a workstation API-key copy.
+It creates only retained discovery credentials, refuses overwrite, and separates unpublished
+installation from live acceptance. Existing consumer credential ownership does not change.
 
-### Private credential-discovery installation
+### Observation boundary
+
+A private, authenticated n8n workflow uses its own header and three restricted SQL readers:
+platform registries/PostgreSQL roles, NocoDB object metadata, and n8n credential identities
+and published workflow bindings. Fixed projections accept no arbitrary SQL or destinations.
+Readers cannot access business records, credential payloads, password verifiers, or mutation
+functions. Projection owners have only required column privileges; definer functions fix
+`search_path` and revoke PUBLIC execution. Project bindings inside PostgreSQL without
+returning workflow parameters. Disable all execution persistence and exclude the inventory
+path from public webhook routing. Routine inventory needs no administrator credential,
+Kubernetes Secret read, exec, or tunnel.
+
+Enumerate observed objects independently of registration, then join retained IDs to detect
+missing, duplicate, unregistered, and inconsistent objects without repair or adoption.
+Pin projections to tested application schemas; drift returns `unsupported_schema`, never a
+raw-table/API fallback. [Specification 028](028-nocodb-operator-ui.md#credential-discovery-and-source-evidence-issue-506)
+defines NocoDB-specific evidence rules.
+
+Each source is limited to 1,000 objects and 1 MiB; the total response to 4 MiB and 30 seconds,
+including connection and response handling. Overflow returns `limit_exceeded`, never a
+complete truncated result. Read each projection in a REPEATABLE READ, READ ONLY transaction
+with local statement timeouts and n8n-managed commit/rollback. Compare fingerprints from
+two separate observations of every source, with one retry within the deadline; continued
+change returns `unstable`. Equality proves metadata stability, not a distributed snapshot.
+Take no provisioning lock. Preserve observation/receipt times and completeness; future,
+invalid, or more than 60-second-old observations cannot establish readiness.
+
+Output is versioned, bounded metadata with fixed error codes. Return neither raw remote
+errors nor secret-bearing fields. Unknown facts remain unknown; partial enumeration cannot
+prove absence. Metrics carry counts, freshness, and consistency, not credential IDs or paths.
+
+### Access and lifecycle invariants
+
+Discovery, credential availability, and task authorization are separate. Next actions contain
+fixed recipe identifiers and validated arguments, not executable remote text. Missing access
+names an existing prerequisite; discovery never provisions, rotates, or retries with broader
+credentials. UI, source, application, runtime, migrator, platform, and recovery identities
+remain distinct.
+
+Local configuration contains only the inventory-header locator and approved profile roots,
+outside checkouts under existing ownership/file-permission rules. Discovery inspects binding
+metadata and file properties without opening consumer password files. Automatic selection
+requires current application generation or migrator credential ID/update marker; unbound,
+stale, or pending material cannot be selected. Only the connection helper consumes the
+selected password, repeats metadata/file checks immediately before use, authenticates the
+session identity, and owns tunnel cleanup. Explicitly supplied profiles retain their existing
+behavior and authority. Ready, authorized routine work requires no password handoff.
+
+Lifecycle readback is independent of mutation success. Observation failure cannot trigger
+another mutation. Pending and acknowledged generations remain distinct. Current absence
+requires complete independent enumeration; retained removal receipts alone cannot prove it.
+Verifiers report discovery evidence separately from service-health results.
+
+### Assurance
+
+Focused tests cover missing/duplicate/wrong bindings, state and generation mismatches,
+profile selection, stale/partial/oversized/unstable observations, bounded failures, secret
+sentinels, noninteractive helper use, and create/rotate/removal sequences. Registered
+`test.nocodb-local-integration` proves actual pinned schemas and published bindings,
+restricted-reader authentication and denials, targeted rotations, pooled-transaction recovery
+after timeout, synthetic attended removal, and restored projections. Candidate evidence does
+not establish deployed access or replace hosted validation and attended live acceptance.
+
+## Review triggers
+
+Revisit this design when measured load requires connection pooling, automatic failover,
+replicas, point-in-time recovery, a shorter recovery point, or larger claims; when the
+number of domains makes direct workflow provisioning or per-database dumps operationally
+unwieldy; when n8n credential API behavior changes; or when a dedicated provisioning
+broker or PostgreSQL operator becomes simpler than the retained custom lifecycle.
+
+Update this specification when a rollout or recovery result changes its design,
+authority, compatibility, or evidence boundary. Source owns exact versions, fields, and
+commands; retained reports own individual execution results.
+
+## Private credential-discovery installation
 
 Installation is separately authorized administration on clean deployed main after both
 n8n and NocoDB initialize. The guarded `automation-data-discovery-install` workflow
@@ -255,7 +1023,7 @@ Retain protected installer `pending/` records until acceptance. Reruns retain re
 passwords; uncertain creation needs attended reconciliation rather than receipt deletion
 or repeated imports. Remove any enrollment-only API-key file afterward.
 
-### Upgrade existing mutation workflows
+## Upgrade existing mutation workflows
 
 Upgrade mutation graphs on their same retained IDs: save protected rollback graph/bindings,
 unpublish, drain executions, replace from the reviewed template, and rebind original SQL,
@@ -271,19 +1039,41 @@ and local access, and repeat acceptance before republishing. For service outage,
 n8n/key and database/verifier state first; lost private installer records require attended
 reconciliation. Do not widen readers or extract unrelated consumer credentials.
 
-## Monitoring and validation boundaries
+## Recovery prerequisites and invocation
 
-The stable Automation Data Canary performs only a bounded identity read using its dedicated
-runtime credential through authenticated n8n. Gatus has no direct PostgreSQL credential
-or policy path. This proves one n8n-to-database chain, not all consumer behavior.
-Prometheus/Grafana cover storage, resources, backups, catalog consistency, and stuck
-operations. Terminal errors remain diagnosable without running active-operation timers.
-Detached idle backup volumes can have unknown robustness; verify claim identity and
-scheduling rather than equating that state with active-data loss.
+Retain the operator age identity, off-cluster backup access, encrypted Secrets in remote
+Git history, stable `N8N_ENCRYPTION_KEY`, and complete n8n/automation-data artifacts
+independently of the running services. Registered client profiles are additional roots:
+a globals dump contains password verifiers, not recoverable client passwords. Preserve
+damaged state; restore isolated empty destinations before separately authorized production
+replacement. Storage loss follows [platform recovery](010-talos-flux-platform.md#independent-platform-recovery).
 
-CI protects source/function contracts and secret-safe backup publication without launching
-live databases. Scoped verification observes service, storage, monitoring, and discovery
-evidence separately. Registered live tests prove authentication, permission denials,
-unchanged reconciliation, targeted rotation, recovery fidelity, and cleanup.
-Local/disposable evidence cannot establish deployed access or replace hosted validation.
-Revisit the topology for measured load, scale, failover needs, or tighter recovery goals.
+Use `mise exec -- just kube automation-data-restore-drill` with approved mutation
+credentials, selected artifacts, and its exact confirmation. The [scenario](../../scripts/test/scenarios/automation-data-restore-drill.sh)
+owns inputs and mechanics. A permission, authentication, or cleanup failure stops acceptance.
+
+First bootstrap establishes PostgreSQL and n8n provisioning/restore acceptance before
+NocoDB initialization. Bind **Automation Data Provisioner** to SQL nodes, **Automation
+Data n8n API** to credential API nodes, and **Automation Data Provisioning Header** to
+the webhook. Initially disable **Observe Mutation Inventory**: discovery cannot initialize
+until NocoDB exists. This exception returns unavailable readback, not discovery acceptance.
+
+## Credential discovery for approved work
+
+Start with `mise exec -- just kube automation-data-credentials list` or `resolve` for
+the intended domain and purpose. `ready` permits the typed helper under existing task
+authority; `setup_required` names enrollment/grants, `recovery_required` preserves pending
+material, `unavailable` means observation failed, and `inconsistent` blocks selection.
+Never execute returned text as shell, search for unrelated credentials, or broaden authority.
+The [CLI](../../scripts/operations/automation-data-credentials.py) owns syntax; metadata
+readiness alone does not prove consumer authentication or authorize database work.
+
+## External references
+
+- [PostgreSQL 17 `pg_dumpall`](https://www.postgresql.org/docs/17/app-pg-dumpall.html)
+- [PostgreSQL 17 SQL dump backup](https://www.postgresql.org/docs/17/backup-dump.html)
+- [PostgreSQL 17 database roles](https://www.postgresql.org/docs/17/database-roles.html)
+- [n8n API authentication and edition-specific scopes](https://docs.n8n.io/api/authentication/)
+- [n8n 2.36.7 credential API](https://github.com/n8n-io/n8n/blob/n8n%402.36.7/packages/cli/src/public-api/v1/handlers/credentials/credentials.handler.ts)
+- [n8n workflow automation platform specification](023-n8n-workflow-automation-platform.md)
+- [CI runtime and merge-throughput specification](024-ci-runtime-and-merge-throughput-optimization.md)

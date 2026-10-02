@@ -19,14 +19,21 @@ This root file owns repository execution policy. Necessary tool adapters, such a
 - Source, schemas, migrations, configuration, and command help own exact implementation
   facts. Do not duplicate field catalogs, defaults, versions, or command inventories in
   prose. Preserve durable compatibility and migration reasoning that changes the contract.
-- Specs own current intent, important rationale, boundaries, and guarantees. Investigate
+- Specs preserve the original design, its rationale and alternatives, and essential
+  changes over time, including completed or superseded designs. Keep existing specs and
+  their supporting assets as design history; do not replace them with compressed outcome
+  summaries. Trim later repeated PR execution detail, not original design reasoning.
+  Retained design-time examples and measurements are historical context, not a second
+  inventory of current source values or a requirement to synchronize them on every PR.
+  Mark superseded decisions clearly and retain the current boundaries and guarantees. Investigate
   discrepancies between implementation and specs; do not silently rewrite requirements
   to match code. Update the existing owner when its contract changes. Create a new spec
   only for an explicitly agreed distinct durable subject, not for each issue or PR.
   Reconcile changed contracts with the implemented and validated result before merge.
 - Use monotonically increasing three-digit spec identifiers, taking the next number after
   the highest assigned identifier, including retired specs in Git history. Never reuse or
-  renumber merged identifiers. Git history is the archive. Preserve minimal independent
+  renumber merged identifiers. Git history retains detailed execution history; specs
+  retain design history. Preserve minimal independent
   recovery prerequisites, authority boundaries, failure interpretation, and steps that
   cannot be discovered from source or help in the owning spec.
 - Keep plans and temporary handoffs ignored under `.tmp/` (`.tmp/plans/` for plans; reuse

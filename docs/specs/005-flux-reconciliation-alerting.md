@@ -1,55 +1,151 @@
 # Flux Reconciliation Alerting
 
-## Intent and signal
+## Purpose
 
-Detect when Flux desired state stops converging. Healthy controller scrape targets do
-not prove individual Kustomizations, HelmReleases, or sources are Ready. The controller
-PodMonitor measures process health; bundled kube-state-metrics supplies resource
-readiness through `gotk_resource_info`.
+Detect when Flux-managed desired state is no longer reconciling. Controller scrape
+health proves that a Flux controller process is reachable, but it does not prove that
+each Kustomization, HelmRelease, or source reports `Ready=True`.
 
-[Exporter configuration](../../kubernetes/apps/monitoring/kube-prometheus-stack/app/values.yaml)
-and [monitoring rules](../../kubernetes/apps/monitoring/alerts/) own exact collectors,
-labels, and expressions. Each configured Flux kind needs independent missing-signal
-coverage: series from other kinds must not conceal a failed collector. Consumers select
-the bundled source explicitly so parallel or unintended collection cannot duplicate
-alerts or conceal production signal loss.
+Flux is the repository's sole Kubernetes reconciler, so resource readiness and dependency
+state are part of the platform's desired-state control model rather than incidental
+observability metadata. Per-resource readiness is therefore load-bearing: healthy
+controller processes do not prove that the declared platform state is converging.
 
-## Correctness and authority
+This specification records the accepted rationale and evidence boundary. Current
+monitoring source, tests, and command help define operational behavior.
 
-Custom-resource collectors need distinct help strings. Identical sanitized metric
-headers can cause kube-state-metrics to discard families. Collection also needs read
-access to CustomResourceDefinitions for discovery; a healthy target and permission to
-list the Flux objects are insufficient without that discovery permission.
+## Metric architecture
 
-Added Flux permissions remain read-only and bounded. The bundled exporter retains its
-ordinary Kubernetes collectors; no separate Flux exporter or duplicate `kube_*` source
-is required. Consolidation replaced the former dedicated exporter only after API-backed
-inventory parity and production alert delivery were verified. A future replacement
-must preserve per-resource readiness, per-kind absence, source selection, and lifecycle
-semantics.
+The existing Flux PodMonitor remains responsible for controller-runtime and scrape
+health. The kube-prometheus-stack general target-down rules cover loss of those scrape
+targets.
 
-Readiness warnings ignore suspended resources and include False, Unknown, and absent
-Ready conditions. Missing metrics mean that the signal is unavailable, rather than
-proving that the underlying resource failed. Both use the existing Alertmanager-to-ntfy
-warning path; routine Flux events do not create another notification control plane.
+Per-resource readiness uses `gotk_resource_info` from the kube-state-metrics exporter
+bundled with kube-prometheus-stack in `monitoring`. Production consumers select that
+source explicitly. The dedicated `flux-kube-state-metrics` release supplied the original
+signal and the migration fallback, with standard collectors disabled to avoid duplicate
+`kube_*` metrics. The bundled exporter retains these five Flux kinds:
 
-## Assurance
+- Kustomization;
+- HelmRelease;
+- GitRepository;
+- OCIRepository; and
+- HelmRepository.
 
-Synthetic promtool fixtures validate readiness, suspension, partial collector loss,
-hold behavior, and exclusions against the exact applied rules. Live verification must
-separately establish target health, every expected kind, rule health, and routing.
+Each collector uses a distinct help string. kube-state-metrics can discard resource
+families when multiple custom-resource collectors produce the same sanitized metric
+header, so the help strings are part of the correctness contract.
 
-The registered firing-and-resolved scenario deliberately creates a run-owned failed
-Flux object and removes it after the production rule fires. It requires run-unique
-firing and resolved messages in the read-only ntfy cache with timestamps after run start.
-Missing or truncated cache evidence fails delivery acceptance. Aggregate webhook counters
-cannot attribute delivery to that alert. Handset receipt remains a separate human result.
+## Isolation and authority boundary
 
-## Monitoring upgrade constraint
+The dedicated exporter originally isolated Flux readiness collection from
+kube-prometheus-stack values changes. Reported upgrade failures on July 22, 2026
+motivated this separation.
+The September 5 investigation below revises the original assumption that all values
+changes fail; that upgrade alone did not establish a validated exporter migration.
 
-Grafana's single-writer claim uses `Recreate`; updates incur downtime. The earlier
-server-side transition retained defaulted `rollingUpdate` fields even with explicit
-null. The shared release therefore uses client-side strategic merging for upgrades via
-`.spec.upgrade.serverSideApply: disabled`. Returning to server-side apply requires
-transition evidence, not only a render. A successful values upgrade does not by itself
-prove exporter migration or external alert delivery.
+The dedicated exporter had only `list` and `watch` access to the five Flux resource kinds
+and to CustomResourceDefinitions needed for collector discovery. It could not read Secrets or
+mutate cluster state. The chart's broad RBAC generation was disabled and the repository
+owned the focused ClusterRole and binding.
+
+Bundled collection adds the same Flux and CRD-discovery permissions to the shared
+exporter's existing role. Its standard Kubernetes collection permissions remain in place.
+
+This last permission came from a useful failure. The exporter target was healthy, its
+configuration was loaded, and its service account could list and watch each configured
+Flux kind, yet it exported no `gotk_resource_info` series. The exporter log identified
+CustomResourceDefinition discovery as the first failing boundary. Adding only that read
+permission restored collection. This diagnosis prevented a misleading conclusion that
+target health or direct access to the five objects was sufficient.
+
+## Alert semantics
+
+`FluxReconciliationFailure` selects any exported resource that is not suspended and
+whose Ready condition is not `True`. This includes `False`, `Unknown`, and a missing
+Ready label. The condition must persist for 15 minutes before the warning fires.
+
+`FluxResourceMetricsMissing` checks each configured kind independently. A single
+family-wide absence check was rejected because series from four working collectors can
+hide failure of the fifth. The warning identifies loss of the monitoring signal rather
+than asserting that a Flux resource failed.
+
+Both warnings follow the existing Alertmanager route to the synchronous
+`alertmanager-ntfy` bridge and the `homelab` topic. Alertmanager retains ownership of
+grouping, deduplication, inhibition, repeat timing, and resolved messages. This design
+does not create a Flux-specific topic or routine Flux event-notification path.
+
+The `warning` severity is deliberate. A reconciliation failure means desired-state
+convergence is degraded; it does not by itself establish the immediate service, data, or
+privacy impact reserved for `critical` alerts.
+
+## Validation model
+
+Cluster-independent checks validate the custom-resource configuration, unique help
+strings, narrow added Flux permissions, PrometheusRule syntax, and the behavior of
+readiness, suspension, and partial metric-loss expressions. This catches errors that a
+successful YAML render cannot detect.
+
+The guarded diagnostic workflow checks the independent live stages: exporter target
+health, presence of all five resource kinds, rule health, Alertmanager connectivity, and
+the expected ntfy receiver and route. Live acceptance observed all five kinds and
+healthy inactive rules after adding the required CRD-discovery permission.
+
+The implemented confirmation-guarded firing-and-resolved scenario creates a run-owned
+Flux Kustomization with a deliberately missing source. It is designed to exercise the
+real path from Flux resource failure through `gotk_resource_info`, the production
+15-minute rule, Alertmanager, `alertmanager-ntfy`, and ntfy, then prove resolution after
+removing the failure. The automated delivery oracle reads only the `homelab` ntfy cache
+with a dedicated read-only token. It requires the exact run-unique firing and resolved
+titles with message timestamps at or after the run start. Aggregate webhook counters
+remain supplementary health checks and cannot attribute publication to the test alert.
+Missing or truncated cached evidence fails the scenario. Human handset receipt is
+recorded separately from the automated result.
+
+## Rejected alternatives
+
+- Controller metrics alone cannot report readiness of individual Flux objects.
+- The removed `gotk_reconcile_condition` metric is not available in the deployed Flux
+  version and must not be treated as a source.
+- Extending the kube-prometheus-stack bundled exporter was deferred because of the
+  reported upgrade failures. Consolidation still requires independent migration evidence.
+- One family-wide absence alert would allow partial collector loss to remain invisible.
+
+## Reconsideration boundaries
+
+The dedicated exporter can be consolidated into kube-prometheus-stack only after a
+bounded values-change upgrade is verified and a migration proves parity for all five metric
+families, the scrape target, both alert behaviors, routing, and resolved delivery. A
+future Flux-native signal is a replacement only if it again exposes per-resource Ready
+state with equivalent missing-signal detection. Routine reconciliation events should
+not bypass Alertmanager unless a new design deliberately replaces its grouping,
+deduplication, inhibition, repeat, and resolution semantics.
+
+## Consequences
+
+The original dedicated design made Flux object failures visible independently of changes
+to the shared monitoring release. It added a workload and a separate release to operate,
+with a narrow read-only authority surface and no duplicate standard Kubernetes metrics.
+Consolidation removes that operational overhead while preserving Flux readiness collection.
+
+## September 2026 upgrade debrief
+
+Grafana uses `Recreate` for persistent-storage updates; replacement incurs downtime.
+The transition exposed server-side apply retaining API-defaulted `rollingUpdate`
+fields even with explicit null. The shared monitoring release therefore uses
+client-side strategic merging for upgrades with explicit `rollingUpdate: null`.
+Returning to server-side apply needs transition evidence, not just a successful render.
+The September 2026 upgrade and live monitoring verification passed. The earlier
+upgrade failure's cause remains unproven; this result did not by itself establish
+exporter migration or external notification delivery.
+
+## Exporter consolidation
+
+Production consumers select the bundled exporter after API-backed comparison across
+all five Flux kinds. Explicit source selection prevents duplicate alerts or concealed
+loss of production metrics. The separate exporter and migration-only parity tooling
+were removed; independent inventory, source-selection, and permission checks remain.
+The [consolidation change](https://github.com/supermorphic/homelab-talos/pull/379)
+records healthy observation and operator-confirmed warning/resolved delivery from the
+bundled source. Source removal and successful tests are distinct from post-merge
+verification that the removed resources have reconciled.

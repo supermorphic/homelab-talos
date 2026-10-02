@@ -6,6 +6,9 @@ repos:
     rev: v6.0.0
     hooks:
       - id: check-added-large-files
+        # Original design diagrams restored unchanged after documentation cleanup.
+        # Keep the default size limit for every other newly added file.
+        exclude: ^docs/specs/images/(plex-public-envoy-trust-boundaries|plex-split-horizon-data-flow)\.png$
       - id: check-merge-conflict
       - id: check-case-conflict
       - id: end-of-file-fixer

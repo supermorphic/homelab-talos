@@ -1,0 +1,161 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1120" viewBox="0 0 1800 1120" role="img" aria-labelledby="title desc">
+  <title id="title">Plex public-port trust boundaries</title>
+  <desc id="desc">The proposed direct public path from the Internet through UniFi WAN and MetalLB plus Cilium to the Plex pod, followed by the impact of a Plex compromise and residual-risk notes.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101727"/>
+      <stop offset="1" stop-color="#171226"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000" flood-opacity="0.32"/>
+    </filter>
+    <marker id="arrow-red" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#f87171"/>
+    </marker>
+    <marker id="arrow-amber" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#fbbf24"/>
+    </marker>
+    <marker id="arrow-blue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#60a5fa"/>
+    </marker>
+    <style>
+      text { font-family: Helvetica; }
+      .title { font-size: 42px; font-weight: 700; fill: #f8fafc; }
+      .subtitle { font-size: 22px; font-weight: 400; fill: #aeb9ca; }
+      .section { font-size: 28px; font-weight: 700; fill: #f8fafc; }
+      .label { font-size: 15px; font-weight: 700; letter-spacing: 2px; fill: #b8c4d5; }
+      .heading { font-size: 25px; font-weight: 700; fill: #f8fafc; }
+      .body { font-size: 18px; font-weight: 400; fill: #d2d9e5; }
+      .small { font-size: 16px; font-weight: 400; fill: #c5cfdd; }
+      .strong { font-weight: 700; fill: #f8fafc; }
+    </style>
+  </defs>
+
+  <rect width="1800" height="1120" fill="url(#background)"/>
+
+  <text x="72" y="74" class="title">Plex public-port trust boundaries</text>
+  <text x="72" y="112" class="subtitle">What a single WAN port exposes—and what still separates it from the rest of the homelab</text>
+
+  <rect x="72" y="154" width="1656" height="300" rx="18" fill="#1b2434" stroke="#344156" filter="url(#shadow)"/>
+  <rect x="72" y="154" width="1656" height="50" rx="18" fill="#253147"/>
+  <rect x="72" y="186" width="1656" height="18" fill="#253147"/>
+  <text x="98" y="187" class="body" fill="#f8fafc">Proposed direct path</text>
+
+  <g>
+    <rect x="104" y="232" width="330" height="184" rx="14" fill="#451a1a" stroke="#ef4444" stroke-width="3"/>
+    <text x="130" y="265" class="label">UNTRUSTED</text>
+    <text x="130" y="304" class="heading">Internet</text>
+    <text x="130" y="341" class="body">
+      <tspan x="130" dy="0">Any source can probe and</tspan>
+      <tspan x="130" dy="27">send Plex protocol traffic.</tspan>
+    </text>
+
+    <line x1="450" y1="324" x2="482" y2="324" stroke="#f87171" stroke-width="5"/>
+    <path d="M492 324 L478 314 L478 334 Z" fill="#f87171"/>
+
+    <rect x="514" y="232" width="330" height="184" rx="14" fill="#422006" stroke="#f59e0b" stroke-width="3"/>
+    <text x="540" y="265" class="label">BOUNDARY 1</text>
+    <text x="540" y="304" class="heading">UniFi WAN</text>
+    <text x="540" y="339" class="small">
+      <tspan x="540" dy="0">DNAT only TCP 32400</tspan>
+      <tspan x="540" dy="24">to one VIP. Stateful firewall</tspan>
+      <tspan x="540" dy="24">blocks unsolicited traffic on</tspan>
+      <tspan x="540" dy="24">every other port.</tspan>
+    </text>
+
+    <line x1="860" y1="324" x2="892" y2="324" stroke="#fbbf24" stroke-width="5"/>
+    <path d="M902 324 L888 314 L888 334 Z" fill="#fbbf24"/>
+
+    <rect x="924" y="232" width="330" height="184" rx="14" fill="#172554" stroke="#3b82f6" stroke-width="3"/>
+    <text x="950" y="265" class="label">BOUNDARY 2</text>
+    <text x="950" y="304" class="heading">MetalLB + Cilium</text>
+    <text x="950" y="339" class="small">
+      <tspan x="950" dy="0" class="strong">192.168.90.31:32400</tspan>
+      <tspan x="950" dy="24">selects only the Plex Service</tspan>
+      <tspan x="950" dy="24">and its Ready pod.</tspan>
+    </text>
+
+    <line x1="1270" y1="324" x2="1302" y2="324" stroke="#60a5fa" stroke-width="5"/>
+    <path d="M1312 324 L1298 314 L1298 334 Z" fill="#60a5fa"/>
+
+    <rect x="1334" y="232" width="362" height="184" rx="14" fill="#2e1065" stroke="#a855f7" stroke-width="3"/>
+    <text x="1360" y="265" class="label">ATTACK SURFACE</text>
+    <text x="1360" y="304" class="heading">Plex pod</text>
+    <text x="1360" y="339" class="small">
+      <tspan x="1360" dy="0">Non-root UID 568, all Linux</tspan>
+      <tspan x="1360" dy="24">capabilities dropped, no privilege</tspan>
+      <tspan x="1360" dy="24">escalation; Plex parser/API remains</tspan>
+      <tspan x="1360" dy="24">Internet-facing.</tspan>
+    </text>
+  </g>
+
+  <text x="72" y="510" class="section">If Plex itself is compromised</text>
+
+  <g>
+    <rect x="72" y="540" width="399" height="222" rx="14" fill="#1d2636" stroke="#ef4444" stroke-width="2"/>
+    <text x="96" y="574" class="label" fill="#fca5a5">HIGH LIKELIHOOD IMPACT</text>
+    <text x="96" y="613" class="heading">Plex state</text>
+    <text x="96" y="648" class="small">
+      <tspan x="96" dy="0">Read or alter the database, server</tspan>
+      <tspan x="96" dy="24">token, metadata, and settings on</tspan>
+      <tspan x="96" dy="24">the writable config PVC.</tspan>
+    </text>
+
+    <rect x="491" y="540" width="399" height="222" rx="14" fill="#1d2636" stroke="#ef4444" stroke-width="2"/>
+    <text x="515" y="574" class="label" fill="#fca5a5">HIGH IMPACT</text>
+    <text x="515" y="613" class="heading">Media share</text>
+    <text x="515" y="648" class="small">
+      <tspan x="515" dy="0">Read, modify, encrypt, or delete the</tspan>
+      <tspan x="515" dy="24">mounted SMB media because the</tspan>
+      <tspan x="515" dy="24">current Plex mount is writable.</tspan>
+    </text>
+
+    <rect x="910" y="540" width="399" height="222" rx="14" fill="#1d2636" stroke="#f59e0b" stroke-width="2"/>
+    <text x="934" y="574" class="label" fill="#fcd34d">NEEDS CONTAINMENT</text>
+    <text x="934" y="613" class="heading">Lateral network</text>
+    <text x="934" y="648" class="small">
+      <tspan x="934" dy="0">The repo has no Plex-specific</tspan>
+      <tspan x="934" dy="24">NetworkPolicy, so compromised code</tspan>
+      <tspan x="934" dy="24">may initiate connections to reachable</tspan>
+      <tspan x="934" dy="24">cluster or LAN targets.</tspan>
+    </text>
+
+    <rect x="1329" y="540" width="399" height="222" rx="14" fill="#1d2636" stroke="#f59e0b" stroke-width="2"/>
+    <text x="1353" y="574" class="label" fill="#fcd34d">LOW PROBABILITY / SEVERE</text>
+    <text x="1353" y="613" class="heading">Node escape</text>
+    <text x="1353" y="648" class="small">
+      <tspan x="1353" dy="0">A container, kernel, runtime, or</tspan>
+      <tspan x="1353" dy="24">GPU-driver exploit could cross the</tspan>
+      <tspan x="1353" dy="24">pod boundary. Current hardening</tspan>
+      <tspan x="1353" dy="24">reduces—not eliminates—this risk.</tspan>
+    </text>
+  </g>
+
+  <g>
+    <rect x="72" y="798" width="808" height="250" rx="16" fill="#102a25" stroke="#10b981" stroke-width="2"/>
+    <text x="100" y="839" class="heading" fill="#6ee7b7">What the port does not expose by itself</text>
+    <circle cx="108" cy="879" r="5" fill="#34d399"/>
+    <text x="126" y="886" class="small">No Kubernetes API, node SSH, Talos API, Envoy admin,</text>
+    <text x="126" y="910" class="small">or arbitrary VLAN port is forwarded.</text>
+    <circle cx="108" cy="944" r="5" fill="#34d399"/>
+    <text x="126" y="951" class="small">MetalLB is address advertisement plus Service routing;</text>
+    <text x="126" y="975" class="small">it is not a bridge granting general LAN access.</text>
+    <circle cx="108" cy="1009" r="5" fill="#34d399"/>
+    <text x="126" y="1016" class="small">A remote client cannot choose another backend unless a</text>
+    <text x="126" y="1040" class="small">routing or Service configuration is wrong.</text>
+
+    <rect x="920" y="798" width="808" height="250" rx="16" fill="#321b20" stroke="#f87171" stroke-width="2"/>
+    <text x="948" y="839" class="heading" fill="#fca5a5">Residual risk that matters</text>
+    <circle cx="956" cy="879" r="5" fill="#fb7185"/>
+    <text x="974" y="886" class="small">Plex becomes a continuously reachable public application</text>
+    <text x="974" y="910" class="small">and must be patched promptly.</text>
+    <circle cx="956" cy="944" r="5" fill="#fb7185"/>
+    <text x="974" y="951" class="small">An application compromise inherits every filesystem mount</text>
+    <text x="974" y="975" class="small">and outbound route available to the pod.</text>
+    <circle cx="956" cy="1009" r="5" fill="#fb7185"/>
+    <text x="974" y="1016" class="small">Cloud/account compromise and malicious authenticated users</text>
+    <text x="974" y="1040" class="small">remain separate risks from port scanning.</text>
+  </g>
+
+  <text x="72" y="1090" class="subtitle">Baseline only: the selected Plex Relay design avoids this inbound public path.</text>
+</svg>
