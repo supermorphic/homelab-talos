@@ -22,6 +22,10 @@ that namespace's commands. Read [AGENTS.md](AGENTS.md) for execution and publica
 boundaries. Initial cluster installation and independent recovery start in the
 [platform spec](docs/specs/010-talos-flux-platform.md).
 
+For routine database access discovery, start with
+`mise exec -- just kube automation-data-credentials --help`; `resolve --help` explains
+profile selection, the supported connection, and blocked results.
+
 ## Topics
 
 - [Platform and recovery](docs/specs/010-talos-flux-platform.md),

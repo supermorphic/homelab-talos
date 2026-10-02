@@ -144,16 +144,15 @@ scan_bare_path() {
   done <<<"$matches"
 }
 
-# General prose has two homes. The remaining exact paths have executable-test
-# or third-party provenance functions; sibling documents are not exempt.
+# General prose has two homes. Functional fixtures use a narrow path category;
+# policy, adapters, and provenance use exact paths. Review must reject manuals
+# disguised as fixtures: this path check cannot establish actual consumption.
 check_document_path() {
   local source="$1" name
   case "$source" in
   README.md | AGENTS.md | CLAUDE.md | \
     kubernetes/apps/monitoring/homepage/app/icons/NOTICE.md | \
-    scripts/test/core/fixtures/PROVENANCE.md | \
-    tests/fixtures/links/dead-markdown.md.in | \
-    tests/fixtures/links/dead-bare-path.txt.in) return ;;
+    scripts/test/core/fixtures/PROVENANCE.md) return ;;
   docs/specs/*)
     name="${source#docs/specs/}"
     if [[ "$name" != */* && "$name" =~ ^[0-9]{3}-[a-z0-9-]+\.md$ ]]; then
@@ -161,6 +160,9 @@ check_document_path() {
     fi
     ;;
   esac
+  if [[ "$source" =~ ^tests/fixtures/([^/]+/)*[^/]+\.(md|txt)(\.in)?$ ]]; then
+    return
+  fi
   case "${source,,}" in
   *.md | *.mdx | *.markdown | *.rst | *.adoc | *.asciidoc | *.txt | *.text | *.html | *.htm | *.org | *.md.in | *.txt.in)
     report_failure "$source" 1 'unsanctioned documentation path' "$source"

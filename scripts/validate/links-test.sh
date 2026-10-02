@@ -331,7 +331,10 @@ for allowed in README.md AGENTS.md CLAUDE.md \
   kubernetes/apps/monitoring/homepage/app/icons/NOTICE.md \
   scripts/test/core/fixtures/PROVENANCE.md \
   tests/fixtures/links/dead-markdown.md.in \
-  tests/fixtures/links/dead-bare-path.txt.in; do
+  tests/fixtures/links/dead-bare-path.txt.in \
+  tests/fixtures/new-case.md tests/fixtures/new-case.txt \
+  tests/fixtures/new-suite/nested/input.md \
+  tests/fixtures/new-suite/nested/input.txt.in; do
   mkdir -p "$allowed_repo/$(dirname "$allowed")"
   printf 'arbitrary content\n' >"$allowed_repo/$allowed"
 done
@@ -345,6 +348,8 @@ for rejected in ${docs_dir}/README.md ${docs_dir}/guides/example.md ${neighbor_d
   ${neighbor_dir}/AGENTS.md notes.MD notes.mdx notes.markdown notes.rst notes.adoc \
   notes.asciidoc notes.txt notes.text notes.html notes.htm notes.org \
   ${specs_dir}/archive/001-example.md ${specs_dir}/README.md \
+  tests/guide.md tests/fixtures/guide.rst tests/fixtures/guide.html \
+  src/tests/fixtures/example.md \
   scripts/test/core/fixtures/guide.md \
   kubernetes/apps/monitoring/homepage/app/icons/guide.md; do
   rejected_repo="$temp_root/rejected-documents"

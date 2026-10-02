@@ -31,11 +31,13 @@ Original specs, alternatives, design intent, historical outcomes, and essential 
 changes are retained. Later repeated PR execution details may be compressed, but completed
 or superseded designs are not deleted merely because they are historical. No routine fix
 requires a new specification or prose update. Read the relevant source/tests and only the
-needed spec sections. New durable design subjects need explicit agreement; changes to an
-existing contract update its owner without erasing the reasoning behind earlier decisions.
+needed spec sections. Root policy's change classification governs new durable design
+subjects; changes to an existing contract update its owner without erasing the reasoning
+behind earlier decisions.
 
 The existing link checker also enforces sanctioned document paths through a small explicit
-allowlist. It does not validate prose, headings, required cross-links, or lifecycle states.
+allowlist with a functional test-fixture category. Review establishes actual fixture use;
+the path check does not validate prose, headings, required cross-links, or lifecycle states.
 Plans stay ignored under `.tmp/`; detailed evidence stays in established reports. Issue/PR
 comments record material decisions, blockers, and outcomes, not repeated activity reports.
 
