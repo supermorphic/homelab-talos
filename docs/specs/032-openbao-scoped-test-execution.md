@@ -2,10 +2,11 @@
 
 ## Status and scope
 
-Draft design for [issue 451](https://github.com/supermorphic/homelab-talos/issues/451).
-The operator approved automatic scoped Kubernetes access while retaining attended
-steps that require sensitive OpenBao operator or recovery credentials. The full
-design, implementation plan, deployment, and live acceptance are not yet approved.
+Approved design for [issue 451](https://github.com/supermorphic/homelab-talos/issues/451),
+2026-10-02. Approval includes the dedicated test profiles and the credential
+distinctions below, while retaining attended steps for sensitive OpenBao operator
+or recovery credentials. The operator requested an implementation plan and a stop
+before implementation. Deployment and live acceptance remain separately gated.
 No implementation or live acceptance is claimed by this document.
 
 This extends the deployed [credential broker](030-openbao-kubernetes-credential-broker.md)
@@ -272,10 +273,11 @@ test-specific exceptions to that access boundary.
 
 In particular, `test.openbao-issuance` exercises the actual issuer identity.
 Automating its Kubernetes access therefore involves sensitive issuer authority,
-even without distributing the issuer credential in a kubeconfig. Approval to
-retain attended passwords and recovery inputs does not approve this separate
-authority expansion. That decision remains pending as part of design approval;
-do not enable the profile on the basis of the attended-input agreement alone.
+even without distributing the issuer credential in a kubeconfig. The design
+approval includes this separate authority expansion; the earlier agreement to
+retain attended passwords and recovery inputs alone did not authorize it.
+Enabling the profile still requires the deployment controls below, and privileged
+live execution requires separate authorization.
 
 ## Credential lifecycle and local state
 
