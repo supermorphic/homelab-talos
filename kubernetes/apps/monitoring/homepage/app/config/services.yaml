@@ -9,3 +9,9 @@
         description: Infrastructure automation
         siteMonitor: https://semaphore.infra.supermorphic.com/api/ping
         statusStyle: basic
+    - Forgejo:
+        icon: forgejo.svg
+        href: https://forgejo.infra.supermorphic.com/
+        description: Self-hosted Git
+        siteMonitor: https://forgejo.infra.supermorphic.com/api/healthz
+        statusStyle: basic

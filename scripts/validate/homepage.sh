@@ -37,6 +37,24 @@ rg -qx '  - ./homepage/ks.yaml' kubernetes/apps/monitoring/kustomization.yaml ||
   echo 'Refusing: ./homepage/ks.yaml is not listed in the monitoring kustomization.' >&2
   exit 1
 }
+[[ "$(yq -r '[.[] | .Platform[]? | select(has("Forgejo"))] | length' \
+  "$base/app/config/services.yaml")" == '1' ]] || {
+  echo 'Homepage must have exactly one static Platform / Forgejo service.' >&2
+  exit 1
+}
+[[ "$(yq -r '.[] | .Platform[]? | select(has("Forgejo")) | .Forgejo |
+  [.href, .siteMonitor, .icon, .statusStyle] | join(",")' \
+  "$base/app/config/services.yaml")" == \
+  'https://forgejo.infra.supermorphic.com/,https://forgejo.infra.supermorphic.com/api/healthz,forgejo.svg,basic' ]] || {
+  echo 'Homepage Forgejo must use the approved HTTPS UI and health URLs with basic HTTP status.' >&2
+  exit 1
+}
+[[ "$(yq -r '.[] | .Platform[]? | select(has("Forgejo")) | .Forgejo |
+  keys | sort | join(",")' "$base/app/config/services.yaml")" == \
+  'description,href,icon,siteMonitor,statusStyle' ]] || {
+  echo 'Homepage Forgejo must not use credentials, a widget, or workload/runtime integration.' >&2
+  exit 1
+}
 
 suspend_state="$(yq -r '.spec.suspend // false' "$ks")"
 [[ "$suspend_state" == 'true' || "$suspend_state" == 'false' ]]

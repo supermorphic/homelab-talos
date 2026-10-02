@@ -253,7 +253,7 @@ check_media_endpoint 'seerr-radarr-service-read' \
 require_equal 'Media Integration endpoint methods and bodies' \
   "$(yq -r '[.config.endpoints[] | select(.group == "Media Integration") | select(.method != "GET" or has("body"))] | length' "$values")" '0'
 
-legacy_endpoint_names='alertmanager,caddy,echo,flaresolverr,grafana,letsencrypt-acme,lidarr,longhorn-ui,nocodb,ntfy,openbao,plex,portainer,prometheus,prowlarr,qbittorrent-vpn,radarr,seerr,semaphore,sonarr,tautulli,test-reports'
+legacy_endpoint_names='alertmanager,caddy,echo,flaresolverr,forgejo,grafana,letsencrypt-acme,lidarr,longhorn-ui,nocodb,ntfy,openbao,plex,portainer,prometheus,prowlarr,qbittorrent-vpn,radarr,seerr,semaphore,sonarr,tautulli,test-reports'
 require_equal 'Existing Level 1 endpoint names' \
   "$(yq -r '[.config.endpoints[] | select(.group != "Media Integration" and
     .name != "n8n-readiness" and .name != "n8n-webhook-e2e" and
@@ -282,6 +282,7 @@ done <<'EOF'
 grafana|Observability|https://grafana.lab.supermorphic.com/api/health|1m|[STATUS] == 200|[BODY].database == ok
 caddy|Platform|https://caddy.infra.supermorphic.com/healthz|1m|[STATUS] == 200
 semaphore|Platform|https://semaphore.infra.supermorphic.com/api/ping|1m|[STATUS] == 200
+forgejo|Platform|https://forgejo.infra.supermorphic.com/api/healthz|1m|[STATUS] == 200
 prometheus|Observability|https://prometheus.lab.supermorphic.com/-/healthy|1m|[STATUS] == 200
 alertmanager|Observability|https://alertmanager.lab.supermorphic.com/-/healthy|1m|[STATUS] == 200
 test-reports|Observability|https://tests.lab.supermorphic.com/|1m|[STATUS] == 200
@@ -302,6 +303,16 @@ tautulli|Media|https://tautulli.lab.supermorphic.com/status|1m|[STATUS] == 200
 flaresolverr|Media|http://flaresolverr.media.svc.cluster.local:8191/|1m|[STATUS] == 200
 letsencrypt-acme|External|https://acme-v02.api.letsencrypt.org/directory|10m|[STATUS] == 200
 EOF
+
+# These consumer checks must keep default DNS and trusted TLS, with no credentials
+# or backend overrides. The endpoint-name assertion above also rejects duplicates.
+for name in caddy semaphore forgejo; do
+  require_equal "Off-cluster endpoint $name method" \
+    "$(yq -r ".config.endpoints[] | select(.name == \"$name\") | .method" "$values")" 'GET'
+  require_equal "Off-cluster endpoint $name fields" \
+    "$(yq -r ".config.endpoints[] | select(.name == \"$name\") | keys | sort | join(\",\")" "$values")" \
+    'conditions,group,interval,method,name,url'
+done
 
 readiness_endpoint="$(yq -o=json -I=0 \
   '.config.endpoints[] | select(.group == "Automation" and .name == "n8n-readiness")' \
