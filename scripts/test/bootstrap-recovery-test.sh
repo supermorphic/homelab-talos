@@ -111,11 +111,11 @@ case "$*" in
     [[ -f "$FAKE_STATE_DIR/lease.json" ]] || exit 1
     cat "$FAKE_STATE_DIR/lease.json"
     ;;
-  *'create --filename -')
+  *'create --field-manager=flux-client-side-apply --filename -')
     yq --output-format json '.metadata.resourceVersion = "1"' \
       >"$FAKE_STATE_DIR/lease.json"
     ;;
-  *'replace --filename -')
+  *'replace --field-manager=flux-client-side-apply --filename -')
     yq --output-format json \
       '.metadata.resourceVersion = ((.metadata.resourceVersion | tonumber) + 1 | tostring)' \
       >"$FAKE_STATE_DIR/lease-next.json"
@@ -419,8 +419,8 @@ assert_count 2 '^talosctl etcd members '
 assert_count 2 '^talosctl service etcd '
 assert_count 1 '^talosctl etcd status '
 assert_count 1 '^talosctl etcd alarm list '
-assert_count 1 '^kubectl .* create --filename -$'
-assert_count 1 '^kubectl .* replace --filename -$'
+assert_count 1 '^kubectl .* create .*--filename -$'
+assert_count 1 '^kubectl .* replace .*--filename -$'
 
 reset_case
 if run_recipe \
