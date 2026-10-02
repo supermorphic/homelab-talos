@@ -185,7 +185,7 @@ cilium-status:
 
     kubeconfig='{{kubeconfig}}'
     [[ -f "$kubeconfig" ]] || {
-      echo "Missing $kubeconfig; run just talos kubeconfig." >&2
+      echo "Missing $kubeconfig; run just kube kubeconfig." >&2
       exit 1
     }
 
@@ -497,7 +497,7 @@ flux-status:
     kubeconfig='{{kubeconfig}}'
     status=0
     [[ -f "$kubeconfig" ]] || {
-      echo "Missing $kubeconfig; run just talos kubeconfig." >&2
+      echo "Missing $kubeconfig; run just kube kubeconfig." >&2
       exit 1
     }
 
@@ -532,7 +532,7 @@ foundation-status:
     kubeconfig='{{kubeconfig}}'
     status=0
     [[ -f "$kubeconfig" ]] || {
-      echo "Missing $kubeconfig; run just talos kubeconfig." >&2
+      echo "Missing $kubeconfig; run just kube kubeconfig." >&2
       exit 1
     }
 
@@ -571,7 +571,7 @@ _flux-restart-raw: require-bash
     kubeconfig='{{kubeconfig}}'
     expected_confirmation='restart:flux-system:controllers'
     [[ -f "$kubeconfig" ]] || {
-      echo "Missing $kubeconfig; run just talos kubeconfig." >&2
+      echo "Missing $kubeconfig; run just kube kubeconfig." >&2
       exit 1
     }
 

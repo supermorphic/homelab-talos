@@ -18,7 +18,7 @@ if [[ " $* " == *' config get-contexts '* ]]; then
     [[ "$argument" != homelab-* ]] || context="$argument"
   done
   case "${FAKE_LAYOUT}:${context}" in
-    named:homelab-observer|named:homelab-diagnostic|named:homelab-report-publisher|partial:homelab-observer) exit 0 ;;
+    named:homelab-observer|named:homelab-diagnostic|named:homelab-report-publisher|named:homelab-campaign-coordinator|partial:homelab-observer) exit 0 ;;
     *) exit 1 ;;
   esac
 fi
@@ -32,6 +32,7 @@ namespace=''
 all_namespaces=false
 diagnostic=false
 publisher=false
+coordinator=false
 resource_name=''
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
@@ -71,6 +72,7 @@ case "$identity" in
   homelab-observer) ;;
   homelab-diagnostic) diagnostic=true ;;
   homelab-report-publisher) publisher=true ;;
+  homelab-campaign-coordinator) coordinator=true ;;
   *) exit 65 ;;
 esac
 request="$identity|$verb|$resource|${namespace:--}|${subresource:--}"
@@ -123,7 +125,12 @@ case "$resource" in
 esac
 
 answer=yes
-if [[ "$publisher" == true ]]; then
+if [[ "$coordinator" == true ]]; then
+  answer=no
+  case "$verb:$resource:$namespace:$resource_name" in
+    get:leases.coordination.k8s.io:flux-system:homelab-test-run-lock|update:leases.coordination.k8s.io:flux-system:homelab-test-run-lock) answer=yes ;;
+  esac
+elif [[ "$publisher" == true ]]; then
   answer=no
   case "$verb:$resource:$subresource:$namespace:$resource_name" in
     get:deployments.apps::test-reports:test-reports|list:deployments.apps::test-reports:test-reports|\
@@ -295,6 +302,12 @@ for context in homelab-observer homelab-diagnostic; do
   expect_request "$context" patch replicas.longhorn.io longhorn-system -
   expect_request "$context" patch settings.longhorn.io longhorn-system -
 done
+for verb in get update create patch delete; do
+  expect_request homelab-campaign-coordinator "$verb" leases.coordination.k8s.io/homelab-test-run-lock flux-system -
+done
+expect_request homelab-campaign-coordinator update leases.coordination.k8s.io/another-lock flux-system -
+expect_request homelab-campaign-coordinator get secrets kube-system -
+expect_request homelab-campaign-coordinator create pods kube-system exec
 admin_log="$(run_layout admin)"
 # The fake validates the identity selection and groups before writing normalized
 # fields. Both credential layouts must cover the same authorization requests.

@@ -132,7 +132,7 @@ source_state() {
     return 1
   }
   [[ -f "$kubeconfig" ]] || {
-    echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
+    echo "Missing $kubeconfig; run mise exec -- just kube kubeconfig first." >&2
     return 1
   }
   remote_ref="$(git ls-remote --exit-code origin refs/heads/main)" || {

@@ -116,9 +116,10 @@ solely to satisfy these style rules.
   local. Feature-branch evidence remains candidate evidence; only clean deployed-main
   evidence may drive authoritative latest links, Homepage status, and last-run metrics.
 - When an approved task needs scoped cluster access, agents must run
-  `mise exec -- just talos kubeconfig` themselves from their assigned linked worktree
-  and use the resulting task-scoped credentials. Do not hand this credential bootstrap
-  off to the operator merely because credentials are involved. Agents may perform
+  `mise exec -- just kube kubeconfig` themselves from their assigned linked worktree
+  and use the resulting task-scoped credentials. Request Talos reader credentials
+  separately with `mise exec -- just talos readerconfig` only when needed. Do not hand
+  this credential bootstrap off to the operator merely because credentials are involved. Agents may perform
   approved scoped verification with those credentials without operator intervention.
   Agents may not seek out, copy, adopt, or use elevated, write, administrative, or
   break-glass credentials unless the operator explicitly authorizes that credential

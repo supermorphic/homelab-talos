@@ -13,7 +13,7 @@ require_bash
 kubeconfig="$1"
 foundation_names=(cert-manager cert-manager-config wildcard-certificate metallb metallb-config envoy-gateway internal-gateway external-dns-internal echo)
 [[ -f "$kubeconfig" ]] || {
-  echo "Missing $kubeconfig; run just talos kubeconfig." >&2
+  echo "Missing $kubeconfig; run just kube kubeconfig." >&2
   exit 1
 }
 

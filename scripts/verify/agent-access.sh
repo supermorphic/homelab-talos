@@ -11,6 +11,7 @@ talosconfig="$2"
 observer='homelab-observer'
 diagnostic='homelab-diagnostic'
 publisher='homelab-report-publisher'
+coordinator='homelab-campaign-coordinator'
 talos_node='192.168.90.10'
 talos_endpoints='192.168.90.10,192.168.90.11,192.168.90.12'
 kc=(kubectl --kubeconfig "$kubeconfig")
@@ -23,17 +24,19 @@ service_account_groups=(
 observer_context=false
 diagnostic_context=false
 publisher_context=false
+coordinator_context=false
 "${kc[@]}" config get-contexts "$observer" --no-headers >/dev/null 2>&1 && observer_context=true
 "${kc[@]}" config get-contexts "$diagnostic" --no-headers >/dev/null 2>&1 && diagnostic_context=true
 "${kc[@]}" config get-contexts "$publisher" --no-headers >/dev/null 2>&1 && publisher_context=true
+"${kc[@]}" config get-contexts "$coordinator" --no-headers >/dev/null 2>&1 && coordinator_context=true
 if [[ "$observer_context" == true && "$diagnostic_context" == true &&
-  "$publisher_context" == true ]]; then
+  "$publisher_context" == true && "$coordinator_context" == true ]]; then
   credential_layout='named-contexts'
 elif [[ "$observer_context" == false && "$diagnostic_context" == false &&
-  "$publisher_context" == false ]]; then
+  "$publisher_context" == false && "$coordinator_context" == false ]]; then
   credential_layout='admin-impersonation'
 else
-  echo 'Agent access verification requires all three scoped contexts or none.' >&2
+  echo 'Agent access verification requires all four scoped contexts or none.' >&2
   exit 1
 fi
 
@@ -206,6 +209,23 @@ assert_can_i "$publisher" no bind clusterroles.rbac.authorization.k8s.io ''
 assert_can_i "$publisher" no escalate clusterroles.rbac.authorization.k8s.io ''
 assert_can_i "$publisher" no impersonate users ''
 
+# Coordinator may only read and renew the pre-created campaign Lease.
+for verb in get update; do
+  assert_can_i "$coordinator" yes "$verb" leases.coordination.k8s.io flux-system '' homelab-test-run-lock
+done
+for verb in create patch delete; do
+  assert_can_i "$coordinator" no "$verb" leases.coordination.k8s.io flux-system '' homelab-test-run-lock
+done
+assert_can_i "$coordinator" no update leases.coordination.k8s.io flux-system '' another-lock
+assert_can_i "$coordinator" no list leases.coordination.k8s.io flux-system
+assert_can_i "$coordinator" no get secrets kube-system
+assert_can_i "$coordinator" no get pods kube-system
+assert_can_i "$coordinator" no create pods kube-system exec
+assert_can_i "$coordinator" no create pods kube-system portforward
+assert_can_i "$coordinator" no impersonate users ''
+assert_can_i "$coordinator" no bind clusterroles.rbac.authorization.k8s.io ''
+assert_can_i "$coordinator" no escalate clusterroles.rbac.authorization.k8s.io ''
+
 # Observer: Secret bodies, interactive subresources, and mutations stay denied.
 assert_can_i "$observer" no get secrets kube-system
 assert_can_i "$observer" no create pods kube-system exec
@@ -267,4 +287,4 @@ talosctl services --nodes "$talos_node" --endpoints "$talos_endpoints" \
   exit 1
 }
 
-echo "Agent access verification passed using $credential_layout: observer, diagnostic, and report publisher Kubernetes boundaries match, and Talos reader inspection succeeds."
+echo "Agent access verification passed using $credential_layout: observer, diagnostic, publisher, and coordinator Kubernetes boundaries match, and Talos reader inspection succeeds."

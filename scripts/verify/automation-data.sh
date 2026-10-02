@@ -21,7 +21,7 @@ prometheus_resolve="prometheus.lab.supermorphic.com:443:${HOMELAB_GATEWAY_VIP}"
 kc=(kubectl --kubeconfig "$kubeconfig")
 
 [[ -f "$kubeconfig" ]] || {
-  echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
+  echo "Missing $kubeconfig; run mise exec -- just kube kubeconfig first." >&2
   exit 1
 }
 

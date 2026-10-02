@@ -32,7 +32,7 @@ assert_equal() {
 }
 
 [[ -f "$kubeconfig" ]] || {
-  echo "Missing $kubeconfig; run just talos kubeconfig." >&2
+  echo "Missing $kubeconfig; run just kube kubeconfig." >&2
   exit 1
 }
 api_server="$("${kc[@]}" config view --minify --output jsonpath='{.clusters[0].cluster.server}')"

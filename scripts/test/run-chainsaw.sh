@@ -43,7 +43,7 @@ case "$confirmation_variable" in
 esac
 
 [[ -f "$kubeconfig" ]] || {
-  echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
+  echo "Missing $kubeconfig; run mise exec -- just kube kubeconfig first." >&2
   exit 1
 }
 

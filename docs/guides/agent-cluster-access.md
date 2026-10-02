@@ -19,7 +19,7 @@ source-only work needs no live access. When approved live verification does need
 agent normally installs its own scoped credentials from inside its assigned worktree:
 
 ```bash
-mise exec -- just talos kubeconfig
+mise exec -- just kube kubeconfig
 ```
 
 This is normally an agent-owned action, not an operator handoff.
@@ -36,7 +36,7 @@ normal repository work
   ↓
 live cluster access becomes necessary
   ↓
-mise exec -- just talos kubeconfig
+mise exec -- just kube kubeconfig
   ↓
 worktree-local scoped credentials
   ↓
@@ -49,7 +49,7 @@ RBAC allows or denies each requested verb and resource
 
 Agent worktrees start without cluster credentials, and most repository work does not
 require them. When an approved task needs live cluster inspection or scoped
-verification, the agent runs `mise exec -- just talos kubeconfig` from that worktree to
+verification, the agent runs `mise exec -- just kube kubeconfig` from that worktree to
 create the scoped credentials locally. Credential creation is demand-driven; it is not
 part of worktree initialization.
 
@@ -60,33 +60,40 @@ credential used by that workflow.
 
 ## What the installer creates
 
-**Location matters.** The recipe selects one of two credential paths from the checkout
-location:
+`mise exec -- just kube kubeconfig` installs an ignored `.kube/config` with mode
+`0600` and four standard Kubernetes exec contexts: `homelab-observer`,
+`homelab-diagnostic`, `homelab-report-publisher`, and `homelab-campaign-coordinator`.
+Observer is the default. The file refers to the repository credential plugin;
+it contains no bearer tokens. Existing administrator kubeconfigs are refused.
 
-- In a linked worktree, it creates `homelab-observer`, `homelab-diagnostic`,
-  `homelab-report-publisher`, and a Talos `os:reader` identity.
-- In the main clone, it uses the existing Talos `os:admin` identity to download and
-  replace the ignored Kubernetes administrator kubeconfig. Its current context is
-  `homelab-admin`; the client certificate authenticates the Kubernetes user `admin` in
-  the `system:masters` superuser group.
+The operator first enrolls this workstation through the
+[OpenBao lifecycle workflow](openbao-operations.md). The reusable AppRole SecretID
+is stored in the private machine-scoped enrollment directory, outside checkouts,
+with a 90-day lifetime. Rotation replaces it through the attended lifecycle command.
+Revocation disables the workstation entity and destroys its SecretIDs, preventing
+both new logins and further issuance through already-issued OpenBao sessions.
+Those narrowly scoped sessions have a 60-second TTL and maximum lifetime and are
+revoked after issuance. Kubernetes profile tokens have a 10-minute default and
+maximum lifetime; already-issued tokens can remain valid until expiry.
 
-The main-clone path refreshes `.kube/config`; it does not create scoped worktree
-credentials or replace the main clone's Talos identity. It is outside this guide's
-scoped agent-access model. Thus, the same `mise exec -- just talos kubeconfig` command
-produces different Kubernetes authority depending on where it runs.
+One workstation enrollment can request all four profiles. Compromise of that
+credential permits all four profiles; contexts provide convenience, not per-agent
+isolation. Repository workflow authorization still applies to each task.
 
-In a linked worktree, `mise exec -- just talos kubeconfig` creates two ignored files with
-mode `0600`:
+Each new client process invokes the plugin. An existing process can use its cached
+Kubernetes token until expiry during an OpenBao outage, but a new command may fail
+immediately. Refresh requires OpenBao to be available. There is no shared token
+cache or daemon, and an open watch or tunnel does not prove a later request can
+refresh successfully. Do not copy, symlink, or commit credential files.
 
-- `.kube/config` contains 30-day Kubernetes token credentials for exactly three contexts:
-  `homelab-observer`, `homelab-diagnostic`, and `homelab-report-publisher`.
-  `homelab-observer` is the current context.
-- `.talos/config` contains a 90-day Talos credential with exactly the `os:reader` role.
+Talos issuance is separate. When approved node inspection needs it, run
+`mise exec -- just talos readerconfig` in the linked worktree. This retains the
+existing primary-checkout Talos signing workflow and installs only `.talos/config`
+with mode `0600`, the `os:reader` role, and a 90-day lifetime. It does not use
+Kubernetes credentials. Keep SOPS key material out of agent sessions.
 
-The installer uses the approved repository workflow to mint the scoped credentials. It
-does not copy the administrator kubeconfig or Talos identity into the worktree. Do not
-copy, symlink, or commit either credential file. Re-run the installer from the worktree
-when a scoped credential expires. Keep SOPS key material out of agent sessions.
+`mise exec -- just talos kubeconfig` is the explicit operator-only administrator
+download command. It no longer selects authority based on checkout location.
 
 ## How RBAC enforces the boundary
 
@@ -173,7 +180,8 @@ and scrape times, and complete results. Missing or stale evidence fails verifica
 
 Within an approved task, an agent may:
 
-- Run `mise exec -- just talos kubeconfig` from its linked worktree.
+- Run `mise exec -- just kube kubeconfig` from its linked worktree, and
+  `mise exec -- just talos readerconfig` separately when node inspection needs it.
 - Use the worktree-local `homelab-observer` context for approved read-oriented
   verification and diagnosis.
 - Read the resources, logs, and metrics granted by observer RBAC.
@@ -316,7 +324,7 @@ it ad hoc.
 
 ## Verify the access boundary
 
-The agent-access verifier checks both named Kubernetes contexts and the Talos reader
+The agent-access verifier checks all four named Kubernetes contexts and the Talos reader
 credential without mutating the cluster:
 
 ```bash
@@ -326,12 +334,13 @@ mise exec -- just kube agent-access-verify
 It requires observer workload, custom-resource, and log reads to succeed. It requires
 observer Secret, exec, port-forward, create, patch, and delete requests to be denied. It
 requires diagnostic exec and port-forward authorization while Secret and Flux mutations
-remain denied. It also requires read-only Talos version and service inspection to
+remain denied. The coordinator may only get/update the named campaign Lease;
+other Lease mutations, Secret reads, and interactive requests must be denied. It also requires read-only Talos version and service inspection to
 succeed.
 
-When both scoped contexts exist, the verifier exercises them directly. In an authorized
-administrator environment without either named context, the same verifier can evaluate
-the scoped ServiceAccount identities through impersonation. A partial one-context layout
+When all four scoped contexts exist, the verifier exercises them directly. In an authorized
+administrator environment without any named context, the same verifier can evaluate
+the scoped ServiceAccount identities through impersonation. A partial scoped layout
 is rejected.
 
 ## Plan and run scoped verification
@@ -361,7 +370,9 @@ disagree with the repository:
   creates the named publication Lease without managing its runtime holder fields.
 - [`talos/mod.just`](../../talos/mod.just) and
   [`scripts/repository/install-worktree-credentials.sh`](../../scripts/repository/install-worktree-credentials.sh)
-  implement credential installation.
+  implement separate Talos credential installation.
+- [`scripts/openbao/credentials.py`](../../scripts/openbao/credentials.py) implements
+  Kubernetes exec credentials and canonical configuration validation.
 - [`scripts/test/scoped-campaign-preflight.sh`](../../scripts/test/scoped-campaign-preflight.sh)
   and [`scripts/test/run-campaign.sh`](../../scripts/test/run-campaign.sh) implement the
   scoped campaign boundary.
