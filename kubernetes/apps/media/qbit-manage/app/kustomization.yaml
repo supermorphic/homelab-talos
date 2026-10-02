@@ -5,6 +5,16 @@ resources:
   - ./helmrelease.yaml
   - ./qbit-manage-secret.sops.yaml
 configMapGenerator:
+  - name: qbit-manage-test-helpers-v1
+    namespace: media
+    options:
+      immutable: true
+    files:
+      - qbm-policy-config.py=test-helpers/qbm-policy-config.py
+      - qbm-policy-run.sh=test-helpers/qbm-policy-run.sh
+      - cz-isolation.yml=test-helpers/cz-isolation.yml
+      - standard-cleanup.yml=test-helpers/standard-cleanup.yml
+      - standard-limits.yml=test-helpers/standard-limits.yml
   - name: qbit-manage-values
     namespace: media
     files:

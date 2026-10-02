@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import importlib.util
 import io
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -38,6 +40,120 @@ tracker:
   other:
     tag: tracker-public
 """
+
+
+class FixedPolicyFixtureTests(unittest.TestCase):
+    def helper(self):
+        root = Path(__file__).resolve().parents[3]
+        helper = root / "kubernetes/apps/media/qbit-manage/app/test-helpers/qbm-policy-config.py"
+        self.assertTrue(
+            helper.is_file(), "credential jobs require a Git-owned fixed config program"
+        )
+        spec = importlib.util.spec_from_file_location("qbm_fixed_fixture", helper)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return root, module
+
+    def test_fixed_templates_preserve_all_canonical_policy_phases(self):
+        root, helper = self.helper()
+        source = qbm.load_policy_yaml(
+            (root / "kubernetes/apps/media/qbit-manage/app/config.yml").read_text()
+        )
+        for run_id in (RUN_ID, "abc12345", "abcdefghijklmnopqrstuvwx"):
+            identity = qbm.RunIdentity(run_id)
+            for phase in (
+                "cz-apply",
+                "cz-repeat",
+                "private",
+                "limits",
+                "cleanup",
+                "cleanup-repeat",
+            ):
+                if phase.startswith("cz-"):
+                    expected = qbm.PolicyConfig.build_czteam_isolation(source, identity)
+                    qbm.PolicyConfig.validate_czteam_isolation(expected, identity)
+                else:
+                    expected = qbm.PolicyConfig.build(source, identity, phase != "limits")
+                    qbm.PolicyConfig.validate(expected, identity, phase != "limits")
+                with self.subTest(run_id=run_id, phase=phase):
+                    rendered = qbm.load_policy_yaml(helper.render_policy(run_id, phase))
+                    self.assertEqual(rendered, expected)
+                    self.assertFalse(rendered["commands"]["tag_update"])
+                    self.assertTrue(rendered["commands"]["skip_cleanup"])
+
+    def test_fixed_program_rejects_unknown_phase_and_run_before_template_access(self):
+        _, helper = self.helper()
+        for run_id, phase in (
+            (RUN_ID, "../../config"),
+            (RUN_ID, "production"),
+            ("../other", "cleanup"),
+            ("short", "limits"),
+            ("x" * 25, "private"),
+            ("UPPERCASE", "limits"),
+        ):
+            with (
+                mock.patch.object(
+                    Path,
+                    "read_text",
+                    side_effect=AssertionError("template read before validation"),
+                ),
+                self.assertRaises(ValueError),
+            ):
+                helper.render_policy(run_id, phase)
+
+    def test_fixed_launcher_translates_application_failures_into_job_failures(self):
+        root, _ = self.helper()
+        launcher = root / "kubernetes/apps/media/qbit-manage/app/test-helpers/qbm-policy-run.sh"
+        # Substitute only the fixed log path so this test never writes /config.
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            log = tmp / "qbit_manage.log"
+            (tmp / "python3").write_text("#!/bin/sh\nexit 0\n")
+            (tmp / "python3").chmod(0o700)
+            script = launcher.read_text().replace("/config/logs/qbit_manage.log", str(log))
+            for content, success in (
+                (None, False),
+                ("Exiting scheduled Run.", False),
+                ("Error executing qBittorrent commands: failed", False),
+                ("Finished one-shot run", True),
+            ):
+                if content is not None:
+                    log.write_text(content)
+                result = subprocess.run(
+                    ["/bin/sh", "-eu"],
+                    input=script,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    env={"PATH": f"{tmp}:/usr/bin:/bin"},
+                )
+                with self.subTest(content=content):
+                    self.assertEqual(result.returncode == 0, success)
+
+    def test_fixture_drift_stops_before_jobs_can_use_application_credentials(self):
+        root, _ = self.helper()
+        app = root / "kubernetes/apps/media/qbit-manage/app"
+        source = (app / "config.yml").read_text()
+        fixture = {
+            "immutable": True,
+            "data": {
+                file.name: file.read_text()
+                for file in (app / "test-helpers").iterdir()
+                if file.is_file() and file.suffix in (".py", ".sh", ".yml")
+            },
+        }
+        qbm.validate_fixed_fixture(source, fixture)
+        for mutate in (
+            lambda f: f.__setitem__("immutable", False),
+            lambda f: f["data"].__setitem__("qbm-policy-run.sh", "echo changed"),
+            lambda f: f["data"].__setitem__("injected.py", "print('other')"),
+        ):
+            changed = copy.deepcopy(fixture)
+            mutate(changed)
+            with self.assertRaises(qbm.AssertionFailure):
+                qbm.validate_fixed_fixture(source, changed)
+        with self.assertRaises(qbm.AssertionFailure):
+            qbm.validate_fixed_fixture(SOURCE_YAML, fixture)
 
 
 class IdentityAndPathTests(unittest.TestCase):
@@ -117,6 +233,62 @@ class IdentityAndPathTests(unittest.TestCase):
                 self.assertRaises(qbm.AssertionFailure),
             ):
                 qbm.validate_no_qbit_collisions(self.identity, fixture, categories, tags)
+
+
+class OwnedJobCleanupTests(unittest.TestCase):
+    def create_job(self, client, directory):
+        manifest = qbm.job_manifest(qbm.RunIdentity(RUN_ID), "limits", qbm.QBM_IMAGE)
+        path = Path(directory) / "job.json"
+        path.write_text(json.dumps(manifest))
+        created = copy.deepcopy(manifest)
+        created["metadata"].update(uid="synthetic-owned-job", resourceVersion="12")
+        with mock.patch.object(client, "call", return_value=json.dumps(created)) as command:
+            client.create(path)
+        self.assertEqual(command.call_args.args[:2], ("create", "-f"))
+        return created
+
+    def test_cleanup_uses_only_created_job_name_and_atomic_uid(self):
+        client = qbm.Kubectl("synthetic.config")
+        with tempfile.TemporaryDirectory() as directory:
+            created = self.create_job(client, directory)
+            with mock.patch.object(
+                client, "call", side_effect=[json.dumps(created), "", "", ""]
+            ) as command:
+                client.delete_labeled(qbm.RunIdentity(RUN_ID).resource_selector)
+            calls = command.call_args_list
+            deletion = calls[1]
+            self.assertEqual(
+                deletion.args[:3],
+                (
+                    "delete",
+                    "--raw",
+                    f"/apis/batch/v1/namespaces/media/jobs/qbm-e2e-{RUN_ID}-limits",
+                ),
+            )
+            body = json.loads(deletion.kwargs["input_text"])
+            self.assertEqual(
+                body["preconditions"], {"uid": "synthetic-owned-job", "resourceVersion": "12"}
+            )
+            self.assertEqual(body["propagationPolicy"], "Foreground")
+            self.assertTrue(all("--selector" not in call.args for call in calls))
+
+    def test_replaced_job_is_never_adopted_or_deleted(self):
+        client = qbm.Kubectl("synthetic.config")
+        with tempfile.TemporaryDirectory() as directory:
+            created = self.create_job(client, directory)
+            created["metadata"]["uid"] = "synthetic-replacement"
+            with (
+                mock.patch.object(client, "call", return_value=json.dumps(created)) as command,
+                self.assertRaises(qbm.AssertionFailure),
+            ):
+                client.delete_labeled(qbm.RunIdentity(RUN_ID).resource_selector)
+            self.assertEqual(command.call_count, 1)
+
+    def test_cleanup_does_not_adopt_preexisting_run_labeled_objects(self):
+        client = qbm.Kubectl("synthetic.config")
+        with mock.patch.object(client, "call") as command:
+            client.delete_labeled(qbm.RunIdentity(RUN_ID).resource_selector)
+        command.assert_not_called()
 
 
 class JunitPhaseResultTests(unittest.TestCase):
@@ -355,19 +527,29 @@ class PolicyConfigTests(unittest.TestCase):
             self.identity,
             "limits",
             qbm.QBM_IMAGE,
-            f"qbm-e2e-{RUN_ID}-limits",
         )
         spec = manifest["spec"]["template"]["spec"]
         app = next(item for item in spec["containers"] if item["name"] == "app")
         self.assertEqual(manifest["kind"], "Job")
         self.assertEqual(manifest["spec"]["activeDeadlineSeconds"], 120)
         self.assertFalse(spec["automountServiceAccountToken"])
-        self.assertEqual(app["command"], ["/bin/sh", "-eu", "-c"])
-        self.assertEqual(len(app["args"]), 1)
-        self.assertIn("python3 qbit_manage.py --run", app["args"][0])
-        self.assertIn("/config/logs/qbit_manage.log", app["args"][0])
-        self.assertIn("Exiting scheduled Run", app["args"][0])
-        self.assertIn("Error executing qBittorrent commands", app["args"][0])
+        self.assertEqual(app["command"], ["/bin/sh", "-eu", "/helpers/qbm-policy-run.sh"])
+        self.assertNotIn("args", app)
+        init = spec["initContainers"][0]
+        self.assertEqual(
+            init["command"], ["python3", "/helpers/qbm-policy-config.py", RUN_ID, "limits"]
+        )
+        self.assertEqual(
+            manifest["metadata"]["labels"]["homelab-talos/test"], "qbit-manage-policy"
+        )
+        self.assertEqual(manifest["metadata"]["labels"]["homelab-talos/run-id"], RUN_ID)
+        self.assertEqual(
+            next(v for v in spec["volumes"] if v["name"] == "helpers"),
+            {
+                "name": "helpers",
+                "configMap": {"name": "qbit-manage-test-helpers-v1", "defaultMode": 292},
+            },
+        )
         self.assertEqual(app["envFrom"], [{"secretRef": {"name": "qbit-manage-secret"}}])
         mounts = {item["mountPath"] for item in app["volumeMounts"]}
         self.assertIn("/data/downloads", mounts)
@@ -382,7 +564,7 @@ class PolicyConfigTests(unittest.TestCase):
             self.assertNotIn(forbidden, serialized)
 
     def _job_log_level_and_ttl(self):
-        manifest = qbm.job_manifest(self.identity, "limits", qbm.QBM_IMAGE, "cm")
+        manifest = qbm.job_manifest(self.identity, "limits", qbm.QBM_IMAGE)
         app = next(
             item
             for item in manifest["spec"]["template"]["spec"]["containers"]

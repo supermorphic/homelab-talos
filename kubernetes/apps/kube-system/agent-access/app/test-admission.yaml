@@ -2,6 +2,40 @@
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
+  name: homelab-test-media-runtime
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CONNECT]
+        resources: [pods/exec]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: media
+      expression: request.namespace == 'media'
+  validations:
+    - expression: >-
+        (!has(object.tty) || !object.tty) &&
+        ((request.name.matches('^(qbit-manage|sonarr|qbittorrent|plex)-[a-z0-9]{5,10}-[a-z0-9]{5}$') &&
+          object.container == 'app') ||
+         (request.name.matches('^plex-policy-(control|selected)-[0-9]{10}-[0-9]+$') &&
+          (!has(object.container) || object.container in ['', 'probe']) && (!has(object.stdin) || !object.stdin)))
+      message: Media runtime access is limited to the application container of registered targets and non-interactive policy probes.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-media-runtime
+spec:
+  policyName: homelab-test-media-runtime
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
   name: homelab-test-storage
 spec:
   failurePolicy: Fail
@@ -242,18 +276,18 @@ spec:
   validations:
     - expression: >-
         request.operation != 'UPDATE' &&
-        variables.run.matches('^[0-9a-f]{12}$') &&
-        variables.family in ['n8n-restore-drill', 'n8n-persistence'] &&
-        ((request.namespace == 'automation' && (variables.family == 'n8n-persistence' ||
+        ((variables.family == 'qbit-manage-policy' && variables.run.matches('^[a-z0-9]{8,24}$') && request.namespace == 'media') ||
+         (variables.run.matches('^[0-9a-f]{12}$') && variables.family in ['n8n-restore-drill', 'n8n-persistence'] &&
+          ((request.namespace == 'automation' && (variables.family == 'n8n-persistence' ||
           variables.job.metadata.labels['homelab-talos/role'] == 'database-helper')) ||
           (request.namespace == 'gatus' && variables.family == 'n8n-restore-drill' &&
-            variables.job.metadata.labels['homelab-talos/role'] == 'request')) &&
+            variables.job.metadata.labels['homelab-talos/role'] == 'request')))) &&
         variables.job.spec.template.metadata.labels['homelab-talos/test'] == variables.family &&
         variables.job.spec.template.metadata.labels['homelab-talos/run-id'] == variables.run &&
         !has(variables.job.metadata.ownerReferences) && !has(variables.job.metadata.annotations) &&
         !has(variables.job.spec.template.metadata.annotations) &&
         variables.job.spec.template.metadata.labels.all(k, k in [
-          'homelab-talos/test', 'homelab-talos/run-id', 'homelab-talos/role',
+          'homelab-talos/test', 'homelab-talos/run-id', 'homelab-talos/role', 'homelab-talos/e2e-run', 'homelab-talos/e2e-target',
           'batch.kubernetes.io/controller-uid', 'batch.kubernetes.io/job-name', 'controller-uid', 'job-name']) &&
         variables.job.spec.backoffLimit == 0 &&
         (!has(variables.job.spec.parallelism) || variables.job.spec.parallelism == 1) &&
@@ -261,6 +295,7 @@ spec:
         (!has(variables.job.spec.manualSelector) || !variables.job.spec.manualSelector)
       message: Jobs must belong to a registered run and one of the enforced fixture families.
     - expression: >-
+        variables.family == 'qbit-manage-policy' || (
         variables.pod.automountServiceAccountToken == false &&
         (!has(variables.pod.serviceAccountName) || variables.pod.serviceAccountName == '' || variables.pod.serviceAccountName == 'default') &&
         variables.pod.restartPolicy == 'Never' && variables.pod.containers.size() == 1 &&
@@ -275,9 +310,10 @@ spec:
         variables.pod.securityContext.seccompProfile.type == 'RuntimeDefault' &&
         !has(variables.pod.securityContext.sysctls) && !has(variables.pod.securityContext.supplementalGroups) &&
         !has(variables.pod.securityContext.seLinuxOptions) && !has(variables.pod.securityContext.windowsOptions) &&
-        !has(variables.pod.securityContext.appArmorProfile)
+        !has(variables.pod.securityContext.appArmorProfile))
       message: Test jobs cannot select a different identity, network, or security context.
     - expression: >-
+        variables.family == 'qbit-manage-policy' || (
         !has(variables.container.envFrom) && !has(variables.container.lifecycle) &&
         !has(variables.container.workingDir) && !has(variables.container.ports) &&
         !has(variables.container.volumeDevices) &&
@@ -295,7 +331,7 @@ spec:
         !has(variables.container.securityContext.seLinuxOptions) &&
         !has(variables.container.securityContext.windowsOptions) &&
         !has(variables.container.securityContext.appArmorProfile) &&
-        (!has(variables.container.securityContext.runAsNonRoot) || variables.container.securityContext.runAsNonRoot)
+        (!has(variables.container.securityContext.runAsNonRoot) || variables.container.securityContext.runAsNonRoot))
       message: Test containers cannot add executable hooks or wider privileges.
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -304,6 +340,134 @@ metadata:
   name: homelab-test-jobs
 spec:
   policyName: homelab-test-jobs
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-qbit-manage-jobs
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [batch]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [jobs]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: qbit-manage
+      expression: >-
+        (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/test'] == 'qbit-manage-policy'
+  variables:
+    - name: job
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: pod
+      expression: variables.job.spec.template.spec
+    - name: app
+      expression: variables.pod.containers[0]
+    - name: init
+      expression: variables.pod.initContainers[0]
+    - name: run
+      expression: variables.job.metadata.labels['homelab-talos/run-id']
+    - name: phase
+      expression: "variables.init.command[3]"
+  validations:
+    - expression: >-
+        request.operation != 'UPDATE' && request.namespace == 'media' &&
+        variables.run.matches('^[a-z0-9]{8,24}$') &&
+        variables.phase in ['cz-apply', 'cz-repeat', 'private', 'limits', 'cleanup', 'cleanup-repeat'] &&
+        variables.job.metadata.name == 'qbm-e2e-' + variables.run + '-' + variables.phase &&
+        variables.job.spec.activeDeadlineSeconds == 120 &&
+        variables.job.spec.ttlSecondsAfterFinished in [600, 3600] &&
+        !has(variables.job.metadata.ownerReferences) && !has(variables.job.metadata.annotations) &&
+        (!has(variables.job.metadata.finalizers) || variables.job.metadata.finalizers.size() == 0) &&
+        !has(variables.job.spec.template.metadata.annotations) && !has(variables.job.spec.template.metadata.ownerReferences) &&
+        variables.job.metadata.labels['homelab-talos/e2e-run'] == variables.run &&
+        variables.job.metadata.labels['homelab-talos/e2e-target'] == 'qbit-manage-policy' &&
+        variables.job.spec.template.metadata.labels['homelab-talos/e2e-run'] == variables.run &&
+        variables.job.spec.template.metadata.labels['homelab-talos/e2e-target'] == 'qbit-manage-policy'
+      message: qbit_manage jobs must use an owned run and one of the six registered phases.
+    - expression: >-
+        variables.pod.containers.size() == 1 && variables.pod.initContainers.size() == 1 &&
+        !has(variables.pod.ephemeralContainers) && variables.pod.restartPolicy == 'Never' &&
+        variables.pod.automountServiceAccountToken == false &&
+        (!has(variables.pod.serviceAccountName) || variables.pod.serviceAccountName in ['', 'default']) &&
+        (!has(variables.pod.hostNetwork) || !variables.pod.hostNetwork) &&
+        (!has(variables.pod.hostPID) || !variables.pod.hostPID) &&
+        (!has(variables.pod.hostIPC) || !variables.pod.hostIPC) &&
+        !has(variables.pod.hostAliases) && !has(variables.pod.dnsConfig) &&
+        (!has(variables.pod.dnsPolicy) || variables.pod.dnsPolicy == 'ClusterFirst') &&
+        !has(variables.pod.imagePullSecrets) && !has(variables.pod.priorityClassName) &&
+        (!has(variables.pod.schedulerName) || variables.pod.schedulerName == 'default-scheduler') &&
+        variables.pod.securityContext.runAsNonRoot && variables.pod.securityContext.runAsUser == 568 &&
+        variables.pod.securityContext.runAsGroup == 568 && variables.pod.securityContext.fsGroup == 568 &&
+        variables.pod.securityContext.fsGroupChangePolicy == 'OnRootMismatch' &&
+        variables.pod.securityContext.seccompProfile.type == 'RuntimeDefault' &&
+        !has(variables.pod.securityContext.seccompProfile.localhostProfile) &&
+        !has(variables.pod.securityContext.sysctls) && !has(variables.pod.securityContext.supplementalGroups) &&
+        !has(variables.pod.securityContext.seLinuxOptions) && !has(variables.pod.securityContext.windowsOptions) &&
+        !has(variables.pod.securityContext.appArmorProfile)
+      message: qbit_manage jobs require the fixed tokenless application identity and network context.
+    - expression: >-
+        (variables.pod.containers + variables.pod.initContainers).all(c,
+          c.image == 'ghcr.io/stuffanthings/qbit_manage:v4.10.0' && !has(c.args) &&
+          !has(c.lifecycle) && !has(c.workingDir) && !has(c.ports) && !has(c.volumeDevices) &&
+          !has(c.livenessProbe) && !has(c.readinessProbe) && !has(c.startupProbe) &&
+          (!has(c.restartPolicy) || c.restartPolicy == '') &&
+          (!has(c.stdin) || !c.stdin) && (!has(c.tty) || !c.tty) &&
+          c.securityContext.allowPrivilegeEscalation == false && c.securityContext.capabilities.drop == ['ALL'] &&
+          !has(c.securityContext.capabilities.add) &&
+          (!has(c.securityContext.privileged) || !c.securityContext.privileged) &&
+          (!has(c.securityContext.runAsNonRoot) || c.securityContext.runAsNonRoot) &&
+          (!has(c.securityContext.runAsUser) || c.securityContext.runAsUser == 568) &&
+          (!has(c.securityContext.runAsGroup) || c.securityContext.runAsGroup == 568) &&
+          !has(c.securityContext.seccompProfile) && !has(c.securityContext.procMount) &&
+          !has(c.securityContext.seLinuxOptions) && !has(c.securityContext.windowsOptions) &&
+          !has(c.securityContext.appArmorProfile)) &&
+        variables.init.name == 'init-config' &&
+        variables.init.command == ['python3', '/helpers/qbm-policy-config.py', variables.run, variables.phase] &&
+        !has(variables.init.env) && !has(variables.init.envFrom) &&
+        variables.app.name == 'app' && variables.app.command == ['/bin/sh', '-eu', '/helpers/qbm-policy-run.sh'] &&
+        variables.app.envFrom.size() == 1 && has(variables.app.envFrom[0].secretRef) &&
+        variables.app.envFrom[0].secretRef.name == 'qbit-manage-secret' &&
+        (!has(variables.app.envFrom[0].prefix) || variables.app.envFrom[0].prefix == '') &&
+        !has(variables.app.envFrom[0].configMapRef) &&
+        variables.app.env.size() == 5 && variables.app.env.all(e, !has(e.valueFrom) &&
+          ((e.name == 'QBT_WEB_SERVER' && e.value == 'false') || (e.name == 'QBT_CONFIG_DIR' && e.value == '/config') ||
+           (e.name == 'QBT_LOGFILE' && e.value == 'qbit_manage.log') ||
+           (e.name == 'QBT_LOG_LEVEL' && e.value in ['INFO', 'TRACE']) ||
+           (e.name == 'PYTHONDONTWRITEBYTECODE' && e.value == '1'))) &&
+        ['QBT_WEB_SERVER', 'QBT_CONFIG_DIR', 'QBT_LOGFILE', 'QBT_LOG_LEVEL', 'PYTHONDONTWRITEBYTECODE'].all(n,
+          variables.app.env.exists(e, e.name == n))
+      message: qbit_manage credentials may run only the fixed initializer and one-shot launcher.
+    - expression: >-
+        variables.pod.volumes.size() == 3 &&
+        variables.pod.volumes.exists(v, v.name == 'config' && has(v.emptyDir)) &&
+        variables.pod.volumes.exists(v, v.name == 'helpers' && has(v.configMap) &&
+          v.configMap.name == 'qbit-manage-test-helpers-v1' && v.configMap.defaultMode == 292 && !has(v.configMap.items)) &&
+        variables.pod.volumes.exists(v, v.name == 'data' && has(v.persistentVolumeClaim) &&
+          v.persistentVolumeClaim.claimName == 'media-data') &&
+        variables.init.volumeMounts.size() == 2 && variables.app.volumeMounts.size() == 3 &&
+        (variables.init.volumeMounts + variables.app.volumeMounts).all(m,
+          !has(m.subPathExpr) && (!has(m.mountPropagation) || m.mountPropagation == 'None') &&
+          ((m.name == 'config' && m.mountPath == '/config' && !has(m.subPath)) ||
+           (m.name == 'helpers' && m.mountPath == '/helpers' && m.readOnly && !has(m.subPath)) ||
+           (m.name == 'data' && m.mountPath == '/data/downloads' && m.subPath == 'downloads'))) &&
+        variables.init.volumeMounts.exists(m, m.name == 'config') &&
+        variables.init.volumeMounts.exists(m, m.name == 'helpers') &&
+        variables.app.volumeMounts.exists(m, m.name == 'config') &&
+        variables.app.volumeMounts.exists(m, m.name == 'helpers') &&
+        variables.app.volumeMounts.exists(m, m.name == 'data')
+      message: qbit_manage jobs may use only the fixed helper, fresh config volume and downloads subtree.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-qbit-manage-jobs
+spec:
+  policyName: homelab-test-qbit-manage-jobs
   validationActions: [Deny]
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -522,6 +686,9 @@ spec:
   matchConditions:
     - name: test-runner
       expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: common-families
+      expression: >-
+        (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/test'] != 'qbit-manage-policy'
   variables:
     - name: workload
       expression: "request.operation == 'DELETE' ? oldObject : object"

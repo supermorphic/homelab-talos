@@ -92,9 +92,283 @@ class TestAccessPolicyTests(unittest.TestCase):
                 "homelab-test-n8n-restore-jobs",
                 "homelab-test-n8n-persistence-jobs",
                 "homelab-test-n8n-request-jobs",
+                "homelab-test-qbit-manage-jobs",
                 "homelab-test-workload-security",
             )
         )
+
+    @staticmethod
+    def qbit_fixture(phase="limits", run="abc12345def67890"):
+        labels = {
+            "homelab-talos/test": "qbit-manage-policy",
+            "homelab-talos/run-id": run,
+            "homelab-talos/e2e-target": "qbit-manage-policy",
+            "homelab-talos/e2e-run": run,
+        }
+        security = {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}}
+        return {
+            "metadata": {"name": f"qbm-e2e-{run}-{phase}", "labels": labels},
+            "spec": {
+                "activeDeadlineSeconds": 120,
+                "backoffLimit": 0,
+                "ttlSecondsAfterFinished": 600,
+                "template": {
+                    "metadata": {"labels": labels},
+                    "spec": {
+                        "restartPolicy": "Never",
+                        "automountServiceAccountToken": False,
+                        "securityContext": {
+                            "runAsNonRoot": True,
+                            "runAsUser": 568,
+                            "runAsGroup": 568,
+                            "fsGroup": 568,
+                            "fsGroupChangePolicy": "OnRootMismatch",
+                            "seccompProfile": {"type": "RuntimeDefault"},
+                        },
+                        "initContainers": [
+                            {
+                                "name": "init-config",
+                                "image": "ghcr.io/stuffanthings/qbit_manage:v4.10.0",
+                                "command": [
+                                    "python3",
+                                    "/helpers/qbm-policy-config.py",
+                                    run,
+                                    phase,
+                                ],
+                                "securityContext": security,
+                                "volumeMounts": [
+                                    {"name": "config", "mountPath": "/config"},
+                                    {"name": "helpers", "mountPath": "/helpers", "readOnly": True},
+                                ],
+                            }
+                        ],
+                        "containers": [
+                            {
+                                "name": "app",
+                                "image": "ghcr.io/stuffanthings/qbit_manage:v4.10.0",
+                                "command": ["/bin/sh", "-eu", "/helpers/qbm-policy-run.sh"],
+                                "securityContext": security,
+                                "env": [
+                                    {"name": "QBT_WEB_SERVER", "value": "false"},
+                                    {"name": "QBT_CONFIG_DIR", "value": "/config"},
+                                    {"name": "QBT_LOGFILE", "value": "qbit_manage.log"},
+                                    {"name": "QBT_LOG_LEVEL", "value": "INFO"},
+                                    {"name": "PYTHONDONTWRITEBYTECODE", "value": "1"},
+                                ],
+                                "envFrom": [{"secretRef": {"name": "qbit-manage-secret"}}],
+                                "volumeMounts": [
+                                    {"name": "config", "mountPath": "/config"},
+                                    {"name": "helpers", "mountPath": "/helpers", "readOnly": True},
+                                    {
+                                        "name": "data",
+                                        "mountPath": "/data/downloads",
+                                        "subPath": "downloads",
+                                    },
+                                ],
+                            }
+                        ],
+                        "volumes": [
+                            {"name": "config", "emptyDir": {}},
+                            {
+                                "name": "helpers",
+                                "configMap": {
+                                    "name": "qbit-manage-test-helpers-v1",
+                                    "defaultMode": 292,
+                                },
+                            },
+                            {"name": "data", "persistentVolumeClaim": {"claimName": "media-data"}},
+                        ],
+                    },
+                },
+            },
+        }
+
+    def test_qbit_manage_admits_all_fixed_phases_and_rejects_template_escape(self):
+        for phase in ("cz-apply", "cz-repeat", "private", "limits", "cleanup", "cleanup-repeat"):
+            for run in ("abc12345", "abc12345def67890", "abcdefghijklmnopqrstuvwx"):
+                obj = self.qbit_fixture(phase, run)
+                req = self.request("jobs", "media", name=obj["metadata"]["name"])
+                with self.subTest(phase=phase, run=run):
+                    self.assertTrue(self.admits_jobs(req, obj))
+                    self.assertTrue(self.admits_jobs({**req, "operation": "DELETE"}, None, obj))
+                    self.assertFalse(self.admits_jobs({**req, "operation": "UPDATE"}, obj, obj))
+        obj = self.qbit_fixture()
+        req = self.request("jobs", "media", name=obj["metadata"]["name"])
+        for change in (
+            "namespace",
+            "phase",
+            "init-command",
+            "main-command",
+            "init-env",
+            "secret",
+            "env",
+            "init-sidecar",
+            "sidecar",
+            "token",
+            "identity",
+            "host-network",
+            "dns",
+            "helper-cm",
+            "helper-items",
+            "media-mount",
+            "mount-expression",
+            "hostpath",
+            "init-hook",
+            "main-hook",
+            "image",
+            "init-image",
+            "root",
+            "init-root",
+            "capabilities",
+            "privileged",
+            "args",
+            "probe",
+            "annotation",
+            "owner",
+            "label",
+            "run",
+            "timeout",
+            "init-mount",
+            "init-secret",
+            "pod-seccomp",
+        ):
+            bad = copy.deepcopy(obj)
+            request = copy.deepcopy(req)
+            ps = bad["spec"]["template"]["spec"]
+            app, init = ps["containers"][0], ps["initContainers"][0]
+            if change == "namespace":
+                request["namespace"] = "automation"
+            elif change == "phase":
+                bad["metadata"]["name"] += "-other"
+            elif change == "init-command":
+                init["command"] = ["sh", "-c", "env"]
+            elif change == "main-command":
+                app["command"] = ["sh", "-c", "env"]
+            elif change == "init-env":
+                init["env"] = [{"name": "PYTHONPATH", "value": "/config"}]
+            elif change == "secret":
+                app["envFrom"][0]["secretRef"]["name"] = "other-secret"
+            elif change == "env":
+                app["env"].append({"name": "QBT_TAG_UPDATE", "value": "true"})
+            elif change == "init-sidecar":
+                ps["initContainers"].append(copy.deepcopy(init))
+            elif change == "sidecar":
+                ps["containers"].append(copy.deepcopy(app))
+            elif change == "token":
+                ps["automountServiceAccountToken"] = True
+            elif change == "identity":
+                ps["serviceAccountName"] = "openbao"
+            elif change == "host-network":
+                ps["hostNetwork"] = True
+            elif change == "dns":
+                ps["dnsConfig"] = {"nameservers": ["192.0.2.1"]}
+            elif change == "helper-cm":
+                ps["volumes"][1]["configMap"]["name"] = "caller-script"
+            elif change == "helper-items":
+                ps["volumes"][1]["configMap"]["items"] = [
+                    {"key": "qbm-policy-run.sh", "path": "other.sh"}
+                ]
+            elif change == "media-mount":
+                app["volumeMounts"][2]["mountPath"] = "/data/media"
+            elif change == "mount-expression":
+                app["volumeMounts"][2]["subPathExpr"] = "$(QBT_CONFIG_DIR)"
+            elif change == "hostpath":
+                ps["volumes"][2] = {"name": "data", "hostPath": {"path": "/"}}
+            elif change == "init-hook":
+                init["lifecycle"] = {"postStart": {"exec": {"command": ["env"]}}}
+            elif change == "main-hook":
+                app["lifecycle"] = {"postStart": {"exec": {"command": ["env"]}}}
+            elif change == "image":
+                app["image"] = "busybox:latest"
+            elif change == "init-image":
+                init["image"] = "busybox:latest"
+            elif change == "root":
+                app["securityContext"]["runAsUser"] = 0
+            elif change == "init-root":
+                init["securityContext"]["runAsUser"] = 0
+            elif change == "capabilities":
+                app["securityContext"]["capabilities"]["add"] = ["SYS_ADMIN"]
+            elif change == "privileged":
+                init["securityContext"]["privileged"] = True
+            elif change == "args":
+                app["args"] = ["-c", "env"]
+            elif change == "probe":
+                app["readinessProbe"] = {"exec": {"command": ["env"]}}
+            elif change == "annotation":
+                bad["spec"]["template"]["metadata"]["annotations"] = {"inject": "true"}
+            elif change == "owner":
+                bad["metadata"]["ownerReferences"] = [
+                    {"kind": "Secret", "name": "production", "uid": "synthetic"}
+                ]
+            elif change == "label":
+                bad["metadata"]["labels"]["homelab-talos/e2e-run"] = "other1234"
+            elif change == "run":
+                bad["metadata"]["labels"]["homelab-talos/run-id"] = "short"
+            elif change == "timeout":
+                bad["spec"]["activeDeadlineSeconds"] = 3600
+            elif change == "init-mount":
+                init["volumeMounts"][1]["readOnly"] = False
+            elif change == "init-secret":
+                init["envFrom"] = [{"secretRef": {"name": "qbit-manage-secret"}}]
+            elif change == "pod-seccomp":
+                ps["securityContext"]["seccompProfile"] = {"type": "Unconfined"}
+            with self.subTest(change=change):
+                self.assertFalse(self.admits_jobs(request, bad))
+
+    def test_qbit_manage_backend_render_matches_enforced_fixture(self):
+        import sys
+
+        sys.path.insert(0, str(ROOT / "scripts/test/scenarios"))
+        import qbit_manage_policy as qbm
+
+        for phase in ("cz-apply", "cz-repeat", "private", "limits", "cleanup", "cleanup-repeat"):
+            obj = qbm.job_manifest(qbm.RunIdentity("abc12345def67890"), phase, qbm.QBM_IMAGE)
+            req = self.request("jobs", "media", name=obj["metadata"]["name"])
+            self.assertTrue(self.admits_jobs(req, obj))
+
+    def test_media_runtime_access_is_limited_to_registered_targets(self):
+        role = next(
+            (
+                d
+                for d in self.documents
+                if d["kind"] == "Role"
+                and d["metadata"]["name"] == "homelab-test-media-runtime"
+                and d["metadata"]["namespace"] == "media"
+            ),
+            None,
+        )
+        self.assertIsNotNone(role)
+        self.assertEqual(
+            role["rules"],
+            [{"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["get", "create"]}],
+        )
+        for target, container, stdin in (
+            ("qbit-manage-756dbd787f-abcde", "app", True),
+            ("sonarr-756dbd787f-abcde", "app", False),
+            ("qbittorrent-756dbd787f-abcde", "app", True),
+            ("plex-756dbd787f-abcde", "app", False),
+            ("plex-policy-control-1770000000-123", "", False),
+            ("plex-policy-selected-1770000000-123", "probe", False),
+        ):
+            req = self.request("pods", "media", "CONNECT", name=target)
+            req["subResource"] = "exec"
+            obj = {
+                "command": ["sh", "-c", "true"],
+                "container": container,
+                "stdin": stdin,
+                "tty": False,
+            }
+            self.assertTrue(self.admits("homelab-test-media-runtime", req, obj))
+            for field, value in (
+                ("name", "unrelated-756dbd787f-abcde"),
+                ("container", "gluetun"),
+                ("container", "init-config"),
+                ("tty", True),
+            ):
+                bad_req, bad = copy.deepcopy(req), copy.deepcopy(obj)
+                (bad_req if field == "name" else bad)[field] = value
+                with self.subTest(target=target, field=field, value=value):
+                    self.assertFalse(self.admits("homelab-test-media-runtime", bad_req, bad))
 
     def test_generalized_runner_has_no_unrestricted_mutation_or_secret_grants(self):
         accounts = [

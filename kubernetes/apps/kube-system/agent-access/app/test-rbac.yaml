@@ -9,6 +9,54 @@ automountServiceAccountToken: false
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
+  name: homelab-test-media-runtime
+  namespace: media
+rules:
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [get, create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-media-runtime
+  namespace: media
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-media-runtime
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-runner
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-jobs
+  namespace: media
+rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-jobs
+  namespace: media
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-jobs
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-runner
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
   name: homelab-test-flux-reconcile
   namespace: flux-system
 rules:
