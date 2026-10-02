@@ -246,7 +246,7 @@ def top_level_contract(root: Path, canonical: dict[str, Any]) -> None:
         "invalid-schema",
         lambda data: data.__setitem__("schema_version", 1),
         "Error: no matches found\n"
-        "Test catalog must have schema_version=2 plus suites, executions.ci, and campaigns.\n",
+        "Test catalog must have schema_version=3 plus suites, executions.ci, and campaigns.\n",
     )
 
     def duplicate_dispatch(data: dict[str, Any]) -> None:
@@ -809,7 +809,7 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
         "operator-published"
     ), "verification does not declare operator-published execution"
     logging = suite(canonical, "verification.logging")
-    assert logging.get("access", {}).get("tier") == "diagnostic", (
+    assert logging.get("access", {}).get("profile") == "debugger", (
         "verification.logging is not diagnostic-tier"
     )
     for campaign_name in ("verification", "scoped-verification"):
@@ -823,7 +823,7 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
         "scripts/verify/nocodb.sh"
     ), "NocoDB verification definition is absent"
     live_contract = suite(canonical, "test.web-research-live-contract")
-    assert live_contract.get("access", {}).get("tier") == "diagnostic"
+    assert live_contract.get("access", {}).get("profile") == "debugger"
     assert live_contract["metadata"]["execution_owner"] == "human"
     assert live_contract["metadata"]["mutates_cluster"] is False
     assert "test.web-research-live-contract" in catalog_validator.STANDALONE_SUITES
@@ -1071,14 +1071,15 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
     )
 
     def operator_only_full_campaign(data: dict[str, Any]) -> None:
-        suite(data, "verification.monitoring")["access"]["tier"] = "operator"
+        suite(data, "verification.monitoring")["access"]["profile"] = "operator"
         data["campaigns"]["scoped-verification"]["members"].remove("verification.monitoring")
 
-    expect_acceptance(
+    expect_rejection(
         root,
         canonical,
         "operator-only-full-campaign",
         operator_only_full_campaign,
+        "Catalog entry verification.monitoring has invalid access declaration.\n",
     )
 
     expect_rejection(

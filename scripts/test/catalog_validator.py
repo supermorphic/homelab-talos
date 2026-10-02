@@ -15,6 +15,10 @@ from typing import Any, NoReturn
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.openbao.configuration import SafeError
+from scripts.test.access import validate_access
+
 REPO_ROOT = Path(__file__).parents[2]
 EXPECTED_CAMPAIGNS = [
     "conformance-certified",
@@ -103,7 +107,7 @@ SAFE_RUNNER = re.compile(
     r"mise\s+exec\s+--\s+just\s+[a-zA-Z0-9_.-]+"
     r"(?:\s+[a-zA-Z0-9._:/<>-]+)*$"
 )
-VERIFICATION_ACCESS_TIERS = {"observer", "diagnostic", "operator"}
+VERIFICATION_ACCESS_TIERS = {"observer", "debugger"}
 
 
 def openbao_seal_source_ready(root: Path, app_source: object) -> bool:
@@ -199,7 +203,10 @@ def openbao_gatus_source_ready(root: Path) -> bool:
 
 
 def campaign_exclusions() -> set[str]:
-    exclusions = set(STANDALONE_SUITES)
+    exclusions = set(STANDALONE_SUITES) | {
+        "test.nocodb-access-source-pair",
+        "test.nocodb-restore-drill-extension",
+    }
     nocodb_source = yaml.safe_load(
         (REPO_ROOT / "kubernetes/apps/automation-data/nocodb/ks.yaml").read_text(encoding="utf-8")
     )
@@ -942,7 +949,7 @@ def verification_access_violations(catalog: dict[str, Any]) -> list[str]:
         suite_id = shell_text(metadata.get("id"))
         if not suite_id.startswith("verification."):
             continue
-        access_tier = shell_text(entry.get("access", {}).get("tier"))
+        access_tier = shell_text(entry.get("access", {}).get("profile"))
         if access_tier not in VERIFICATION_ACCESS_TIERS:
             violations.append(f"{suite_id}: access tier is absent or invalid")
 
@@ -951,12 +958,12 @@ def verification_access_violations(catalog: dict[str, Any]) -> list[str]:
         if not path.is_file():
             continue
         source = reachable_verifier_source(REPO_ROOT, implementation)
-        if "cilium status" in source and access_tier != "diagnostic":
+        if "cilium status" in source and access_tier != "debugger":
             violations.append(f"{suite_id}: cilium status requires diagnostic pod exec")
         forbidden = forbidden_kubernetes_operations(
-            source, allow_interactive=access_tier == "diagnostic"
+            source, allow_interactive=access_tier == "debugger"
         )
-        if access_tier in {"observer", "diagnostic"} and forbidden:
+        if access_tier in {"observer", "debugger"} and forbidden:
             violations.append(f"{suite_id}: {' and '.join(forbidden)}")
         elif not access_tier and forbidden:
             violations.append(f"{suite_id}: {' and '.join(forbidden)} but tier is absent")
@@ -1055,6 +1062,15 @@ def load_yaml(path: Path) -> Any:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
+def validate_entry_access(entry: dict[str, Any]) -> None:
+    try:
+        validate_access(entry)
+    except SafeError:
+        fail(
+            f"Catalog entry {entry.get('metadata', {}).get('id')} has invalid access declaration.\n"
+        )
+
+
 class CatalogValidator:
     def __init__(self, catalog_path: Path, catalog: dict[str, Any]) -> None:
         self.catalog_path = catalog_path
@@ -1126,7 +1142,7 @@ class CatalogValidator:
             suite_id = shell_text(entry.get("metadata", {}).get("id"))
             if (
                 not suite_id.startswith("verification.")
-                or entry.get("access", {}).get("tier") != "diagnostic"
+                or entry.get("access", {}).get("profile") != "debugger"
                 or suite_id == "verification.agent-access"
             ):
                 continue
@@ -1374,6 +1390,7 @@ class CatalogValidator:
             fail(f"Catalog entry {suite_id} has invalid scenario '{scenario}'.\n")
         if "dispatch" in entry:
             self.validate_dispatch(suite_id, framework, entry["dispatch"])
+        validate_entry_access(entry)
 
     def validate_dispatch(self, suite_id: str, framework: str, dispatch: dict[str, Any]) -> None:
         mode = shell_text(dispatch.get("mode"))
@@ -1529,7 +1546,7 @@ class CatalogValidator:
             entry["metadata"]["id"]
             for entry in self.suites
             if entry["metadata"]["tier"] == "verification"
-            and entry["access"]["tier"] in {"observer", "diagnostic"}
+            and entry["access"]["profile"] in {"observer", "debugger"}
             and entry["metadata"]["id"] not in campaign_exclusions()
         )
         actual_scoped = sorted(self.campaigns["scoped-verification"]["members"])
@@ -1641,7 +1658,7 @@ def validate_catalog(catalog_argument: str) -> int:
     catalog = load_yaml(resolved_path)
     valid_shape = (
         isinstance(catalog, dict)
-        and catalog.get("schema_version") == 2
+        and catalog.get("schema_version") == 3
         and isinstance(catalog.get("suites"), list)
         and len(catalog["suites"]) > 0
         and isinstance(catalog.get("executions"), dict)
@@ -1653,7 +1670,7 @@ def validate_catalog(catalog_argument: str) -> int:
     if not valid_shape:
         print("Error: no matches found", file=sys.stderr)
         print(
-            "Test catalog must have schema_version=2 plus suites, executions.ci, and campaigns.",
+            "Test catalog must have schema_version=3 plus suites, executions.ci, and campaigns.",
             file=sys.stderr,
         )
         return 1

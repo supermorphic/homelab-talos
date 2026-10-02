@@ -92,6 +92,10 @@ nocodb-pair-retry domain pair access_kind quiesced_operation_id: require-bash
 nocodb-access-test: require-bash
     @scripts/test/run-catalog-suite.sh test.nocodb-access -- scripts/test/scenarios/nocodb-access.sh {{quote(kubeconfig)}}
 
+# Explicit source-pair acceptance variant; requires its additional attended inputs.
+nocodb-access-source-pair-test: require-bash
+    @scripts/test/run-catalog-suite.sh test.nocodb-access-source-pair -- scripts/test/scenarios/nocodb-access.sh {{quote(kubeconfig)}}
+
 # Run the registered disposable Podman integration. It binds loopback ports only and
 # never uses cluster credentials or production endpoints.
 nocodb-local-integration-test: require-bash
@@ -101,6 +105,10 @@ nocodb-local-integration-test: require-bash
 # application scratch. Guard: NOCODB_RESTORE_CONFIRM='restore:nocodb:metadata'.
 nocodb-restore-drill: require-bash
     @scripts/test/run-catalog-suite.sh test.nocodb-restore-drill -- scripts/test/scenarios/nocodb-restore-drill.sh {{quote(kubeconfig)}}
+
+# Explicit restore extension; retains both restore and source-pair confirmations.
+nocodb-restore-drill-extension: require-bash
+    @scripts/test/run-catalog-suite.sh test.nocodb-restore-drill-extension -- scripts/test/scenarios/nocodb-restore-drill.sh {{quote(kubeconfig)}}
 
 # Validate specification 023 source, rendered n8n chart, database, backup, routes,
 # containment, monitoring, and secret structure. Cluster-independent; part of just ci.

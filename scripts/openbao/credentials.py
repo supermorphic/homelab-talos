@@ -23,6 +23,16 @@ PROFILES = {
     "publisher": "homelab-report-publisher",
     "campaign-coordinator": "homelab-campaign-coordinator",
 }
+SUITE_PROFILE_BINDINGS = {
+    "test-flux-restart": ("test.flux-restart",),
+    "test-cilium-connectivity": ("test.cilium-connectivity",),
+    "test-node-reschedule": ("chainsaw.resilience.plex-cross-node-reschedule",),
+    "test-conformance": ("conformance.quick", "conformance.certified"),
+    "test-openbao-issuance": ("test.openbao-issuance",),
+    "test-openbao-ha": ("test.openbao-ha",),
+    "test-openbao-restore": ("test.openbao-restore-drill",),
+    "test-openbao-lifecycle": ("test.agent-credentials",),
+}
 API_VERSION = "client.authentication.k8s.io/v1"
 LAUNCHER = Path("scripts/repository/kubernetes-credential.sh")
 
