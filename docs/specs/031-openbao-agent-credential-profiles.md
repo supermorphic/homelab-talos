@@ -9,8 +9,11 @@ and caller-level lifetime and outage tests. The operator approved the design.
 The additive broker, workstation lifecycle, and exec helper are deployed. Operator
 configuration apply and workstation enrollment passed. Caller cutover uses the
 shared canonical validator and separates Talos reader installation from Kubernetes
-setup. Full live acceptance and deployment of caller retirement remain pending;
-issue 450 stays open until retained deployed-main evidence passes.
+setup. [Deployed-main acceptance](https://tests.lab.supermorphic.com/reports/20261002T011416Z-431b7b32799e-operator-3c0b3142/awesome/)
+passed on `431b7b32799e3813703af63721ab270113a22c45`, including cleanup,
+parallel checkout use, expiry/refresh, outage behavior, revocation, and rotation.
+Deployment of caller retirement and its final deployed-main acceptance remain
+pending; issue 450 stays open until both complete.
 
 [Specification 030](030-openbao-kubernetes-credential-broker.md) records the
 completed platform dependency, issue 449, including retained issuance, expiry,
