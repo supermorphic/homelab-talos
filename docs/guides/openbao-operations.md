@@ -418,8 +418,21 @@ results contain only assertions, issuance counts and timing.
 Cleanup disables each owned entity, destroys its SecretIDs, waits through the hard
 session lifetime, then removes owned aliases/entities/roles. An interruption or
 failed cleanup leaves private recovery records under
-`~/.config/homelab-talos/acceptance/`. Stop and inspect those records through
-explicit operator authority before another run; do not retry ambiguous writes or
-remove another holder's Lease. A passing offline test does not establish live
+`~/.config/homelab-talos/acceptance/`. New acceptance refuses to start while a
+recovery journal remains. Use the failed report's run ID for attended recovery:
+
+```sh
+mise exec -- just bootstrap openbao-agent /absolute/path/to/operator-kubeconfig recover <failed-run-id>
+```
+
+This validates clean deployed main, confirms the selected journal, verifies the
+same cluster and exact run-owned objects, and repeats the full cleanup barrier.
+It accepts a newer source revision without accepting a different cluster, role,
+or policy. A private lifecycle lock excludes concurrent recovery. A failed
+recovery retains its records and stops; successful recovery removes only that
+run's private directory and records a fresh acceptance run without re-enrollment.
+Keep main unchanged until acceptance finishes. Do not retry ambiguous writes or
+remove another holder's Lease. Inspect private recovery records only through
+explicit operator authority. A passing offline test does not establish live
 acceptance. Legacy Kubernetes minting and final caller migration remain gated on
 reviewed deployment and successful live acceptance.

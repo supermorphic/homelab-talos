@@ -79,6 +79,22 @@ raise SystemExit(7 if sys.argv[-1] == os.getenv("FAIL_STEP") else 0)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([c["args"] for c in calls], [["test", "record", "test.agent-credentials"]])
 
+    def test_recovery_precedes_acceptance_and_failure_stops_the_retry(self):
+        shutil.copy(self.root / "just", self.root / "uv")
+        run = "20261001T000000Z-aaaaaaaaaaaa-operator-bbbbbbbb"
+        for fail in (False, True):
+            self.trace.unlink(missing_ok=True)
+            self.env["FAIL_STEP"] = run if fail else ""
+            result, calls = self.run_recipe(
+                "bootstrap", "openbao-agent", str(self.config), "recover", run,
+            )
+            self.assertEqual(result.returncode, 7 if fail else 0, result.stderr)
+            expected = [["run", "--locked", "--no-dev", "python", "-m",
+                         "scripts.test.scenarios.agent_credentials", "recover", run]]
+            if not fail:
+                expected.append(["test", "record", "test.agent-credentials"])
+            self.assertEqual([c["args"] for c in calls], expected)
+
     def test_bad_inputs_stop_before_any_workflow(self):
         for config, step in (("relative/config", "apply"), (str(self.root / "missing"), "apply"),
                              (str(self.config), "typo")):

@@ -452,8 +452,8 @@ KUBECONFIG="$mutating_root/kubeconfig" \
 TEST_CAMPAIGN_CONFIRM="$mutating_confirmation" \
   "$repo_root/scripts/test/run-campaign.sh" run mutating-fixture \
   >"$mutating_root/run.log" 2>&1
-[[ "$(rg -c ' create --filename -$' "$mutating_root/lease-calls")" == 1 ]]
-[[ "$(rg -c ' replace --filename -$' "$mutating_root/lease-calls")" == 1 ]]
+[[ "$(rg -c ' create .*--filename -$' "$mutating_root/lease-calls")" == 1 ]]
+[[ "$(rg -c ' replace .*--filename -$' "$mutating_root/lease-calls")" == 1 ]]
 [[ "$(yq -r '.spec.holderIdentity // ""' "$mutating_root/lease.json")" == '' ]]
 [[ "$(cat "$mutating_root/commands")" == mutating-pass ]]
 # Recording is explicit execution intent. It freezes a clean candidate
@@ -539,7 +539,7 @@ agent_record_manifest="$(find "$agent_record_root/campaigns" -name campaign.json
   "$agent_record_manifest")" == 'test.agent-credentials:published' ]]
 [[ "$(cat "$agent_record_root/commands")" == acceptance-agent ]]
 [[ "$(wc -l <"$agent_record_root/publishes" | tr -d ' ')" == 1 ]]
-if rg -q ' (create|replace) --filename -$' "$agent_record_root/lease-calls"; then
+if rg -q ' (create|replace) .*--filename -$' "$agent_record_root/lease-calls"; then
   echo 'Agent acceptance record must not take a parent Lease.' >&2
   exit 1
 fi

@@ -5,6 +5,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import select
 import shutil
 import socket
@@ -36,20 +37,28 @@ from scripts.openbao.operator import (
 )
 from scripts.test.scenarios.resilience_support import atomic_write_json, install_interrupt_handlers
 
+ACCEPTANCE_DIRECTORY = Path.home() / ".config/homelab-talos/acceptance"
 
-def run_inputs():
+
+def operator_kubeconfig():
     selected = os.environ.get("OPENBAO_OPERATOR_KUBECONFIG", "")
-    run = os.environ.get("HOMELAB_TEST_RUN_DIR", "")
-    config, directory = Path(selected), Path(run)
+    config = Path(selected)
     if (
         not selected
         or not config.is_absolute()
         or not config.is_file()
         or os.environ.get("TEST_KUBECONFIG") != selected
-        or not run
-        or not directory.is_dir()
         or os.environ.get("TEST_CAMPAIGN_LEASE_HOLDER")
     ):
+        raise SafeError("invalid-source")
+    return config
+
+
+def run_inputs():
+    config = operator_kubeconfig()
+    run = os.environ.get("HOMELAB_TEST_RUN_DIR", "")
+    directory = Path(run)
+    if not run or not directory.is_dir():
         raise SafeError("invalid-source")
     return config, directory
 
@@ -119,6 +128,8 @@ class BrokerScope:
         ):
             raise SafeError("source-mismatch")
         aliases = entity.get("aliases", [])
+        if aliases and not actor.get("role_id"):
+            raise SafeError("source-mismatch")
         if (
             actor.get("role_id")
             and not (allow_unbound and aliases == [])
@@ -312,6 +323,85 @@ class BrokerScope:
             except NotFound:
                 continue
             raise SafeError("incomplete-list")
+
+
+def load_recovery_scope(directory, run_id, kubeconfig, client, approved):
+    record = workstation.read_private(directory / "operator.json")
+    if (
+        set(record) != {"schema_version", "run_id", "target", "actors"}
+        or record["schema_version"] != 1
+        or record["run_id"] != run_id
+        or not isinstance(record["target"], dict)
+        or record["target"].get("cluster_uid") != approved["cluster_uid"]
+        or not re.fullmatch(r"[0-9a-f]{40}", record["target"].get("source_revision", ""))
+        or not isinstance(record["actors"], list)
+        or not 1 <= len(record["actors"]) <= 2
+    ):
+        raise SafeError("invalid-source")
+    reviewed = next(o.fields for o in load_document(apply.DESIRED)["objects"]
+                    if o.kind == "approle-role")
+    scope = BrokerScope(kubeconfig, run_id, directory, client, approved)
+    seen = set()
+    for saved in record["actors"]:
+        if not isinstance(saved, dict) or set(saved) - {
+            "role", "path", "fields", "role_id", "entity_id", "mount_accessor", "disabled_at",
+        }:
+            raise SafeError("invalid-source")
+        suffix = saved.get("role", "")[-1:]
+        if suffix in seen:
+            raise SafeError("invalid-source")
+        actor = scope.actor(suffix)
+        if (
+            saved.get("role") != actor["role"] or saved.get("path") != actor["path"]
+            or ("fields" in saved and saved["fields"] != reviewed)
+            or any(not isinstance(saved[key], str) or not saved[key]
+                   for key in ("role_id", "entity_id", "mount_accessor") if key in saved)
+        ):
+            raise SafeError("invalid-source")
+        # Re-read live ownership and repeat the full disable/wait barrier. A saved
+        # monotonic clock timestamp is never evidence in a new recovery process.
+        actor.update({k: v for k, v in saved.items() if k != "disabled_at"})
+        seen.add(suffix)
+    return scope
+
+
+def recover(run_id):
+    result = {"action": "recover", "status": "fail"}
+    client = None
+    try:
+        if not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{12}-operator-[a-f0-9]{8}", run_id):
+            raise SafeError("invalid-source")
+        kubeconfig = operator_kubeconfig()
+        approved = workstation.target(kubeconfig)
+        workstation.ensure_private_directory(ACCEPTANCE_DIRECTORY)
+        matches = [path.parent for path in ACCEPTANCE_DIRECTORY.glob("agent-*/operator.json")
+                   if workstation.read_private(path).get("run_id") == run_id]
+        if len(matches) != 1:
+            raise SafeError("invalid-source")
+        directory = matches[0]
+        with workstation.lifecycle_lock(directory):
+            scope = load_recovery_scope(directory, run_id, kubeconfig, None, approved)
+            fingerprint = guards.digest(workstation.read_private(directory / "operator.json"))
+            confirmation = f"recover-agent-credentials:{approved['source_revision']}:{run_id}:{fingerprint}"
+            if private_prompt(f"Exact confirmation {confirmation}: ") != confirmation:
+                raise SafeError("invalid-source")
+            install_interrupt_handlers()
+            client = OperatorClient(kubeconfig)
+            scope.client = client
+            password = private_prompt("Retained OpenBao operator password: ")
+            with operator_password_session(client, password) as token:
+                client.set_token(token)
+                with lease(kubeconfig):
+                    scope.cleanup()
+            shutil.rmtree(directory)
+        result.update(status="pass", cleanup="passed", run_id=run_id)
+    except BaseException as error:  # noqa: BLE001 -- Never expose credential-bearing exceptions.
+        result["classification"] = str(error) if isinstance(error, SafeError) else "invalid-response"
+    finally:
+        if client:
+            client.close()
+    print(json.dumps(result, sort_keys=True))
+    return 0 if result["status"] == "pass" else 1
 
 
 def fixture_launcher():
@@ -848,6 +938,10 @@ def main():
     try:
         kubeconfig, run_dir = run_inputs()
         approved = workstation.target(kubeconfig)
+        parent = ACCEPTANCE_DIRECTORY
+        if any(parent.glob("agent-*/operator.json")):
+            result["recovery_required"] = True
+            raise SafeError("source-mismatch")
         confirmation = f"agent-credentials:openbao:{approved['source_revision']}:{run_dir.name}"
         if (
             os.environ.get("AGENT_CREDENTIALS_CONFIRM") != confirmation
@@ -855,12 +949,11 @@ def main():
         ):
             raise SafeError("invalid-source")
         install_interrupt_handlers()
-        parent = Path.home() / ".config/homelab-talos/acceptance"
         workstation.ensure_private_directory(parent)
         private = Path(tempfile.mkdtemp(prefix="agent-", dir=parent)).resolve()
         client = OperatorClient(kubeconfig)
         password = private_prompt("Retained OpenBao operator password: ")
-        with operator_password_session(client, password) as token:
+        with workstation.lifecycle_lock(private), operator_password_session(client, password) as token:
             client.set_token(token)
             scope = BrokerScope(kubeconfig, run_dir.name, private, client, approved)
             try:
@@ -961,4 +1054,9 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    if len(sys.argv) == 1:
+        raise SystemExit(main())
+    if len(sys.argv) == 3 and sys.argv[1] == "recover":
+        raise SystemExit(recover(sys.argv[2]))
+    print(json.dumps({"status": "fail", "classification": "invalid-source"}))
+    raise SystemExit(1)

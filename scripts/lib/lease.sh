@@ -3,6 +3,7 @@
 # Cluster-wide serialization for disruptive transactions. Acquisition and renewal use
 # resourceVersion-guarded create/replace operations; release succeeds only while the
 # Lease still names this run as its holder.
+# Flux's preserved field manager keeps runtime fields on Git-created Leases.
 
 TEST_LEASE_NAMESPACE="${TEST_LEASE_NAMESPACE:-flux-system}"
 TEST_LEASE_NAME="${TEST_LEASE_NAME:-homelab-test-run-lock}"
@@ -109,7 +110,7 @@ acquire_test_lease() {
       now="$(lease_now)"
       if operation_error="$(
         lease_manifest "$holder" "$now" "$resource_version" |
-          lease_kubectl "$kubeconfig" replace --filename - 2>&1
+          lease_kubectl "$kubeconfig" replace --field-manager=flux-client-side-apply --filename - 2>&1
       )"; then
         return 0
       fi
@@ -120,7 +121,7 @@ acquire_test_lease() {
       now="$(lease_now)"
       if operation_error="$(
         lease_manifest "$holder" "$now" |
-          lease_kubectl "$kubeconfig" create --filename - 2>&1
+          lease_kubectl "$kubeconfig" create --field-manager=flux-client-side-apply --filename - 2>&1
       )"; then
         return 0
       fi
@@ -148,7 +149,7 @@ renew_test_lease() {
       .spec.holderIdentity = strenv(HOLDER) |
       .spec.renewTime = strenv(NOW)
     ' <<<"$lease_json" |
-    lease_kubectl "$kubeconfig" replace --filename - >/dev/null
+    lease_kubectl "$kubeconfig" replace --field-manager=flux-client-side-apply --filename - >/dev/null
 }
 
 verify_test_lease_holder() {
@@ -217,5 +218,5 @@ release_test_lease() {
       .spec.holderIdentity = null |
       .spec.renewTime = strenv(NOW)
     ' <<<"$lease_json" |
-    lease_kubectl "$kubeconfig" replace --filename - >/dev/null
+    lease_kubectl "$kubeconfig" replace --field-manager=flux-client-side-apply --filename - >/dev/null
 }
