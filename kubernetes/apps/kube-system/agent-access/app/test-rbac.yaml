@@ -7,6 +7,126 @@ metadata:
 automountServiceAccountToken: false
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-disruption
+  namespace: automation
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-disruption
+  namespace: automation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-disruption
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-runner
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-disruption
+  namespace: media
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-disruption
+  namespace: media
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-disruption
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-runner
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-disruption
+  namespace: portainer
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-disruption
+  namespace: portainer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-disruption
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-runner
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-disruption
+  namespace: test-reports
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-disruption
+  namespace: test-reports
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-disruption
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-runner
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-disruption
+  namespace: tailscale
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-disruption
+  namespace: tailscale
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-disruption
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-runner
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: homelab-test-runner-view
@@ -34,6 +154,30 @@ kind: RoleBinding
 metadata:
   name: homelab-test-jobs
   namespace: automation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-jobs
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-runner
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-jobs
+  namespace: gatus
+rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-jobs
+  namespace: gatus
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

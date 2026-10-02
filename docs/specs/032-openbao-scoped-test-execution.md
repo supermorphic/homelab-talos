@@ -265,6 +265,12 @@ Kubernetes token issuance does not make those steps unattended. OpenBao bootstra
 administrative configuration, and independent disaster recovery remain
 operator-owned.
 
+The same separation applies to application credentials outside OpenBao.
+`test.n8n-persistence` uses the `test-runner` Kubernetes profile, but a person still
+supplies `N8N_CANARY_TOKEN` for its authenticated canary request. Its catalog entry
+declares `application-credential` and retains human execution ownership. The
+Kubernetes issuer does not supply or replace that application token.
+
 The OpenBao server's own Kubernetes **issuer credential** is a third, distinct
 credential. It is not a workstation test token and must not be distributed in a
 workstation kubeconfig. Ordinary diagnostic credentials continue to exclude

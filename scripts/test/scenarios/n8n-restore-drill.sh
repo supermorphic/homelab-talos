@@ -433,8 +433,7 @@ request_job_manifest() {
                 "name": "request",
                 "image": "docker.n8n.io/n8nio/n8n:2.36.7",
                 "imagePullPolicy": "IfNotPresent",
-                "command": ["node", "--input-type=module", "--eval"],
-                "args": ["const endpoint = `http://${process.env.APP_NAME}.automation.svc.cluster.local:5678/webhook/platform-canary`;\nconst correlation = `restore-${process.env.RUN_HASH}`;\nconst send = (value, token) => fetch(endpoint, {\n  method: \"POST\",\n  headers: {\n    \"Content-Type\": \"application/json\",\n    ...(token ? {\"X-Platform-Canary\": token} : {}),\n  },\n  body: JSON.stringify({correlation: value}),\n  signal: AbortSignal.timeout(60000),\n});\nconst negative = await send(`restore-negative-${process.env.RUN_HASH}`);\nif (![400, 401, 403, 404].includes(negative.status)) {\n  throw new Error(`Unauthenticated request returned HTTP ${negative.status}`);\n}\nconst positive = await send(correlation, process.env.CANARY_TOKEN);\nif (!positive.ok) throw new Error(`Authenticated request returned HTTP ${positive.status}`);\nlet body;\ntry { body = await positive.json(); } catch { throw new Error(\"Authenticated response was not JSON\"); }\nconst keys = Object.keys(body).sort();\nif (JSON.stringify(keys) !== JSON.stringify([\"correlation\", \"executionId\", \"status\"])) {\n  throw new Error(\"Authenticated response had an unexpected key set\");\n}\nif (body.status !== \"ok\" || body.correlation !== correlation ||\n    typeof body.executionId !== \"string\" || body.executionId.length === 0) {\n  throw new Error(\"Authenticated response failed its exact value contract\");\n}"],
+                "command": ["node", "/helpers/n8n-restore-request.mjs"],
                 "env": [
                   {"name": "APP_NAME", "value": strenv(APP_NAME)},
                   {"name": "RUN_HASH", "value": strenv(RUN_HASH)},
@@ -455,9 +454,9 @@ request_job_manifest() {
                   "runAsNonRoot": true,
                   "runAsUser": 1000
                 },
-                "volumeMounts": [{"name": "tmp", "mountPath": "/tmp"}]
+                "volumeMounts": [{"name": "helpers", "mountPath": "/helpers", "readOnly": true}, {"name": "tmp", "mountPath": "/tmp"}]
               }],
-              "volumes": [{"name": "tmp", "emptyDir": {}}]
+              "volumes": [{"name": "helpers", "configMap": {"name": "n8n-test-request-helpers-v1"}}, {"name": "tmp", "emptyDir": {}}]
             }
           }
         }

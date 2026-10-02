@@ -252,7 +252,9 @@ rg -Fq 'N8N_RESTORE_DRILL_CONFIRM=restore:n8n-postgresql:temporary' \
     [.metadata.execution_owner, .metadata.mutates_cluster, .metadata.tier, .access.profile,
      .confirmation.type, .confirmation.variable, .confirmation.expected,
      .dispatch.mode, .dispatch.runtime, .dispatch.path] | join(",")' "$catalog")" == \
-    'shared,true,resilience,test-runner,exact,CLUSTER_CHAOS_CONFIRM,chaos:n8n-persistence,direct,bash,scripts/test/scenarios/n8n-persistence.sh' && \
+    'human,true,resilience,test-runner,exact,CLUSTER_CHAOS_CONFIRM,chaos:n8n-persistence,direct,bash,scripts/test/scenarios/n8n-persistence.sh' && \
+  "$(yq -r '.suites[] | select(.metadata.id == "test.n8n-persistence") |
+    .access.prerequisites | join(",")' "$catalog")" == 'application-credential' && \
   "$(yq -r '.suites[] | select(.metadata.id == "test.n8n-persistence") |
     .metadata.scenario == null' "$catalog")" == 'true' && \
   "$(yq -r '.suites[] | select(.metadata.id == "test.n8n-persistence") | .runner.command' \
@@ -719,8 +721,9 @@ actual_request_egress="$(yq ea -o=json -I=0 '
 }
 restore_command="$(yq ea -r 'select(.kind == "ConfigMap" and .metadata.name == "n8n-test-helpers-v1") |
   .data."n8n-restore-common.sh"' "$temp_dir/n8n-fixtures.yaml")"
-request_command="$(yq -r '.spec.template.spec.containers[0].args[0]' \
-  "$temp_dir/restore-request-job.yaml")"
+kustomize build "$(dirname -- "$gatus_kustomization")" >"$temp_dir/gatus-fixtures.yaml"
+request_command="$(yq ea -r 'select(.kind == "ConfigMap" and .metadata.name == "n8n-test-request-helpers-v1") |
+  .data."n8n-restore-request.mjs"' "$temp_dir/gatus-fixtures.yaml")"
 [[ "$(yq -r '.spec.template.spec.containers[0].command | join(",")' \
     "$temp_dir/restore-job.yaml")" == '/bin/sh,-eu,/helpers/n8n-restore-load.sh' && \
   "$restore_command" == *'count(*) = 1'* && \
@@ -730,7 +733,9 @@ request_command="$(yq -r '.spec.template.spec.containers[0].args[0]' \
   "$restore_command" != *'credential.data'* && \
   "$restore_command" != *'SELECT data'* && \
   "$(yq -r '.spec.template.spec.containers[0].command | join(",")' \
-    "$temp_dir/restore-request-job.yaml")" == 'node,--input-type=module,--eval' && \
+    "$temp_dir/restore-request-job.yaml")" == 'node,/helpers/n8n-restore-request.mjs' && \
+  "$(yq ea -r 'select(.kind == "ConfigMap" and .metadata.name == "n8n-test-request-helpers-v1") |
+    .immutable' "$temp_dir/gatus-fixtures.yaml")" == 'true' && \
   "$request_command" == *'const negative = await send'* && \
   "$request_command" == *'[400, 401, 403, 404]'* && \
   "$request_command" == *'Object.keys(body).sort()'* && \

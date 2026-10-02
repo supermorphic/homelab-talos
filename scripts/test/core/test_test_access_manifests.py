@@ -1,6 +1,8 @@
 """Independent request fixtures exercise the CEL shipped to Kubernetes."""
 
 import copy
+import json
+import os
 import subprocess
 import unittest
 from pathlib import Path
@@ -79,6 +81,17 @@ class TestAccessPolicyTests(unittest.TestCase):
             "operation": operation,
             "userInfo": {"username": user},
         }
+
+    def admits_jobs(self, request, obj, old=None):
+        return all(
+            self.admits(name, request, obj, old)
+            for name in (
+                "homelab-test-jobs",
+                "homelab-test-n8n-restore-jobs",
+                "homelab-test-n8n-persistence-jobs",
+                "homelab-test-n8n-request-jobs",
+            )
+        )
 
     def test_generalized_runner_has_no_unrestricted_mutation_or_secret_grants(self):
         accounts = [
@@ -274,7 +287,7 @@ class TestAccessPolicyTests(unittest.TestCase):
                 "template": {"metadata": {"labels": labels}, "spec": ps},
             },
         }
-        self.assertTrue(self.admits("homelab-test-jobs", req, obj))
+        self.assertTrue(self.admits_jobs(req, obj))
         for change in (
             "command",
             "database",
@@ -340,7 +353,7 @@ class TestAccessPolicyTests(unittest.TestCase):
                     }
                 ]
             with self.subTest(change=change):
-                self.assertFalse(self.admits("homelab-test-jobs", req, bad))
+                self.assertFalse(self.admits_jobs(req, bad))
 
     def test_n8n_backend_manifests_match_policy_and_immutable_helpers(self):
         source = (ROOT / "scripts/test/scenarios/n8n-restore-drill.sh").read_text()
@@ -364,13 +377,9 @@ class TestAccessPolicyTests(unittest.TestCase):
             obj = yaml.safe_load(rendered.stdout)
             req = self.request("jobs", "automation", name=name)
             req["resource"]["group"] = "batch"
-            self.assertTrue(self.admits("homelab-test-jobs", req, obj))
-            self.assertTrue(
-                self.admits("homelab-test-jobs", {**req, "operation": "DELETE"}, None, obj)
-            )
-            self.assertFalse(
-                self.admits("homelab-test-jobs", {**req, "operation": "UPDATE"}, obj, obj)
-            )
+            self.assertTrue(self.admits_jobs(req, obj))
+            self.assertTrue(self.admits_jobs({**req, "operation": "DELETE"}, None, obj))
+            self.assertFalse(self.admits_jobs({**req, "operation": "UPDATE"}, obj, obj))
         rendered = subprocess.run(
             ["kustomize", "build", str(ROOT / "kubernetes/apps/automation/n8n/app")],
             capture_output=True,
@@ -393,3 +402,378 @@ class TestAccessPolicyTests(unittest.TestCase):
                 content,
                 (ROOT / "kubernetes/apps/automation/n8n/app/test-helpers" / name).read_text(),
             )
+
+    def test_n8n_persistence_cannot_read_or_write_other_paths(self):
+        req = self.request("jobs", "automation", name="n8n-persistence-0123456789ab-write")
+        req["resource"]["group"] = "batch"
+        labels = {"homelab-talos/test": "n8n-persistence", "homelab-talos/run-id": "0123456789ab"}
+        container = {
+            "name": "sentinel",
+            "image": "docker.n8n.io/n8nio/n8n:2.36.7",
+            "command": ["/bin/sh", "-ceu"],
+            "args": [
+                'umask 077; printf %s "$SENTINEL_VALUE" >"$SENTINEL"; sync; test "$(cat "$SENTINEL")" = "$SENTINEL_VALUE"'
+            ],
+            "env": [
+                {"name": "SENTINEL", "value": "/data/.homelab-n8n-persistence-0123456789ab"},
+                {"name": "SENTINEL_VALUE", "value": "homelab-n8n-persistence-0123456789ab"},
+            ],
+            "securityContext": {
+                "allowPrivilegeEscalation": False,
+                "capabilities": {"drop": ["ALL"]},
+                "readOnlyRootFilesystem": True,
+                "runAsGroup": 1000,
+                "runAsUser": 1000,
+                "runAsNonRoot": True,
+            },
+            "volumeMounts": [{"name": "data", "mountPath": "/data"}],
+        }
+        pod = {
+            "automountServiceAccountToken": False,
+            "nodeName": "synthetic-node",
+            "restartPolicy": "Never",
+            "securityContext": {"fsGroup": 1000, "seccompProfile": {"type": "RuntimeDefault"}},
+            "containers": [container],
+            "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "n8n-data"}}],
+        }
+        obj = {
+            "metadata": {"name": req["name"], "labels": labels},
+            "spec": {
+                "activeDeadlineSeconds": 300,
+                "backoffLimit": 0,
+                "template": {"metadata": {"labels": labels}, "spec": pod},
+            },
+        }
+        self.assertTrue(self.admits_jobs(req, obj))
+        for change in (
+            "path",
+            "program",
+            "claim",
+            "env",
+            "probe",
+            "identity",
+            "token",
+            "image",
+            "labels",
+        ):
+            bad = copy.deepcopy(obj)
+            ps = bad["spec"]["template"]["spec"]
+            app = ps["containers"][0]
+            if change == "path":
+                app["env"][0]["value"] = "/data/database.sqlite"
+            elif change == "program":
+                app["args"] = ["cat /data/database.sqlite"]
+            elif change == "claim":
+                ps["volumes"][0]["persistentVolumeClaim"]["claimName"] = "other"
+            elif change == "env":
+                app["env"].append({"name": "ENV", "value": "/data/injected.sh"})
+            elif change == "probe":
+                app["readinessProbe"] = {"exec": {"command": ["sh", "-c", "env"]}}
+            elif change == "identity":
+                ps["serviceAccountName"] = "n8n"
+            elif change == "token":
+                ps["automountServiceAccountToken"] = True
+            elif change == "image":
+                app["image"] = "busybox:latest"
+            else:
+                bad["spec"]["template"]["metadata"]["labels"]["app.kubernetes.io/name"] = "n8n"
+            with self.subTest(change=change):
+                self.assertFalse(self.admits_jobs(req, bad))
+
+    def test_n8n_persistence_backend_all_phases_match_policy(self):
+        source = (ROOT / "scripts/test/scenarios/n8n-persistence.sh").read_text()
+        function = source.split("job_manifest() {", 1)[1].split("\njob_absent() {", 1)[0]
+        script = (
+            "set -euo pipefail\nrun_hash=0123456789ab\n"
+            "sentinel=/data/.homelab-n8n-persistence-$run_hash\n"
+            "sentinel_value=homelab-n8n-persistence-$run_hash\n"
+            "job_manifest() {" + function
+        )
+        for phase, operation in (
+            ("write", "write"),
+            ("verify", "verify-remove"),
+            ("cleanup", "cleanup"),
+        ):
+            name = f"n8n-persistence-0123456789ab-{phase}"
+            rendered = subprocess.run(
+                ["bash", "-c", script + f"\njob_manifest {name} synthetic-node {operation}\n"],
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=ROOT,
+            )
+            obj = yaml.safe_load(rendered.stdout)
+            req = self.request("jobs", "automation", name=name)
+            req["resource"]["group"] = "batch"
+            self.assertTrue(self.admits_jobs(req, obj))
+            self.assertTrue(self.admits_jobs({**req, "operation": "DELETE"}, None, obj))
+            self.assertFalse(self.admits_jobs({**req, "operation": "UPDATE"}, obj, obj))
+
+    def test_n8n_request_credentials_stay_in_fixed_helper(self):
+        req = self.request("jobs", "gatus", name="n8n-restore-0123456789ab-request")
+        req["resource"]["group"] = "batch"
+        labels = {
+            "homelab-talos/test": "n8n-restore-drill",
+            "homelab-talos/run-id": "0123456789ab",
+            "homelab-talos/role": "request",
+        }
+        app = {
+            "name": "request",
+            "image": "docker.n8n.io/n8nio/n8n:2.36.7",
+            "command": ["node", "/helpers/n8n-restore-request.mjs"],
+            "env": [
+                {"name": "APP_NAME", "value": "n8n-restore-0123456789ab"},
+                {"name": "RUN_HASH", "value": "0123456789ab"},
+                {
+                    "name": "CANARY_TOKEN",
+                    "valueFrom": {"secretKeyRef": {"name": "n8n-canary", "key": "token"}},
+                },
+                {"name": "HOME", "value": "/tmp"},
+            ],
+            "securityContext": {
+                "allowPrivilegeEscalation": False,
+                "capabilities": {"drop": ["ALL"]},
+                "readOnlyRootFilesystem": True,
+                "runAsGroup": 1000,
+                "runAsUser": 1000,
+                "runAsNonRoot": True,
+            },
+            "volumeMounts": [
+                {"name": "helpers", "mountPath": "/helpers", "readOnly": True},
+                {"name": "tmp", "mountPath": "/tmp"},
+            ],
+        }
+        pod = {
+            "automountServiceAccountToken": False,
+            "restartPolicy": "Never",
+            "securityContext": {
+                "runAsNonRoot": True,
+                "seccompProfile": {"type": "RuntimeDefault"},
+            },
+            "containers": [app],
+            "volumes": [
+                {"name": "helpers", "configMap": {"name": "n8n-test-request-helpers-v1"}},
+                {"name": "tmp", "emptyDir": {}},
+            ],
+        }
+        obj = {
+            "metadata": {"name": req["name"], "labels": labels},
+            "spec": {
+                "activeDeadlineSeconds": 300,
+                "backoffLimit": 0,
+                "template": {"metadata": {"labels": labels}, "spec": pod},
+            },
+        }
+        self.assertTrue(self.admits_jobs(req, obj))
+        for change in ("endpoint", "script", "env", "image", "identity", "token"):
+            bad = copy.deepcopy(obj)
+            ps = bad["spec"]["template"]["spec"]
+            app = ps["containers"][0]
+            if change == "endpoint":
+                app["env"][0]["value"] = "production"
+            elif change == "script":
+                app["command"] = ["node", "--eval", "console.log(process.env)"]
+            elif change == "env":
+                app["env"].append({"name": "NODE_OPTIONS", "value": "--require=/tmp/injected.js"})
+            elif change == "image":
+                app["image"] = "busybox:latest"
+            elif change == "identity":
+                ps["serviceAccountName"] = "gatus"
+            else:
+                app["env"][2]["valueFrom"]["secretKeyRef"]["name"] = "other-secret"
+            with self.subTest(change=change):
+                self.assertFalse(self.admits_jobs(req, bad))
+
+    def test_n8n_request_backend_uses_immutable_program(self):
+        source = (ROOT / "scripts/test/scenarios/n8n-restore-drill.sh").read_text()
+        function = source.split("request_job_manifest() {", 1)[1].split("\ncleanup() {", 1)[0]
+        script = (
+            "set -euo pipefail\nrun_hash=0123456789ab\nservice=n8n-restore-$run_hash\n"
+            "request_job=$service-request\nrequest_job_manifest() {"
+            + function
+            + "\nrequest_job_manifest\n"
+        )
+        rendered = subprocess.run(
+            ["bash", "-c", script], capture_output=True, text=True, check=True, cwd=ROOT
+        )
+        obj = yaml.safe_load(rendered.stdout)
+        req = self.request("jobs", "gatus", name="n8n-restore-0123456789ab-request")
+        req["resource"]["group"] = "batch"
+        self.assertTrue(self.admits_jobs(req, obj))
+        self.assertTrue(self.admits_jobs({**req, "operation": "DELETE"}, None, obj))
+        rendered = subprocess.run(
+            ["kustomize", "build", str(ROOT / "kubernetes/apps/monitoring/gatus/app")],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        helpers = [
+            d
+            for d in yaml.safe_load_all(rendered.stdout)
+            if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "n8n-test-request-helpers-v1"
+        ]
+        self.assertEqual(len(helpers), 1)
+        self.assertTrue(helpers[0]["immutable"])
+        self.assertEqual(set(helpers[0]["data"]), {"n8n-restore-request.mjs"})
+
+    def test_fixed_request_program_preserves_authenticated_canary_contract(self):
+        program = (
+            ROOT / "kubernetes/apps/monitoring/gatus/app/test-helpers/n8n-restore-request.mjs"
+        ).as_uri()
+        expected = {
+            "status": "ok",
+            "correlation": "restore-0123456789ab",
+            "executionId": "synthetic-execution",
+        }
+        cases = (
+            (401, expected, True),
+            (200, expected, False),
+            (401, {**expected, "executionId": ""}, False),
+            (401, {**expected, "correlation": "other-run"}, False),
+            (401, {**expected, "extra": "unexpected"}, False),
+        )
+        for negative_status, body, succeeds in cases:
+            script = (
+                "import assert from 'node:assert/strict';\nlet calls=0;\n"
+                "globalThis.fetch=async (url, options) => {\n"
+                "assert.equal(url, 'http://n8n-restore-0123456789ab.automation.svc.cluster.local:5678/webhook/platform-canary');\n"
+                "assert.equal(options.method, 'POST');\n"
+                "assert.equal(options.headers['Content-Type'], 'application/json');\n"
+                "calls++;\nif (calls === 1) {\n"
+                "assert.equal(options.headers['X-Platform-Canary'], undefined);\n"
+                "assert.deepEqual(JSON.parse(options.body), {correlation:'restore-negative-0123456789ab'});\n"
+                f"return {{status:{negative_status}}};\n}}\n"
+                "assert.equal(calls, 2);\nassert.equal(options.headers['X-Platform-Canary'], 'synthetic-canary');\n"
+                "assert.deepEqual(JSON.parse(options.body), {correlation:'restore-0123456789ab'});\n"
+                f"return {{ok:true,json:async()=>({json.dumps(body)})}};\n}};\n"
+                f"await import({json.dumps(program)});\nassert.equal(calls, 2);\n"
+            )
+            result = subprocess.run(
+                ["node", "--input-type=module", "--eval", script],
+                capture_output=True,
+                text=True,
+                check=False,
+                env={
+                    **os.environ,
+                    "APP_NAME": "n8n-restore-0123456789ab",
+                    "RUN_HASH": "0123456789ab",
+                    "CANARY_TOKEN": "synthetic-canary",
+                },
+            )
+            with self.subTest(negative_status=negative_status, body=body):
+                self.assertEqual(result.returncode == 0, succeeds, result.stderr)
+
+    def test_disruption_deletes_only_registered_controller_pods(self):
+        cases = (
+            ("automation", "n8n", "ReplicaSet", "n8n-123abc", "n8n-123abc-abc12"),
+            ("automation", "n8n-postgresql", "StatefulSet", "n8n-postgresql", "n8n-postgresql-0"),
+            (
+                "media",
+                "qbittorrent",
+                "ReplicaSet",
+                "qbittorrent-123abc",
+                "qbittorrent-123abc-abc12",
+            ),
+            ("portainer", "portainer", "ReplicaSet", "portainer-123abc", "portainer-123abc-abc12"),
+            (
+                "test-reports",
+                "test-reports",
+                "ReplicaSet",
+                "test-reports-123abc",
+                "test-reports-123abc-abc12",
+            ),
+            (
+                "tailscale",
+                "lab-subnet-router",
+                "StatefulSet",
+                "ts-lab-subnet-router-abc12",
+                "ts-lab-subnet-router-abc12-1",
+            ),
+        )
+        for ns, app, kind, owner, name in cases:
+            labels = (
+                {"tailscale.supermorphic.com/component": app}
+                if ns == "tailscale"
+                else {"app.kubernetes.io/name": app}
+            )
+            req = self.request("pods", ns, "DELETE", name)
+            obj = {
+                "metadata": {
+                    "name": name,
+                    "namespace": ns,
+                    "labels": labels,
+                    "ownerReferences": [
+                        {
+                            "apiVersion": "apps/v1",
+                            "kind": kind,
+                            "name": owner,
+                            "uid": "synthetic-uid",
+                            "controller": True,
+                        }
+                    ],
+                }
+            }
+            with self.subTest(namespace=ns, app=app):
+                self.assertTrue(self.admits("homelab-test-disruption", req, None, obj))
+                for change in ("namespace", "label", "owner", "controller", "kind", "name"):
+                    bad, request = copy.deepcopy(obj), copy.deepcopy(req)
+                    if change == "namespace":
+                        request["namespace"] = bad["metadata"]["namespace"] = "openbao"
+                    elif change == "label":
+                        bad["metadata"]["labels"] = {"app.kubernetes.io/name": "other"}
+                    elif change == "owner":
+                        bad["metadata"]["ownerReferences"][0]["name"] = "other-controller"
+                    elif change == "controller":
+                        bad["metadata"]["ownerReferences"][0]["controller"] = False
+                    elif change == "kind":
+                        bad["metadata"]["ownerReferences"][0]["kind"] = "Job"
+                    else:
+                        bad["metadata"]["name"] = request["name"] = "other-pod"
+                    self.assertFalse(
+                        self.admits("homelab-test-disruption", request, None, bad), change
+                    )
+                self.assertFalse(self.admits("homelab-test-disruption", req, None, None))
+
+    def test_disruption_roles_have_only_individual_pod_deletion(self):
+        roles = [
+            d
+            for d in self.documents
+            if d["kind"] == "Role" and d["metadata"]["name"] == "homelab-test-disruption"
+        ]
+        self.assertEqual(
+            {d["metadata"]["namespace"] for d in roles},
+            {"automation", "media", "portainer", "test-reports", "tailscale"},
+        )
+        self.assertEqual(len(roles), 5)
+        for role in roles:
+            self.assertEqual(
+                role["rules"], [{"apiGroups": [""], "resources": ["pods"], "verbs": ["delete"]}]
+            )
+            bindings = [
+                d
+                for d in self.documents
+                if d["kind"] == "RoleBinding" and d["metadata"] == role["metadata"]
+            ]
+            self.assertEqual(len(bindings), 1)
+            self.assertEqual(
+                bindings[0]["subjects"],
+                [
+                    {
+                        "kind": "ServiceAccount",
+                        "name": "homelab-test-runner",
+                        "namespace": "kube-system",
+                    }
+                ],
+            )
+        spec = self.policy("homelab-test-disruption")
+        self.assertEqual(
+            spec["matchConstraints"]["resourceRules"],
+            [
+                {
+                    "apiGroups": [""],
+                    "apiVersions": ["v1"],
+                    "operations": ["DELETE"],
+                    "resources": ["pods"],
+                }
+            ],
+        )

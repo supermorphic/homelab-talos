@@ -149,3 +149,10 @@ class AccessContractTests(unittest.TestCase):
             self.assertRaises(SafeError),
         ):
             access.resolve_suite_access(ROOT, "test.nocodb-access")
+
+    def test_n8n_persistence_retains_attended_application_credential(self):
+        entry = self.entry("test.n8n-persistence")
+        self.assertEqual(entry["metadata"]["execution_owner"], "human")
+        self.assertEqual(entry["access"]["profile"], "test-runner")
+        self.assertIn("application-credential", entry["access"]["prerequisites"])
+        self.assertEqual(entry["confirmation"]["expected"], "chaos:n8n-persistence")
