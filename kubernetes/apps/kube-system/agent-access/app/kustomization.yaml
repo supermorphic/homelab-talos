@@ -5,3 +5,5 @@ resources:
   - ./campaign-lease.yaml
   - ./report-publication-lease.yaml
   - ./rbac.yaml
+  - ./test-rbac.yaml
+  - ./test-admission.yaml

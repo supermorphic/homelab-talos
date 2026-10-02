@@ -1,0 +1,395 @@
+"""Independent request fixtures exercise the CEL shipped to Kubernetes."""
+
+import copy
+import subprocess
+import unittest
+from pathlib import Path
+
+import celpy
+import yaml
+from celpy.adapter import json_to_cel
+
+ROOT = Path(__file__).resolve().parents[3]
+PACKAGE = ROOT / "kubernetes/apps/kube-system/agent-access/app"
+IDENTITY = "system:serviceaccount:kube-system:homelab-test-runner"
+
+
+class TestAccessPolicyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        rendered = subprocess.run(
+            ["kustomize", "build", str(PACKAGE)], capture_output=True, text=True, check=True
+        )
+        cls.documents = list(yaml.safe_load_all(rendered.stdout))
+        cls.env = celpy.Environment()
+        cls.programs = {}
+
+    def policy(self, name):
+        found = [
+            d
+            for d in self.documents
+            if d["kind"] == "ValidatingAdmissionPolicy" and d["metadata"]["name"] == name
+        ]
+        self.assertEqual(len(found), 1, f"missing enforced admission policy {name}")
+        policy = found[0]
+        self.assertEqual(policy["spec"]["failurePolicy"], "Fail")
+        bindings = [
+            d
+            for d in self.documents
+            if d["kind"] == "ValidatingAdmissionPolicyBinding" and d["spec"]["policyName"] == name
+        ]
+        self.assertEqual(len(bindings), 1)
+        self.assertEqual(bindings[0]["spec"]["validationActions"], ["Deny"])
+        return policy["spec"]
+
+    def evaluate(self, expression, activation):
+        if expression not in self.programs:
+            self.programs[expression] = self.env.program(self.env.compile(expression))
+        return self.programs[expression].evaluate(activation)
+
+    def admits(self, policy_name, request, obj, old=None):
+        spec = self.policy(policy_name)
+        activation = {
+            "request": json_to_cel(request),
+            "object": json_to_cel(obj),
+            "oldObject": json_to_cel(old),
+            "variables": json_to_cel({}),
+        }
+        try:
+            for condition in spec.get("matchConditions", []):
+                if not self.evaluate(condition["expression"], activation):
+                    return True
+            variables = {}
+            for variable in spec.get("variables", []):
+                variables[variable["name"]] = self.evaluate(variable["expression"], activation)
+                activation["variables"] = celpy.celtypes.MapType(variables)
+            return all(
+                bool(self.evaluate(v["expression"], activation)) for v in spec["validations"]
+            )
+        except celpy.CELEvalError:
+            return False
+
+    @staticmethod
+    def request(resource, namespace, operation="CREATE", name="fixture", user=IDENTITY):
+        return {
+            "resource": {"group": "", "version": "v1", "resource": resource},
+            "subResource": "",
+            "namespace": namespace,
+            "name": name,
+            "operation": operation,
+            "userInfo": {"username": user},
+        }
+
+    def test_generalized_runner_has_no_unrestricted_mutation_or_secret_grants(self):
+        accounts = [
+            d
+            for d in self.documents
+            if d["kind"] == "ServiceAccount" and d["metadata"]["name"] == "homelab-test-runner"
+        ]
+        self.assertEqual(len(accounts), 1)
+        roles = {
+            (d["kind"], d["metadata"].get("namespace", ""), d["metadata"]["name"]): d
+            for d in self.documents
+            if d["kind"] in {"Role", "ClusterRole"}
+        }
+        bindings = [
+            d
+            for d in self.documents
+            if d["kind"] in {"RoleBinding", "ClusterRoleBinding"}
+            and any(
+                s.get("name") == "homelab-test-runner" and s.get("namespace") == "kube-system"
+                for s in d.get("subjects", [])
+            )
+        ]
+        self.assertTrue(bindings)
+        for binding in bindings:
+            ref = binding["roleRef"]
+            if ref["name"] == "view":
+                continue
+            role = roles[
+                (
+                    ref["kind"],
+                    binding["metadata"].get("namespace", "") if ref["kind"] == "Role" else "",
+                    ref["name"],
+                )
+            ]
+            for rule in role["rules"]:
+                self.assertNotIn("*", rule["apiGroups"])
+                self.assertNotIn("*", rule["resources"])
+                self.assertNotIn("*", rule["verbs"])
+                self.assertFalse(
+                    set(rule["verbs"]) & {"bind", "escalate", "impersonate", "deletecollection"}
+                )
+                writes = set(rule["verbs"]) - {"get", "list", "watch"}
+                if writes:
+                    self.assertFalse(
+                        set(rule["resources"])
+                        & {
+                            "nodes",
+                            "namespaces",
+                            "serviceaccounts",
+                            "serviceaccounts/token",
+                            "roles",
+                            "rolebindings",
+                            "clusterroles",
+                            "clusterrolebindings",
+                        }
+                    )
+                if "secrets" in rule["resources"]:
+                    self.assertTrue(rule.get("resourceNames"))
+                    self.assertNotIn("list", rule["verbs"])
+
+    def test_fresh_pvc_allowed_but_unrelated_claim_and_shape_denied(self):
+        request = self.request(
+            "persistentvolumeclaims", "longhorn-system", name="storage-provisioning-123-456"
+        )
+        obj = {
+            "metadata": {
+                "name": request["name"],
+                "namespace": request["namespace"],
+                "labels": {"homelab-talos/test": "storage-provisioning"},
+            },
+            "spec": {
+                "accessModes": ["ReadWriteOnce"],
+                "storageClassName": "longhorn",
+                "resources": {"requests": {"storage": "1Gi"}},
+            },
+        }
+        self.assertTrue(self.admits("homelab-test-storage", request, obj))
+        for change in ("name", "namespace", "class", "size", "dataSource"):
+            bad, req = copy.deepcopy(obj), copy.deepcopy(request)
+            if change == "name":
+                bad["metadata"]["name"] = req["name"] = "production-claim"
+            elif change == "namespace":
+                req["namespace"] = bad["metadata"]["namespace"] = "openbao"
+            elif change == "class":
+                bad["spec"]["storageClassName"] = "other"
+            elif change == "size":
+                bad["spec"]["resources"]["requests"]["storage"] = "1Ti"
+            else:
+                bad["spec"]["dataSource"] = {"kind": "PersistentVolumeClaim", "name": "production"}
+            with self.subTest(change=change):
+                self.assertFalse(self.admits("homelab-test-storage", req, bad))
+        deleting = {**request, "operation": "DELETE"}
+        self.assertTrue(self.admits("homelab-test-storage", deleting, None, obj))
+
+    def test_report_exec_only_reads_canonical_paths(self):
+        req = self.request("pods", "test-reports", "CONNECT", "test-reports-123abc-abc12")
+        req["subResource"] = "exec"
+        obj = {
+            "container": "caddy",
+            "stdin": False,
+            "stdout": True,
+            "stderr": True,
+            "tty": False,
+            "command": ["readlink", "/srv/state/current"],
+        }
+        self.assertTrue(self.admits("homelab-test-report-exec", req, obj))
+        for command in (
+            ["cat", "/srv/state/current/catalog.json"],
+            [
+                "sha256sum",
+                "/srv/reports/20261002T120000Z-0123456789ab-agent-01234567/awesome/index.html",
+            ],
+            ["sha256sum", "/srv/artifacts/20261002T120000Z-0123456789ab-agent-01234567.tar.gz"],
+        ):
+            self.assertTrue(
+                self.admits("homelab-test-report-exec", req, {**obj, "command": command})
+            )
+        for change in (
+            {"command": ["sh", "-c", "cat /srv/state/current/catalog.json"]},
+            {"command": ["rm", "/srv/state/current/catalog.json"]},
+            {"command": ["cat", "/etc/passwd"]},
+            {"command": ["sha256sum", "/srv/reports/../state/catalog.json"]},
+            {"stdin": True},
+            {"tty": True},
+            {"container": "other"},
+        ):
+            with self.subTest(change=change):
+                self.assertFalse(self.admits("homelab-test-report-exec", req, {**obj, **change}))
+
+    def test_n8n_helper_only_uses_fixed_program_and_scratch_database(self):
+        req = self.request("jobs", "automation", name="n8n-restore-0123456789ab-load")
+        req["resource"]["group"] = "batch"
+        labels = {
+            "homelab-talos/test": "n8n-restore-drill",
+            "homelab-talos/run-id": "0123456789ab",
+            "homelab-talos/role": "database-helper",
+        }
+        container = {
+            "name": "restore",
+            "image": "postgres:17.11-alpine3.24",
+            "command": ["/bin/sh", "-eu", "/helpers/n8n-restore-load.sh"],
+            "env": [
+                {"name": "PGHOST", "value": "n8n-postgresql.automation.svc.cluster.local"},
+                {"name": "PGPORT", "value": "5432"},
+                {"name": "PGUSER", "value": "postgres"},
+                {
+                    "name": "PGPASSWORD",
+                    "valueFrom": {
+                        "secretKeyRef": {
+                            "name": "postgresql-credentials",
+                            "key": "postgres-superuser-password",
+                        }
+                    },
+                },
+                {"name": "RESTORE_DATABASE", "value": "n8n_restore_0123456789ab"},
+            ],
+            "securityContext": {
+                "allowPrivilegeEscalation": False,
+                "capabilities": {"drop": ["ALL"]},
+                "readOnlyRootFilesystem": True,
+            },
+            "volumeMounts": [
+                {"name": "helpers", "mountPath": "/helpers", "readOnly": True},
+                {"name": "backups", "mountPath": "/backups", "readOnly": True},
+                {"name": "tmp", "mountPath": "/tmp"},
+            ],
+        }
+        ps = {
+            "automountServiceAccountToken": False,
+            "restartPolicy": "Never",
+            "securityContext": {
+                "runAsNonRoot": True,
+                "runAsUser": 70,
+                "runAsGroup": 70,
+                "fsGroup": 70,
+                "seccompProfile": {"type": "RuntimeDefault"},
+            },
+            "containers": [container],
+            "volumes": [
+                {"name": "helpers", "configMap": {"name": "n8n-test-helpers-v1"}},
+                {
+                    "name": "backups",
+                    "persistentVolumeClaim": {"claimName": "n8n-postgresql-backups"},
+                },
+                {"name": "tmp", "emptyDir": {}},
+            ],
+        }
+        obj = {
+            "metadata": {"name": req["name"], "labels": labels},
+            "spec": {
+                "activeDeadlineSeconds": 1800,
+                "backoffLimit": 0,
+                "template": {"metadata": {"labels": labels}, "spec": ps},
+            },
+        }
+        self.assertTrue(self.admits("homelab-test-jobs", req, obj))
+        for change in (
+            "command",
+            "database",
+            "secret",
+            "image",
+            "serviceaccount",
+            "token",
+            "hostpath",
+            "script",
+            "sidecar",
+            "dns",
+            "backup-write",
+            "probe",
+            "container-user",
+            "annotations",
+            "owner",
+        ):
+            bad = copy.deepcopy(obj)
+            pod = bad["spec"]["template"]["spec"]
+            app = pod["containers"][0]
+            if change == "command":
+                app["command"] = ["/bin/sh", "-c", "env"]
+            elif change == "database":
+                app["env"][4]["value"] = "postgres"
+            elif change == "secret":
+                app["env"][3]["valueFrom"]["secretKeyRef"]["name"] = "other-secret"
+            elif change == "image":
+                app["image"] = "busybox:latest"
+            elif change == "serviceaccount":
+                pod["serviceAccountName"] = "openbao"
+            elif change == "token":
+                pod["automountServiceAccountToken"] = True
+            elif change == "hostpath":
+                pod["volumes"][2] = {"name": "tmp", "hostPath": {"path": "/"}}
+            elif change == "script":
+                pod["volumes"][0]["configMap"]["name"] = "mutable-script"
+            elif change == "sidecar":
+                pod["containers"].append(copy.deepcopy(app))
+            elif change == "dns":
+                pod["hostAliases"] = [
+                    {
+                        "ip": "192.0.2.1",
+                        "hostnames": ["n8n-postgresql.automation.svc.cluster.local"],
+                    }
+                ]
+            elif change == "backup-write":
+                app["volumeMounts"][1]["readOnly"] = False
+            elif change == "probe":
+                app["livenessProbe"] = {"exec": {"command": ["sh", "-c", "env"]}}
+            elif change == "container-user":
+                app["securityContext"]["runAsUser"] = 0
+            elif change == "annotations":
+                bad["spec"]["template"]["metadata"]["annotations"] = {
+                    "test.example/inject": "true"
+                }
+            else:
+                bad["metadata"]["ownerReferences"] = [
+                    {
+                        "apiVersion": "v1",
+                        "kind": "Secret",
+                        "name": "production",
+                        "uid": "synthetic",
+                    }
+                ]
+            with self.subTest(change=change):
+                self.assertFalse(self.admits("homelab-test-jobs", req, bad))
+
+    def test_n8n_backend_manifests_match_policy_and_immutable_helpers(self):
+        source = (ROOT / "scripts/test/scenarios/n8n-restore-drill.sh").read_text()
+        function = source.split("database_job_manifest() {", 1)[1].split(
+            "\napplication_manifests() {", 1
+        )[0]
+        script = (
+            "set -euo pipefail\nrun_hash=0123456789ab\n"
+            "database_name=n8n_restore_$run_hash\n"
+            "database_job_manifest() {" + function
+        )
+        for phase, operation in (("load", "restore"), ("drop", "drop")):
+            name = f"n8n-restore-0123456789ab-{phase}"
+            rendered = subprocess.run(
+                ["bash", "-c", script + f"\ndatabase_job_manifest {name} {operation}\n"],
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=ROOT,
+            )
+            obj = yaml.safe_load(rendered.stdout)
+            req = self.request("jobs", "automation", name=name)
+            req["resource"]["group"] = "batch"
+            self.assertTrue(self.admits("homelab-test-jobs", req, obj))
+            self.assertTrue(
+                self.admits("homelab-test-jobs", {**req, "operation": "DELETE"}, None, obj)
+            )
+            self.assertFalse(
+                self.admits("homelab-test-jobs", {**req, "operation": "UPDATE"}, obj, obj)
+            )
+        rendered = subprocess.run(
+            ["kustomize", "build", str(ROOT / "kubernetes/apps/automation/n8n/app")],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        helpers = [
+            d
+            for d in yaml.safe_load_all(rendered.stdout)
+            if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "n8n-test-helpers-v1"
+        ]
+        self.assertEqual(len(helpers), 1)
+        self.assertTrue(helpers[0]["immutable"])
+        self.assertEqual(
+            set(helpers[0]["data"]),
+            {"n8n-restore-common.sh", "n8n-restore-load.sh", "n8n-restore-drop.sh"},
+        )
+        for name, content in helpers[0]["data"].items():
+            self.assertEqual(
+                content,
+                (ROOT / "kubernetes/apps/automation/n8n/app/test-helpers" / name).read_text(),
+            )

@@ -223,21 +223,21 @@ policy_manifest() {
 }
 
 database_job_manifest() {
-  local name="$1" operation="$2" job_command volume_mounts_json volumes_json
+  local name="$1" operation="$2" helper volume_mounts_json volumes_json
   if [[ "$operation" == 'restore' ]]; then
-    job_command="$(n8n_restore_job_command)"
-    volume_mounts_json='[{"name":"backups","mountPath":"/backups","readOnly":true},{"name":"tmp","mountPath":"/tmp"}]'
-    volumes_json='[{"name":"backups","persistentVolumeClaim":{"claimName":"n8n-postgresql-backups"}},{"name":"tmp","emptyDir":{}}]'
+    helper='/helpers/n8n-restore-load.sh'
+    volume_mounts_json='[{"name":"helpers","mountPath":"/helpers","readOnly":true},{"name":"backups","mountPath":"/backups","readOnly":true},{"name":"tmp","mountPath":"/tmp"}]'
+    volumes_json='[{"name":"helpers","configMap":{"name":"n8n-test-helpers-v1"}},{"name":"backups","persistentVolumeClaim":{"claimName":"n8n-postgresql-backups","readOnly":true}},{"name":"tmp","emptyDir":{}}]'
   elif [[ "$operation" == 'drop' ]]; then
-    job_command="$(n8n_drop_restore_database_job_command)"
-    volume_mounts_json='[{"name":"tmp","mountPath":"/tmp"}]'
-    volumes_json='[{"name":"tmp","emptyDir":{}}]'
+    helper='/helpers/n8n-restore-drop.sh'
+    volume_mounts_json='[{"name":"helpers","mountPath":"/helpers","readOnly":true},{"name":"tmp","mountPath":"/tmp"}]'
+    volumes_json='[{"name":"helpers","configMap":{"name":"n8n-test-helpers-v1"}},{"name":"tmp","emptyDir":{}}]'
   else
     return 2
   fi
-  # shellcheck disable=SC2016,SC2026,SC2086 # yq emits this shell program for the Job.
+  # shellcheck disable=SC2016 # yq emits literal environment and fixture references.
   JOB_NAME="$name" OPERATION="$operation" RUN_HASH="$run_hash" \
-  DATABASE_NAME="$database_name" JOB_COMMAND="$job_command" \
+  DATABASE_NAME="$database_name" HELPER="$helper" \
   VOLUME_MOUNTS_JSON="$volume_mounts_json" VOLUMES_JSON="$volumes_json" \
     yq --null-input --output-format yaml --expression '
       {
@@ -273,11 +273,10 @@ database_job_manifest() {
                 "seccompProfile": {"type": "RuntimeDefault"}
               },
               "containers": [{
-                "name": strenv(OPERATION),
+                "name": "restore",
                 "image": "postgres:17.11-alpine3.24",
                 "imagePullPolicy": "IfNotPresent",
-                "command": ["/bin/sh", "-ceu"],
-                "args": [strenv(JOB_COMMAND)],
+                "command": ["/bin/sh", "-eu", strenv(HELPER)],
                 "env": [
                   {"name": "PGHOST", "value": "n8n-postgresql.automation.svc.cluster.local"},
                   {"name": "PGPORT", "value": "5432"},
