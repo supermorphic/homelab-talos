@@ -26,6 +26,14 @@ lease_kubectl() {
     esac
   done
   printf '%s\n' "$operation" >>"$operation_log"
+  # Flux deliberately removes ordinary kubectl ownership during reconciliation.
+  # The documented field manager preserves runtime-only Lease fields.
+  if [[ "$operation" == create || "$operation" == replace ]]; then
+    [[ " $* " == *' --field-manager=flux-client-side-apply '* ]] || {
+      echo 'Lease mutation did not select the Flux-preserved field manager.' >&2
+      return 2
+    }
+  fi
   case "$operation" in
     get)
       [[ "$force_get_error" == 'false' ]] || return 1
