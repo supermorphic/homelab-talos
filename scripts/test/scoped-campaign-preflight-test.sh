@@ -83,46 +83,18 @@ EOF
 chmod +x "$fixture/bin/git" "$fixture/bin/kubectl" "$fixture/bin/talosctl" \
   "$fixture/bin/stat"
 
+# The canonical validator has its own file/layout tests. This fixture proves
+# preflight invokes it and stops when it rejects a credential.
+cat >"$fixture/bin/uv" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == "run --locked --no-dev python -m scripts.openbao.credentials validate $FAKE_WORKTREE/.kube/config" ]] || exit 64
+printf 'validated\n' >"$FAKE_WORKTREE/validation-called"
+[[ "${FAKE_CREDENTIAL_VALID:-true}" == true ]]
+EOF
+chmod +x "$fixture/bin/uv"
 write_kubeconfig_view() {
-  local variant="$1"
-  yq --null-input --output-format json -I=0 '
-    {
-      "current-context": "homelab-observer",
-      "clusters": [{"name": "homelab", "cluster": {"server": "https://cluster"}}],
-      "contexts": [
-        {"name": "homelab-observer", "context": {"cluster": "homelab", "user": "homelab-observer"}},
-        {"name": "homelab-diagnostic", "context": {"cluster": "homelab", "user": "homelab-diagnostic"}},
-        {"name": "homelab-report-publisher", "context": {"cluster": "homelab", "user": "homelab-report-publisher"}}
-      ],
-      "users": [
-        {"name": "homelab-observer", "user": {"token": "observer-token"}},
-        {"name": "homelab-diagnostic", "user": {"token": "diagnostic-token"}},
-        {"name": "homelab-report-publisher", "user": {"token": "publisher-token"}}
-      ]
-    }
-  ' >"$fixture/kubeconfig-view.json"
-  case "$variant" in
-    valid) ;;
-    admin)
-      yq -i '.contexts += [{"name": "homelab-admin", "context": {"cluster": "homelab", "user": "homelab-admin"}}] |
-        .users += [{"name": "homelab-admin", "user": {"client-certificate-data": "admin"}}]' \
-        "$fixture/kubeconfig-view.json"
-      ;;
-    missing-diagnostic)
-      yq -i '.contexts = [.contexts[] | select(.name != "homelab-diagnostic")] |
-        .users = [.users[] | select(.name != "homelab-diagnostic")]' \
-        "$fixture/kubeconfig-view.json"
-      ;;
-    missing-publisher)
-      yq -i '.contexts = [.contexts[] | select(.name != "homelab-report-publisher")] |
-        .users = [.users[] | select(.name != "homelab-report-publisher")]' \
-        "$fixture/kubeconfig-view.json"
-      ;;
-    wrong-current)
-      yq -i '."current-context" = "homelab-diagnostic"' \
-        "$fixture/kubeconfig-view.json"
-      ;;
-  esac
+  printf '{"current-context":"%s"}\n' "$1" >"$fixture/kubeconfig-view.json"
 }
 
 run_preflight() {
@@ -145,7 +117,7 @@ expect_failure() {
   rg -q "$expected" "$fixture/$name.out"
 }
 
-write_kubeconfig_view valid
+write_kubeconfig_view homelab-observer
 run_preflight
 
 expect_failure main-clone 'linked Git worktree' env FAKE_GIT_LAYOUT=main \
@@ -153,15 +125,15 @@ expect_failure main-clone 'linked Git worktree' env FAKE_GIT_LAYOUT=main \
   FAKE_COMMON_DIR="$fixture/common" FAKE_KUBECONFIG_VIEW="$fixture/kubeconfig-view.json" \
   "$preflight" "$worktree" "$worktree/.kube/config" "$worktree/.talos/config"
 
-write_kubeconfig_view admin
-expect_failure admin-kubeconfig 'exactly the three scoped contexts' run_preflight
-write_kubeconfig_view missing-diagnostic
-expect_failure missing-diagnostic 'exactly the three scoped contexts' run_preflight
-write_kubeconfig_view missing-publisher
-expect_failure missing-publisher 'exactly the three scoped contexts' run_preflight
-write_kubeconfig_view wrong-current
+[[ -f "$worktree/validation-called" ]]
+expect_failure invalid-credential 'canonical scoped Kubernetes credential' env \
+  FAKE_CREDENTIAL_VALID=false PATH="$fixture/bin:$PATH" REAL_STAT="$real_stat" \
+  FAKE_WORKTREE="$worktree" FAKE_COMMON_DIR="$fixture/common" \
+  FAKE_KUBECONFIG_VIEW="$fixture/kubeconfig-view.json" \
+  "$preflight" "$worktree" "$worktree/.kube/config" "$worktree/.talos/config"
+write_kubeconfig_view homelab-diagnostic
 expect_failure wrong-current 'current context must be homelab-observer' run_preflight
-write_kubeconfig_view valid
+write_kubeconfig_view homelab-observer
 expect_failure wrong-reader 'Talos credential must have exactly the os:reader role' env \
   FAKE_TALOS_ROLE=os:admin PATH="$fixture/bin:$PATH" REAL_STAT="$real_stat" \
   FAKE_WORKTREE="$worktree" \

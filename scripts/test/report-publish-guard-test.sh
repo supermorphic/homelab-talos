@@ -221,6 +221,17 @@ users:
 current-context: homelab-observer
 YAML
 source scripts/test/lib/report-publication.sh
+# Exercise publication wiring without reading real workstation enrollment.
+uv() {
+  [[ "$*" == "run --locked --no-dev python -m scripts.openbao.credentials validate $fixture/kubeconfig" ]] || return 64
+  touch "$fixture/validation-called"
+  [[ "${FAKE_CREDENTIAL_VALID:-true}" == true ]]
+}
+if FAKE_CREDENTIAL_VALID=false select_report_publication_context "$fixture/kubeconfig" true >"$fixture/invalid.log" 2>&1; then
+  echo 'Publication accepted a credential rejected by the canonical validator.' >&2
+  exit 1
+fi
+[[ -f "$fixture/validation-called" ]]
 select_report_publication_context "$fixture/kubeconfig" true
 [[ "$report_publication_context" == homelab-report-publisher ]]
 [[ "$(publication_kubectl --kubeconfig "$fixture/kubeconfig" config view --minify \
@@ -249,5 +260,7 @@ if select_report_publication_context "$fixture/kubeconfig" true >"$fixture/linke
   echo 'A linked worktree accepted an operator context as a publication fallback.' >&2
   exit 1
 fi
+
+unset -f uv
 
 echo 'Test-report intent, secret scan, and publication identity guards passed.'

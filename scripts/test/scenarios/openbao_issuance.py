@@ -15,7 +15,8 @@ if str(ROOT) not in sys.path:
 
 from scripts.openbao import guards, issuance
 from scripts.openbao import issuer as issuer_identity
-from scripts.openbao.configuration import strict_json
+from scripts.openbao.configuration import SafeError, strict_json
+from scripts.openbao.credentials import validate_scoped_kubeconfig
 from scripts.openbao.operator import private_prompt
 from scripts.test.scenarios.resilience_support import atomic_write_json, install_interrupt_handlers
 
@@ -457,6 +458,10 @@ def diagnostic_boundary(kubeconfig, namespace_uid):
     """
     if not kubeconfig.is_absolute() or not kubeconfig.is_file():
         raise issuance.AcceptanceError()
+    try:
+        validate_scoped_kubeconfig(kubeconfig, ROOT)
+    except SafeError:
+        raise issuance.AcceptanceError() from None
     identity = 'system:serviceaccount:kube-system:homelab-diagnostic'
     base = ['kubectl', '--kubeconfig', str(kubeconfig), '--context', 'homelab-diagnostic',
             '--request-timeout=10s']
@@ -464,15 +469,6 @@ def diagnostic_boundary(kubeconfig, namespace_uid):
                               capture_output=True, text=True, timeout=15, check=False)
     if (observed.returncode != 0 or
             json.loads(observed.stdout)['status']['userInfo']['username'] != identity):
-        raise issuance.AcceptanceError()
-    # Default config view redacts credential values. Reject impersonation, plugins,
-    # and administrator certificate layouts even when the context has the right name.
-    layout = subprocess.run([*base, 'config', 'view', '--minify', '-o', 'json'],
-                            capture_output=True, text=True, timeout=15, check=False)
-    if layout.returncode != 0:
-        raise issuance.AcceptanceError()
-    users = json.loads(layout.stdout)['users']
-    if len(users) != 1 or set(users[0]['user']) not in ({'token'}, {'tokenFile'}):
         raise issuance.AcceptanceError()
     target = subprocess.run([*base, 'get', 'namespace', 'kube-system', '-o', 'json'],
                             capture_output=True, text=True, timeout=15, check=False)
