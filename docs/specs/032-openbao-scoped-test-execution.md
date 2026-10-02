@@ -244,6 +244,39 @@ Update its desired configuration, TokenRequest permissions, verification and
 negative acceptance together. The earlier broker-only permission boundary must
 not be described as unchanged after privileged test profiles are introduced.
 
+## Automatic Kubernetes credentials and attended OpenBao credentials
+
+The proposed `test-openbao-*` profiles are Kubernetes test identities. OpenBao
+issues their short-lived Kubernetes tokens through the workstation credential
+helper. These tokens authorize the declared Kubernetes operations; they do not
+replace an OpenBao operator password or recovery material.
+
+| Test | Proposed automatic access through OpenBao-issued Kubernetes credentials | Inputs that remain person-supplied |
+| --- | --- | --- |
+| `test.openbao-issuance` | Acceptance workloads and the dedicated issuer-boundary test. See the separate issuer authority decision below. | No OpenBao operator password is used by the current test. Retain its exact execution confirmation and source checks. |
+| `test.openbao-ha` | Named member eviction, acceptance workload, and named member tunnels. | Retained OpenBao operator password for authenticated OpenBao operations. |
+| `test.openbao-restore-drill` | Isolated scratch resources, storage checks, and scratch runtime access. | Snapshot and matching recovery metadata, matching static seal key, and the operator password retained with the snapshot. |
+| `test.agent-credentials` | Observer reads and named member tunnels for workstation lifecycle acceptance. | Retained OpenBao operator password for creating, rotating, and revoking the test's OpenBao workstation identities. |
+
+All rows retain their required confirmations and preconditions. A person supplies
+the sensitive OpenBao inputs through the existing attended workflow; automatic
+Kubernetes token issuance does not make those steps unattended. OpenBao bootstrap,
+administrative configuration, and independent disaster recovery remain
+operator-owned.
+
+The OpenBao server's own Kubernetes **issuer credential** is a third, distinct
+credential. It is not a workstation test token and must not be distributed in a
+workstation kubeconfig. Ordinary diagnostic credentials continue to exclude
+OpenBao exec and port-forward access. The proposed dedicated profiles introduce
+test-specific exceptions to that access boundary.
+
+In particular, `test.openbao-issuance` exercises the actual issuer identity.
+Automating its Kubernetes access therefore involves sensitive issuer authority,
+even without distributing the issuer credential in a kubeconfig. Approval to
+retain attended passwords and recovery inputs does not approve this separate
+authority expansion. That decision remains pending as part of design approval;
+do not enable the profile on the basis of the attended-input agreement alone.
+
 ## Credential lifecycle and local state
 
 Keep the 600-second default and maximum Kubernetes token lifetime. The pinned
