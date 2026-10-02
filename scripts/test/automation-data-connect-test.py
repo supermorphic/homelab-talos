@@ -7,6 +7,7 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -91,6 +92,37 @@ class ConnectTest(unittest.TestCase):
             "status": {"userInfo": {"username": "system:masters"}}})), \
                 self.assertRaises(client.PrivateTunnelUnavailable):
             client.assert_scoped_identity(self.config)
+
+    def test_canonical_exec_config_is_accepted_and_altered_launcher_is_rejected(self):
+        root = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(root))
+        from scripts.openbao import credentials, guards, workstation
+        from scripts.test.core.test_openbao_credentials import state
+
+        repo = self.directory.resolve() / "checkout"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        launcher = repo / credentials.LAUNCHER
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("#!/bin/sh\nexit 0\n")
+        launcher.chmod(0o755)
+        auth = self.directory.resolve() / "auth"
+        auth.mkdir(mode=0o700)
+        local = state()
+        workstation.write_private(auth / "cluster.json", local["cluster"])
+        workstation.write_private(auth / "workstation.json", {
+            **{k: v for k, v in local.items() if k != "cluster"}, "schema_version": 1,
+            "cluster_digest": guards.digest(local["cluster"]),
+        })
+        config = credentials.install_kubeconfig(repo, auth)
+        with mock.patch.object(client, "__file__", str(repo / "scripts/lib/automation_data_client.py")), \
+                mock.patch.object(workstation, "DIRECTORY", auth):
+            self.assertEqual(client.scoped_kubeconfig(config), config)
+            changed = json.loads(config.read_text())
+            changed["users"][0]["user"]["exec"]["command"] = "/unapproved/plugin"
+            config.write_text(json.dumps(changed))
+            with self.assertRaises(client.PrivateTunnelUnavailable):
+                client.scoped_kubeconfig(config)
 
     def test_pod_must_be_ready_and_owned_by_fixed_statefulset(self):
         pod = {"metadata": {"name": "automation-data-postgresql-0",
