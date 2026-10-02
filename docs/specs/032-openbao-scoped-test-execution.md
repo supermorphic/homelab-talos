@@ -1,0 +1,499 @@
+# OpenBao capability-scoped test execution
+
+## Status and scope
+
+Draft design for [issue 451](https://github.com/supermorphic/homelab-talos/issues/451).
+The operator approved automatic scoped Kubernetes access while retaining attended
+steps that require sensitive OpenBao operator or recovery credentials. The full
+design, implementation plan, deployment, and live acceptance are not yet approved.
+No implementation or live acceptance is claimed by this document.
+
+This extends the deployed [credential broker](030-openbao-kubernetes-credential-broker.md)
+and [workstation authentication](031-openbao-agent-credential-profiles.md).
+Keep their AppRole authentication, protected machine enrollment, revocation,
+verified TLS, exec credential protocol, and independent recovery root. Do not add
+a controller, CRD, remote executor, daemon, or separate credential service.
+
+Every Kubernetes-automatable catalog test must execute locally from an authorized
+linked worktree using its declared profile. Keep canonical assertions, required
+application credentials, exact confirmations, source checks, and cleanup. Physical
+power removal and separately scoped Talos authority remain operator boundaries.
+OpenBao restore, HA, and workstation lifecycle acceptance additionally retain the
+approved attended OpenBao credential boundary. That attendance does not require
+an administrator Kubernetes kubeconfig.
+
+## Chosen execution model
+
+Extend the existing exec credential helper with per-invocation, single-profile
+kubeconfigs. The catalog selects a profile before the backend starts. The helper
+authenticates through the existing workstation enrollment and requests only that
+profile. Kubernetes clients refresh it through the same helper when necessary.
+
+| Considered representation | Decision |
+| --- | --- |
+| Private single-profile config per invocation | Selected. Clear ownership and cleanup; parallel campaigns never rewrite one another's active config. |
+| Reusable immutable profile configs in each checkout | Suitable for manual base-profile access, but not selected for suite sessions because run binding and cleanup are less explicit. |
+| Materialized bearer token in a temporary config | Rejected. Adds token-at-rest and a separate refresh mechanism for long-running clients. |
+
+```text
+canonical catalog entry
+    -> validate intent, source, and prerequisites
+    -> create one suite-bound exec kubeconfig
+    -> existing local test backend
+    -> same-profile refresh, if required
+    -> owned cleanup and result finalization
+    -> remove invocation config
+
+campaign source/admission reads -> observer
+campaign Lease operations     -> campaign-coordinator
+each child backend            -> child's declared profile
+retained report publication   -> report-publisher
+```
+
+The caller must not select credentials from checkout topology, an ambient
+KUBECONFIG, execution ownership, mutation metadata, or a permission error.
+An existing broader credential is never a fallback.
+
+## Catalog contract
+
+Advance the catalog schema for an explicit `access` declaration on every suite:
+
+```yaml
+access:
+  profile: test-runner
+  prerequisites: []
+```
+
+`profile` replaces verifier-only `access.tier`. A null profile means no Kubernetes
+credential is issued. Offline validation and the two host-local integration suites
+use null with no operator boundary. The physical-loss suite uses null plus
+`operator_boundary: physical-power-and-talos`. Attended OpenBao suites still name
+their Kubernetes profile and declare their non-Kubernetes prerequisites.
+
+Use a small validated prerequisite vocabulary: `talos-reader`, `talos-operator`,
+`physical-power`, `application-credential`, `openbao-operator`, and
+`openbao-recovery`. Only declare prerequisites reached by the selected scenario,
+including transitive helpers. A prerequisite does not authorize credential
+discovery or recovery. Missing application or OpenBao inputs stop at that boundary.
+
+Keep `execution_owner`, `mutates_cluster`, and confirmation metadata independent:
+
+- Kubernetes-automatable suites are shared execution, unless their declared
+  attended prerequisite requires human ownership. This does not add schedules.
+- An observer or debugger profile can accompany `mutates_cluster: true` when
+  the test changes application state through HTTPS or an allowed exec operation.
+  The mutation flag still requires coordination and cleanup.
+- Correct the VPN leak probe to mutating: its temporary WAN-reference Pod is
+  an actual Kubernetes mutation.
+- Keep exact confirmation values. Credential availability does not satisfy them.
+- Preserve existing deployed-source requirements and candidate versus authoritative
+  evidence rules; credential selection cannot relax either.
+
+An optional scenario with different Kubernetes permissions gets an explicit
+catalog variant, resolved before issuance. In particular, keep default
+`test.nocodb-access` on observer and register its source-pair extension on debugger.
+An environment variable cannot silently broaden the default entry's profile.
+Register the optional NocoDB restore extension explicitly as well, preserving its
+extra confirmation and private application credential prerequisite.
+
+Extend the existing profile definitions in `scripts/openbao/credentials.py` with
+exact dedicated-suite bindings. Catalog validation compares these bindings with
+the Git-managed identity and OpenBao role definitions. Do not introduce a second
+generic registry framework. Reject unknown profiles, missing declarations,
+dedicated profiles mapped to unrelated suites, unsupported variants, ordinary
+suite use of coordinator/publisher, and contradictory attendance metadata.
+
+The canonical catalog is the runtime authority. Fixture catalogs used by offline
+tests cannot reach production credential issuance. Bind each invocation to its
+suite ID, run ID, selected profile, and catalog digest; verify the binding again
+on credential refresh. A changed binding ends the invocation rather than changing
+its authority.
+
+## Base profiles
+
+| Public profile | Kubernetes authority |
+| --- | --- |
+| `observer` | Existing observation and explicitly required read APIs. Default profile. |
+| `debugger` | Existing observation plus the bounded interactive paths required by named diagnostic workflows. Public successor to `diagnostic`. |
+| `test-runner` | Ordinary admitted test resources, designated workload disruption, and only the interactive paths required by those tests. |
+| `report-publisher` | Existing report namespace publication and named publication Lease. Public successor to `publisher`. |
+| `campaign-coordinator` | Only get/update of the pre-created campaign Lease. |
+
+Keep existing ServiceAccount names when renaming public profiles; a public name
+change does not require replacing the Kubernetes identity. The generalized runner
+uses a new Git-managed `homelab-test-runner` account. It does not inherit debugger
+as a whole. Publisher and coordinator never inherit observer or test mutation.
+
+### Generalized runner boundary
+
+Grant enumerated groups, resources, and verbs through namespace Roles wherever
+possible. Reuse observational grants for required inventory. No wildcard rules,
+RBAC writes, impersonation, bind/escalate, ServiceAccount token requests, namespace
+creation, Node mutation, or unrestricted platform-controller mutation belong here.
+
+The following are explicit categories of test authority, not blanket namespace
+CRUD grants:
+
+| Resources and locations | Intended operations and limits |
+| --- | --- |
+| PVCs in the storage test's namespace | Create/read/delete fresh run claims; observe Longhorn placement. Retain fresh provisioning proof. |
+| Jobs, application workloads, Services, PVCs, ConfigMaps and CiliumNetworkPolicies in `automation`, `automation-data`, `gatus`, and `media`, as required per fixture | Create/read/delete registered run fixtures. Allow update/patch only where a canonical backend requires it. Preserve isolated restore targets, network selectors, and cleanup. |
+| Designated application Pods in `automation`, `media`, `portainer`, `test-reports`, and `tailscale` | Read/delete only the registered disruption targets. Do not grant general Deployment modification for Pod-recreation tests. |
+| Required Pod exec/attach paths in `media` and `test-reports` | Support actual policy, persistence and network probes; both supported transport verbs where required. No automatic grant in other namespaces. |
+| `flux-system/flux-canary` Secret | Named get/delete only. Preserve encrypted-Git/SOPS recreation and new-UID assertion. Do not replace this test with a ConfigMap. |
+| Named Flux source/canary reconciliation resources | Read and request reconciliation through the approved annotation change only. No arbitrary spec modification. |
+| Run-owned Flux alert fixture | Create/read/delete only the canonical deliberately missing-source fixture, preserving firing and resolved delivery assertions. |
+| Designated temporary NocoDB extension credential fixture | Named read/update and bounded clearing only; no namespace-wide Secret reads or generic Secret creation. |
+
+Use a Git-created empty, named credential fixture for the optional NocoDB restore
+extension, serialized by the campaign Lease. The operator/application workflow
+supplies its run credential through the existing protected path. Check that the
+fixture is empty or owned by the same run before writing; clear the value and run
+ownership during checked cleanup. Do not retain the credential in Git, logs, or
+reports. The non-extension path never inspects that Secret.
+
+### Enforce resource shape as well as RBAC
+
+Kubernetes RBAC alone does not restrict a created workload's service account,
+volumes, or executable specification. Use the built-in validating admission policy
+facility for these concrete constraints; do not add an admission server. Scope
+rules to the new issued identities and the registered resources, with denial on
+evaluation failure. Git/Flux manages policies before the identities receive grants.
+
+For generalized runner requests, enforce:
+
+1. The declared resource families, namespace, fixture name, and ownership metadata.
+2. Approved workload service accounts, token mounting, security settings, images,
+   volume/Secret references, command structure, and validated runtime arguments.
+3. Fixed executable test helpers in Git-owned ConfigMaps where credential-bearing
+   Jobs require executable content. The runner cannot replace those scripts or
+   their mounts. Preserve the existing scripts' assertions and cleanup behavior.
+4. Service selectors, restore host mappings, and policy selectors that address only
+   the appropriate test resources; no production Service capture or broader policy.
+5. Immutable ownership and protected object fields on update; designation and
+   ownership checks on deletion. Cleanup uses explicit object names and recorded
+   UIDs rather than granting collection deletion.
+6. Only the intended reconciliation annotation or deliberate failure-fixture shape
+   for Flux requests. Name-scoped patch permission alone is insufficient.
+7. For report-persistence exec, admit only the canonical direct `readlink`,
+   `sha256sum`, and `cat` argument vectors against the fixed generation/catalog
+   paths and validated canonical report paths, in the `caddy` container, without
+   stdin or a TTY. Apply this CONNECT policy to both supported exec transports.
+   Reject shells, alternate commands/containers, and write operations. The
+   publisher remains the only ordinary identity with report installation access.
+
+Controller-created children are covered by the admitted parent template and the
+existing controller identity. Validate every parent write path that can change a
+Pod template, including updates; do not rely on a run label alone. Validate
+interactive target names separately from resource-creation rules. Admission
+matching uses the authenticated identity, not an optional client-supplied label
+that could skip the check. RBAC does not impose these command/shape restrictions;
+the admission policies do, and their absence must block profile activation.
+Other approved production exec paths represent access to that application's
+runtime and data. Do not claim that Kubernetes RBAC constrains SQL/file operations
+inside them.
+
+Use fixed Git fixtures only where they remove otherwise broader authority. Do not
+replace real consumer checks with synthetic consumers, replace fresh provisioning
+with an existing claim, or reduce conformance/connectivity coverage. Fixture
+allocation changes must preserve the test's independently checked outcome.
+
+## Dedicated profiles
+
+Each profile below represents materially different authority. Bind it only to
+the listed canonical entry or entries. Each uses an existing Git-managed account
+issued through the same OpenBao interface; none is a default or an error fallback.
+
+| Profile | Catalog binding | Required distinction |
+| --- | --- | --- |
+| `test-flux-restart` | `test.flux-restart` | Restart the four named Flux controller Deployments and request named source/application reconciliation. Restrict patch shape to the intended restart/reconcile fields. |
+| `test-cilium-connectivity` | `test.cilium-connectivity` | Canonical privileged connectivity workloads, test namespace/account lifecycle, cluster policy fixtures, Cilium runtime access, and canonical failure diagnostics. |
+| `test-node-reschedule` | `chainsaw.resilience.plex-cross-node-reschedule` | Named cluster Node scheduling changes plus the required Plex/media disruption and storage observations. No unrelated Node-field changes. |
+| `test-conformance` | `conformance.quick`, `conformance.certified` | Exceptional Kubernetes administrator authority required by the current Sonobuoy/conformance workload and RBAC lifecycle. Both modes share the profile. |
+| `test-openbao-issuance` | `test.openbao-issuance` | The acceptance and issuer-boundary probe resources and required runtime transports. This does not belong in ordinary application testing. |
+| `test-openbao-ha` | `test.openbao-ha` | Sequential exact OpenBao member eviction, acceptance workload, and named member tunnels. Retain attended OpenBao operator authentication. |
+| `test-openbao-restore` | `test.openbao-restore-drill` | Isolated scratch resources, scratch Secret, storage observations and scratch runtime access. Retain attended snapshot/recovery inputs. |
+| `test-openbao-lifecycle` | `test.agent-credentials` | Observer reads and exact OpenBao member tunnels for attended workstation identity lifecycle acceptance. No member eviction or issuer-probe capability. |
+
+The conformance profile must be described honestly as privileged. Bind its
+pre-existing account through Git; allow the pinned backend's ephemeral workload
+and RBAC lifecycle. Its token can exercise that authority during its lifetime.
+Neither the catalog guard nor token expiry confines an already-created workload.
+Retain checked cleanup and the separate authorization required for live execution.
+
+Keep Cilium's successful path and failure diagnostics in the same selected
+connectivity profile. Enumerate the pinned client's API groups/resources and
+feature-dependent fixtures; do not switch profiles when diagnostics encounter a
+denial. Remove cleanup of unrelated failed production Pods: that housekeeping is
+not part of connectivity proof. Preserve the canonical test selection and report
+diagnostic or cleanup failures separately. Validate enabled feature coverage at
+acceptance; a client upgrade requires renewed permission review.
+
+For OpenBao scratch restore, pre-create a dedicated empty fixture namespace,
+ServiceAccount, and fixed isolation policy through Git. Allocate the scratch
+instance to one run under the campaign Lease. Remove its owned workloads, scratch
+Secret/configuration and volumes on completion; verify both storage deletion and
+return to the empty fixture baseline. Keep production unchanged and retain all
+snapshot/configuration/issuance-denial assertions. This avoids issuing arbitrary
+namespace or RBAC creation solely to obtain an isolated restore environment.
+The live drill requires a healthy credential broker; it does not replace the
+independent operator disaster-recovery procedure when that broker is unavailable.
+
+OpenBao's issuer allowlist expands to these explicitly registered accounts.
+Update its desired configuration, TokenRequest permissions, verification and
+negative acceptance together. The earlier broker-only permission boundary must
+not be described as unchanged after privileged test profiles are introduced.
+
+## Credential lifecycle and local state
+
+Keep the 600-second default and maximum Kubernetes token lifetime. The pinned
+Kubernetes TokenRequest implementation rejects requests below 600 seconds. Keep
+the 60-second OpenBao login-token bound and revoke the login token after issuance.
+Validate returned account, namespace, audience and actual expiry as today.
+
+Use an owner-checked private invocation directory below the assigned checkout's
+`.kube/` tree, separate from `.test-results` and report archives. Directories are
+0700 and configs are 0600 regular files; reject symlinks and unsafe ownership.
+Each config contains one cluster, user, context, and exact exec invocation. Token
+bytes remain in the exec pipe/client memory. Do not put them in argv, environment,
+config files, caches, exceptions, or evidence.
+
+Clients obtain a fresh credential for the same profile when their cached token
+expires. Long conformance, Cilium, and campaign operations must prove refresh
+through the actual pinned client. No session daemon or cross-process token cache
+is needed. An OpenBao outage may leave a cached token usable until expiry; it does
+not authorize retaining it longer or switching credentials. Existing streams or
+workloads can outlive the token; cleanup remains a separate obligation.
+
+On issuance failure, RBAC denial, loss of coordination, or failed refresh, stop new
+test actions and enter checked cleanup using the same declared authority. Record
+primary assertion, cleanup, and recovery separately. If that authority cannot
+clean up, retain sanitized object identities and mark the run broken. Do not retry
+with an operator credential. Release the Lease only while still its holder; then
+remove private configs, including on signals and failed setup.
+
+The shared workstation enrollment remains a trusted-process boundary. Any process
+able to use it can request endpoints granted to that enrollment. Suite binding is
+enforced by the normal repository issuance path, not by OS isolation or proof of
+which source code made an HTTP request. Do not claim stronger isolation. Keep
+exact endpoint policies, explicit catalog routing, short tokens, and auditability.
+
+## Runner and campaign integration
+
+Use one small shared routing implementation across catalog, Chainsaw, probe,
+direct-dispatch, and Sonobuoy entrypoints. Existing backend scripts remain the
+canonical tests. Thread the resolved config through Just variables, positional
+arguments, environment and Python subprocesses; do not leave literal
+`.kube/config` paths that bypass the selected invocation.
+
+Nested verification within a test retains the parent's suite identity for backend
+operations. It cannot acquire a different test profile implicitly. Separate
+orchestration source/admission reads may use observer. Refactor explicit diagnostic
+context selection to validate and use the declared config rather than search a
+multi-context file. Missing or mismatched authority fails before mutation.
+
+The campaign coordinator owns only the named, Git-created
+`flux-system/homelab-test-run-lock` Lease. Use `existing-only` acquisition and
+preserve resourceVersion contention, duration/renewal, holder validation, loss
+markers, and release semantics. Children may read that named Lease to recheck
+ownership; they never receive its write authority. A standalone mutating suite
+uses the same separate coordinator path. Keep node admission checks and repeat
+relevant live preconditions immediately before consequential mutation.
+
+Keep the publisher's identity, named publication Lease, source checks, secret
+scans, atomic install, and candidate-evidence rules. Publication receives a
+publisher-only config. It neither reuses the suite credential nor bootstraps Talos
+access. A finalized run can still be published without rerunning its suite.
+
+Record eligibility uses explicit catalog access and prerequisites instead of
+inferring authority from a linked checkout or human/shared metadata. The normal
+published campaign retains its exact deployed-main source checks. A candidate
+record session remains candidate evidence and never updates authoritative latest
+links, Homepage status or last-run metrics. Preserve each suite's stronger source
+guard, particularly attended OpenBao operations and physical node testing.
+
+### Identity-audit exceptions
+
+`verification.agent-access` and `test.agent-credentials` intentionally test several
+base identities. Declare a finite `access.profile_checks` list for these two
+entries only. Issue a separate config for each checked base identity; never combine
+them into an administrator config or use impersonation to simulate issuance.
+Reject this field on ordinary suites and reject dedicated-profile probes through
+it. Dedicated acceptance occurs through each dedicated profile's mapped test.
+
+Keep workstation-lifecycle acceptance standalone. It releases its operator section
+of the campaign Lease before exercising coordinator contention/expiry and then
+reacquires checked sections for cleanup. A parent campaign must not hold the same
+Lease continuously around that test.
+
+## Deployment and compatibility
+
+Implement this as a single initiative with staged deployment, not as partially
+classified tests left for a later executor:
+
+1. Add identities, narrowly scoped RBAC, admission rules and fixed fixtures through
+   Git/Flux. They must be present before new profile issuance is enabled.
+2. Add OpenBao roles and exact endpoint policies using the established guarded
+   operator configuration workflow. Preserve operator-only OpenBao administration.
+3. Upgrade the machine's protected enrollment metadata through the existing
+   attended lifecycle workflow. Do not edit or copy its secret material ad hoc.
+4. Cut callers over to explicit access declarations and isolated configs. Provide
+   explicit old-name compatibility only during this migration; it cannot grant
+   new test profiles to an old metadata layout or act as a permission fallback.
+5. Reinstall base connection configs, perform acceptance, then retire the old
+   public `diagnostic`/`publisher` endpoints and multi-context execution paths.
+   Prove final new-name operation before declaring the initiative complete.
+
+The public base-profile installer remains `mise exec -- just kube kubeconfig`,
+defaulting to observer. Explicit base-profile requests produce their own config
+without rewriting another active invocation. Dedicated test credentials are
+selected through canonical catalog dispatch, not a general profile override.
+Request Talos reader credentials separately, only for suites that need them.
+
+Changes to the cluster still require the repository's feature-branch, hosted
+validation and explicit merge authorization. Design approval is not merge approval,
+authorization for privileged live acceptance, or permission to supply operator
+secrets to an agent.
+
+## Validation and completion
+
+Use focused offline tests for the new catalog schema, every dedicated binding,
+all direct dispatch paths, nested credential propagation, private config
+validation, parallel run isolation, same-profile refresh, no fallback, and token
+redaction. Exercise campaign coordinator/child/publisher separation, contention,
+Lease loss, signals, publication resume, and cleanup failures. Preserve existing
+source-binding and evidence-authority regression tests.
+
+Validate rendered RBAC and admission policies with independent positive and
+negative invariants. Include unrelated workload deletion, alternate service
+accounts, forbidden volumes/Secret references, changed executable fixtures,
+broader network selectors, unauthorized Flux fields, Node writes, RBAC changes,
+and attempts to choose dedicated profiles through unrelated suites. Policy-source
+inspection and `auth can-i` alone do not prove admission behavior.
+
+After deployment and separate authorization, retain canonical live evidence for:
+
+- Every dedicated profile, including both Sonobuoy modes and actual client refresh
+  across a token lifetime. Use no standing administrator Kubernetes kubeconfig.
+- Ordinary runner creation, application disruption, restore fixtures and cleanup;
+  actual permitted API operations plus safe negative requests against unrelated
+  resources. Prefer server dry-run denials where it proves the intended boundary.
+- Observer/debugger suites, application-state tests with observational Kubernetes
+  profiles, optional scenario variants, and independent worktrees/campaigns.
+- Loss/expiry/outage behavior, cleanup failure reporting, source drift and distinct
+  coordinator/publication permissions. No broader-credential recovery.
+- Attended OpenBao suites with operator-supplied OpenBao credentials and the
+  dedicated Kubernetes profiles; the agent does not handle retained secret values.
+
+Run relevant repository checks, commit-time secret/staged-blob checks, independent
+final review, and fresh hosted merge-gate validation for the exact candidate/base.
+The optional full local CI run is not automatic. Reconcile this specification with
+the implemented and validated result before merge of completed work. Keep the
+issue open until the full runnable catalog and required live acceptance are proven.
+
+## Catalog mapping at the audited baseline
+
+The source audit used commit `5fe5c44d65`: 134 entries, of which 47 are offline and
+87 are listed below. All 47 offline entries receive `profile: null`. The table
+specifies intended Kubernetes profiles; prerequisite and execution ownership
+metadata remain separate as described above. New optional variants are additional
+entries, not a change to the default scenario's authority.
+
+| Catalog entry | Profile |
+| --- | --- |
+| `verification.metrics-server` | observer |
+| `verification.cilium` | debugger |
+| `verification.openbao` | observer |
+| `verification.flux` | observer |
+| `verification.foundation` | observer |
+| `verification.n8n` | observer |
+| `verification.automation-data` | observer |
+| `verification.nocodb` | observer |
+| `verification.storage` | observer |
+| `verification.csi-driver-smb` | observer |
+| `verification.media-storage` | observer |
+| `verification.plex` | debugger |
+| `verification.intel-gpu-plugin` | observer |
+| `verification.qbittorrent` | observer |
+| `verification.prowlarr` | observer |
+| `verification.sonarr` | observer |
+| `verification.radarr` | observer |
+| `verification.lidarr` | observer |
+| `verification.seerr` | observer |
+| `verification.tautulli` | debugger |
+| `verification.flaresolverr` | debugger |
+| `verification.qbit-manage` | observer |
+| `verification.monitoring` | observer |
+| `verification.logging` | debugger |
+| `verification.security-alerts` | observer |
+| `verification.gatus` | observer |
+| `verification.portainer` | observer |
+| `verification.test-reports` | observer |
+| `verification.homepage` | debugger |
+| `verification.trivy` | observer |
+| `verification.tailscale-operator` | observer |
+| `verification.tailscale-subnet-router` | observer |
+| `verification.ntfy` | debugger |
+| `verification.alertmanager-ntfy` | observer |
+| `verification.agent-access` | observer; explicit base-profile checks |
+| `test.cilium-connectivity` | test-cilium-connectivity |
+| `test.storage-provisioning` | test-runner |
+| `test.flux-canary` | test-runner |
+| `test.n8n-restore-drill` | test-runner |
+| `test.automation-data-provisioning` | test-runner |
+| `test.nocodb-access` | observer |
+| `test.nocodb-local-integration` | null (host-local) |
+| `test.web-research-local-integration` | null (host-local) |
+| `test.web-research-live-contract` | debugger |
+| `test.nocodb-restore-drill` | test-runner |
+| `test.automation-data-restore-drill` | test-runner |
+| `test.ntfy-publish` | debugger |
+| `test.flux-restart` | test-flux-restart |
+| `test.portainer-persistence` | test-runner |
+| `test.n8n-persistence` | test-runner |
+| `chainsaw.smoke.cluster.default` | observer |
+| `chainsaw.smoke.cluster.flux-ready` | observer |
+| `chainsaw.smoke.cluster.diagnostics-self-test` | observer |
+| `chainsaw.smoke.media.qbittorrent` | observer |
+| `chainsaw.smoke.media.qbit-manage` | observer |
+| `chainsaw.smoke.platform.all` | observer |
+| `chainsaw.smoke.platform.cluster` | observer |
+| `chainsaw.smoke.platform.flux` | observer |
+| `chainsaw.smoke.platform.gateway` | observer |
+| `chainsaw.smoke.platform.dns` | observer |
+| `chainsaw.smoke.platform.cilium` | observer |
+| `chainsaw.smoke.platform.longhorn` | observer |
+| `chainsaw.smoke.platform.n8n` | observer |
+| `chainsaw.smoke.platform.portainer` | observer |
+| `chainsaw.smoke.platform.smb` | observer |
+| `chainsaw.smoke.platform.tailscale` | observer |
+| `diagnostics.cluster` | observer |
+| `diagnostics.flux-alerts` | observer |
+| `test.integration.media-hardlink` | debugger |
+| `test.plex-network-policy` | test-runner |
+| `test.e2e.qbit-manage-policy` | test-runner |
+| `test.e2e.flux-alert-delivery` | test-runner |
+| `chainsaw.resilience.qbittorrent-vpn-disconnect` | test-runner |
+| `chainsaw.resilience.qbittorrent-pod-recreation` | test-runner |
+| `chainsaw.resilience.plex-cross-node-reschedule` | test-node-reschedule |
+| `chainsaw.resilience.test-reports-persistence` | test-runner |
+| `chainsaw.resilience.tailscale-subnet-router-replica-recovery` | test-runner |
+| `test.resilience.node-abrupt-loss` | null (physical/Talos operator boundary) |
+| `probe.qbittorrent` | test-runner |
+| `probe.vpn-leak` | test-runner |
+| `probe.dns-isolation` | debugger |
+| `conformance.quick` | test-conformance |
+| `conformance.certified` | test-conformance |
+| `test.openbao-restore-drill` | test-openbao-restore |
+| `test.openbao-issuance` | test-openbao-issuance |
+| `test.openbao-ha` | test-openbao-ha |
+| `test.agent-credentials` | test-openbao-lifecycle |
+
+## Primary references
+
+- [Kubernetes RBAC and named-resource limitations](https://kubernetes.io/docs/reference/access-authn-authz/rbac/)
+- [Workload creation and effective namespace authority](https://kubernetes.io/docs/concepts/security/rbac-good-practices/)
+- [Kubernetes 1.35 validating admission policies](https://v1-35.docs.kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/)
+- [Kubernetes 1.35.6 minimum TokenRequest duration](https://github.com/kubernetes/kubernetes/blob/v1.35.6/pkg/apis/authentication/validation/validation.go)
+- [Pinned Sonobuoy execution](https://github.com/vmware-tanzu/sonobuoy/blob/v0.57.5/pkg/client/run.go)
+- [Pinned Cilium connectivity lifecycle](https://github.com/cilium/cilium-cli/blob/v0.19.6/vendor/github.com/cilium/cilium/cilium-cli/connectivity/check/deployment.go)
