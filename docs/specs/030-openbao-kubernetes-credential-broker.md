@@ -29,14 +29,10 @@ accepted issuance or HA implementation.
 | Selected snapshot recovery, isolated restored configuration, restart, negative issuance, and cleanup | [Restore](https://tests.lab.supermorphic.com/reports/20260930T180129Z-eb8f13abb15d-operator-ca433213/awesome/) |
 | Current deployed configuration, three ready servers, placement, private route, backup, and monitoring | [Observer verification](https://tests.lab.supermorphic.com/reports/20260930T192528Z-491655601924-operator-3eb727d8/awesome/) |
 
-The HA run recorded standby recovery in 23.857 seconds and leader recovery in
-26.617 seconds. Its issuance probe observed no interruption; this does not promise
-zero downtime. The passing restore run took 335 seconds including operator input,
-isolation checks, restart, and cleanup; this is not a production recovery-time
-guarantee. Local snapshot completion was observed at 14:53:13 UTC, and Longhorn
-reported a completed off-cluster backup at 03:01:10 UTC. The later manual snapshot
-was retrieved and restored separately; these observations distinguish local
-snapshot freshness from scheduled off-cluster transfer freshness.
+The reports retain measured recovery timings. Observed uninterrupted issuance does not
+promise zero downtime, and isolated drill duration is not a production recovery-time
+guarantee. Local snapshot freshness and scheduled off-cluster transfer freshness remain
+separate evidence; restoring one snapshot does not establish both.
 
 Deploy OpenBao inside the Talos cluster to issue short-lived credentials for
 pre-existing Kubernetes ServiceAccounts. Git and Flux own every ServiceAccount,
@@ -720,9 +716,9 @@ using the retained operator login. Read only the source-owned JWT config entry;
 all other configuration uses ordinary API reads. Unexpected errors or stored fields
 fail the drill. Scratch still receives no production API token or egress.
 
-The [platform recovery section](../runbooks/platform-disaster-recovery.md#openbao-credential-broker-state)
+The [platform recovery section](010-talos-flux-platform.md#independent-platform-recovery)
 owns the dependency order and break-glass boundary. The
-[operations guide](../guides/openbao-operations.md#5-run-attended-acceptance) owns
+[isolated restore section](#isolated-restore-assurance) owns
 operator inputs and the guarded command. Restore mechanics and exact acceptance
 assertions remain in source and tests.
 
@@ -762,7 +758,7 @@ not the recovery procedure.
 
 ## Validation, evidence, and completion
 
-Implement commands using the [repository command lifecycle](../reference/repository-command-lifecycle.md)
+Implement commands using the [repository command lifecycle](021-repository-command-lifecycle.md)
 and register assurance in the [test catalog](../../tests/catalog.yaml).
 
 The implemented catalog uses `validation.openbao` in core CI and registers
@@ -860,16 +856,37 @@ Live acceptance must prove:
    or credential disclosure during verification.
 
 Normal iteration stays local. Before opening or updating a PR, follow the
-[contributor workflow](../guides/repository-worktree-setup.md#prepare-validate-and-publish-a-change).
+[repository validation policy](../../AGENTS.md#validation).
 Intentional live acceptance uses `mise exec -- just test record <suite-id>`;
 publication does not grant permission for a suite's mutation. Retained evidence
 contains only sanitized assertions and measurements. No live acceptance is claimed
 until its independently authorized run passes.
 
-Reconcile the open measurements and recovery evidence above after the authorized
-live runs. Preserve their actual values and any changed release pins in this
-record before issue closure. A source commit does not mean issue 449 is deployed
-or complete.
+Retain detailed measurements and release identity in the canonical reports. Update this
+specification when those results change a design assumption, boundary, or guarantee;
+source owns current release pins. A source commit alone does not establish deployment
+or acceptance.
+
+## Isolated restore assurance
+
+The [recovery design above](#snapshots-and-isolated-recovery) owns the isolation and
+restore algorithm. Select private `raft.snap` and sibling `metadata.json`, matching the
+recorded version, seal ID/generation, and retained operator/recovery material.
+
+With an explicitly authorized operator kubeconfig and clean deployed source, set
+`OPENBAO_RESTORE_SNAPSHOT`, `OPENBAO_RESTORE_SEAL_ID`, and `OPENBAO_RESTORE_GENERATION`.
+Run `mise exec -- just test record test.openbao-restore-drill`; review its exact
+checksum/run-bound confirmation and supply matching seal/password only at private prompts.
+
+Assertions and owned cleanup must both pass. After a cleanup failure, review the failed
+run and use guarded `openbao-restore-cleanup <failed-run-id>` before another drill. Retain
+the failure report; successful cleanup permits fresh acceptance, not rewriting the outcome.
+
+The drill requires production healthy for isolation checks. During an actual outage,
+recover Kubernetes/storage/TLS through [platform recovery](010-talos-flux-platform.md#independent-platform-recovery)
+first, then use a separately reviewed, operator-authorized production restore procedure.
+The isolated drill does not authorize production Raft/PVC replacement or force restore;
+missing seal material is a stop boundary, not permission to reinitialize.
 
 ## Upstream design references
 

@@ -2,8 +2,9 @@
 
 ## Purpose
 
-Replace the repository's ADR-style decision lifecycle with a specification-driven
-documentation model that matches how design and implementation evolve in practice.
+Record the migration from the repository's ADR-style decision lifecycle to a
+specification-driven documentation model, including its original rationale and later
+changes. The historical taxonomy below is not current execution policy.
 
 The durable artifact is a design specification. A specification is a living design
 record that may change during or after implementation to describe the current validated
@@ -11,12 +12,35 @@ design for its subject. Before merge, it must be reconciled with the implemented
 validated result. Iterative work on the same subject normally updates that specification;
 a distinct design subject uses a new numbered specification.
 
-This record includes the current lifecycle from [`AGENTS.md`](../../AGENTS.md). It
-replaces the migration's original post-merge freeze model while retaining the migration
-rationale and history below.
+[`AGENTS.md`](../../AGENTS.md) owns the current lifecycle. It replaced the migration's
+original post-merge freeze model and later retired its guides/reference/runbooks taxonomy.
+This specification remains as design history, not a competing policy surface.
 
 Implementation plans are separate, transient execution artifacts. They remain
 uncommitted and may be discarded after the work is complete.
+
+## Current boundary after issue 521
+
+General documentation now belongs only in root `README.md` and `docs/specs/`, with root
+`AGENTS.md` as the policy exception and thin tool adapters. Functional assets and required
+provenance remain narrow exceptions. Source and command help own exact current facts.
+The old documentation index, nested READMEs, guides, references, and runbooks are retired.
+Essential independent recovery knowledge remains in the owning specs.
+
+Original specs, alternatives, design intent, historical outcomes, and essential later
+changes are retained. Later repeated PR execution details may be compressed, but completed
+or superseded designs are not deleted merely because they are historical. A fix that restores
+documented behavior normally needs no spec edit; changes to a contract, procedure, or meaning
+update the affected content while preserving surrounding intent. Read the relevant
+source/tests and only the needed spec sections. Root policy's change classification governs
+new durable design subjects; changes to an existing contract update its owner without
+erasing the reasoning behind earlier decisions.
+
+The existing link checker also enforces sanctioned document paths through a small explicit
+allowlist with a functional test-fixture category. Review establishes actual fixture use;
+the path check does not validate prose, headings, required cross-links, or lifecycle states.
+Plans stay ignored under `.tmp/`; detailed evidence stays in established reports. Issue/PR
+comments record material decisions, blockers, and outcomes, not repeated activity reports.
 
 ## Motivation
 
@@ -32,9 +56,9 @@ before implementation validates it. Current repository policy, source, and opera
 documentation remain authoritative. Historical specifications explain how and why the
 repository reached its current state but do not override it.
 
-## Documentation model
+## Historical documentation model
 
-The repository uses these documentation roles:
+The migration originally used these roles, superseded by the current boundary above:
 
 - `AGENTS.md` defines current, vendor-neutral repository policy.
 - The root and domain-level `README.md` files orient readers and state source
@@ -63,7 +87,7 @@ Durable specifications use monotonically increasing numeric identifiers, such as
 `001-<name>.md`. The number identifies a design lineage in repository chronology; it is
 not a lifecycle status.
 
-The lifecycle is:
+For an agreed durable design subject, the lifecycle is:
 
 1. Brainstorm the design.
 2. Commit a numbered design specification.
@@ -87,7 +111,7 @@ When a transient implementation plan corresponds to a numbered specification, it
 the same numeric identifier and descriptive name where practical. Repository-defined
 artifact locations override tool and skill defaults.
 
-## Migration method
+## Historical migration method
 
 The migration is a full, lineage-first reconciliation rather than a mechanical file move.
 It uses the current source and current documentation as the implementation baseline, then
@@ -113,7 +137,7 @@ When historical records disagree, the implemented and validated repository state
 If neither current source nor current documentation resolves a material conflict, the
 migration stops at that item and requests an operator decision rather than inventing one.
 
-## Legacy artifact dispositions
+## Historical legacy artifact dispositions
 
 Legacy records are reconciled as follows:
 
@@ -145,7 +169,7 @@ Every retained document has one primary purpose. Mixed documents are split only 
 resulting parts remain useful; otherwise their useful content moves to the best primary
 destination.
 
-## Phase disposition
+## Historical phase disposition
 
 The former phase documents are not retained as a separate documentation category. Their
 durable content has these destinations:
@@ -173,13 +197,16 @@ rationale helps explain a non-obvious design choice, accepted tradeoff, or rejec
 alternative. The specification supplies context; it is not the source of current
 authority.
 
-Current procedures and facts link to the applicable guide, runbook, or reference.
+Current facts link to source or command help; essential recovery links to the owning spec.
 Generic specification banners and comprehensive source-to-spec
 traceability are not required. During this migration, existing callouts are retained only
 when they meet this boundary, and missing callouts are added only where a specific
 non-obvious constraint would otherwise be easy to change incorrectly.
 
-## Runbook boundary
+## Historical runbook boundary
+
+The original taxonomy below explains how the migration separated procedure from design.
+Issue 521 retired the separate categories; it does not authorize recreating them.
 
 A runbook is an event-driven operational procedure for an alert, failure, recovery, or
 maintenance event. It should identify the trigger, required authority and preconditions,
@@ -202,9 +229,9 @@ and lifecycle-specific tests are removed. This includes the decision parser and 
 suite, the decision index and validation recipes, and their validation-catalog and
 test-chain entries.
 
-No replacement documentation or specification validator is introduced. Numeric naming
-and document placement are repository policy enforced through `AGENTS.md` and review, not
-through a parser or generated index.
+The migration introduced no replacement lifecycle parser or generated index. Issue 521
+later added path validation to the existing link checker; meaning and duplication remain
+review responsibilities, not semantic documentation tests.
 
 The tracked ignore file contains only repository-defined generic artifact locations. A
 tool-specific local state directory belongs in the clone-local Git exclude file when it
@@ -215,10 +242,11 @@ The ordinary link-integrity checker remains because it detects useful failures s
 broken links after files move. It is simplified so that it:
 
 - verifies that explicit relative Markdown links resolve within the repository;
-- verifies bare paths to current documentation, runbooks, guides, and references;
+- verifies bare paths to current repository documentation;
 - permits specifications to name planned implementation paths that do not exist yet; and
-- has no knowledge of document categories, numeric identifiers, lifecycle states,
-  immutability, or changes relative to `origin/main`.
+- checks document placement and numbered spec filenames with narrow functional exceptions;
+  it does not enforce lifecycle states, immutability, prose, or changes relative to
+  `origin/main`.
 
 The checker must not fetch a remote branch or invoke a decision parser. Focused link tests
 will cover the remaining generic behavior.
@@ -229,10 +257,9 @@ The migration design grouped the policy, documentation structure, tooling retire
 specification reconciliation, and link repair into one atomic delivery. This avoided
 deploying a partially migrated tree with two competing documentation models. Independent
 Git-hook fixes were separate work. Current publication and rebase steps belong to the
-[contributor workflow](../guides/repository-worktree-setup.md#prepare-validate-and-publish-a-change),
-under the Git safety policy in [`AGENTS.md`](../../AGENTS.md#git-and-worktrees).
+Git safety and validation policy in [`AGENTS.md`](../../AGENTS.md#git-and-worktrees).
 
-## Validation
+## Original migration validation
 
 Migration work uses focused checks while records and links are reconciled. Final
 validation includes:
@@ -242,9 +269,10 @@ validation includes:
 - repository lint and staged-blob or secret checks where applicable; and
 - a full local `mise exec -- just ci` run for that migration.
 
-## Completion criteria
+## Original migration completion criteria
 
-The migration is complete when:
+The migration's original acceptance criteria were the following. They record the
+historical delivery boundary; the retired taxonomy is not a requirement for later work:
 
 - `AGENTS.md` defines the approved specification lifecycle and transient plan location;
 - `/.tmp/` is ignored;

@@ -257,7 +257,7 @@ load-bearing ways:
   off-network reachability, and human-visible playback were the useful oracles.
 
 These are design corrections, not operator procedure. Current application and router
-steps remain in the operations guide.
+steps remain in the operational sections below and guarded command help.
 
 ## Authority and recovery boundary
 
@@ -311,3 +311,51 @@ This permanent path is smaller and more compatible than the public Envoy design 
 exposes no operator-controlled TLS key. Its cost is continuous Internet reachability to
 Plex's own listener. The [remote-access detection specification](014-plex-remote-access-detection.md)
 defines the available aggregate signals and their limits.
+
+## Restore and accept the direct path
+
+1. Require ready listener/policy, healthy detection, and recoverable Plex configuration.
+   Do not establish durable exposure while telemetry is known blind.
+2. Set the private discovery URL and accepted LAN classification. Inventory router rules
+   and disable automatic mappings; require the intended Servers intrusion prevention
+   setting without unintended exclusions.
+3. Create only the accepted TCP mapping to the Plex LoadBalancer. Set Plex's manual public
+   port to match, then require publication of the WAN-derived `plex.direct` connection.
+4. Force rediscovery and require healthy Apple TV, Plex iOS, local Plexamp, native Sonos,
+   Plexamp-to-Sonos without AirPlay, Tautulli, Homepage, Gatus, and internal browsing.
+5. From genuinely off-network, prove the intended direct connection, bounded exposed
+   port set, and independent absence of an IPv6 path. A LAN scan cannot prove WAN safety.
+
+A client quality cap limits what playback acceptance proves: the retained off-site result
+proved a direct route but did not prove bitrate above Relay's ceiling. Relay fallback
+needs its own [client exercise](008-plex-relay-sonos.md#recover-relay-access).
+Normal acceptance does not generate detector test traffic.
+
+## Disable exposure
+
+Remove the single DNAT, clear the manual public port if direct access will stay disabled,
+and require a new off-site TCP connection to fail while local playback and integrations
+remain healthy. Keep Relay, containment, detection, and read-only media intact.
+
+Existing conntrack entries and Plex sessions can survive DNAT removal. If material risk
+requires session eviction, an authorized operator restarts Plex; that interrupts every
+local client because the server is a single writer. No surgical conntrack operation is
+selected. DNAT removal is proof about new connections only.
+
+## Recovery and change boundary
+
+Disable **Empty trash automatically after every scan** so temporary NAS/SMB loss does
+not discard library entries. Media managers own organized-library changes; qbit_manage
+owns download cleanup. Bulk media has no independent backup by operator decision, so
+complete loss requires potentially slow/incomplete reacquisition.
+
+Plex database, identity, and watch history need application and off-cluster Longhorn
+backups. Before consequential exposure changes, require a configuration restore rehearsal
+into a throwaway claim with isolated validation before production replacement.
+[Platform recovery](010-talos-flux-platform.md) owns storage prerequisites; ordinary
+replication is not restore evidence.
+
+Review after material router/DNS/address-family, Plex settings, listener, Cilium,
+notification, or recovery changes. Another ingress port invalidates the current detector's
+workload-to-port assumption. New proxy/client naming behavior, edge filtering, or stronger
+application detection needs an explicit redesign and fresh acceptance.

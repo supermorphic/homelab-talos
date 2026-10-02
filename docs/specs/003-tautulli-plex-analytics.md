@@ -161,4 +161,4 @@ recently-added events do not meet that boundary on their own. Tautulli remains o
 direct notification delivery unless a later design accepts that second policy surface.
 
 Current setup, authentication, API-key, and acceptance procedure belongs in
-`docs/guides/media-automation-setup.md`.
+`docs/specs/006-media-stack-architecture.md`.

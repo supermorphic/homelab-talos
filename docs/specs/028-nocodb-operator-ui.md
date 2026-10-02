@@ -12,9 +12,9 @@ orchestration and bulk-change boundary. NocoDB is a removable interface over pri
 and business contracts defined by each domain.
 
 This specification defines architecture, lifecycle invariants, and required evidence.
-The [operations guide](../guides/nocodb-operations.md) owns executable procedures and
-credential binding. The [platform recovery runbook](../runbooks/platform-disaster-recovery.md#nocodb-metadata-recovery)
-identifies recovery roots and the lost-key boundary. Guarded scripts and tests own
+Command help and guarded workflows own executable procedures and credential binding.
+The [recovery section](#recovery-roots-and-sequence) identifies independent roots and
+the lost-key boundary. Guarded scripts and tests own
 restore execution; reports, issues, and Git history retain implementation evidence.
 
 ## Existing platform context
@@ -341,6 +341,11 @@ Incompatible renames or removals require attended review. Refresh must not silen
 recreate a source, discard views, or widen grants. Automatic metadata refresh through
 the provisioning webhook is not required by the initial design.
 
+In the affected base, use **Data Sources** → the exact source → **Meta Sync** →
+**Reload**. Inspect additive changes before **Sync Now**, then rerun the same source/pair
+sync and check unchanged identities, credential generation, editing flags, and saved
+views. Stop on unexpected renames/removals; confirm labels against the deployed UI.
+
 ## Existing-platform upgrade
 
 Empty-data-directory initialization is not an upgrade mechanism for a populated service.
@@ -416,7 +421,7 @@ retained application objects or regenerate the connection encryption key as comp
 Ambiguous administrative state requires attended repair.
 
 Executable sequencing, API calls, confirmation strings, binding instructions, and
-credential recovery mechanics belong in the operations guide.
+credential recovery uses the guarded workflows and recovery section below.
 
 ## Source provisioning workflow
 
@@ -535,7 +540,7 @@ sensitive administrative execution remains with the operator.
 
 Read-only verification does not inspect Secrets, authenticate as a source, or perform a
 positive authorization probe. Those checks belong in registered acceptance workflows.
-The operations guide owns command syntax and the exact operator procedure.
+Command help and the guarded scripts own syntax and execution details.
 
 ## Monitoring and logs
 
@@ -622,7 +627,7 @@ Rollout follows dependency and authority order:
 5. Verify deployed activation and complete isolated recovery using a backup containing
    accepted source state before claiming rollout completion or recoverability.
 
-The operations guide owns executable ordering within these boundaries. Human operators
+The guarded workflows own executable ordering within these boundaries. Human operators
 review and merge PRs; agents prepare reviewable changes and perform authorized scoped
 observation. Relevant platform or recovery changes require fresh affected evidence;
 unrelated repository changes do not alone invalidate accepted dependency evidence.
@@ -644,28 +649,17 @@ unrelated repository changes do not alone invalidate accepted dependency evidenc
 
 ## Implementation status
 
-NocoDB is durably active with private routing, platform monitoring, and Homepage discovery.
-Reader/operator source provisioning and attended browser access acceptance passed.
-Disposable integration proved the source lifecycle, restart behavior, targeted rotation,
-additive schema refresh, backup, and isolated restoration. Attended isolated metadata
-recovery passed on September 10, 2026.
+NocoDB is active with private routing, monitoring, and Homepage discovery. Reader/operator
+provisioning, browser access, and isolated metadata recovery passed. The
+[recovery closeout](https://github.com/supermorphic/homelab-talos/pull/437) retains the
+replacement-domain restore evidence, including fresh backup and owned cleanup; publication
+of that locally retained run was not established. It proves the selected acceptance
+domain, not unrelated lifecycle or user-access changes.
 
-On September 23, 2026, automation-data and NocoDB read-only verification passed at
-revision `78e2b6c09f2e`. The replacement-domain isolated restore passed in canonical run
-`20260923T205527Z-78e2b6c09f2e-operator-c8028c37`, using complete bundle
-`automation-data-20260923T003011Z`. Assertion and cleanup both passed. The drill produced
-a fresh logical bundle inside the isolated environment, and its run-owned resources
-were confirmed absent after cleanup. This evidence is retained locally; report
-publication has not been established.
-
-Individual run records and diagnostic history remain in reports and PRs. The isolated
-restore verifies recovery of the retained acceptance domain, not unrelated lifecycle
-or user-access changes.
-
-The material implementation findings are reflected in the final architecture: separate
-fact and decision schemas, PostgreSQL-owned durable state with external artifact
-references and no native attachment storage, asynchronous resumable creation, and ready
-sources that do not depend on historical job retention.
+Implementation retained the original authority model: separate fact and decision schemas,
+PostgreSQL-owned durable metadata, external artifact references, asynchronous resumable
+creation, and ready sources independent of historical job retention. Later pair and
+credential-discovery contracts are described below.
 
 ## Rejected alternatives
 
@@ -710,7 +704,7 @@ unrelated bases, integrations, or sources.
 
 ### Commands and operation claims
 
-The [operator guide](../guides/nocodb-operations.md#add-an-independent-source-pair) owns
+The [source-operation workflow](../../scripts/nocodb/source-operation.sh) owns
 register/prepare/sync/rotate/status/retry commands and confirmations. The existing
 private webhook accepts optional `pair`; named responses include it. Registration alone
 accepts schema names. Other operations select registered identities; none accepts arbitrary
@@ -770,7 +764,7 @@ selected rotation and partial recovery; both pairs' isolated restore with retain
 authenticated application recovery; Community Edition field/linked-record editing; and
 protected CLI credentials and transport, including negative cases.
 
-Use the [extended attended access and restore procedure](../guides/nocodb-operations.md#11-record-acceptance-for-additional-pairs-and-application-logins).
+Use the [extended attended access and restore procedure](../../scripts/test/scenarios/nocodb-restore-drill.sh).
 Baseline runs explicitly identify omitted extension coverage. Disposable component and
 isolated recovery run `20260930T143422Z-f6abe9c57ed7-operator-4edbc3f4` passed; this is
 candidate evidence. Live upgrade, browser acceptance, and recorded recovery remain
@@ -781,7 +775,7 @@ returned roles, grant/connection prerequisites, and evidence IDs.
 
 The [shared discovery contract](026-automation-data-postgresql-platform.md#task-oriented-credential-discovery-issue-506)
 owns the observation/access boundary, limits, assurance, and rollout status. The
-[operations guide](../guides/nocodb-operations.md#credential-discovery-for-approved-work)
+[task-access section](026-automation-data-postgresql-platform.md#credential-discovery-for-approved-work)
 owns credential families, task selection, and lifecycle procedures. NocoDB adds these
 interpretation rules:
 
@@ -824,15 +818,41 @@ new affected evidence. A native attachment proposal must resolve storage ownersh
 authority, portability, and recovery before becoming supported.
 
 Keep this specification aligned with accepted architectural changes. Procedures belong
-in the operations guide and platform runbook; executable details belong in implementation
-and tests.
+in command help and guarded workflows; independent recovery prerequisites remain here
+and in the platform spec. Execution details belong in implementation and tests.
+
+## Recovery roots and sequence
+
+Retain outside the cluster the operator age identity, exact `NC_CONNECTION_ENCRYPT_KEY`,
+encrypted Secret in remote Git history, complete automation-data bundles, backup access,
+and private operator accounts. Registered application clients also retain their protected
+profiles under [spec 026](026-automation-data-postgresql-platform.md#protected-credential-installation-and-recovery).
+Metadata without its matching encryption key cannot recover source passwords; missing
+or unreadable key material stops ordinary recovery and needs a separately reviewed design.
+
+1. For an application-only failure with healthy PostgreSQL, allow pod replacement and
+   run `mise exec -- just kube nocodb-verify`; disposable scratch needs no restore.
+2. For lost/corrupt metadata, preserve state and select a complete compatible bundle.
+   Restore globals, control/metadata, and domains into isolated PostgreSQL first.
+3. Start isolated NocoDB with retained encryption material and fresh scratch. Redirect
+   restored sources only to the isolated database; never connect them to live domains.
+4. Prove identity/registry/grant agreement, actual decrypted source authentication and
+   denials, retained decisions, views, and artifact references. Revalidate authority;
+   saved UI flags do not establish it. Recover external bytes separately with their owner.
+5. Generate a fresh validated bundle and prove run-owned cleanup before acceptance.
+
+Use the guarded `mise exec -- just kube nocodb-restore-drill` with approved mutation
+credentials and exact confirmation. Source owns selectors/assertions. This proves selected
+isolated recovery, not production replacement or Longhorn recovery. Production-state
+replacement remains separately authorized. Native attachment support would require a new
+decision covering ownership, authority, portability, and full recovery.
 
 ## References
 
 - [Automation-data PostgreSQL specification](026-automation-data-postgresql-platform.md)
 - [Repository command lifecycle](021-repository-command-lifecycle.md)
-- [NocoDB operations](../guides/nocodb-operations.md)
-- [Platform disaster recovery](../runbooks/platform-disaster-recovery.md#nocodb-metadata-recovery)
+- [NocoDB recovery](#recovery-roots-and-sequence)
+- [Platform disaster recovery](010-talos-flux-platform.md#independent-platform-recovery)
 - [NocoDB Kubernetes installation](https://nocodb.com/docs/self-hosting/installation/kubernetes)
 - [NocoDB environment variables](https://nocodb.com/docs/self-hosting/environment-variables)
 - [NocoDB backup guidance](https://nocodb.com/docs/self-hosting/maintenance/backups)

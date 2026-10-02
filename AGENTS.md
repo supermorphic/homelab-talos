@@ -7,16 +7,23 @@ this file.
 
 This repository manages a three-node Talos Linux and Flux GitOps Kubernetes cluster.
 Git is the source of truth, and merged changes to `main` can affect the live environment.
-Before changing a subsystem, inspect its current source and the applicable current
-guide, reference, or design specification only as needed. Do not load documentation
-merely because it exists alongside the source. Expand to related callers,
-dependencies, and tests only as needed.
 
-This root file is the sole repository-policy surface; supporting documentation supplies
-procedure, not competing instructions. Use the current repository
-state and current documentation as the implementation baseline. Repository policy and
-current source state take precedence over historical specifications, transient plans,
-prior conversation context, and assumptions.
+Before changing a subsystem, start with the task, this policy, relevant
+implementation, and associated tests. Read only needed sections of owning
+specifications; expand into callers, dependencies, and related specifications
+for actual cross-component constraints or uncertainty. Do not preload whole
+documentation trees or a README/guide/spec bundle. This root file is the sole
+repository-policy surface; supporting documents provide procedures, not
+competing instructions. Current
+repository policy, documentation, and source state take precedence over
+historical specifications, transient plans, prior conversation context, and
+assumptions.
+
+Repository artifact and communication rules override agent-skill defaults and
+older issue/spec instructions. Preserve real requirements, not obsolete demands
+for guides, committed plans, or exhaustive status reports. Investigate
+implementation/spec discrepancies instead of silently changing requirements to
+match code.
 
 ## Communication style
 
@@ -46,6 +53,16 @@ domain.
 Do not rewrite literal APIs, identifiers, commands, configuration fields, or quoted text
 solely to satisfy these style rules.
 
+Apply these communication rules to issue bodies, PR descriptions, and comments.
+
+Post comments only when they add a material finding, decision, changed blocker,
+requested answer, or acceptance outcome. Skip routine progress, duplicate
+information, and session-end recaps.
+
+Write for readers without the agent conversation. Explain the problem, outcome,
+and necessary rationale; link retrievable evidence instead of repeating it.
+Preserve important decisions and authorization history.
+
 ## Git and worktrees
 
 - Never commit or push directly to `main`. Published implementation work must use an
@@ -71,10 +88,9 @@ solely to satisfy these style rules.
   whose ownership or preservation state is uncertain. Before removing a task-owned
   worktree, preserve its useful work or intentionally discard it with appropriate
   authority.
-- Stop if the current Git or worktree state is inconsistent or unsafe. Preserve
-  unrelated changes.
-- Keep each commit limited to one coherent change. Do not include unrelated edits, and
-  split changes when they can be independently reviewed or reverted.
+- Preserve unrelated changes. Stop when repository or worktree state is unsafe
+  or ownership is unclear.
+- Keep each commit limited to one coherent, independently reviewable change.
 - Before each push, fetch `origin` and inspect `origin/main` and, when it exists, the
   remote feature branch. If the remote feature branch contains unexpected commits absent
   locally, stop rather than overwriting or automatically reconciling it. Otherwise, if
@@ -176,13 +192,11 @@ solely to satisfy these style rules.
   standard model for normal implementation, integration, and task review. Use a
   fast model for mechanical, tightly scoped work. Do not escalate a review
   model solely because it is a review.
-- If the same implementation approach fails twice, stop repeating it. Diagnose
-  the failure and change the approach, provide missing context, split the task,
-  or escalate to a more capable model.
+- If the same implementation approach fails twice, diagnose the cause and
+  change the approach instead of repeating it.
 - Do not spawn additional subagents merely to obtain more opinions or repeat completed
   analysis.
-- Prefer focused tests, diffs, queries, and bounded logs over broad command
-  output when they provide the required evidence.
+- Prefer focused tests, diffs, queries, and bounded logs over broad output.
 - Treat repeated context compaction, excessive retries, or rapidly growing
   delegated work as signals to reassess the task rather than continuing
   mechanically.
@@ -223,31 +237,65 @@ solely to satisfy these style rules.
   `talos/patches/`, then run `mise exec -- just talos source-validate`. Generation or
   application requiring the age key or admin credentials remains operator-run.
 - Follow the pinned version and compatibility constraints documented in
-  `talos/README.md`, `kubernetes/README.md`, and relevant approved upgrade documentation.
+  configuration, the owning platform specification, and relevant approved upgrade designs.
   Do not independently upgrade Talos, Kubernetes, or Cilium outside an approved upgrade
   workflow.
 - Follow `kubernetes/apps/<domain>/<app>/` and the Flux patterns documented in
-  `kubernetes/README.md`.
+  `docs/specs/010-talos-flux-platform.md`.
 - A Deployment mounting a `ReadWriteOnce` PVC uses `Recreate`, or uses a StatefulSet; it
   must not use `RollingUpdate`.
-- Durable design specifications belong in `docs/specs/`. A specification represents one
-  logical body of work, may evolve during implementation, and must be reconciled with the
-  implemented and validated result before merge. Post-merge corrections and evolutions
-  follow the Design lifecycle rules.
-- Implementation plans are transient execution artifacts. Store repository-local plans
-  under `.tmp/plans/`, keep them uncommitted, and use them for execution, task resumption,
-  and agent handoff.
 - A validation assertion must use an independent oracle or encode a genuine invariant.
 - Repeat safety-critical live preconditions immediately before consequential mutation.
   Do not rely on an earlier plan or preflight as proof that target state is unchanged.
 
 ## Design lifecycle
 
-- Use consecutive, monotonically increasing three-digit identifiers for durable design
-  specifications, such as `001-<name>.md`. Assign the next number after the highest
-  existing specification. After merge, do not reuse or renumber an identifier.
-- A specification is a living design record and may be updated during or after
-  implementation to reflect the current validated design for its subject.
+- Documentation is not a default deliverable. Most fixes, refactors, dependency
+  changes, and implementation-only schema changes need no prose update.
+- General documentation belongs only in root `README.md` and `docs/specs/`.
+  Do not create nested READMEs, a documentation index, guides, references, runbooks,
+  contribution manuals, archives, or substitute documentation categories.
+  Root `AGENTS.md` is the policy exception; do not add nested policy files.
+  Necessary thin tool adapters, functional skills/prompts/policies,
+  machine-consumed Markdown fixtures, and required provenance/licensing records
+  are distinct assets. Do not relabel general documentation to evade this rule.
+- Durable design specifications belong in `docs/specs/` and use consecutive
+  three-digit identifiers, such as `001-<name>.md`. Assign the next number after the highest existing specification.
+  After merge, do not reuse or renumber an identifier.
+- Keep the README to purpose, current scope, bootstrap commands, and navigation.
+  Keep repository policy here; tool-specific instruction files adapt tools
+  without duplicating policy.
+- Give each documented contract or procedure one canonical home. Specifications
+  own intended behavior, rationale, boundaries, and acceptance requirements.
+  Link to the owning specification instead of repeating its contract elsewhere.
+  Code, schemas, configuration, and command help define exact implementation
+  details; explain only what those sources do not make clear.
+  Do not copy current schema revisions, field catalogs, defaults, provider/model
+  versions, or command inventories into prose. Preserve executable versioning
+  and immutable migration history.
+- Keep needed operating knowledge in the owning specification: attended steps,
+  cross-system sequencing, recovery, and interpretation of results that supported
+  code or command help cannot supply. Recovery must remain usable independently
+  of working services.
+  Include commands, prerequisites, and expected results where needed to act.
+  Add UI walkthroughs only for a demonstrated use.
+- Update documentation when a change affects its contract, procedure, or meaning.
+  A fix that restores behavior already described in a specification normally
+  needs no spec edit. When an edit is needed, limit it to the affected content
+  and preserve the surrounding design intent and rationale.
+  Internal refactoring alone does not require prose updates. Preserve useful
+  knowledge before removing duplicated text, and repair affected links.
+  As a routine procedure becomes a guarded command, keep only the instructions
+  and judgment that the command does not provide. Prompts, Markdown fixtures,
+  and provenance or licensing records are not expendable documentation.
+- Keep specifications current with the implemented and validated design across
+  staged delivery. Update them in place as the design evolves, including after
+  merge; do not split a specification solely because a delivery stage merged.
+  Do not add change logs or approval histories to specifications.
+  Keep completed implementation plans and acceptance diaries out of specs.
+- Store transient implementation plans under ignored `.tmp/plans/`.
+  Temporary handoffs remain ignored under `.tmp/`; required detailed evidence
+  stays in established evidence stores.
 - Prefer updating an existing specification for iterative work on the same subject. Create
   a new numbered specification when the work introduces a distinct design subject, not
   merely because the earlier specification merged.
@@ -258,37 +306,49 @@ solely to satisfy these style rules.
 
 ## Validation
 
-- Before pushing, run focused validation appropriate to the change and ensure
-  commit-time checks pass. Ordinary documentation changes, including specification
-  updates, use applicable focused checks, then push without asking permission to omit
-  optional local CI.
+- Do not test documentation prose, headings, required phrases, or prescribed
+  cross-links. Review documentation content; allow mechanical Markdown lint and
+  generic link and structural path checks. Test machine-consumed examples only
+  against an independent parser or executable behavior. Functional Markdown
+  remains subject to its actual consumer checks.
+- Before pushing or opening or updating a pull request, run relevant focused
+  checks and ensure commit-time checks pass. Ordinary documentation changes use
+  applicable mechanical checks. Omitting optional full local CI does not
+  require an operator exception.
 - A successful hosted `merge-gate` for the exact candidate and required base is the
   authoritative validation gate before merge. Missing or failed hosted validation must
   not fall back to a local passing result. Do not manually reduce required validation
   groups. Passing validation does not replace explicit operator authorization for that
   specific merge.
-- Local `mise exec -- just ci`, `mise exec -- just test ci-publish`, and
-  `mise exec -- just test ci-publish-full` are optional for reproducing hosted failures,
-  validating CI, harness, or selection changes when useful, or an explicit operator
-  request. Do not automatically run them for every PR creation or update. When using
-  `ci-publish` or `ci-publish-full`, keep the committed feature worktree clean and
-  untouched while the command runs.
+- Use full local `mise exec -- just ci` to reproduce failures, check broad or
+  shared changes when useful, validate CI/harness changes, or satisfy an explicit
+  operator request. Do not run it automatically for every PR creation or update.
+  Hosted `merge-gate` must pass the checks required by the repository’s trusted CI policy
+  for the current candidate and base.
+- Local `mise exec -- just test ci-publish` and `mise exec -- just test ci-publish-full`
+  are optional under the same conditions. Keep the committed feature worktree clean and
+  untouched while either command runs.
 - `just ci` is the canonical full, cluster-independent, secret-free validation command.
   Cluster-dependent verification, status, preflight, and diagnostic workflows remain
   outside it.
-- After candidate edits or rebases, rerun relevant focused checks as needed and require
-  fresh hosted evidence for the updated candidate and required base before merge. Do not
-  reuse an earlier candidate's passing result.
+- After edits or rebases, rerun affected local checks and require fresh hosted
+  validation for the updated candidate and applicable base before merge. Do not
+  present earlier results as proof of the changed candidate.
 - Commit-time hooks provide staged-file feedback. Use `mise exec -- just repo lint` when
   repository-wide hook coverage is useful.
-- Follow the relevant testing documentation for additional task-specific or scoped live
-  validation.
+- Preserve required native or attended acceptance for affected integration and
+  deployment boundaries. Hosted offline CI does not prove deployed cluster behavior
+  or authorize live operations. A passing check does not authorize broader credentials
+  or live mutations outside the approved task; use the established guarded procedures
+  and authority.
 
 ## Completion
 
-Report changed files, validation performed and its results, validation not performed and
-why, remaining non-sensitive risks, and required operator actions. Distinguish focused
-local results from hosted CI status; report pending hosted validation as pending. An
-intentionally omitted optional local CI run is not a policy exception. Report actionable
-security-sensitive risks to the operator outside repository artifacts rather than
-publishing them.
+Report changed files, validation performed and its result, validation not
+performed and why, remaining non-sensitive risks, and required operator actions.
+Distinguish focused local results, hosted CI status, and native or attended
+acceptance. Report pending validation as pending. An intentionally omitted
+optional full local CI run is not a policy violation.
+
+Report actionable security-sensitive risks to the operator outside repository artifacts
+rather than publishing them.

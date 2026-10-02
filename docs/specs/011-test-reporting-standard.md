@@ -7,8 +7,10 @@ integration, disruption, measurement, and Kubernetes conformance. The standard k
 framework appropriate to each behavior while giving every coordinated run stable
 identity, result semantics, canonical evidence, and clear execution authority.
 
-This specification preserves the design rationale. The current catalog, executable
-source, test-report reference, campaign guide, and repository policy remain authoritative.
+This specification preserves the reporting design and rationale. The current catalog
+and executable source own exact suite membership and command behavior; repository policy
+owns execution authority. [Specification 027](027-deterministic-ci-gates.md) owns hosted
+CI selection and evidence reconciliation.
 
 ## Recorded evidence evolution — issue 371
 
@@ -92,21 +94,24 @@ replace controlled run history or become canonical test results.
 
 ## CI boundary
 
-`mise exec -- just ci` is the pull-request gate. It is fail-fast,
+`mise exec -- just ci` is the canonical full local validation command. It is fail-fast,
 cluster-independent, and secret-free. It validates repository policy, Talos sources,
 Kubernetes renders and schemas, Rego policies, shell and Python tooling, the test
 catalog, and component-specific source invariants without a usable kubeconfig or SOPS
 age key.
 
-GitHub Actions runs this same command and uploads canonical results on success or
-failure. It has no cluster or report-publication path. Live verification, tests,
+GitHub Actions runs the groups selected by the repository-owned plan and reconciles
+their canonical results in the required `merge-gate`, as defined by specification 027.
+It retains canonical results on success or failure and has no cluster or
+report-publication path. Live verification, tests,
 probes, resilience, and conformance therefore cannot enter the CI execution list even
 when their runners are stored and validated by CI.
 
-CI is one canonical multi-suite run. Native JUnit is preserved where a tool supplies it;
-adapters retain individual ShellCheck and Python test findings; Bash-only commands
-receive explicit wrapper cases. After the first failed or broken suite, the remaining CI
-suites are represented as skipped rather than silently omitted.
+Full local CI and each hosted group produce canonical multi-suite runs. Native JUnit is
+preserved where a tool supplies it; adapters retain individual ShellCheck and Python test
+findings; Bash-only commands receive explicit wrapper cases. After the first failed or
+broken suite, the remaining suites in that run are represented as skipped rather than
+silently omitted.
 
 ## Catalog contract
 
@@ -344,13 +349,10 @@ drift requires a new campaign.
 
 ### Publication debrief — September 2026
 
-Publishing an automation-data acceptance report exposed a mismatch between Python's
-path-component ordering and the installer's full-filename ordering. Valid report assets
-could therefore fail manifest verification. Both sides now use the same byte ordering.
-Offline validation reproduced the rejection and confirmed successful installation after
-the correction; checksum rejection and atomic publication remain intact. Live publication
-of the corrected revision was confirmed with automation-data recovery run
-`20260906T103531Z-bfd6c1b6793c-operator-1efda0f5`.
+Report publication requires the manifest producer and installer to use the same
+byte ordering of complete filenames. Different path-component ordering rejected
+valid assets. The [correction](https://github.com/supermorphic/homelab-talos/pull/372)
+retained checksum rejection and atomic publication; subsequent live publication passed.
 
 ## Deferred assurance coverage
 
@@ -358,7 +360,7 @@ The implemented catalog does not yet provide a controlled media-pipeline end-to-
 scenario, isolated Longhorn restore and replica-recovery scenarios, or an isolated SMB
 remount and recovery scenario. These remain deliberate gaps: each needs run-owned test
 state and cleanup that cannot affect production application data. Current membership,
-dispatch, and any future execution procedure belong in the catalog and campaign guide.
+dispatch, and execution procedures belong in the catalog, command help, and runner source.
 
 ## Reconsideration boundaries
 

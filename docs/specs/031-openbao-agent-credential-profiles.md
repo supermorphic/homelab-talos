@@ -262,7 +262,7 @@ The current caller inventory includes:
   that check the four-context exec representation.
 
 Inspect these callers and repeat the repository-wide search before changing the
-representation. Update repository-owned messages, Just consumers, guides, and
+representation. Update repository-owned messages, Just consumers, retained examples, and
 policy together. Preserve explicit operator-only credential inputs where a
 workflow requires greater authority. Never silently fall back from failed
 profile issuance to those credentials.
@@ -396,3 +396,35 @@ Complete focused tests, staged secret checks, independent final implementation
 review, and exact-candidate hosted validation before requesting merge. Reconcile
 this specification with observed results. A passing local test or an approved
 design does not establish live acceptance or authorize activation.
+
+## Operator lifecycle and independent recovery
+
+The reviewed AppRole mount/slots, issuance roles, and configuration remain Git-owned. Runtime
+entity bindings, disablement, and SecretIDs are managed only by guarded enrollment/rotation/
+revocation, never reconciled active by config apply. Keep runtime identifiers and hardware details
+private. Readback proves exact bindings/effective policy without putting those IDs in reports.
+
+From clean deployed source with an explicitly authorized operator kubeconfig, use
+`mise exec -- just bootstrap openbao-agent <operator-kubeconfig>` to apply config, enroll,
+and record acceptance. Each child retains source/target/Lease/confirmation guards and uses
+the retained operator password through private prompts. It saves no operator credential.
+Resume at `enroll` or `test` only after inspecting the first unfinished phase; completed
+enrollment need not be repeated for source-parity or publication failures.
+Individual `openbao-workstation` actions use the same explicit credential and reviewed slot.
+
+Missing workstation material requires separately attended recovery using independent operator
+login/cluster access under [spec 030](030-openbao-kubernetes-credential-broker.md#seal-and-recovery-ownership).
+Do not make operator recovery depend on an expired/revoked broker-issued profile.
+Rotate by validated atomic replacement before old-ID destruction. Ambiguous role/entity
+creation needs private identity inspection, never invented/adopted mappings. Revoke to preserve
+the disabled barrier when interrupted enrollment/rotation cannot be completed safely.
+
+An interrupted acceptance retains private run-owned journals outside repositories. New
+acceptance refuses pending journals. Use
+`mise exec -- just bootstrap openbao-agent <operator-kubeconfig> recover <failed-run-id>`
+for separately authorized recovery: verify current deployed main, same cluster and exact
+owned identities, exclude concurrent recovery, and repeat disable/SecretID destruction/
+full session-expiry cleanup. Never reuse a previous process's monotonic timestamp as elapsed
+proof. Failure retains records; success removes only that run's private state and starts fresh
+recorded acceptance without re-enrolling the normal workstation. Do not remove another Lease
+holder. If only evidence publication failed, resume the retained record rather than rerun tests.

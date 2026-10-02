@@ -401,4 +401,4 @@ Stage 1 is complete. Future changes to its retained design must continue to esta
 
 Detailed audit rows, experiment attempts, sample exclusions, execution transcripts,
 commit identities, and rollout mechanics belong in Git history, retained evidence,
-issue 303, PRs, plans, and the relevant guides—not in this durable Stage 1 record.
+issue 303, PRs, retained evidence, and ignored plans—not in this durable Stage 1 record.

@@ -118,4 +118,53 @@ is that some displayed controls fail and Docker-host management is unavailable. 
 single retained database simplifies recovery but makes Portainer itself single-active.
 
 Current credential, acceptance, backup, and recovery procedure belongs in
-`docs/guides/portainer-operations.md`.
+`docs/specs/009-portainer-gitops-observability.md`.
+
+## Empty database and acceptance
+
+Stage source suspension and the encrypted bootstrap credential through reviewed Git;
+remove the active Gatus probe during deliberate suspension. Use the guarded
+`mise exec -- just bootstrap portainer` workflow from the authorized clean checkout matching
+deployed main. Its help/source owns exact guards. On failure it preserves resources and
+re-suspends reconciliation.
+
+Require administrator login, automatic local-environment discovery without an Agent or
+imported kubeconfig, permitted inventory/log reads, and no Secret-body visibility.
+Use `portainer-verify` to check the complete authorization graph; do not try a production
+mutation as a denial test because drift could let it succeed. Before activation, run the
+registered persistence test and then recheck login and usable UI state. That test proves
+same-claim pod replacement, not backup restore or full database semantics. Make activation
+and restored Gatus monitoring durable through Git, then rerun the verifier.
+
+## Recover lost administrator access
+
+Preserve the healthy PVC. Portainer's supported reset helper must exclusively mount the
+same database while the normal writer is stopped. There is no repository-guarded password
+reset workflow, so this remains an operator recovery boundary:
+
+1. Confirm Longhorn state and review the exact Flux/Helm stop, helper creation, cleanup,
+   and resume sequence. Reconciliation must not recreate the writer during helper access.
+2. Use the supported `portainer/helper-reset-password` process on that preserved claim;
+   never edit `portainer.db` manually or replace it merely to recover login.
+3. Remove the exact helper resource, restore normal reconciliation, and require login
+   plus `portainer-verify`.
+4. Update password-manager custody and matching encrypted bootstrap state.
+
+A generic upstream scale command is insufficient under Flux ownership. Implement and
+review a guarded workflow before automating this sequence.
+
+## Recover database state
+
+Retain a healthy claim. For lost/unusable state, choose a verified Longhorn backup,
+restore to a new claim, validate the database in isolation, then replace production
+through an approved recovery change. [Platform recovery](010-talos-flux-platform.md)
+owns storage prerequisites. Replication and scheduled backups do not prove restore
+acceptance. Require login, internal route, RBAC, persisted local environment, and actual
+Homepage data after recovery. If no usable database remains, use the empty-state lifecycle;
+Portainer never reconstructs Flux desired state.
+
+Standard/Edge Agents and Docker-host management remain outside this design. Docker socket
+access is host authority, and CE has no proven read-only Docker role. Any later integration
+needs separate authorization, bounded network paths, authenticated Agent acceptance, and
+continued external desired-state ownership. Database encryption requires its own key and
+recovery lifecycle rather than an unreviewed toggle.

@@ -28,16 +28,44 @@ class Parser(argparse.ArgumentParser):
 
 
 def parse_request(argv: list[str]) -> DiscoveryRequest:
-    parser = Parser(description=__doc__)
+    parser = Parser(
+        description=__doc__,
+        epilog=(
+            "For approved task access, first run 'mise exec -- just kube kubeconfig' "
+            "from the assigned worktree. Use 'list' to discover identities, then "
+            "'resolve --help' to select the intended purpose. Discovery reads private "
+            "metadata, not passwords; keep its output private."
+        ),
+    )
     actions = parser.add_subparsers(dest="action", required=True, parser_class=Parser)
-    listing = actions.add_parser("list")
+    listing = actions.add_parser("list", help="List registered identities and access metadata.")
     listing.add_argument("--domain")
-    resolution = actions.add_parser("resolve")
-    resolution.add_argument("domain")
-    resolution.add_argument("purpose", choices=["application", "migration", "workflow", "source"])
-    resolution.add_argument("--application")
-    resolution.add_argument("--pair")
-    resolution.add_argument("--access-kind", dest="access_kind")
+    resolution = actions.add_parser(
+        "resolve",
+        help="Resolve prerequisites and the supported next action for one identity.",
+        epilog=(
+            "For routine application access, select 'application --application NAME'. "
+            "A ready application or migration result supplies localProfile.serviceFile "
+            "and localProfile.service on the identity, plus nextAction with the connection "
+            "recipe and arguments. Keep that connection running while using the selected "
+            "profile in the consumer. Readiness does not authorize the consumer operation. "
+            "For a blocked result, report its prerequisite and nextAction; do not switch "
+            "to broader credentials or provision a replacement."
+        ),
+    )
+    resolution.add_argument("domain", help="Registered domain to inspect.")
+    resolution.add_argument(
+        "purpose",
+        choices=["application", "migration", "workflow", "source"],
+        help="Access purpose authorized for this task.",
+    )
+    resolution.add_argument(
+        "--application", help="Registered application name for application access."
+    )
+    resolution.add_argument("--pair", help="Registered NocoDB source pair for source access.")
+    resolution.add_argument(
+        "--access-kind", dest="access_kind", help="Source access kind: reader or operator."
+    )
     for child in [listing, resolution]:
         child.add_argument("--format", choices=["text", "json"], default="text")
     request = DiscoveryRequest(**vars(parser.parse_args(argv)))
@@ -119,7 +147,7 @@ def main(argv: list[str]) -> int:
             [{"name": "inventory_access", "status": code}],
             next_action={
                 "kind": "procedure",
-                "reference": "docs/guides/automation-data-operations.md#private-credential-discovery-installation",
+                "reference": "docs/specs/026-automation-data-postgresql-platform.md#private-credential-discovery-installation",
                 "owner": "Platform operator",
             },
         )
@@ -132,7 +160,7 @@ def main(argv: list[str]) -> int:
                 [{"name": "private_access_enrollment", "status": "missing"}],
                 next_action={
                     "kind": "procedure",
-                    "reference": "docs/guides/automation-data-operations.md#private-credential-discovery-installation",
+                    "reference": "docs/specs/026-automation-data-postgresql-platform.md#private-credential-discovery-installation",
                     "owner": "Platform operator",
                 },
             )

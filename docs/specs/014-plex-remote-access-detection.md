@@ -67,7 +67,7 @@ missing-signal, and adjacent exclusion behavior they asserted from the exact app
 rule expressions; they did not prove alert recovery. The historical off-cluster
 exercise used a host outside Kubernetes so Cilium supplied an off-cluster identity. It
 proved the selected firing shape and ntfy route, not alert recovery. The current
-detection-test guide separately requires firing and resolved notifications; source
+attended detection test separately requires firing and resolved notifications; source
 details remain private.
 
 The live source-matcher test deliberately used an off-cluster LAN host so Cilium would
@@ -242,3 +242,22 @@ Threshold tuning requires measured household and remote evidence. A false positi
 miss is not permission to adjust one constant without rechecking the neighboring flood,
 connection-rate, probe-ratio, and missing-signal cases. Authentication abuse, bandwidth,
 request shape, durable client history, and rate limiting remain separate future designs.
+
+## Response and stop conditions
+
+For active or uncertain material risk, remove the direct DNAT first using
+[specification 013](013-plex-direct-remote-access.md#disable-exposure); restart only if
+established sessions must be evicted. Otherwise observe briefly and compare Hubble time/
+source with Plex Dashboard, Tautulli, and known household activity.
+
+Detector absence requires inspection of the complete collection path and known live
+traffic. Remove exposure if blind detection makes it untrustworthy; fix durable source
+through Git. Workload policy denial is [a separate warning](015-alerting-architecture.md#plex-workload-policy-denial-signal):
+identify the consumer and ingress/egress boundary before changing the minimal intended
+policy. Unintended consumers remain denied. Never widen policy from an aggregate alert.
+
+Require new off-site connections blocked after containment, inspect old sessions separately,
+and retain local playback/verification. For repaired telemetry require known traffic and
+cleared alerts; for a policy fix require the real integration without new denials.
+Escalate on uncertain attribution, continuing material traffic, unsafe session eviction,
+blind telemetry, unclear integration ownership, or any need for broader authority.

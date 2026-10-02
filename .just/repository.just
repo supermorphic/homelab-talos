@@ -1822,7 +1822,7 @@ portainer-secrets:
 # consumes this pre-created Secret when oauth.clientId/clientSecret are empty. Create the
 # OAuth client in the tailnet admin console first (tagged tag:k8s-operator, scopes
 # Devices/Core + Keys/Auth Keys + Services = write) — see
-# docs/guides/tailscale-operator-operations.md.
+# docs/specs/010-talos-flux-platform.md#private-tailscale-access.
 # Never echoes the values.
 tailscale-operator-secrets:
     #!/usr/bin/env bash
@@ -1885,7 +1885,7 @@ tailscale-operator-secrets:
 # the mirrored Homepage widget Secret. ensure/reconcile/rotate/finalize preserve existing
 # credentials by default, generate them only for missing or rotated identities, and never
 # print secrets. Guard: NTFY_IDENTITY_CONFIRM='<action>:monitoring:ntfy:<identity>:sops'
-# (reconcile uses 'all' as the identity). See docs/guides/ntfy-operations.md.
+# (reconcile uses 'all' as the identity). See docs/specs/007-ntfy-notification-architecture.md.
 ntfy-identity action identity:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -1901,7 +1901,7 @@ ntfy-subscriber-password:
     just repo secrets
     exec scripts/secrets/ntfy-subscriber-password.sh
 
-# Reject broken relative Markdown links and bare repository documentation paths.
+# Check documentation placement, relative Markdown links, and bare repository paths.
 links-validate:
     scripts/validate/links-test.sh
 

@@ -25,7 +25,7 @@ controllers:
         # the Deployment automatically. `just ci` asserts it equals the real hash, so a config
         # edit can never silently fail to deploy. Update it whenever config.yml changes:
         #   git hash-object kubernetes/apps/media/qbit-manage/app/config.yml
-        config-hash: "9f81ba7ba81d5f6c95067527888d94ef3885dbb1"
+        config-hash: "aa463359c7ea11fa1572e53f6706d1cb2385d351"
         # qbit_manage reads QBT_USER/QBT_PASS from envFrom only when the process starts.
         # `just repo qbit-manage-secrets` updates this encrypted-Secret blob revision so
         # credential rotation changes the Pod template and forces a Recreate rollout.

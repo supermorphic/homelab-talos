@@ -363,8 +363,8 @@ record for this strategy.
 
 Specification 024 recorded `encode-benchmark` as Active while this corrected evaluation
 was still pending. That statement is historical and does not authorize another run. The
-terminal result leaves the runnable harness pending a separate removal change under the
-repository lifecycle policy; retaining it temporarily does not create another evaluation
+terminal result was followed by harness retirement during Stage 1 CI optimization
+(specification 024); this historical design record does not authorize another evaluation
 stage.
 
 An eventual FileFlows encoder requires a new strategy decision and a new numbered

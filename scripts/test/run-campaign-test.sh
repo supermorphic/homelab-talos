@@ -388,13 +388,6 @@ if TEST_CATALOG_PATH="$catalog" TEST_CAMPAIGN_TEST_MODE=true \
 fi
 rg -q 'scoped-verification requires scoped local-only mode' "$fixture/wrong-mode.out"
 
-if rg -n 'TEST_SCOPED_CAMPAIGN_CONFIRM' \
-  scripts/test/run-campaign.sh tests/mod.just README.md tests/README.md \
-  docs/guides/test-campaign-operations.md docs/guides/agent-cluster-access.md; then
-  echo 'Current campaign implementation or documentation still requires scoped confirmation.' >&2
-  exit 1
-fi
-
 mutating_root="$fixture/mutating"
 mutating_catalog="$mutating_root/catalog.yaml"
 mkdir -p "$mutating_root"

@@ -54,8 +54,8 @@ actual application containers. The original inode-only result did not test this 
 The live baseline and post-remount result remain unverified; the SMB protocol response
 was not captured. `nolease` removes client lease requests and related caching, so
 representative playback and NAS throughput must be checked during rollout. The
-[media setup guide](../guides/media-automation-setup.md#smb-lease-option)
-summarizes the mount-cycle requirement.
+PV edits do not change existing mounts: an operator must coordinate a mount cycle on
+every consuming node before evaluating the mitigation.
 
 Plex mounts the same SMB share read-only at `/Volumes/Prometheus` because its migrated
 database retains those historical paths. It uses node-local `emptyDir` for transcode
@@ -258,6 +258,108 @@ application remains single-active, so failover includes an outage while its Long
 claim reattaches. External metadata providers, trackers, the NAS, and the VPN provider
 remain real dependencies that a healthy Kubernetes Deployment cannot eliminate.
 
-Current application configuration belongs in `docs/guides/media-automation-setup.md`.
+Source and supported application settings own current configuration; independent recovery
+is described below.
 VPN credential and operating procedure belongs in
-`docs/guides/qbittorrent-vpn-operations.md`.
+`docs/specs/006-media-stack-architecture.md`.
+
+## qbit_manage containment and mistaken-clean recovery
+
+Flux suspension alone stops reconciliation, not the active scheduler. Containment is
+operator-run from the clean authorized primary checkout with administrative credentials:
+
+1. Run `QBIT_MANAGE_CONTAIN_CONFIRM='contain:qbit-manage:stop' mise exec -- just kube qbit-manage-contain stop`.
+   It freezes the Flux ownership chain and stops only qbit_manage. Notify operators that
+   broad reconciliation is frozen; leave qBittorrent/Gluetun seeding. Failed containment
+   is incomplete and requires investigation.
+2. Merge reviewed `spec.suspend: true` for the qbit_manage child. Update the clean
+   operator checkout to that exact deployed main commit, then run
+   `QBIT_MANAGE_CONTAIN_CONFIRM='contain:qbit-manage:finalize' mise exec -- just kube qbit-manage-contain finalize`.
+   Its source-revision check restores broad owners while keeping the child and workload
+   stopped. If it fails, retain the freeze; do not manually resume owners.
+3. Recover a mistaken clean before `/data/downloads/.RecycleBin` expires. The current
+   window is seven days; confirm the configured window when policy changes. Privately
+   identify the exact torrent, original path, and matching recycle entry. Require that
+   the original path contains no replacement data.
+4. Restore only that entry through an approved guarded operator workflow. If none
+   exists, add and review it before restoration. Do not use a broad move or ad hoc pod
+   shell. If seeding is needed, re-add the authorized torrent at its original path and
+   category, force recheck, then start. Require library playback, applicable tracker
+   credit, and unchanged unrelated torrents.
+5. Correct the policy through Git with the child suspended and intended HelmRelease
+   unsuspended. Use `mise exec -- just bootstrap qbit-manage` with its printed guard
+   from the updated operator checkout, and attend the first corrected run. Only after
+   semantic acceptance make activation durable through Git and rerun the verifier.
+
+Stop on ambiguous or expired recycle data, replacement files, unsafe policy correction,
+or failed guarded state checks. A library hardlink can survive recycle expiry, but a
+seedable download path then needs a separately reviewed recovery decision. Bootstrap
+failure re-suspends reconciliation while preserving resources; a running scheduler can
+survive, so contain it again when necessary. Keep torrent activity and raw logs private.
+
+## Application-state recovery
+
+Preserve a healthy retained claim on restart or upgrade. For lost state, prefer a trusted
+backup restored to a new claim and validated in isolation; broader storage recovery
+belongs to [the platform spec](010-talos-flux-platform.md). Never commit live databases
+or plaintext configuration exports. An empty replacement claim is a new installation.
+
+For deliberate empty-state bootstrap, stage encrypted dependencies and source suspension
+through reviewed Git, wait for deployed main to match, then use the existing guarded
+`mise exec -- just bootstrap` workflow from the clean authorized operator checkout.
+Scoped linked-worktree observer credentials do not authorize bootstrap. The recipe
+requires Git/live suspension and deployed-source agreement; on failure it preserves
+resources and re-suspends reconciliation. Help and [.just/bootstrap.just](../../.just/bootstrap.just)
+own exact application syntax and guards.
+
+Restore supported runtime configuration in this order: qBittorrent credentials/paths/
+categories, media-manager roots/authentication, Prowlarr indexers and app sync, direct
+imports, Plex libraries and refresh connectors, then Seerr and auxiliary consumers.
+Use internal Service names from source. Do not invent Remote Path Mappings when all
+managers share `/data`, or independently edit Prowlarr-synchronized indexers. Native
+Plex connector path maps stay blank; require a controlled import/rename to trigger the
+matching Plex library without a manual scan. Only library-changing events require scans.
+Television naming includes the series year, zero-padded season directories, and `S01E01`
+notation; movie naming includes title and release year. Confirm application naming previews
+rather than preserving version-specific token strings.
+
+Fresh qBittorrent activation requires the blocking VPN-disconnect resilience gate;
+[Lidarr](001-lidarr-music-stack.md) and [Tautulli](003-tautulli-plex-analytics.md) remain
+source-suspended through their stronger functional gates. Required runtime settings
+must be accepted before treating bootstrap readiness as completed recovery. Make durable
+activation through Git and rerun the relevant verifier.
+
+Before accepting Seerr, prove direct Sonarr and Radarr imports independently. Review
+Seerr household permissions, approval, and quotas; select intended downstream defaults.
+Then require one authorized TV request and one movie request to traverse the expected
+manager/category, hardlink import, Plex library refresh, and Seerr availability with
+accepted naming. Component readiness and Gatus selected-service reads cannot prove this
+workflow. No retained evidence yet establishes both request-to-library acceptance paths.
+
+Homepage media-widget keys are environment-backed and currently lack a media Secret
+rollout stamp: after a reviewed rotation, arrange authorized process replacement and
+require actual widget data. [Gatus integration credentials](019-media-integration-health-gatus.md)
+have the same process-replacement boundary. Supported UI/API settings and human gates
+remain necessary; they are not inferred from YAML renders.
+
+## VPN credential rotation and failure recovery
+
+For private-key rotation, keep the previous Proton credential valid, record the old
+qBittorrent Pod UID, and use `mise exec -- just repo protonvpn-secrets` under operator
+custody. Review both encrypted Secret and rollout-stamp changes through Git. After
+reconciliation, an operator must compare the new Pod UID, its `sops-hash` annotation
+against `git hash-object` of the encrypted Proton Secret, and a private SHA-256 digest
+of the running Gluetun `WIREGUARD_PRIVATE_KEY` against the intended new key. Perform
+that comparison with tracing off, non-echoing input, no printed key/digests, and immediate
+input cleanup. There is no guarded command for this complete uptake check; ad hoc exec
+requires explicit operator authority. Run the registered VPN probe before retiring the
+previous credential. A Secret change without startup replacement is insufficient.
+
+On failure retain the kill switch; revert through reviewed Git while the old credential
+is valid, or obtain and publish another valid key. Never bypass the VPN. Gluetun can
+restore traffic while DNS health or forwarded-port state remains unhealthy. Pod
+recreation is the known clean recovery; a same-namespace container restart is not proven
+to clear every partial state. If slow liveness recovery/restart alerts persist, escalate
+for an attended operator Pod replacement; no dedicated guarded recovery recipe exists.
+Proactive expiry reminders belong outside the cluster because no Proton expiry metric
+is available. Extending an unchanged valid key needs no Secret or rollout change.

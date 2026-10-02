@@ -28,8 +28,9 @@ the repository at that time; they are not present-day policy gates.
 
 ## One policy surface
 
-Root `AGENTS.md` is the sole vendor-neutral repository-policy surface. Subtree-specific
-procedures and facts belong in applicable guides, references, and runbooks. A client
+Root `AGENTS.md` is the sole vendor-neutral repository-policy surface. Source and command
+help own implementation facts; owning specs preserve design and independent recovery
+knowledge. General documentation is limited to the root README and specs. A client
 adapter such as [`CLAUDE.md`](../../CLAUDE.md) may import the root
 contract and add only client-specific operating guidance; it must not create a second
 repository policy.
@@ -40,11 +41,9 @@ This design avoids two failure modes:
   and
 - duplicated rules drift and leave an agent to decide which copy controls.
 
-Policy is organized by the order in which an agent needs it: repository context and
-communication, Git and worktree boundaries, authority and agent orchestration, secrets,
-public content, repository invariants, design lifecycle, validation, and completion. Its
-test contract covers stable structure without freezing an exact rule count or exact
-prose.
+Policy is organized by the order in which an agent needs it. Section headings and their
+order are presentation choices, not a tested interface. Validation protects the single
+policy location, executable adapter import, and actual hook behavior without freezing prose.
 
 ## Proportional planning and execution
 
@@ -69,6 +68,14 @@ ends with conclusions and evidence; production implementation is a new task to c
 before implementation, not a separate authorization event.
 These choices affect process overhead only: existing worktree, authority, credential,
 validation, and merge protections continue to apply.
+
+Issue 521 keeps original design reasoning and essential later changes in every existing
+specification, including historical designs. Later repeated execution inventories can be
+trimmed without rewriting the original intent. Routine fixes need no prose update;
+contract changes update the existing owner. Read only relevant sections, and keep plans
+ignored under `.tmp/`. Issue/PR comments carry new decisions, blockers, or meaningful
+outcomes with evidence links; unchanged status does not require a comment. Root policy
+owns these execution rules, including precedence over conflicting skill defaults.
 
 ## Effect-based authority
 
@@ -124,8 +131,11 @@ Credentials are separated by scope and checkout location.
   artifacts, templates, schemas, references, and non-secret metadata without obtaining
   the key or exposing plaintext.
 
-Credential files stay ignored and repository-relative so a worktree never inherits the
-primary clone's administrative identity by path. The session-start hook reports the
+The original paired credential installer has been replaced by the Kubernetes exec-profile
+installer and separate Talos reader workflow in [specification 031](031-openbao-agent-credential-profiles.md).
+Checkout configuration stays ignored and repository-relative; the workstation AppRole
+material stays protected outside checkouts. A worktree never inherits the primary clone's
+administrative identity by path. The session-start hook reports the
 checkout kind and recognized credential tier and warns when key material is present in
 the environment. This hook provides visibility; the credential and RBAC scopes provide
 the actual authorization boundary.
@@ -200,8 +210,8 @@ instead use schema validation, rendered output, policy applied across a class of
 negative authorization tests, external state, or an invariant whose two sides do not
 share the same editable source.
 
-The hook-test design verifies stable architecture: one tracked `AGENTS.md`, the semantic
-section order, a thin vendor shim, hook registration, credential visibility, and denial
+The hook-test design verifies stable architecture: one tracked `AGENTS.md`, an executable
+vendor import, hook registration, credential visibility, and denial
 of known irreversible Git command forms. It intentionally does not enforce a fixed
 policy size or repeat the normative policy text.
 
@@ -216,8 +226,7 @@ effective workload.
 The following alternatives were considered and rejected:
 
 - Nested `AGENTS.md` files were rejected because nearest-file precedence can weaken the
-  repository contract and because applicable guides and references carry local
-  procedure.
+  repository contract. Local implementation facts do not require another policy surface.
 - Tool-name prohibitions were rejected because different tools can cause the same
   effect, while the same tool can perform either bounded inspection or privileged
   mutation.
@@ -244,8 +253,8 @@ Implementation exposed several details that became durable design knowledge:
   force-with-lease fails;
 - worktree ownership needed to permit task-owned lifecycle management while protecting
   another task's or uncertain worktree;
-- the scoped credential workflow needed atomic publication and rollback of the
-  Kubernetes and Talos credential pair; and
+- the original scoped credential workflow needed atomic publication and rollback of the
+  Kubernetes and Talos credential pair; specification 031 records its later separation; and
 - negative authorization checks were necessary to prove that observer and diagnostic
   roles could not read Secret objects, mutate Flux resources, bind or escalate RBAC, or
   impersonate identities.

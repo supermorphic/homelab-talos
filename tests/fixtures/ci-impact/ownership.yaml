@@ -1,14 +1,12 @@
 schema_version: 1
 contracts:
-  campaign-documentation:
+  documentation-structure:
     changed_inputs:
       - README.md
-      - tests/README.md
-      - docs/guides/test-campaign-operations.md
-      - docs/guides/agent-cluster-access.md
+      - docs/specs/011-test-reporting-standard.md
+      - docs/specs/026-automation-data-postgresql-platform.md
     required_tests:
       - catalog:validation.links
-      - shell:campaign-runner
   narrow-just-commands:
     changed_inputs:
       - .just/cluster.just
@@ -28,11 +26,6 @@ contracts:
     required_tests:
       - setup:chainsaw-test-files
       - catalog:validation.n8n
-  chainsaw-documentation:
-    changed_inputs:
-      - tests/fixtures/chainsaw/README.md
-    required_tests:
-      - catalog:validation.links
   allure-report-unit:
     changed_inputs:
       - scripts/test/test_allure_report.py

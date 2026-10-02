@@ -177,4 +177,48 @@ outweighs the loss of the single Alertmanager lifecycle. Routine health, Flux ev
 and application-status changes remain on the existing Prometheus path.
 
 Current credential, client, producer, verification, and rotation procedure belongs in
-`docs/guides/ntfy-operations.md`.
+`docs/specs/007-ntfy-notification-architecture.md`.
+
+## Credential lifecycle and reconstruction
+
+The guarded `mise exec -- just repo ntfy-identity` workflow owns registry reconciliation
+and encrypted updates; help and [its implementation](../../scripts/secrets/ntfy-identity.sh)
+own syntax/guards. Under operator SOPS custody, establish the subscriber password, then
+reconcile all active identities before bootstrap. Reconciliation preserves active
+credentials and rejects undeclared Secret state. Retire via a registry tombstone before
+reconciliation; deleting the registry entry first leaves unauthorized unknown state.
+
+Git-managed consumers rotate with their encrypted mirrors and rollout stamps. API-managed
+Seerr and n8n consumers require this ordering:
+
+1. Stage one pending token and deploy the encrypted change so ntfy accepts old and new.
+2. Run guarded `mise exec -- just kube ntfy-consumer-sync <consumer>` from the authorized
+   deployed-source checkout. Synchronization prefers the pending token. Seerr tests before
+   saving managed fields; n8n updates its exact named private API credential while preserving
+   its ID. This is application mutation and does not import or publish workflows.
+3. Require real delivery acceptance before finalizing the token, then deploy finalization
+   to revoke the old token. An accepted credential API write alone is insufficient.
+
+On failure preserve the old token, repair sync/delivery, and reuse the existing pending
+rotation. Do not stage a second token or print credentials for manual copying. n8n's
+handler contract belongs to [specification 023](023-n8n-workflow-automation-platform.md).
+Subscriber password updates preserve service tokens and require client login updates.
+
+For lost ntfy state, restore/reconcile canonical ciphertext before using the existing
+guarded suspended-main bootstrap. Tailscale dependencies must already be ready. Start
+ntfy before a separately suspended bridge; successful verification then permits durable
+activation through Git. Ordinary rotation/restarts do not use exceptional bootstrap.
+A failed bootstrap preserves claims/Secrets and re-suspends reconciliation.
+
+## Failure interpretation
+
+Isolate failures from client toward producer: private URL/Tailscale reachability, server
+health, subscriber ACL, deployed ntfy verification, then bridge or application sync.
+Direct publish success with integration failure points upstream of ntfy. For iOS-only
+failure inspect upstream HTTPS, notification permissions, canonical server/subscriptions,
+and Tailscale availability; do not open anonymous topics or public access as a shortcut.
+
+The registered Flux delivery test requires attributable firing and resolved cache messages;
+handset receipt remains separate. Homepage shows the latest cached critical message,
+including resolved messages, rather than active-alert state. Monitoring and delivery share
+cluster fate, so these controls cannot provide independent dead-man monitoring.

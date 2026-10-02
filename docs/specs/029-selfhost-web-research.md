@@ -524,7 +524,7 @@ Explicitly test bootstrap replacement and coordinated server rollout. Keep the
 route unavailable if a required policy or usable credential is absent.
 
 Before publication, follow the
-[contributor workflow](../guides/repository-worktree-setup.md#prepare-validate-and-publish-a-change).
+[repository validation policy](../../AGENTS.md#validation).
 Operator bootstrap
 precedes initial deployment. Required live acceptance precedes Gatus activation and
 declaring the platform ready. Merge needs explicit operator authorization. Reconcile
@@ -635,4 +635,4 @@ internet access but no cluster credentials or production secret.
 - [n8n platform](023-n8n-workflow-automation-platform.md)
 - [Current Gatus checks](../../kubernetes/apps/monitoring/gatus/app/values.yaml)
 - [Media integration evidence boundaries](019-media-integration-health-gatus.md)
-- [Private lab-domain Tailscale access](../guides/tailscale-lab-domain-access.md)
+- [Private lab-domain Tailscale access](010-talos-flux-platform.md#private-tailscale-access)

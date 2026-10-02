@@ -62,8 +62,6 @@ n8n_restore_command_test='scripts/test/n8n-restore-command-test.sh'
 n8n_persistence='scripts/test/scenarios/n8n-persistence.sh'
 n8n_restore_drill='scripts/test/scenarios/n8n-restore-drill.sh'
 n8n_smoke='tests/chainsaw/smoke/platform/n8n/chainsaw-test.yaml'
-n8n_operations='docs/guides/n8n-operations.md'
-platform_recovery='docs/runbooks/platform-disaster-recovery.md'
 bootstrap_just='.just/bootstrap.just'
 kubernetes_just='kubernetes/mod.just'
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/n8n-validate.XXXXXX")"
@@ -185,7 +183,7 @@ for file in "$n8n_verifier" "$n8n_verification_lib" "$n8n_verification_contract_
   "$n8n_job_wait_lib" "$n8n_job_wait_test" \
   "$n8n_restore_command_lib" "$n8n_restore_command_test" \
   "$n8n_persistence" "$n8n_restore_drill" "$n8n_smoke" \
-  "$n8n_operations" "$platform_recovery" "$catalog" "$bootstrap_just" \
+  "$catalog" "$bootstrap_just" \
   "$kubernetes_just"; do
   [[ -f "$file" ]] || { echo "Missing n8n operations source: $file" >&2; exit 1; }
 done
@@ -216,73 +214,6 @@ kustomize build "$temp_dir/public-route-disabled" \
   echo 'The Git-owned public route containment source does not build empty.' >&2
   exit 1
 }
-
-# Validate executable Markdown command blocks as shell and inspect the actual curl
-# option/config contracts. Human explanatory prose is deliberately not an oracle.
-python - "$n8n_operations" <<'PY'
-import re
-import shlex
-import subprocess
-import sys
-from pathlib import Path
-
-document = Path(sys.argv[1]).read_text(encoding="utf-8")
-blocks = re.findall(r"```bash\n(.*?)\n```", document, re.DOTALL)
-if not blocks:
-    raise SystemExit("The n8n operations guide has no executable shell command blocks.")
-for index, block in enumerate(blocks, start=1):
-    syntax = subprocess.run(
-        ["bash", "-n"], input=block, text=True, capture_output=True, check=False
-    )
-    if syntax.returncode:
-        raise SystemExit(
-            f"The n8n operations block {index} is not valid Bash syntax."
-        )
-    for line in block.splitlines():
-        read_match = re.match(r"\s*(?:IFS=\s*)?read\s+(.*)", line)
-        if not read_match:
-            continue
-        for token in shlex.split(read_match.group(1), posix=True):
-            if token == "--":
-                break
-            if (
-                token.startswith("-")
-                and not token.startswith("--")
-                and "p" in token[1:]
-            ):
-                raise SystemExit(
-                    f"The n8n operations block {index} uses the incompatible read -p option."
-                )
-section_match = re.search(
-    r"## Off-network acceptance\n(.*?)(?=\n## )", document, re.DOTALL
-)
-off_network_section = section_match.group(1) if section_match else ""
-off_network = next((block for block in blocks if "n8n-off-network" in block), "")
-normalized = off_network_section.replace("\\\n", " ")
-direct_curls = [line for line in normalized.splitlines() if "curl --silent" in line]
-config_contract = {
-    "umask 077",
-    "mktemp -d",
-    "trap cleanup_check_dir EXIT",
-    "trap 'exit 130' INT",
-    "trap 'exit 143' TERM",
-    "rm -rf -- \"$check_dir\"",
-    "connect-timeout = 10",
-    "max-time = 30",
-}
-if (
-    not off_network
-    or not all(marker in off_network for marker in config_contract)
-    or not direct_curls
-    or any(
-        "--connect-timeout" not in command or "--max-time" not in command
-        for command in direct_curls
-    )
-):
-    raise SystemExit(
-        "The off-network n8n curl commands lack bounded requests or trap-backed restricted cleanup."
-    )
-PY
 
 # Both mutating scenario implementations must reject an absent confirmation before
 # trying to inspect kubeconfig or contact Kubernetes.

@@ -226,7 +226,7 @@ application namespace cannot attach another backend directly.
 The initial HTTPRoute uses an `Exact` match for `/webhook/platform-canary`, targeting
 the `automation/n8n:5678` Service through a narrow ReferenceGrant. Later integrations
 add non-overlapping exact paths through Git/Flux, following the
-[integration activation procedure](../guides/n8n-operations.md#add-a-public-webhook-integration).
+[integration activation procedure](023-n8n-workflow-automation-platform.md#access-and-webhook-routing).
 The HTTPRoute is the source of truth for the allowlist; this specification retains
 the canary as its example. The source validator, live route verifier, and smoke
 assertions enforce the approved inventory. The route does not expose `/webhook/*`,
@@ -354,7 +354,7 @@ cluster as backup payload.
 The recovery unit is deliberately distributed: the dated logical archive is retained on
 the backup claim and its Longhorn NAS backup, while the unchanged SOPS-encrypted key
 manifest is retained in the remote Git history. Repository validation confirms that the
-encrypted manifest remains present. The platform runbook identifies both recovery roots;
+encrypted manifest remains present. The recovery path below retains both roots;
 the logical dump alone is not a complete n8n backup. The backup job never reads or copies
 the plaintext encryption key into a dump, checksum file, log, or metrics series.
 
@@ -365,9 +365,9 @@ is not a normal Secret refresh.
 ### Recovery objective
 
 The off-cluster recovery-point objective is 24 hours. There is no fixed recovery-time
-objective because database restore and validation are manual. The operations guide
-distinguishes pod rescheduling, storage recovery, and logical restore; the platform
-runbook covers the recovery roots and operator authorization. Guarded scripts and tests
+objective because database restore and validation are manual. The recovery path below
+distinguishes pod rescheduling, storage recovery, and logical restore; the platform spec
+owns infrastructure recovery and its authority boundaries. Guarded scripts and tests
 own artifact selection, isolated restore, credential proof, and cleanup behavior.
 
 ## Workflow and data ownership
@@ -501,8 +501,8 @@ acceptance, and must be rechecked on upgrades; it is not an architectural invari
 Acceptance uses two independent private, authenticated automatic failure fixtures bound
 to the same handler, with synthetic sensitive markers. It checks notification content,
 execution links, bounded delivery failure, absence of recursive executions, and cleanup.
-The procedure and current validation status belong in the
-[n8n operations guide](../guides/n8n-operations.md#shared-workflow-failure-notifications).
+The registered scenario and command help own execution details; retained reports record
+acceptance results.
 
 ## Capacity
 
@@ -676,6 +676,12 @@ the database, use pod exec, or send a webhook request.
 Authenticated canary execution belongs to the attended mutating persistence, restore,
 and off-network acceptance paths.
 
+During off-network acceptance, keep a separate client on the private path for execution
+inspection while the test client is disconnected from LAN/VPN. Put authentication headers
+in an owner-readable temporary request configuration, not process arguments. Bound requests
+with connection and total timeouts; clean up private request/response files on success,
+failure, or interruption and exclude them from retained evidence.
+
 Combined read-only and attended live acceptance verifies:
 
 1. Flux reports the public Gateway, PostgreSQL, n8n, and monitoring resources ready.
@@ -764,9 +770,46 @@ requirement. Those conditions may justify Redis queue mode, worker pools, a data
 operator, larger claims, more frequent off-cluster backups, or Authentik integration.
 They do not require those components in advance.
 
-Before merge, reconcile this specification with the implemented chart and image versions,
-actual configuration fields, rendered resources, operations guide, platform recovery
-boundary, and validated cluster result.
+Before merging a changed contract, reconcile its design and evidence limits with the
+implementation. Source owns current pins, fields, and rendered resources; reports retain
+individual acceptance results. Routine implementation changes need no prose update.
+
+## Choose a recovery path
+
+1. With healthy claims and an unready pod, preserve state and let its controller reschedule;
+   use `mise exec -- just kube n8n-verify` after recovery.
+2. With unavailable storage, preserve the volume and follow the storage boundary in
+   [platform recovery](010-talos-flux-platform.md). Do not recreate claims as rollback.
+3. With logical database damage, preserve current state and first restore a selected
+   validated archive in isolation with the retained encryption key. Production replacement
+   requires explicit operator authority; the isolated drill does not perform it.
+4. If incomplete or incorrect public responses are possible, contain exposure below before
+   recovery. Re-enable only after private and off-network acceptance.
+
+The guarded `mise exec -- just kube n8n-restore-drill` checks restored authentication,
+persistence, and run-owned cleanup. It requires authorized mutation credentials and its
+exact confirmation. Failure or cleanup failure stays failed. Independent recovery must
+prove that restored n8n can use a retained credential; checksums and healthy replicas
+alone cannot establish that chain.
+
+## Public exposure rollback
+
+Remove router TCP/443 forwarding first and prove off-network containment. Disable its
+DDNS profile and remove the public record when withdrawing exposure durably; preserve
+the Git-managed internal DNS record. Suspension does not delete an applied HTTPRoute.
+
+In the reviewed Git containment change, keep `public-webhook-route` unsuspended with
+pruning enabled and make its
+[route Kustomization](../../kubernetes/apps/networking/public-webhook-gateway/route/kustomization.yaml)
+select `resources: []`. Wait for current-generation reconciliation and prove
+`networking-public/n8n-platform-canary` absent before a later Git change suspends the
+child. If either containment or absence proof fails, stop; do not suspend early.
+Durable withdrawal removes the public Gatus endpoint/Secret reference and n8n alert
+selection while preserving their staged activation sources and the private readiness check.
+
+Reactivation restores the exact route and monitoring selections through Git, waits for
+current acceptance, verifies DDNS, and restores forwarding last. Keep claims, encryption
+material, and dumps throughout withdrawal and rollback.
 
 ## External references
 

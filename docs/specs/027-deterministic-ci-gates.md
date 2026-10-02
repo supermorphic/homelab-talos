@@ -132,28 +132,16 @@ against the complete rebased tree.
 
 ### Impact reassessment after validation cleanup
 
-The selector accepts `ci-framework` as a conditional group. The campaign documentation
-read by its framework test selects `core` and `ci-framework`. Chainsaw test documents
-select those groups for lint and catalog checks; the n8n smoke document also selects
-`automation` because its validation reads that file. The cluster and node `just` modules
-select `core`, which owns their command contract test. Shared bootstrap and repository
-modules, CI gate code, catalog inputs, and unknown paths still select full.
+CI selection follows actual executable consumers. General documentation selects `core`
+for structural/link checks; it no longer selects framework or automation groups merely
+because tests formerly inspected guide prose. Chainsaw test documents still select their
+lint/catalog owners, and n8n smoke selects automation as an actual consumer.
 
-These examples classify the complete file changes in recent merged commits against the
-previous and current maps. They show actual group reductions, including cases where other
-changed files retain an additional group.
-
-| Merged change | Previous groups | Current groups |
-| --- | --- | --- |
-| `#446` Portainer Chainsaw assertion (one file) | all four | `core`, `ci-framework` |
-| `#457` media playback fix and testing documentation | all four | `core`, `ci-framework` |
-| `#454` qbit_manage fixture and testing documentation | all four | `core`, `ci-framework` |
-| `#448` Flux alert delivery test and testing documentation | all four | `core`, `observability`, `ci-framework` |
-| `#445` shared campaign runner and fixture | all four | all four |
-
-The ownership fixture ties each reduced input to independently listed catalog or harness
-evidence. The planner tests also require unknown inputs to fall back to full, `core` to
-remain always selected, and full selection to remain the exact ordered group union.
+Shared bootstrap/repository modules, CI gate code, catalog inputs, and unknown paths
+remain fail-broad. The ownership fixture independently identifies required evidence;
+planner tests keep `core` mandatory and full selection equal to the ordered group union.
+[The earlier reassessment](https://github.com/supermorphic/homelab-talos/pull/471)
+records the initial reductions; `tests/impact.yaml` owns the current mapping.
 
 ## Harness decomposition and exact-once ownership
 
@@ -268,7 +256,7 @@ The optional local `ci-publish` command reuses the hosted planner, grouped execu
 and canonical reconciliation. Its receipt binds the clean candidate and freshly fetched
 base, so an edited branch or newer main needs fresh validation. This shared selection
 path avoids a second classification system. Current contributor procedure is in the
-[repository and worktree guide](../guides/repository-worktree-setup.md#prepare-validate-and-publish-a-change);
+[repository validation policy](../../AGENTS.md#validation);
 the executable contract is in the [CI impact map](../../tests/impact.yaml) and
 [planner](../../scripts/test/ci_plan.py).
 
@@ -303,40 +291,22 @@ categories. No runtime number overrides correctness or justifies unnecessary mac
 
 ## Implementation status
 
-Stage 2 implementation and rollout are complete. Pull requests plan affected groups, while
-manual dispatch requests full validation. The matrix consumes the validated plan's
-groups; the duplicate provider `ci` job is removed. The optional local publication
-wrapper uses the same planner and grouped execution and checks the candidate and base.
+Stage 2 rollout is complete: pull requests plan affected groups, manual dispatch selects
+full validation, and protection requires `merge-gate` with strict current-main checks.
+The optional local publisher uses the same planner and checks candidate/base identity.
+The [rollout closeout](https://github.com/supermorphic/homelab-talos/pull/402) records
+full/grouped equivalence, cancellation failing the gate, selective execution, protection
+readback, and local publication acceptance.
 
-Split-all provider execution established equivalent full and grouped evidence on the
-same candidate tree. On the merged workflow, cancellation of the group jobs caused
-the always-running gate to fail; a complete retry produced passing group results and
-reconciliation. Protection now requires `merge-gate` with strict current-main checks;
-the applied rules passed independent readback. The selection-enabled provider workflow
-passed with its dynamically planned full group set for a CI-framework change, without
-the duplicate full job. A subsequent automation change ran only core and automation,
-omitted unrelated groups, and passed required reconciliation. The local publication
-command also passed end to end on the same candidate as full local CI, with identical
-test identities and outcomes, including final candidate and remote-base checks.
+Initial provider observations showed comparable core and longest-group durations.
+Selection can save aggregate validation work while providing smaller wall-time savings;
+optimize core when it limits the critical path. Long-term variance and skip-frequency
+observations are ongoing tuning, not unfinished rollout requirements.
 
-Long-term skip-frequency, runtime variance, capacity, and serialized merge-drain
-measurements remain normal operational observations, not unfinished rollout prerequisites.
-
-The initial provider observation shows comparable core and longest-group durations.
-Selective execution can therefore save substantial aggregate validation work while
-offering smaller wall-time savings. Continue measuring both; optimize core intrinsically
-if it limits the critical path. Existing group boundaries remain appropriate, including
-automation's now-material validation cost.
-
-Local group execution is sequential while each harness retains bounded parallelism.
-Parallel local groups are feasible, but unlike isolated provider runners they share
-one host with other worktrees. Any increase should measure aggregate worker/resource
-usage and wall time before selecting a bound. It is optional tuning, not a correctness
-requirement or a prerequisite for this initiative's closeout.
-
-Operational commands and inspection examples live in
-[the testing guide](../../tests/README.md). Detailed execution evidence and remaining
-task mechanics belong in issues, PRs, retained artifacts, and transient plans.
+Local groups execute sequentially with bounded parallelism inside each harness. Increasing
+local group concurrency needs host-wide resource and wall-time measurements because
+worktrees share the host; isolated provider runners do not have that same boundary.
+Command help owns invocation details; retained reports and PRs own execution evidence.
 
 ## Deferred work
 
@@ -346,3 +316,25 @@ The Stage 3 boundary and deployment/isolation dependency handoff remain in
 A later measured decision and new numbered implementation specification must authorize
 that work. This design does not assume an off-cluster runner is faster, prescribe a benchmark protocol,
 or introduce trusted cross-run attestations.
+
+## Repository protection recovery
+
+[The tracked checker](../../scripts/repository/github_protection.py) owns exact required
+repository settings and rules. Its objective is that `main` advances only through a
+current successful squash pull-request merge, without bypass actors. Repository merge
+settings and the ruleset must agree; an update restriction with no bypass actors would
+also block valid GitHub merges.
+
+The checker needs Administration access to inspect the bypass list and effective rules.
+A passing ruleset check does not inspect the separate legacy branch-protection API:
+also verify no legacy rule targets `main` in GitHub Settings. Ruleset availability is a
+protection prerequisite; a plan/visibility-related HTTP 403 is failed protection, not
+permission to continue without enforcement. Confirm support before changing visibility.
+
+Use `mise exec -- just repo github-protection-check`, then `github-protection-plan` to
+review drift. Repair only through `github-protection-apply` with specific operator
+administrative authorization and its exact repository-bound confirmation; it reads back
+the effective contract. Duplicate managed rulesets or unrelated effective rules require
+deliberate resolution rather than guessing. That authorization does not permit a merge.
+Verify functional behavior using a real PR and a new candidate commit. Never probe
+protection with a direct push to production: a broken rule could let Flux deploy it.

@@ -12,7 +12,7 @@ observability metadata. Per-resource readiness is therefore load-bearing: health
 controller processes do not prove that the declared platform state is converging.
 
 This specification records the accepted rationale and evidence boundary. Current
-monitoring source, tests, and applicable guides or references define operational behavior.
+monitoring source, tests, and command help define operational behavior.
 
 ## Metric architecture
 
@@ -130,40 +130,22 @@ Consolidation removes that operational overhead while preserving Flux readiness 
 
 ## September 2026 upgrade debrief
 
-A successful values-change upgrade disproved the assumption that all changes to the
-shared monitoring release fail. The earlier upgrade failure's cause remains unproven.
-
-Grafana now uses `Recreate` so that Deployment updates terminate the old pod before
-creating its replacement. Its persistent-storage setup must not rely on overlapping
-update pods. `ReadWriteOnce` permits multiple pods on one node, so it does not imply
-that every rolling update deadlocks. Updates that replace Grafana's pod incur downtime.
-
-The strategy transition initially failed because server-side apply retained
-API-defaulted `rollingUpdate` fields, even with explicit null. The correction selects
-client-side strategic merging for kube-prometheus-stack upgrades through
-`.spec.upgrade.serverSideApply: disabled`, retaining Grafana's `Recreate` and explicit
-`rollingUpdate: null` values. This applies to upgrades of the whole release; chart
-versions, drift detection, and the dedicated exporter remain unchanged. Returning to
-server-side apply requires separate transition evidence, not just a successful render.
-
-On September 5, 2026, the upgrade succeeded and Grafana was ready with `Recreate` and
-no remaining `rollingUpdate` fields. Live `monitoring-verify` passed, including all
-five Flux kinds, both alert rules, and the Alertmanager route. This establishes the
-bounded upgrade prerequisite for consolidation, not exporter migration or external
-firing-and-resolved delivery.
+Grafana uses `Recreate` for persistent-storage updates; replacement incurs downtime.
+The transition exposed server-side apply retaining API-defaulted `rollingUpdate`
+fields even with explicit null. The shared monitoring release therefore uses
+client-side strategic merging for upgrades with explicit `rollingUpdate: null`.
+Returning to server-side apply needs transition evidence, not just a successful render.
+The September 2026 upgrade and live monitoring verification passed. The earlier
+upgrade failure's cause remains unproven; this result did not by itself establish
+exporter migration or external notification delivery.
 
 ## Exporter consolidation
 
-Shadow collection passed live comparison against the independent Flux API inventory for
-all five kinds. Production consumers now select the bundled source, with standard
-Kubernetes metrics and existing alert semantics preserved. Explicit source selection
-prevents parallel collection from duplicating alerts or concealing loss of production
-metrics. Post-cutover monitoring and API-backed parity passed, including a full
-15-minute healthy observation interval. On September 7, the operator-run scenario
-exercised the production 15-minute rule and the operator confirmed receipt of the
-matching warning and resolved notifications from the bundled source. Independent
-cleanup and monitoring checks passed, satisfying the delivery gate for removal.
-The final cleanup removes the separate release and migration-only parity tooling,
-retaining independent five-kind, source-selection, and permission checks. Actual
-resource removal still requires post-merge reconciliation verification. Detailed rollout
-sequencing and test procedures belong in the implementation plan.
+Production consumers select the bundled exporter after API-backed comparison across
+all five Flux kinds. Explicit source selection prevents duplicate alerts or concealed
+loss of production metrics. The separate exporter and migration-only parity tooling
+were removed; independent inventory, source-selection, and permission checks remain.
+The [consolidation change](https://github.com/supermorphic/homelab-talos/pull/379)
+records healthy observation and operator-confirmed warning/resolved delivery from the
+bundled source. Source removal and successful tests are distinct from post-merge
+verification that the removed resources have reconciled.

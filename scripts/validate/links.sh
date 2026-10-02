@@ -95,11 +95,11 @@ scan_markdown() {
     target="${target%>}"
 
     case "$target" in
-      \#*|http://*|https://*|mailto:*) continue ;;
-      /*|file:*)
-        report_failure "$source" "$line" 'forbidden Markdown link target' "$target"
-        continue
-        ;;
+    \#* | http://* | https://* | mailto:*) continue ;;
+    /* | file:*)
+      report_failure "$source" "$line" 'forbidden Markdown link target' "$target"
+      continue
+      ;;
     esac
 
     path="$(unescape_destination "$target")"
@@ -134,7 +134,7 @@ scan_bare_path() {
     [[ -n "$target" ]] || continue
     resolved="$target"
     case "$target" in
-      ./*|../*) resolved="$(dirname "$source")/$target" ;;
+    ./* | ../*) resolved="$(dirname "$source")/$target" ;;
     esac
     if [[ ! -f "$resolved" ]]; then
       report_failure "$source" "$line" 'missing bare path target' "$target"
@@ -142,6 +142,32 @@ scan_bare_path() {
       report_failure "$source" "$line" 'non-local bare path target' "$target"
     fi
   done <<<"$matches"
+}
+
+# General prose has two homes. Functional fixtures use a narrow path category;
+# policy, adapters, and provenance use exact paths. Review must reject manuals
+# disguised as fixtures: this path check cannot establish actual consumption.
+check_document_path() {
+  local source="$1" name
+  case "$source" in
+  README.md | AGENTS.md | CLAUDE.md | \
+    kubernetes/apps/monitoring/homepage/app/icons/NOTICE.md | \
+    scripts/test/core/fixtures/PROVENANCE.md) return ;;
+  docs/specs/*)
+    name="${source#docs/specs/}"
+    if [[ "$name" != */* && "$name" =~ ^[0-9]{3}-[a-z0-9-]+\.md$ ]]; then
+      return
+    fi
+    ;;
+  esac
+  if [[ "$source" =~ ^tests/fixtures/([^/]+/)*[^/]+\.(md|txt)(\.in)?$ ]]; then
+    return
+  fi
+  case "${source,,}" in
+  *.md | *.mdx | *.markdown | *.rst | *.adoc | *.asciidoc | *.txt | *.text | *.html | *.htm | *.org | *.md.in | *.txt.in)
+    report_failure "$source" 1 'unsanctioned documentation path' "$source"
+    ;;
+  esac
 }
 
 markdown_paths="$(mktemp)"
@@ -156,14 +182,15 @@ while IFS= read -r -d '' source; do
 done <"$markdown_paths"
 
 bare_pattern='(?<![\w$/{}.-])(?:docs/[A-Za-z0-9._/-]+\.md|(?:[A-Za-z0-9._-]+/)+(?:README|AGENTS)\.md)(?![A-Za-z0-9_/-]|\.[A-Za-z0-9_-])'
-git ls-files -z ':(exclude)docs/specs/*' >"$bare_paths"
+git ls-files -z >"$bare_paths"
 while IFS= read -r -d '' source; do
   [[ -e "$source" ]] || continue
-  scan_bare_path "$source"
+  check_document_path "$source"
+  [[ "$source" == docs/specs/* ]] || scan_bare_path "$source"
 done <"$bare_paths"
 
 if ((failed != 0)); then
   exit 1
 fi
 
-echo 'Tracked Markdown links and bare repository paths resolve.'
+echo 'Documentation paths, tracked Markdown links, and bare repository paths pass.'

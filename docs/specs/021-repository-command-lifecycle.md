@@ -29,8 +29,8 @@ candidate taxonomy that preceded this audit. The audit covered:
 - catalog validation, reachable-verifier analysis, scoped RBAC comparison, campaign
   orchestration, result coordination, and command-focused tests;
 - repository policy in `AGENTS.md`;
-- root and subsystem README files, testing references, setup guides, and operational
-  runbooks;
+- root README and owning specifications (the original migration also covered the now-retired
+  guides, references, and runbooks);
 - GitHub protection check, plan, and apply behavior;
 - Talos maintenance-mode and live apply behavior;
 - first-time and application bootstrap transactions;
@@ -448,8 +448,8 @@ Rename:
 - catalog `validation.repo-verify` and scenario `verify` to
   `validation.repo-validate` and scenario `validate`.
 
-Update every repository-owned recipe dependency, CI reference, test, variable, README,
-guide, runbook, and command example in the same change. Do not leave aliases or deprecated
+Update every actual repository-owned recipe dependency, CI reference, test, variable,
+and retained command example in the same change. Do not leave aliases or deprecated
 terminology.
 
 ### Observational ntfy verification
@@ -459,7 +459,7 @@ instruction that enables it.
 
 Expose the three-message positive path as a purpose-specific `ntfy-publish-test` in the
 controlled-test profile. Register it as mutating, require an exact confirmation that
-binds ntfy and the tested topics, and update the ntfy operations guide and focused tests.
+binds ntfy and the tested topics, and update affected ntfy recovery instructions and focused tests.
 
 Denied publish attempts remain valid verifier assertions because denial is the expected
 result and no target mutation can persist.
@@ -581,28 +581,19 @@ The resulting convention establishes these standards:
 
 ## Durable documentation placement
 
-Create a concise `docs/reference/repository-command-lifecycle.md` as the current durable
-reference. It will document:
-
-- the five primary semantic terms;
-- the accepted workflow profiles;
-- stages and safeguards;
-- authority versus confirmation;
-- the future-command decision framework;
-- representative profile examples; and
-- repository invariants.
-
-Do not maintain a second manual inventory of every recipe. Source-adjacent README files,
-the Just modules, and `tests/catalog.yaml` continue to own executable command details.
+The original design separated a concise lifecycle reference from this design record.
+Issue 521 removes that duplicate surface: this specification retains the semantic terms,
+workflow profiles, rationale, safeguards, and invariants. Just modules, command help, and
+`tests/catalog.yaml` own executable details; do not maintain a second recipe inventory.
 
 `AGENTS.md` remains limited to actual agent authority and safety rules. Add only concise
 policy that agents must obey, such as observational verification, independent authority,
 immediate precondition checks, and no credential fallback. Do not copy the taxonomy into
 that file.
 
-`docs/reference/testing-layers.md` and `tests/README.md` remain focused on test tiers,
-evidence, and execution. They should reference the lifecycle document where needed rather
-than becoming the repository-wide command-semantics authority.
+The [test-reporting specification](011-test-reporting-standard.md) owns the evidence
+design. Root README provides command discovery. No separate reference, guide, runbook,
+or nested README is required by this design.
 
 ## Mechanical enforcement
 
@@ -688,7 +679,7 @@ Implementation will use focused tests for every changed contract and finish with
 
 Live cluster execution is not required for implementation tests when fixtures and command
 stubs independently prove control flow. Later live execution follows current repository
-authority policy and the relevant runbook.
+authority policy and the owning recovery contract.
 
 Before merge, reconcile this specification with the implemented and validated result.
 After merge, it becomes a historical record; material later redesign uses a new numbered

@@ -126,9 +126,9 @@ and album discovery can still fail while the workload remains healthy.
 
 The original Lidarr rollout intentionally left Plex Music creation and Plexamp/Sonos
 integration to later work. The current
-[media automation guide](../guides/media-automation-setup.md) owns Plex Music creation
+[media recovery section](006-media-stack-architecture.md#application-state-recovery) owns Plex Music creation
 and the Lidarr-to-Plex refresh connection. Plexamp and Sonos operations and troubleshooting
-belong in the [Plex remote-access guide](../guides/plex-remote-access-operations.md). Those
+belong in the [Plex Relay and Sonos recovery](008-plex-relay-sonos.md#recover-sonosplexamp-linking). Those
 integrations were not evidence for accepting the Lidarr workload itself. Automated
 Chainsaw coverage also remains a deliberate all-`*arr` decision rather than one-off
 Lidarr coverage. A synthetic metadata transaction is still deferred because it would
@@ -140,4 +140,4 @@ and add an external-metadata monitor only when its failure signal and operating 
 defined. Neither change requires a different storage, VPN, or torrent-lifecycle model.
 
 Current first-run, credential, naming, and recovery procedure belongs in
-`docs/guides/media-automation-setup.md`.
+`docs/specs/006-media-stack-architecture.md`.

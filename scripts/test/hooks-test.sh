@@ -148,57 +148,8 @@ if [[ "$tracked_agent_files" != 'AGENTS.md' ]]; then
   exit 1
 fi
 
-required_agent_headings=(
-  'Repository context'
-  'Communication style'
-  'Git and worktrees'
-  'Authority boundaries'
-  'Agent orchestration'
-  'Secrets and credentials'
-  'Public repository'
-  'Repository invariants'
-  'Design lifecycle'
-  'Validation'
-  'Completion'
-)
-mapfile -t actual_agent_headings < <(sed -n 's/^## //p' "$repo_root/AGENTS.md")
-previous_heading_index=-1
-for required_heading in "${required_agent_headings[@]}"; do
-  heading_count=0
-  heading_index=-1
-  for index in "${!actual_agent_headings[@]}"; do
-    if [[ "${actual_agent_headings[$index]}" == "$required_heading" ]]; then
-      ((heading_count += 1))
-      heading_index="$index"
-    fi
-  done
-  if ((heading_count != 1 || heading_index <= previous_heading_index)); then
-    echo 'AGENTS.md canonical semantic sections must each appear once and in order.' >&2
-    printf 'Required sections:\n' >&2
-    printf '  %s\n' "${required_agent_headings[@]}" >&2
-    printf 'Actual sections:\n' >&2
-    printf '  %s\n' "${actual_agent_headings[@]}" >&2
-    exit 1
-  fi
-  previous_heading_index="$heading_index"
-done
-
-if rg -q '\[(Authoritative —|Operator policy — operator|Gotcha)\]' "$repo_root/AGENTS.md"; then
-  echo 'AGENTS.md must not expose design-time provenance labels.' >&2
-  exit 1
-fi
-
 rg -qx '@AGENTS.md' "$repo_root/CLAUDE.md" || {
   echo 'CLAUDE.md must import AGENTS.md.' >&2
   exit 1
 }
-rg -q '^## Claude Code specifics$' "$repo_root/CLAUDE.md" || {
-  echo 'CLAUDE.md must retain the Claude-specific operating heading.' >&2
-  exit 1
-}
-if rg -q 'SOPS-encrypted|Never push|ReadWriteOnce' "$repo_root/CLAUDE.md"; then
-  echo 'CLAUDE.md must not repeat repository rules from AGENTS.md.' >&2
-  exit 1
-fi
-
 echo 'Git hook and agent policy checks passed.'
