@@ -61,7 +61,7 @@ emit_bootstrap_success() {
 Import the secret-free NocoDB source-provisioning workflow. Bind NocoDB Operator API,
 Automation Data Provisioner, the fixed provisioning Header Auth credential, and the
 discovery installer's Automation Data Inventory Header exactly as its setup note specifies.
-Follow the mutation workflow procedure in docs/guides/automation-data-operations.md before
+Follow the mutation workflow procedure in docs/specs/026-automation-data-postgresql-platform.md before
 publication. Revoke any reported orphan token in NocoDB
 after verifying the credential. Keep durable suspend changes in Git.
 EOF

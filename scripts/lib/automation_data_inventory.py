@@ -362,63 +362,63 @@ FAMILY_DEFINITIONS = {
         "Registered consumer",
         "Application login lifecycle",
         "Protected application profile",
-        "automation-data-operations.md",
+        "026-automation-data-postgresql-platform.md",
     ),
     "migration": (
         "Reviewed domain schema migration",
         "Domain migrator",
         "Domain lifecycle and consumer migration owner",
         "n8n credential and separately retained protected migrator profile",
-        "automation-data-operations.md",
+        "026-automation-data-postgresql-platform.md",
     ),
     "workflow": (
         "Normal domain processing",
         "Published n8n workflows",
         "Domain provisioner",
         "n8n Postgres credential",
-        "automation-data-operations.md",
+        "026-automation-data-postgresql-platform.md",
     ),
     "source": (
         "One NocoDB pair and access kind",
         "NocoDB",
         "Source and pair lifecycle",
         "NocoDB encrypted integration; contents are not observed",
-        "nocodb-operations.md",
+        "028-nocodb-operator-ui.md",
     ),
     "ui": (
         "Human authentication and membership",
         "NocoDB UI users",
         "Operator-managed UI lifecycle",
         "Opaque NocoDB identity metadata",
-        "nocodb-operations.md",
+        "028-nocodb-operator-ui.md",
     ),
     "api_webhook": (
         "Authenticate a fixed API or webhook",
         "Named automation workflow",
         "Workflow/bootstrap owner",
         "Named n8n credential or protected caller material",
-        "n8n-operations.md",
+        "023-n8n-workflow-automation-platform.md",
     ),
     "platform": (
         "Metadata, provisioning, backup, exporter, and inventory access",
         "Platform components",
         "Platform operator",
         "Existing encrypted configuration or restricted n8n binding",
-        "automation-data-operations.md",
+        "026-automation-data-postgresql-platform.md",
     ),
     "recovery": (
         "Encryption, signing, and retained recovery material",
         "Attended platform recovery",
         "Platform operator",
         "not_observed",
-        "n8n-operations.md",
+        "023-n8n-workflow-automation-platform.md",
     ),
     "unclassified": (
         "Purpose is not established by metadata",
         "not_observed",
         "Ownership is not established by metadata",
         "Observed opaque identity only",
-        "nocodb-operations.md",
+        "028-nocodb-operator-ui.md",
     ),
 }
 PLATFORM_ROLES = {
@@ -490,7 +490,7 @@ def _fresh(source: dict) -> bool:
 
 
 def _item(family: str, identity: str, facts: dict, sources: list[str], available: dict) -> dict:
-    purpose, consumer, owner, storage, guide = FAMILY_DEFINITIONS[family]
+    purpose, consumer, owner, storage, procedure = FAMILY_DEFINITIONS[family]
     return {
         "family": family,
         "id": identity,
@@ -499,7 +499,7 @@ def _item(family: str, identity: str, facts: dict, sources: list[str], available
         "lifecycleOwner": owner,
         "storageLocator": storage,
         "procedures": {
-            stage: "docs/guides/" + guide
+            stage: "docs/specs/" + procedure
             for stage in ["provision", "rotate", "recover", "decommission"]
         },
         "requiredSources": sources,
@@ -893,7 +893,7 @@ def build_inventory(observations: list[SourceObservation]) -> InventoryEnvelope:
             "consumer": definition[1],
             "lifecycleOwner": definition[2],
             "storageLocator": definition[3],
-            "procedure": "docs/guides/" + definition[4],
+            "procedure": "docs/specs/" + definition[4],
             "observationStatus": "not_observed" if family == "recovery" else "metadata_only",
             "decommissionStatus": "requires_separately_reviewed_operator_procedure",
         }
@@ -925,7 +925,7 @@ def resolve(request: DiscoveryRequest, inventory: InventoryEnvelope, profile=Non
             [{"name": "fresh_complete_metadata", "status": "unavailable"}],
             next_action={
                 "kind": "procedure",
-                "reference": "docs/guides/automation-data-operations.md#private-credential-discovery-installation",
+                "reference": "docs/specs/026-automation-data-postgresql-platform.md#private-credential-discovery-installation",
                 "owner": "Platform operator",
             },
         )
@@ -949,7 +949,7 @@ def resolve(request: DiscoveryRequest, inventory: InventoryEnvelope, profile=Non
             [{"name": "registered_identity", "status": "ambiguous" if selected else "missing"}],
             next_action={
                 "kind": "procedure",
-                "reference": "docs/guides/automation-data-operations.md",
+                "reference": "docs/specs/026-automation-data-postgresql-platform.md",
                 "owner": "Lifecycle owner",
             },
         )

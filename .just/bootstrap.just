@@ -1433,7 +1433,7 @@ arr app:
 
     just kube arr-verify "$app"
     bootstrap_complete=true
-    echo "$app live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube arr-verify $app. Continue with the app's first-run steps in docs/guides/media-automation-setup.md."
+    echo "$app live acceptance passed. Set suspend=false in Git, commit, push, and rerun just kube arr-verify $app. Continue with the app's first-run steps in docs/specs/006-media-stack-architecture.md."
 
 # Reconcile a suspended config-only media app after guarded checks, then verify.
 # Operator-run. The allowlist intentionally contains only Tautulli.
@@ -1693,7 +1693,7 @@ qbit-manage:
 
     just kube qbit-manage-verify
     bootstrap_complete=true
-    echo "qbit-manage live readiness passed; the active classification, share-limit, and cleanup policy is running. Attend the first policy run before setting suspend=false through Git, then rerun just kube qbit-manage-verify. See docs/guides/qbit-manage-operations.md and docs/reference/qbit-manage.md."
+    echo "qbit-manage live readiness passed; the active classification, share-limit, and cleanup policy is running. Attend the first policy run before setting suspend=false through Git, then rerun just kube qbit-manage-verify. See docs/specs/006-media-stack-architecture.md."
 
 # Reconcile the Intel GPU device plugin from source staged with suspend=true, then
 # verify it before the activation change sets suspend=false.
@@ -2164,7 +2164,7 @@ trivy:
 # Reconcile the suspended Tailscale operator after guarded checks, then verify the
 # operator and its ingress ProxyGroup. Requires the operator-oauth Secret committed
 # (just repo tailscale-operator-secrets) and the tailnet-side prerequisites in
-# docs/guides/tailscale-operator-operations.md already in place. On failure the resumed Kustomization is
+# docs/specs/010-talos-flux-platform.md#private-tailscale-access already in place. On failure the resumed Kustomization is
 # re-suspended, preserving its resources.
 tailscale-operator:
     #!/usr/bin/env bash
@@ -2241,7 +2241,7 @@ tailscale-operator:
 # or the operator cannot create the Connector devices. The Connector CRD is installed by the
 # already-active tailscale-operator. On failure the resumed Kustomization is re-suspended,
 # preserving its resources. After success, approve both /32 routes on BOTH devices and
-# configure split DNS per docs/guides/tailscale-lab-domain-access.md, then open the activation PR.
+# configure split DNS per docs/specs/010-talos-flux-platform.md#private-tailscale-access, then open the activation PR.
 tailscale-subnet-router:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -2302,7 +2302,7 @@ tailscale-subnet-router:
 
     just kube tailscale-subnet-router-verify
     bootstrap_complete=true
-    echo 'Tailscale subnet-router live acceptance passed. Approve both /32 routes on BOTH lab-subnet-router-* devices and configure split DNS (docs/guides/tailscale-lab-domain-access.md), complete client acceptance, then change the subnet-router Kustomization Git source to suspend=false, commit, push, and rerun just kube tailscale-subnet-router-verify.'
+    echo 'Tailscale subnet-router live acceptance passed. Approve both /32 routes on BOTH lab-subnet-router-* devices and configure split DNS (docs/specs/010-talos-flux-platform.md#private-tailscale-access), complete client acceptance, then change the subnet-router Kustomization Git source to suspend=false, commit, push, and rerun just kube tailscale-subnet-router-verify.'
 
 # Reconcile the suspended ntfy notification service after guarded checks, then verify.
 # Requires the ntfy-secret committed (just repo ntfy-identity reconcile all) and the

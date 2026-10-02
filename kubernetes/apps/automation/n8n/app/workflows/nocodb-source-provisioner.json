@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## One-time operator setup\n\nImport this inactive template through the private n8n editor. Bind **Automation Data Provisioner** to every Postgres node, **NocoDB Operator API** to every HTTP Request node except **Observe Mutation Inventory**, and **NocoDB Source Provisioning Header** to **Source Webhook**. Publish only after the bindings are verified. Keep execution persistence disabled.\n\nBind **Automation Data Inventory Header** only to **Observe Mutation Inventory**. The separately authorized discovery installer creates this credential after the databases are initialized. Follow docs/guides/automation-data-operations.md#upgrade-existing-mutation-workflows for initial enrollment and upgrades. Do not reuse an API or provisioning header for inventory readback.",
+        "content": "## One-time operator setup\n\nImport this inactive template through the private n8n editor. Bind **Automation Data Provisioner** to every Postgres node, **NocoDB Operator API** to every HTTP Request node except **Observe Mutation Inventory**, and **NocoDB Source Provisioning Header** to **Source Webhook**. Publish only after the bindings are verified. Keep execution persistence disabled.\n\nBind **Automation Data Inventory Header** only to **Observe Mutation Inventory**. The separately authorized discovery installer creates this credential after the databases are initialized. Follow docs/specs/026-automation-data-postgresql-platform.md#upgrade-existing-mutation-workflows for initial enrollment and upgrades. Do not reuse an API or provisioning header for inventory readback.",
         "height": 560,
         "width": 520
       },

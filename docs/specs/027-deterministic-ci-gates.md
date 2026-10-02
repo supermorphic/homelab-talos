@@ -1,19 +1,11 @@
 # Deterministic CI Gates — Stage 2
 
-## Purpose and authorization
+## Purpose
 
-Reduce recomputation of expensive, unrelated validation after a candidate is rebased onto
-current main. [Specification 024](024-ci-runtime-and-merge-throughput-optimization.md)
-records the Stage 1 cleanup, retained correctness, final runtime evidence, and measured
-decision that authorized selective execution for
-[issue 303](https://github.com/supermorphic/homelab-talos/issues/303).
-
-This specification owns the Stage 2 architecture. It does not repeat the Stage 1 audit
-or authorize runner placement, live tests, a merge queue, or post-merge substitution.
-
-The design favors a small category selector over a generalized dependency planner.
-Its value is safely avoiding unrelated work with bounded configuration and maintenance
-cost—not achieving an arbitrary two-minute runtime.
+Select expensive offline validation only when changed inputs can affect it, then reconcile
+fresh exact-candidate evidence through one hosted gate. [Coverage ownership](024-ci-runtime-and-merge-throughput-optimization.md)
+owns deduplication and optimization; a small deterministic category selector avoids a
+generalized dependency planner's maintenance cost.
 
 ## Goals and constraints
 
@@ -130,37 +122,9 @@ change already validated on main does not make all candidate evidence affected.
 Relevant shared inputs broaden the selection, and every selected target still executes
 against the complete rebased tree.
 
-### Impact reassessment after validation cleanup
-
-The selector accepts `ci-framework` as a conditional group. The campaign documentation
-read by its framework test selects `core` and `ci-framework`. Chainsaw test documents
-select those groups for lint and catalog checks; the n8n smoke document also selects
-`automation` because its validation reads that file. The cluster and node `just` modules
-select `core`, which owns their command contract test. Shared bootstrap and repository
-modules, CI gate code, catalog inputs, and unknown paths still select full.
-
-These examples classify the complete file changes in recent merged commits against the
-previous and current maps. They show actual group reductions, including cases where other
-changed files retain an additional group.
-
-| Merged change | Previous groups | Current groups |
-| --- | --- | --- |
-| `#446` Portainer Chainsaw assertion (one file) | all four | `core`, `ci-framework` |
-| `#457` media playback fix and testing documentation | all four | `core`, `ci-framework` |
-| `#454` qbit_manage fixture and testing documentation | all four | `core`, `ci-framework` |
-| `#448` Flux alert delivery test and testing documentation | all four | `core`, `observability`, `ci-framework` |
-| `#445` shared campaign runner and fixture | all four | all four |
-
-The ownership fixture ties each reduced input to independently listed catalog or harness
-evidence. The planner tests also require unknown inputs to fall back to full, `core` to
-remain always selected, and full selection to remain the exact ordered group union.
-
 ## Harness decomposition and exact-once ownership
 
-The general harness is part of CI, not the whole CI flow. Its decomposed catalog identities
-are `validation.test-harness-core`, `validation.test-harness-observability`,
-`validation.test-harness-automation`, and `validation.test-harness-ci-framework`.
-Each group combines its harness work with existing standalone catalog suites.
+The general harness and standalone validations are assigned to executable catalog groups.
 
 Each retained work unit has one owner. Full execution and the group union must contain
 the same evidence exactly once. Decomposition does not delete tests or duplicate them
@@ -211,7 +175,7 @@ without reevaluating validators.
 
 ## Merge enforcement and contributor trust
 
-After the authorized transition, branch protection requires one static `merge-gate`,
+Branch protection requires one static `merge-gate`,
 not separate conditional branch checks. The workflow always starts; top-level path
 filters must not skip the required workflow entirely.
 
@@ -237,28 +201,13 @@ deployment and runner-isolation initiatives must prove their own PR execution an
 credential boundaries before Forgejo becomes authoritative. No author label, agent
 judgment, or risk declaration can de-escalate the repository's plan.
 
-## Rollout and rollback
+## Rollback
 
-The rollout establishes correctness before skipping validation:
-
-1. **Shadow planning:** full `ci` remains authoritative while the planner reports its
-   proposed groups. Review natural PR plans and use local fixtures for absent change classes.
-2. **Split-all parity:** run all four groups in isolated provider jobs with advisory
-   reconciliation. Temporarily retain the required full job. Prove equivalent evidence,
-   failure handling, artifact identity, and reporting before relying on the replacement.
-3. **Protection transition:** after the split workflow is merged and proven, change
-   protection only with explicit operator authorization and verify strict-main readback.
-4. **Selective enforcement:** use the actual plan for PR jobs only after `merge-gate`
-   is required. Remove the temporary duplicate full job. Manual full escalation remains.
-5. **Post-enable review:** measure savings, skip frequency, overhead, and maintenance cost.
-
-Provider evidence follows publication; protection proof covers the merged workflow.
-Keep the temporary full-plus-split phase bounded to parity work. No merge or protection
-change is implied by general implementation approval.
-
-Rollback selection by forcing full through the same groups and reconciler. If grouped
-execution itself is defective, restore the known full workflow with a coordinated
-protection change; never bypass validation or leave a nonexistent required check.
+Force full selection through the existing groups and reconciler when selective planning
+is suspect. If grouped execution itself is defective, restore the known full workflow
+with an explicitly authorized, coordinated protection change. Never bypass validation
+or leave a nonexistent required check. Protection changes require their own operator
+authorization and live read-back; implementation approval does not authorize them.
 
 ## Measurement and acceptance
 
@@ -267,10 +216,8 @@ protection change; never bypass validation or leave a nonexistent required check
 The optional local `ci-publish` command reuses the hosted planner, grouped execution,
 and canonical reconciliation. Its receipt binds the clean candidate and freshly fetched
 base, so an edited branch or newer main needs fresh validation. This shared selection
-path avoids a second classification system. Current contributor procedure is in the
-[repository and worktree guide](../guides/repository-worktree-setup.md#prepare-validate-and-publish-a-change);
-the executable contract is in the [CI impact map](../../tests/impact.yaml) and
-[planner](../../scripts/test/ci_plan.py).
+path avoids a second classification system. The [CI impact map](../../tests/impact.yaml) and
+[planner](../../scripts/test/ci_plan.py) own the executable contract.
 
 ### Evidence requirements
 
@@ -301,48 +248,42 @@ Acceptance requires:
 If core becomes the bottleneck, continue intrinsic optimization rather than multiplying
 categories. No runtime number overrides correctness or justifies unnecessary machinery.
 
-## Implementation status
+## Execution boundary
 
-Stage 2 implementation and rollout are complete. Pull requests plan affected groups, while
-manual dispatch requests full validation. The matrix consumes the validated plan's
-groups; the duplicate provider `ci` job is removed. The optional local publication
-wrapper uses the same planner and grouped execution and checks the candidate and base.
-
-Split-all provider execution established equivalent full and grouped evidence on the
-same candidate tree. On the merged workflow, cancellation of the group jobs caused
-the always-running gate to fail; a complete retry produced passing group results and
-reconciliation. Protection now requires `merge-gate` with strict current-main checks;
-the applied rules passed independent readback. The selection-enabled provider workflow
-passed with its dynamically planned full group set for a CI-framework change, without
-the duplicate full job. A subsequent automation change ran only core and automation,
-omitted unrelated groups, and passed required reconciliation. The local publication
-command also passed end to end on the same candidate as full local CI, with identical
-test identities and outcomes, including final candidate and remote-base checks.
-
-Long-term skip-frequency, runtime variance, capacity, and serialized merge-drain
-measurements remain normal operational observations, not unfinished rollout prerequisites.
-
-The initial provider observation shows comparable core and longest-group durations.
-Selective execution can therefore save substantial aggregate validation work while
-offering smaller wall-time savings. Continue measuring both; optimize core intrinsically
-if it limits the critical path. Existing group boundaries remain appropriate, including
-automation's now-material validation cost.
-
-Local group execution is sequential while each harness retains bounded parallelism.
-Parallel local groups are feasible, but unlike isolated provider runners they share
-one host with other worktrees. Any increase should measure aggregate worker/resource
-usage and wall time before selecting a bound. It is optional tuning, not a correctness
-requirement or a prerequisite for this initiative's closeout.
-
-Operational commands and inspection examples live in
-[the testing guide](../../tests/README.md). Detailed execution evidence and remaining
-task mechanics belong in issues, PRs, retained artifacts, and transient plans.
+Pull requests plan affected groups; manual dispatch escalates to full. Hosted
+`merge-gate` for the exact candidate and required base is authoritative. Local full CI
+and publication validation are optional reproductions and never replace hosted proof.
+Selective execution can reduce aggregate work more than wall time when core dominates
+the critical path; optimize core before adding categories. Local groups share a host,
+so parallelism needs measured aggregate resource use and isolation rather than adopting
+the hosted runner count.
 
 ## Deferred work
 
 Runner placement and advanced evidence reuse are outside this implementation.
 The Stage 3 boundary and deployment/isolation dependency handoff remain in
 [specification 024](024-ci-runtime-and-merge-throughput-optimization.md).
-A later measured decision and new numbered implementation specification must authorize
-that work. This design does not assume an off-cluster runner is faster, prescribe a benchmark protocol,
+A separately approved measured design must authorize that distinct work. This design does not assume an off-cluster runner is faster, prescribe a benchmark protocol,
 or introduce trusted cross-run attestations.
+
+## Repository protection recovery
+
+[The tracked checker](../../scripts/repository/github_protection.py) owns exact required
+repository settings and rules. Its objective is that `main` advances only through a
+current successful squash pull-request merge, without bypass actors. Repository merge
+settings and the ruleset must agree; an update restriction with no bypass actors would
+also block valid GitHub merges.
+
+The checker needs Administration access to inspect the bypass list and effective rules.
+A passing ruleset check does not inspect the separate legacy branch-protection API:
+also verify no legacy rule targets `main` in GitHub Settings. Ruleset availability is a
+protection prerequisite; a plan/visibility-related HTTP 403 is failed protection, not
+permission to continue without enforcement. Confirm support before changing visibility.
+
+Use `mise exec -- just repo github-protection-check`, then `github-protection-plan` to
+review drift. Repair only through `github-protection-apply` with specific operator
+administrative authorization and its exact repository-bound confirmation; it reads back
+the effective contract. Duplicate managed rulesets or unrelated effective rules require
+deliberate resolution rather than guessing. That authorization does not permit a merge.
+Verify functional behavior using a real PR and a new candidate commit. Never probe
+protection with a direct push to production: a broken rule could let Flux deploy it.

@@ -3,7 +3,7 @@
 # ntfy Secret. A staged pending token wins during rotation. Seerr settings are tested
 # before save. n8n gets exactly one named httpHeaderAuth credential through its private
 # API; this script does not read or mutate workflows. API responses and credential values
-# are never printed. See docs/guides/ntfy-operations.md.
+# are never printed. See docs/specs/007-ntfy-notification-architecture.md.
 set -euo pipefail
 
 consumer="${1:-}"

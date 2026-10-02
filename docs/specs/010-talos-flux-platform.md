@@ -7,65 +7,28 @@ Kubernetes platform. The design joins machine configuration and cluster desired 
 one repository so changes that cross the operating-system and Kubernetes boundary remain
 reviewable together.
 
-This is a historical architecture record, not an operations manual. Current repository
-policy, pinned source, READMEs, and recovery runbooks define present behavior.
+The tracked machine and Kubernetes configuration owns exact implementation facts. This
+specification owns platform boundaries and the independent recovery path.
 
-## Greenfield rebuild
+## Architectural choices
 
-The replacement system drives were introduced before the cluster held workloads or
-durable application data. Preserving the earlier Talos identity and migrating its etcd
-state would have added recovery risk without preserving useful state. The platform was
-therefore rebuilt with a fresh Talos identity and a new source-controlled configuration.
-The previous installation was useful as hardware, firmware, Secure Boot, and rollback
-evidence, but not as a configuration source.
+One monorepo keeps machine, bootstrap, networking, and application compatibility changes
+reviewable together. HomeOps supplies selected patterns, not a wholesale template or
+legacy deployment input: imported providers, identities, layout, and release cadence
+would create unwanted ownership and maintenance assumptions. Talhelper is the sole
+renderer, preventing divergent credential-bearing hand-maintained machine files.
 
-This choice established a reproducible source of truth and avoided carrying forward
-legacy controllers, credentials, generated machine files, or unverified ciphertext.
+Three uniform schedulable control planes give an odd etcd quorum without a second node
+class. Each platform responsibility has one owner: Cilium for CNI/kube-proxy and policy,
+MetalLB for service advertisement, Envoy Gateway for Gateway API, and Flux for delivery.
+Parallel CNI, ingress, or reconciler ownership would complicate recovery and is unsupported.
 
-## Architectural choices and rejected alternatives
-
-The platform favors one owner per responsibility and keeps recovery possible from
-reviewed source:
-
-- Proven HomeOps patterns were adopted selectively while local requirements and
-  ownership remained explicit. Adopting a cluster template wholesale would also import
-  its layout, providers, bootstrap assumptions, naming, and release cadence, then make
-  upstream divergence a permanent maintenance concern. Pure DIY would repeat solved
-  work in rendering, dependency ordering, secret delivery, and package layout. Copying
-  legacy deployment artifacts would preserve obsolete controllers, generated output,
-  ciphertext, and implicit discovery rather than the requirements they once served.
-  The chosen approach preserves useful intent and reauthors it in current Talos and Flux
-  source; templates and legacy repositories remain pattern libraries, not generators or
-  deployment inputs.
-- One monorepo was chosen over separate machine and application repositories because a
-  bootstrap, networking, or storage change often crosses the Talos and Kubernetes
-  boundary and must be reviewed as one compatibility decision.
-- Talhelper is the only machine-config renderer. Hand-maintained generated Talos files
-  and mixed rendering paths were rejected because they obscure secret-bearing output
-  and make node configurations diverge.
-- Three uniform, schedulable control-plane machines were chosen over a split
-  control-plane/worker topology. The hardware can perform both roles, three etcd voters
-  preserve quorum, and a second node class would add operational variation without an
-  availability gain at this scale.
-- Cilium was chosen over the bundled CNI because kube-proxy replacement, policy, and
-  Hubble were required as one coherent network layer. A second CNI is unsupported.
-- MetalLB L2 owns service address advertisement. Cilium L2 and BGP were rejected for the
-  initial platform because they would add another ownership path without a demonstrated
-  benefit.
-- Envoy Gateway owns Gateway API. A parallel ingress controller was rejected because it
-  would duplicate routing, certificate, and exposure policy.
-- Flux is the sole Kubernetes reconciler. Argo CD or dual reconciliation was rejected
-  because two controllers cannot safely own the same desired state.
-- SOPS with an operator-held age identity was chosen over plaintext secrets, replicated
-  Secret objects, and additional in-cluster secret controllers. It keeps encrypted
-  desired state reviewable without introducing another authority system before there is
-  a demonstrated rotation or multi-cluster need.
-- Longhorn owns replicated application state while SMB owns shared bulk data. Ceph was
-  too complex for three small nodes, local-only storage did not meet rescheduling goals,
-  and placing all state on the NAS would make ordinary application availability depend
-  on one external system.
-- Manual, observable upgrades were retained until upgrade and rollback behavior was
-  understood. Lifecycle automation was not accepted as a substitute for that evidence.
+Longhorn supplies replicated application state; SMB supplies shared bulk capacity.
+Local-only state cannot meet rescheduling goals, making all state NAS-dependent weakens
+ordinary availability, and Ceph adds disproportionate complexity at this scale. SOPS
+keeps encrypted desired state reviewable without another in-cluster secret authority.
+Manual observable lifecycle acceptance precedes automation; successful rollout alone is
+weaker than recovery and stable subsequent operation.
 
 ## Machine and control-plane design
 
@@ -176,12 +139,9 @@ three-node cluster can sustain every multi-failure combination. Workloads using 
 single-writer claims use `Recreate`, `ReadWriteOncePod`, or StatefulSet semantics as
 appropriate so rollouts do not contend for the same volume.
 
-The initial machine design allowed the Longhorn XFS volume to grow into most remaining
-NVMe space. Before it held replicas, the design changed to a fixed cap so node-local
-capacity remained available for scratch, transcode, and future local workloads. The
-timing was load-bearing: XFS could grow but not shrink, so delaying the correction until
-after Longhorn stored data would have required disruptive replica evacuation and volume
-recreation.
+Longhorn volume sizing preserves node-local capacity for other workloads. XFS grows but
+cannot shrink: reducing an established allocation requires replica evacuation and volume
+recreation, not a harmless machine-size edit.
 
 Bulk media and downloads use SMB instead of Longhorn. These storage systems solve
 different failure models: Longhorn provides replicated low-latency application state,
@@ -194,109 +154,37 @@ Replicas provide availability; they are not backups. Recovery must preserve this
 distinction. Old system drives were a bounded rollback option during installation, but
 they are not a continuing backup or the current recovery source. Current recovery uses
 the tracked Talos inputs, operator-held secret identity, etcd procedures, Longhorn
-snapshots or backups, and the repository runbook.
+snapshots or backups, and the recovery procedure below.
 
 ## Failure boundaries and validation gates
 
-Bootstrap deliberately has a small imperative boundary, but every owner transition has
-an explicit stopping condition:
+Installation proves exact target hardware, firmware, Secure Boot, and media before any
+destructive action. Tracked and rendered Talos inputs require strict validation. Etcd
+acceptance requires the exact expected member set, a common leader, and no alarms:
+three healthy endpoints alone can conceal stale or unintended membership. Disrupt only
+one node at a time and complete recovery before advancing.
 
-- Preflight identifies the exact three target machines, verifies firmware and Secure
-  Boot prerequisites, and proves the selected install media before any destructive
-  action.
-- Talos source and every rendered node configuration must pass strict validation before
-  application. Generated output is evidence for the application step, not durable
-  source.
-- Bootstrap succeeds only with exactly three expected etcd members and no alarms. Node
-  operations proceed one at a time so the cluster never intentionally loses quorum.
-- Cilium must make the nodes Ready before Flux is introduced. Its guarded adoption is a
-  one-time ownership transfer; later runs must be idempotent and must not create a
-  second Helm owner.
-- Flux must reconcile the expected revision before foundation controllers and their
-  custom resources advance. Controller/CRD readiness precedes dependent configuration.
-- Networking and certificate foundations must pass before storage and applications.
-  Storage provisioning and replica placement must pass before stateful workloads rely
-  on them.
-- Each disruptive experiment includes cleanup and recovery before the next disruption.
-  A failed cleanup, an etcd alarm, or loss of expected ownership stops progression.
+Cilium must make nodes Ready before Flux; guarded adoption must preserve the only CNI
+and be idempotent. Flux must reconcile the intended revision, and controllers/CRDs must
+be ready before dependent configuration. Networking/certificates precede storage and
+applications; replica placement and provisioning precede stateful use. Failed cleanup,
+alarm, or ownership drift stops progression. Observe Gateway attachment after namespace
+label changes because controller caches can delay admission effects.
 
-These gates preserve the useful method from the original phased rebuild without making
-old phase names, shell transcripts, or rollout ceremony part of the design.
-The foundation was accepted only after rolling-node recovery, TPM auto-unlock and etcd
-recovery, MetalLB failover, Flux-controller recovery, and Git-driven workload
-remove/recreate tests were followed by a sustained soak. This combined gate recognized
-that isolated rollout success is weaker evidence than recovery followed by stable
-operation over time.
+A single-replica `ReadWriteOnce` Deployment can deadlock under `RollingUpdate`; use
+`Recreate` or StatefulSet semantics. Workload checks must render effective Helm workloads
+rather than assume Kustomize includes chart-generated objects. Talos immutability must
+not be weakened for a collector designed for mutable hosts.
 
-Implementation revealed several non-obvious constraints:
+## Compatibility boundary
 
-- One storage bridge did not expose the preferred disk telemetry. A waiver was accepted
-  only after native-drive evidence and repeated I/O checks established the narrower
-  hardware claim; the waiver does not generalize to other devices.
-- Etcd membership had to be asserted as an exact set. Merely observing three healthy
-  endpoints could miss an unintended fourth or stale member.
-- Removing the control-plane load-balancer exclusion belongs in Talos source because an
-  ad hoc Kubernetes label edit would not survive machine reconciliation.
-- Namespace-label changes used by Gateway admission can be delayed by controller cache
-  behavior, so acceptance must observe the resulting attachment rather than assume an
-  immediate label effect.
-- A single-replica application with a `ReadWriteOnce` claim can deadlock under
-  `RollingUpdate`; `Recreate` or StatefulSet ownership is a platform invariant.
-- A node-level vulnerability collector that expects a conventional mutable host cannot
-  be assumed compatible with Talos. The implemented security scanner omits that
-  incompatible collector rather than weakening the host.
-- Applying custom resources before their controller and CRDs are ready creates noisy or
-  failed reconciliation. Package/configuration separation and dependency checks are
-  therefore recovery behavior, not only repository style.
-
-## Reconciled platform versions
-
-The implemented design was reconciled against the repository pins as follows:
-
-| Component | Version |
-| --- | --- |
-| Talos Linux machine configuration | `v1.13.6` |
-| Kubernetes | `v1.35.6` |
-| Talos client | `1.13.7` |
-| Cilium chart | `1.19.6` |
-| Flux | `2.9.2` |
-| cert-manager | `v1.21.0` |
-| MetalLB chart | `0.16.1` |
-| Envoy Gateway | `v1.8.2` |
-| ExternalDNS application / chart | `v0.21.0` / `1.21.1` |
-| Longhorn chart | `1.12.0` |
-
-[`talos/README.md`](../../talos/README.md),
-[`kubernetes/README.md`](../../kubernetes/README.md), `.mise.toml`, and `mise.lock`
-remain the operational compatibility sources. A later upgrade must follow an approved
-upgrade design and update all coupled pins and validation together; this record does not
-authorize independent Talos, Kubernetes, or Cilium upgrades.
-
-## Validated outcomes
-
-The greenfield platform demonstrated the intended boundaries through source and live
-acceptance:
-
-- Talhelper inputs and all rendered node configurations passed strict metal validation
-  without tracking generated credentials.
-- All nodes booted through Secure Boot, formed the three-member etcd quorum, and
-  scheduled workloads.
-- TPM-bound `STATE` and `EPHEMERAL` volumes unlocked after rolling node reboots, and each
-  node rejoined etcd and the platform health gates.
-- Cilium, kube-proxy replacement, Hubble, network policy, and the applicable functional
-  connectivity cases passed before Flux adoption.
-- Flux reconciled the tracked source, decrypted a non-sensitive SOPS canary, adopted the
-  existing Cilium release, and resumed reconciliation after controller restart.
-- The internal path from DNS through trusted TLS, Gateway API, and application routes
-  passed as a complete foundation check.
-- Longhorn provisioning, two-node replica placement, claim attachment, backup-target
-  availability, and recurring snapshot and backup configuration passed the storage
-  acceptance checks. The retained acceptance record did not prove a backup restore or a
-  post-reboot replica rebuild.
-
-These outcomes establish architecture, not a promise that the live cluster is currently
-healthy. Current status and recovery use the repository's scoped verification workflows
-and runbooks.
+[Machine source](../../talos/talconfig.yaml), [Cilium values](../../kubernetes/apps/kube-system/cilium/app/values.yaml),
+[tool pins](../../.mise.toml), and [the lockfile](../../mise.lock) own exact versions.
+Talos, Kubernetes, and Cilium are a coupled compatibility decision: Cilium replaces both
+CNI and kube-proxy and depends on Talos networking and KubePrism. An approved upgrade
+must validate the machine schema, client/server compatibility, Cilium's Kubernetes
+support, extensions, and networking before applying coupled pin changes. A dependency
+update alone does not authorize an independent platform upgrade.
 
 ## Reconsideration boundaries
 
@@ -313,13 +201,175 @@ first.
 
 External or public service exposure, another reconciler, another CNI, and any change to
 the Talos, Kubernetes, or Cilium compatibility set require a new design decision. This
-historical specification does not authorize them. Current procedures and compatibility
-constraints remain in the READMEs, runbooks, repository policy, and pinned source.
+specification does not authorize them; repository policy and pinned source govern execution.
 
-## Consequences
+## External DNS recovery
 
-The repository plus the operator-held age identity can recreate the Talos and Kubernetes
-source of truth. Flux owns steady-state Kubernetes delivery after the explicit Talos and
-Cilium bootstrap boundary. Platform components have one owner, dependency order is
-declarative, and storage, ingress, DNS, certificate, and secret responsibilities remain
-separate enough to recover or replace independently.
+Pi-hole and Unbound are external infrastructure; installation, backup, host authority,
+and restore remain outside this repository. ExternalDNS uses a dedicated Pi-hole
+application password over verified HTTPS with the reviewed public CA. Private TLS keys
+stay on the Pi-hole host. Application-password configuration authority is broader than
+DNS-record updates, so this credential is dedicated to ExternalDNS.
+
+After an external rebuild, restore the expected hostname and HTTPS listener, review SSH
+host identity, and enable `webserver.api.app_sudo` for application-password writes.
+A new application password invalidates the previous password and sessions; rotation has
+an interruption until Git reconciliation replaces the ExternalDNS process. A new CA
+must be reviewed through `mise exec -- just repo pihole-ca-refresh`; never bypass TLS
+verification. The combined `foundation-provider-secrets` writer needs both provider
+values, tests a uniquely owned DNS record, and encrypts the result. If cleanup is
+uncertain, remove only the exact record printed by the writer and prove its absence
+before retrying. These are operator workflows using external host or secret authority.
+
+The CA and ciphertext rollout stamps ensure the running process consumes new material.
+`foundation-verify` must prove those deployed revisions and the DNS-to-trusted-HTTPS
+path. Existing Pi-hole records survive an ExternalDNS outage; new records and updates
+wait for recovery. `upsert-only` intentionally leaves stale records after source removal,
+so deletion requires deliberate external cleanup.
+
+A MetalLB transition that narrows one pool and adds an overlapping pool needs ordered
+Kustomizations: Flux dry-runs additions against the old live range before applying its
+narrowing, and the webhook rejects the overlap.
+
+## Private Tailscale access
+
+Git owns the Operator, shared ingress ProxyGroup, Connector, and encrypted OAuth
+material. The operator owns external tailnet tags, policy, route approval, DNS, and
+clients. Suspension in Git does not remove external devices or credentials. The
+Kubernetes API proxy, exit-node behavior, and public Funnel are outside this design.
+Proxy workloads need the privileged namespace for TUN/network capabilities; that label
+alone does not grant those settings to every Pod.
+
+Establish the intended tailnet and Mac/iPhone clients, review base access policy, then
+prepare the Operator before private services or the optional lab Connector. The OAuth
+client uses `tag:k8s-operator`, which owns `tag:k8s` and `tag:lab-router` for managed
+proxies. Grant only the Operator-required read/write Services, Devices Core, and Auth
+Keys scopes. The external policy must preserve application Service ownership and
+advertiser relationships separately from device tags; [ntfy](007-ntfy-notification-architecture.md)
+owns its application contract. Merge feature relationships into the current policy,
+rather than replacing unrelated entries. Before a second human joins, replace
+single-user `autogroup:member` grants with a reviewed group.
+
+Private Services require MagicDNS and HTTPS certificates. Their certificate names enter
+public Certificate Transparency logs, so names must contain no sensitive information.
+OAuth rotation keeps the old client valid until the ciphertext-derived rollout stamp
+restarts the Operator, verification passes, and a real client can use a representative
+service; only then revoke the old client.
+
+The lab Connector advertises only the DNS resolver and internal Gateway host `/32`
+routes from [Connector source](../../kubernetes/apps/networking/tailscale-operator/subnet-router/connector.yaml).
+Never widen these to LAN, Pod, or Service networks. In external policy, both routes need
+`tag:lab-router` auto-approval, resolver grants for TCP/UDP DNS, and Gateway grants for
+HTTPS. Add the resolver as a restricted nameserver for the lab domain; do not override
+all client DNS. Check route approval on both Connector devices: reported Kubernetes
+routes mirror configuration and cannot independently prove approval. All applications
+share the Gateway address, so application authentication provides per-application access.
+
+Off-LAN acceptance requires real Mac and cellular iPhone clients to prove split DNS,
+Tailscale routing, trusted HTTPS, and application login; disconnecting Tailscale must
+remove access. On-LAN acceptance must inspect routes too: a host `/32` can take
+precedence over the connected LAN and depend on Connector health. Diagnose connection,
+both route approvals, split DNS, DNS answer, Gateway, then the application. Migrations
+add and accept the new resolver or VIP route, grant, and DNS path before retiring the old
+path. Guarded suspended-source bootstraps preserve resources and re-suspend on failure;
+they are exceptional operator actions, not routine rotation or restart.
+
+## Independent platform recovery
+
+Recover the lowest unhealthy layer first: Talos/etcd, Cilium, Flux source access, Flux
+SOPS decryption, then storage and applications. Checks can fail because their prerequisite
+is unavailable; that identifies the recovery boundary and does not authorize skipping it.
+Workstation loss with a healthy cluster requires only local recovery, not reinstall or
+bootstrap. Administrator recovery uses an operator-controlled primary checkout; never
+copy its credentials to a linked task worktree.
+
+Independent prerequisites are a reviewed current clone, pinned tools, the matching
+operator-held age identity, tracked encrypted Talos identity, and off-cluster backup
+access. Keep private recovery roots outside all checkouts and independent of the cluster
+or credential broker being recovered. Review configuration before `mise trust`, install
+with `mise install --locked`, and use repository hooks and source validation.
+
+With `SOPS_AGE_KEY_FILE` pointing to an owner-readable identity outside the checkout,
+the operator restores local state in this order:
+
+```bash
+mise exec -- just repo secrets
+mise exec -- just talos generate
+# Retrieve administrator Kubernetes configuration only once an API is reachable.
+mise exec -- just talos kubeconfig
+```
+
+Unset the identity environment reference after use. `repo secrets` proves recipient
+agreement with `.sops.yaml`, not application credential validity. Generated machine
+files and client configs are disposable; the age identity and encrypted Talos bundle
+are not. Missing or mismatched identity is a stop boundary. Never regenerate the Talos
+bundle or reuse legacy ciphertext to bypass loss of the matching identity.
+
+Diagnose with `cluster status`, `talos volume-status`, and the Cilium/Flux/foundation
+status workflows that are reachable. The following guarded recovery branches are
+operator-run; invoke them without guessing confirmation and use only their printed exact
+target-bound guard after reviewing the current preflight:
+
+- Failed initial non-bootstrap etcd join: `mise exec -- just bootstrap retry-join <node>`
+  proves failed service, absent membership, and exact discovery before one-node reboot.
+  It requires the Kubernetes API for shared Lease coordination and fails closed without
+  it. Success requires the requested join, exact healthy expected membership, one leader,
+  and no alarms. Lost quorum, snapshot restoration, member removal, and replaying etcd
+  bootstrap require a separate reviewed recovery plan.
+- Maintenance-mode reinstall: `mise exec -- just talos apply <node>` wipes the target
+  system disk. Prove survivor quorum, target hardware/Secure Boot/disk identity, and an
+  off-target healthy replica or verified backup first. Reinstall only one node and prove
+  its complete recovery before disturbing another. Live no-reboot source changes use
+  `talos apply-live`, never this install path. Firmware, key enrollment (`Enroll Secure
+  Boot keys: auto`), approved USB boot, and physical power remain operator actions. For
+  KVM input, nuc2 requires the rear USB-C port via adapter; its rear USB-A path does not
+  supply working input. nuc1/nuc3 use rear USB-A.
+- Cilium before Flux ownership: `mise exec -- just bootstrap cilium` uses the canonical
+  tracked values and rejects competing/unmanaged ownership. Once the Flux HelmRelease
+  exists, repair through Git; never install a second owner or remove the only CNI as a
+  workaround. Failed adoption restores the source edit and re-suspends resumed live
+  reconciliation. If broken networking prevents Flux-owned repair, stop for a separately
+  reviewed recovery plan; the repository has no parallel-owner shortcut.
+- Flux SSH host trust only: `mise exec -- just bootstrap flux-ssh-known-hosts` repairs
+  `known_hosts` for `knownhosts: key is unknown`, preserving the working deploy identity.
+  Missing deploy identity/bootstrap state instead uses `kube flux-preflight` followed by
+  `bootstrap flux` with a temporary repository-scoped GitHub credential. Remove that
+  credential and confirmation after recovery; Flux retains only its read-only deploy key.
+- Missing Flux decryption identity: `mise exec -- just bootstrap flux-sops` validates the
+  workstation recipient, leaves a matching Secret unchanged, and requires its exact guard
+  to create an absent Secret. A different live recipient is refused: preserve identities
+  and ciphertext and design reviewed rotation/re-encryption instead of overwrite.
+
+The permanent noncritical Flux canary has an encrypted marker and depends on Cilium.
+`flux-verify` checks readiness; the separately authorized `flux-canary-test` deletes only
+the labeled canary and proves recreation with a different UID. Routine observation does
+not use that mutation. Neither source validation nor Ready state alone establishes full
+platform recovery.
+
+A returned node with lifecycle annotation and cordon remains contained. Resume through
+[common node recovery](025-node-lifecycle-and-maintenance.md#recovery-acceptance), leaving
+annotation removal and uncordon until final acceptance. Never manually uncordon a failed
+recovery or downgrade code while lifecycle state still requires its interpreter.
+
+Longhorn replicas provide availability, not backups. Let a returned node converge to
+healthy redundancy before the next disruption. For lost application state, identify its
+Git contract, select a verified backup, restore a **new** claim, and validate it with an
+isolated workload before an explicitly authorized production replacement. The repository
+checks backup target/configuration but does not automate claim restore or prove restored
+application data. Flux Ready and storage readiness cannot establish retained history.
+
+Recover application identity and data together using the owning contracts:
+[media](006-media-stack-architecture.md), [n8n](023-n8n-workflow-automation-platform.md),
+[automation-data](026-automation-data-postgresql-platform.md),
+[NocoDB](028-nocodb-operator-ui.md), and [OpenBao](030-openbao-kubernetes-credential-broker.md).
+Recover optional consumers only after their database or credential provider is accepted.
+Finish with `cluster verify`, the Cilium/Flux/foundation/storage verifiers, and each
+recovered application's functional acceptance. Preserve sanitized evidence through the
+[reporting contract](011-test-reporting-standard.md); no recovery guard grants new authority.
+
+## Scoped credential design
+
+Linked worktrees begin without credentials. Approved Kubernetes access uses OpenBao
+exec profiles; Talos reader installation remains a separate guarded workflow.
+[Agent credential design](031-openbao-agent-credential-profiles.md) owns the shared
+workstation trust boundary, server-side authorization, and independent recovery limits.

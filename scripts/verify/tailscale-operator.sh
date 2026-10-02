@@ -30,5 +30,5 @@ echo 'Tailscale operator acceptance passed: Kustomization + HelmRelease Ready, o
 echo
 echo 'MANUAL (mandatory for the first application): complete the owning application guide'
 echo 'from a real tailnet client. This proves tailnet client -> Tailscale Service -> shared'
-echo 'ProxyGroup -> Kubernetes Service. Start with docs/guides/ntfy-operations.md; do not create'
+echo 'ProxyGroup -> Kubernetes Service. Start with docs/specs/007-ntfy-notification-architecture.md; do not create'
 echo 'an ad-hoc production test Ingress.'

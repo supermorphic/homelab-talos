@@ -122,10 +122,6 @@ conditional_paths:
     - tests/prometheus/openbao_test.yaml
   automation:
     - .sops.yaml
-    - docs/README.md
-    - docs/guides/n8n-operations.md
-    - docs/guides/automation-data-operations.md
-    - docs/runbooks/platform-disaster-recovery.md
     - kubernetes/apps/automation/**
     - kubernetes/apps/automation-data/**
     - kubernetes/apps/web-research/**
@@ -174,10 +170,6 @@ conditional_paths:
     - tests/fixtures/automation-data-discovery/**
     - tests/chainsaw/smoke/platform/n8n/chainsaw-test.yaml
   ci-framework:
-    - README.md
-    - tests/README.md
-    - docs/guides/test-campaign-operations.md
-    - docs/guides/agent-cluster-access.md
     - tests/chainsaw/**/chainsaw-test.yaml
     - tests/fixtures/chainsaw/lint/chainsaw-test.yaml
     - scripts/test/test_allure_report.py
@@ -186,6 +178,7 @@ conditional_paths:
     - scripts/test/test_repository_secret_scan.py
     - scripts/test/test_repository_shell_validation.py
 core_paths:
+  - README.md
   - .just/cluster.just
   - .just/node.just
   - .gitignore
@@ -193,8 +186,6 @@ core_paths:
   - AGENTS.md
   - CLAUDE.md
   - docs/**
-  - tests/fixtures/chainsaw/README.md
-  - kubernetes/README.md
   - kubernetes/apps/media/**
   - kubernetes/apps/networking/**
   - kubernetes/apps/security/**

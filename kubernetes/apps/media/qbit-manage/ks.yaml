@@ -22,7 +22,7 @@ spec:
     name: flux-system
     namespace: flux-system
   # The active category-based classification, share-limit, and recycle-bin policy is in
-  # docs/reference/qbit-manage.md.
+  # docs/specs/006-media-stack-architecture.md.
   suspend: false
   timeout: 10m
   wait: true

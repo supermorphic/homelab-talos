@@ -100,19 +100,17 @@ class ClassificationTests(unittest.TestCase):
     def test_empty_diff_still_requires_core(self):
         self.assertEqual(classify([], self.impact, full=False), ("core",))
 
-    def test_campaign_consumed_documentation_selects_its_runner(self):
+    def test_general_documentation_selects_only_structural_checks(self):
         for path in (
             "README.md",
-            "tests/README.md",
-            "docs/guides/test-campaign-operations.md",
-            "docs/guides/agent-cluster-access.md",
+            "docs/specs/011-test-reporting-standard.md",
+            "docs/specs/026-automation-data-postgresql-platform.md",
         ):
             with self.subTest(path=path):
-                groups, reasons = planner.select(
-                    [Change("M", None, path)], self.impact, full=False
+                self.assertEqual(
+                    classify([Change("M", None, path)], self.impact, full=False),
+                    ("core",),
                 )
-                self.assertEqual(groups, ("core", "ci-framework"))
-                self.assertEqual(reasons[0]["reason"], "conditional")
 
     def test_narrow_chainsaw_inputs_select_lint_and_real_consumers(self):
         cases = {
@@ -127,7 +125,6 @@ class ClassificationTests(unittest.TestCase):
                 "ci-framework",
             ),
             "tests/fixtures/chainsaw/lint/chainsaw-test.yaml": ("core", "ci-framework"),
-            "tests/fixtures/chainsaw/README.md": ("core",),
         }
         for path, expected in cases.items():
             with self.subTest(path=path):
@@ -332,16 +329,12 @@ class ClassificationTests(unittest.TestCase):
                 "automation",
             ),
             ".sops.yaml": ("core", "observability", "automation"),
-            "docs/README.md": ("core", "automation"),
-            "docs/guides/n8n-operations.md": ("core", "automation"),
-            "docs/guides/automation-data-operations.md": ("core", "automation"),
             "tests/fixtures/automation-data-discovery/complete.json": ("core", "automation"),
             "tests/fixtures/automation-data-discovery/partial.json": ("core", "automation"),
             "tests/fixtures/automation-data-discovery/schema-contract.json": (
                 "core",
                 "automation",
             ),
-            "docs/runbooks/platform-disaster-recovery.md": ("core", "automation"),
         }
         for path, expected in cases.items():
             with self.subTest(path=path):
@@ -695,8 +688,8 @@ class GitPlanTests(unittest.TestCase):
         self.assertNotEqual(payload["plan_id"], json.loads(first)["plan_id"])
         self.assertEqual(list(self.repo.glob(".plan.json.*")), [])
 
-    def test_selective_framework_document_plan_round_trips(self):
-        self.write("README.md", "Campaign instructions\n")
+    def test_selective_framework_test_plan_round_trips(self):
+        self.write("scripts/test/test_allure_report.py", "# Fixture change\n")
         self.head = self.commit()
         result = self.plan_cli()
         self.assertEqual(result.returncode, 0, result.stderr)

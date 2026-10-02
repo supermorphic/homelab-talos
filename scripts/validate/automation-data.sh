@@ -9,11 +9,6 @@ fail() {
   exit 1
 }
 
-operations_guide='docs/guides/automation-data-operations.md'
-recovery_runbook='docs/runbooks/platform-disaster-recovery.md'
-for required_document in "$operations_guide" "$recovery_runbook"; do
-  [[ -f "$required_document" ]] || fail "required operations document is missing: $required_document"
-done
 just --dry-run bootstrap automation-data >/dev/null 2>&1 ||
   fail 'the guarded automation-data bootstrap recipe is missing'
 

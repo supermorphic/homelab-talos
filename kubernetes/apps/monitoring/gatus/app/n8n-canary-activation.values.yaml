@@ -1,6 +1,6 @@
 # Retained activation source for the n8n public webhook E2E check. Copy these exact values
 # into values.yaml only while the encrypted gatus/n8n-canary Secret and public webhook
-# route are active through the reviewed Git procedure in docs/guides/n8n-operations.md.
+# route are active through the reviewed Git procedure in docs/specs/023-n8n-workflow-automation-platform.md.
 env:
   GATUS_N8N_CANARY_TOKEN:
     valueFrom:

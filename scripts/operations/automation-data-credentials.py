@@ -119,7 +119,7 @@ def main(argv: list[str]) -> int:
             [{"name": "inventory_access", "status": code}],
             next_action={
                 "kind": "procedure",
-                "reference": "docs/guides/automation-data-operations.md#private-credential-discovery-installation",
+                "reference": "docs/specs/026-automation-data-postgresql-platform.md#private-credential-discovery-installation",
                 "owner": "Platform operator",
             },
         )
@@ -132,7 +132,7 @@ def main(argv: list[str]) -> int:
                 [{"name": "private_access_enrollment", "status": "missing"}],
                 next_action={
                     "kind": "procedure",
-                    "reference": "docs/guides/automation-data-operations.md#private-credential-discovery-installation",
+                    "reference": "docs/specs/026-automation-data-postgresql-platform.md#private-credential-discovery-installation",
                     "owner": "Platform operator",
                 },
             )

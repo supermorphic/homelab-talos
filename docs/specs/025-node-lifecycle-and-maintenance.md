@@ -2,66 +2,26 @@
 
 ## Purpose
 
-Define the operational lifecycle for disrupting one established node in the three-node
-Talos, Kubernetes, etcd, Cilium, and Longhorn cluster. The design covers routine reboot,
-planned physical maintenance, recovery acceptance, and a controlled abrupt electrical
-power-loss test.
+Disrupt one established node safely in the three-node Talos/Kubernetes/etcd/Cilium/
+Longhorn cluster. Graceful reboot, arbitrary-duration physical maintenance, and attended
+unprepared electrical-loss testing have different storage and evidence contracts but
+share recovery acceptance. [Command semantics](021-repository-command-lifecycle.md) and
+[repository policy](../../AGENTS.md) govern their effects and authority.
 
-This specification supports
-[GitHub issue 346](https://github.com/supermorphic/homelab-talos/issues/346). It applies
-the command profiles and safeguards established by
-[Repository Command Lifecycle](021-repository-command-lifecycle.md) to the platform in
-[Talos and Flux Platform](010-talos-flux-platform.md). Current repository policy,
-executable source, pinned versions, and operational documentation remain authoritative.
+## Operational boundary
 
-## Scope
+[Node recipes](../../.just/node.just), [the lifecycle controller](../../scripts/node/lifecycle.sh),
+and [the abrupt-loss runner](../../scripts/test/scenarios/node_abrupt_loss.py) own syntax,
+record schema, timeouts, and exact guards. Observational maintenance-check and cluster
+status/verify use approved scoped credentials. Mutating lifecycle and electrical-loss
+workflows require operator-controlled administrative credentials and refuse scoped
+linked-worktree execution; confirmation does not grant that authority.
 
-This design introduces:
-
-- an established-node command domain for reboot, Longhorn volume resizing, and planned
-  maintenance;
-- an established-cluster observation domain for aggregate status and verification;
-- a persistent Node-based containment state and a transient shared disruption Lease;
-- a repository-owned Kubernetes and Longhorn drain transaction;
-- a common recovery-acceptance path;
-- a controlled abrupt electrical power-loss resilience test; and
-- the missing requested-member postcondition for exceptional etcd join retry.
-
-This design does not:
-
-- redesign the repository-wide command taxonomy;
-- automate physical maintenance or electrical power control;
-- broaden scoped agent credentials to permit node mutation;
-- treat Longhorn replicas as backups;
-- add a lifecycle controller, custom resource, or transaction journal;
-- introduce a normal force-reboot command;
-- make arbitrary application health part of aggregate cluster verification; or
-- independently upgrade Talos, Kubernetes, Cilium, or Longhorn.
-
-## Previous state and problem
-
-The former `bootstrap reboot <node>` validated Kubernetes and etcd, required an exact
-confirmation, immediately asked Talos to reboot the target, waited for its return, and
-checked Secure Boot, TPM-backed volumes, etcd, and foundation health. It neither cordoned
-nor drained the target. Workloads remained assigned when the node disappeared.
-
-That behavior is useful evidence for an unprepared node disappearance, but it is not the
-right routine lifecycle for an established node. It also cannot intentionally leave a
-node safely powered off for physical work.
-
-Several established-state commands were under `bootstrap`:
-
-```text
-bootstrap status [node]
-bootstrap verify
-bootstrap reboot <node>
-bootstrap resize-longhorn <node>
-```
-
-The former public `bootstrap verify` was additionally a pre-Cilium bootstrap gate. It
-expects Kubernetes Nodes to remain `NotReady` and performs a bounded ignored-kubeconfig
-handoff. That behavior cannot become an established-cluster verifier through a blind
-rename.
+Reboot drains workloads and preserves reusable replicas for a short outage. Maintenance
+entry records and disables replica scheduling, drains and fully evacuates replicas, then
+shuts down and deliberately leaves the node offline. The operator physically starts it
+before maintenance-exit. Longhorn resize retains its guarded destructive two-reboot
+transaction under shared serialization; a rename does not authorize a live resize test.
 
 ## Design principles
 
@@ -83,67 +43,14 @@ The lifecycle follows these rules:
 10. Public commands own complete transaction semantics without naively chaining each
     other.
 
-## Public command surface
-
-The approved surface is:
-
-| Command | Profile | Confirmation |
-| --- | --- | --- |
-| `mise exec -- just node maintenance-check <node>` | Read-only lifecycle check | None |
-| `mise exec -- just node maintenance-enter <node>` | Planned disruption | `NODE_MAINTENANCE_CONFIRM='enter:<node>:<ip>'` |
-| `mise exec -- just node maintenance-exit <node>` | Recovery acceptance | `NODE_LIFECYCLE_CONFIRM='accept:<node>:<kind>'` |
-| `mise exec -- just node reboot <node>` | Planned short disruption | `NODE_REBOOT_CONFIRM='reboot:<node>:<ip>'` |
-| `mise exec -- just node resize-longhorn <node>` | Destructive Talos volume operation | Existing `TALOS_RESIZE_LONGHORN_CONFIRM='resize-longhorn:<node>:<ip>'` |
-| `mise exec -- just cluster status [node]` | Read-only diagnostic view | None |
-| `mise exec -- just cluster verify` | Read-only established-platform acceptance | None |
-| `mise exec -- just test resilience node-abrupt-loss <node>` | Controlled unprepared failure | `CLUSTER_CHAOS_CONFIRM='chaos:node-abrupt-loss'` and `NODE_ABRUPT_LOSS_CONFIRM='remove-power:<node>:<ip>'` |
-
-`NODE_REBOOT_CONFIRM` replaces `TALOS_REBOOT_CONFIRM` because the new operation owns a
-Kubernetes, Longhorn, and Talos lifecycle rather than only a Talos reboot.
-
-The recovery token follows the established repository grammar of an action prefix plus
-target context. Its lifecycle kind is read from persisted state, so a confirmation for
-one recovery state cannot accept a different state.
-
-The following semantic moves are atomic and leave no aliases:
-
-```text
-bootstrap reboot <node>          -> node reboot <node>
-bootstrap resize-longhorn <node> -> node resize-longhorn <node>
-bootstrap status [node]          -> cluster status [node]
-bootstrap verify                 -> cluster verify
-```
-
-`bootstrap retry-join <node>` remains exceptional bootstrap recovery. A command is not
-moved only because it accepts a node argument.
-
-## Lifecycle state model
-
 ### Transient ownership
 
-The existing renewable Lease implementation becomes the generalized disruption lock.
-The same Lease identity is used by node lifecycle, qualifying topology-changing
-operations, and existing mutating test orchestration:
+The renewable `flux-system/homelab-test-run-lock` serializes node lifecycle,
+qualifying topology changes, and mutating test orchestration. Retaining one identity
+prevents workflows from using separate locks.
 
-```text
-flux-system/homelab-test-run-lock
-```
-
-The resource name is historical, but retaining its identity prevents old and new
-repository workflows from mistakenly using separate locks. The implementation moves
-from its test-specific library location to a shared library without changing the proven
-acquire, renew, verify-holder, and release behavior.
-
-The Lease protects only an active transaction. It is acquired and renewed by:
-
-- `node reboot`;
-- `node maintenance-enter`;
-- `node maintenance-exit`;
-- `node resize-longhorn`;
-- `test resilience node-abrupt-loss`;
-- `bootstrap retry-join`; and
-- existing mutating test scenarios or campaigns whose current contract already requires
-  the shared lock.
+The Lease protects only an active transaction, including reboot, maintenance entry/exit,
+Longhorn resize, abrupt-loss testing, join retry, and qualifying mutating campaigns.
 
 Read-only verification does not acquire the Lease. Unrelated mutations do not join the
 lock without a concrete topology or stability requirement.
@@ -160,35 +67,9 @@ One annotation on the Kubernetes Node carries the minimum durable recovery recor
 homelab.supermorphic.com/node-lifecycle
 ```
 
-Routine reboot and abrupt loss use small records:
-
-```json
-{"schemaVersion":1,"kind":"reboot"}
-```
-
-```json
-{"schemaVersion":1,"kind":"abrupt-loss"}
-```
-
-Maintenance also records the Longhorn values observed before entry and the values the
-lifecycle intends to own during maintenance:
-
-```json
-{
-  "schemaVersion": 1,
-  "kind": "maintenance",
-  "longhorn": {
-    "allowScheduling": {
-      "before": true,
-      "during": false
-    },
-    "evictionRequested": {
-      "before": false,
-      "during": true
-    }
-  }
-}
-```
+The record identifies supported lifecycle kind; maintenance additionally retains observed
+Longhorn values before entry and intended values during absence. Exact record fields and
+schema belong to [the lifecycle controller](../../scripts/node/lifecycle.sh).
 
 The annotation does not contain step flags, timestamps, hardware identifiers, or a
 general transaction journal. Unknown schema versions, malformed records, unsupported
@@ -285,11 +166,8 @@ as fallback. It permits normal deletion of declared `emptyDir` data after report
 inventory because that storage is node-local and cannot survive reboot or maintenance.
 A workload that relies on `emptyDir` for durable state violates its deployment contract.
 
-The observational preflight confirms that Kubernetes core `/api/v1` discovery advertises
-`pods/eviction`. It uses `kubectl drain --dry-run=client`, so scoped credentials can
-exercise pod discovery and drain classification without node-patch or eviction authority.
-The operator-run transaction repeats API discovery and performs the real eviction only
-after it has persisted lifecycle containment.
+Observational preflight must not require eviction or Node-patch authority. The real
+operator transaction repeats capability checks and evicts only after persistent containment.
 
 For each controller-owned workload that preflight classifies as expected to continue
 during the target's absence, drain completion requires an actual replacement Pod on an
@@ -307,14 +185,12 @@ condition, provided the live Job UID matches the captured controller UID. Otherw
 its Ready survivor replacement is required. Longhorn-managed InstanceManager Pods
 in `longhorn-system` are node-local infrastructure: eviction remains subject to their
 PDB, and Longhorn evacuation/convergence provides their acceptance evidence.
-Replacement observations retry for up to 60 attempts, five seconds apart, to allow
-controllers and readiness probes to converge after drain. Exhaustion preserves
-containment and prevents shutdown.
+Replacement readiness has a bounded wait. Exhaustion preserves containment and prevents
+shutdown.
 
 For Plex, these generic checks use its existing `/identity` readiness probe, require the
 same Longhorn-backed configuration volume to attach on the landing node, and require the
-SMB media volume to mount. Its 120-second termination grace period allows an orderly
-SQLite shutdown. Its `emptyDir` transcode data is reported and discarded, so an active
+SMB media volume to mount. Its termination grace allows an orderly SQLite shutdown. Its `emptyDir` transcode data is reported and discarded, so an active
 stream or transcode can be interrupted even though the workload transition is graceful.
 The lifecycle does not create a Plex persistence marker or duplicate the complete
 `plex-cross-node-reschedule` resilience test.
@@ -322,12 +198,12 @@ The lifecycle does not create a Plex persistence marker or duplicate the complet
 A blocked or timed-out drain stops before reboot or shutdown. The node remains annotated
 and cordoned for recovery through `maintenance-exit`.
 
-The pinned Talos 1.13.7 CLI has an optional `reboot --drain` path. Its implementation
+The reviewed Talos CLI has an optional `reboot --drain` path. Its implementation
 cordons and drains before reboot, then uses deferred cleanup to uncordon even when a
 later stage fails. That behavior conflicts with persistent containment, so `node reboot`
 does not pass `--drain`.
 
-Talos 1.13.7 `shutdown` behaves differently: it performs its own cordon and drain unless
+The reviewed Talos `shutdown` behaves differently: it performs its own cordon and drain unless
 `--force` is supplied. In this specific command, `--force` suppresses that duplicate
 Kubernetes drain but still runs the normal Talos machine sequence that stops pods,
 services, and filesystems before shutdown. `maintenance-enter` may use
@@ -439,88 +315,6 @@ acquire Lease
 If Longhorn restoration succeeds but later acceptance fails, a repeated
 `maintenance-exit` observes `current == before` and continues safely.
 
-## Operation state machines
-
-### Maintenance check
-
-```text
-resolve exact target
--> inspect Lease and persistent lifecycle state
--> evaluate target, Kubernetes, etcd, Cilium, workloads, PDBs, capacity, and Longhorn
--> report safe or actionable blockers
--> perform no mutation
-```
-
-The result can become stale and is never authority for later mutation.
-
-### Maintenance enter
-
-```text
-acquire Lease
--> repeat admission checks
--> exact target-bound confirmation
--> read current Node and Longhorn state
--> construct minimal before/during record
--> atomically annotate and cordon with optimistic concurrency
--> read back and verify containment
--> apply and verify Longhorn during values with optimistic concurrency
--> gracefully drain workloads
--> fully evacuate required Longhorn replicas
--> repeat disruption safety checks
--> request Talos shutdown without a second client-side drain
--> verify the node is offline and remains cordoned
--> release Lease
-```
-
-Successful entry deliberately stops with the node unavailable, cordoned, annotated, and
-safe for arbitrary-duration physical maintenance. It must not succeed merely because a
-node disappeared and returned automatically.
-
-### Routine reboot
-
-```text
-acquire Lease
--> repeat admission checks
--> exact target-bound confirmation
--> atomically annotate reboot and cordon
--> verify containment
--> gracefully drain workloads
--> verify short-absence Longhorn safety without replica evacuation
--> repeat critical safety checks and Lease ownership
--> request Talos reboot without Talos client-side drain
--> observe disappearance and return
--> recover while still cordoned
--> complete acceptance
--> atomically remove annotation and uncordon
--> release Lease
-```
-
-Failure after annotation leaves the node contained. A reboot that does not complete
-acceptance is resumed with `maintenance-exit`, not a new reboot-specific command.
-
-### Maintenance exit and common recovery
-
-The operator physically starts a maintained node before invoking `maintenance-exit`.
-The command also accepts supported interrupted reboot and abrupt-loss records.
-
-```text
-acquire Lease
--> validate exact target and persisted kind
--> require accept:<node>:<kind>
--> wait for Talos and Kubernetes return
--> restore lifecycle-owned Longhorn state when recorded
--> complete common and kind-specific acceptance
--> repeat critical checks and Lease ownership
--> atomically remove annotation and uncordon
--> verify the Node object
--> release Lease
-```
-
-The standalone confirmation is required because maintenance exit is a new transaction,
-possibly hours or days after entry. The original entry confirmation is stale. Successful
-reboot and abrupt-loss commands need no second confirmation for their built-in exit
-because the original command and Lease continuously own those bounded transactions.
-
 ### Abrupt electrical power-loss resilience test
 
 This test is not a normal node lifecycle command. It deliberately proves behavior after
@@ -541,25 +335,12 @@ AND target etcd member unreachable
 AND remaining etcd members retain quorum
 ```
 
-The default sequence is:
-
-```text
-require scenario confirmation
--> acquire Lease and pass lifecycle admission
--> require exact target confirmation
--> establish healthy baseline
--> start continuous probes
--> request electrical disconnection
--> observe genuine unprepared multi-plane loss
--> atomically annotate abrupt-loss and cordon the already-offline Node
--> passively observe autonomous cluster recovery
--> record workload, storage, and service behavior
--> request electrical restoration
--> recover while cordoned
--> require full platform and Longhorn convergence
--> atomically remove annotation and uncordon
--> release Lease
-```
+Establish healthy baseline and continuous external probes, request electrical removal,
+prove genuine multi-plane loss, then contain the already-offline Node. Observe autonomous
+recovery passively, request electrical restoration, and require full recovery before
+final acceptance. Default degraded observation preserves surviving replicas without
+requiring full reconstruction during absence; complete convergence is required afterward.
+Singleton recovery is measured separately from core-path continuity.
 
 Nothing annotates, cordons, drains, or otherwise prepares the target before electrical
 removal. The post-loss ordinary cordon prevents new scheduling when the node returns but
@@ -572,59 +353,6 @@ is intended to measure. It must be used only after independently confirming the 
 powered off and removed after the node has recovered. A future extended scenario or
 explicit incident procedure requires separate design, authorization, owned-taint
 cleanup, and evidence.
-
-#### Baseline
-
-Before power removal, the test records:
-
-- exact target identity and three-node health;
-- etcd membership, leader, endpoint health, and alarms;
-- remaining-node capacity and workload placement eligibility;
-- non-DaemonSet workloads currently hosted by the target;
-- affected PVCs, logical volume ownership, and off-target healthy replicas;
-- Cilium and foundation health; and
-- external API, DNS, and trusted HTTPS probe baselines.
-
-It refuses the test when an affected durable volume has no healthy replica away from the
-target.
-
-#### Passive degraded-state evidence
-
-While power remains disconnected, the test records and evaluates:
-
-| Layer | Evidence |
-| --- | --- |
-| Control plane | Exactly two surviving Nodes `Ready`, healthy two-member etcd quorum, usable Kubernetes API |
-| Network | Cilium healthy on survivors; API/VIP, DNS, and trusted HTTPS continuity samples |
-| Workloads | Autonomous behavior and recovery time for eligible controller-owned workloads; stuck stateful or singleton workloads remain visible |
-| Storage | PVC identity preservation, surviving healthy replicas, volume usability where expected, robustness, replenishment, and rebuild activity |
-
-The default test does not wait for every affected volume to regain full configured
-replica count while the node remains absent. That would turn every run into an extended
-storage-reconstruction test. Full replica reconstruction during sustained absence is a
-separate future resilience scenario. The default requires complete Longhorn convergence
-after power restoration.
-
-External core probes begin before power removal and continue through recovery. The
-repository policy defaults are:
-
-| Setting | Default |
-| --- | ---: |
-| Probe cadence | 5 seconds |
-| Core-path no-success limit | 60 seconds |
-| Power-loss detection | 3 minutes |
-| Passive observation | 10 minutes |
-| Electrical-restoration wait | 30 minutes |
-| Full recovery acceptance | 30 minutes |
-
-The 60-second limit is a repository SLO, not a Kubernetes guarantee. Overrides are
-bounded, validated, and printed before disruption. Singleton workload failover can take
-longer and is measured separately rather than described as uninterrupted service.
-
-If passive observation fails, the test still requests electrical restoration and
-attempts recovery. It reports the primary assertion, containment, cleanup, and recovery
-independently. A valid result can therefore show a failed resilience assertion with
-successful node recovery.
 
 ## Recovery acceptance
 
@@ -692,48 +420,8 @@ started:
 If the active process stops after abrupt loss, the persisted annotation and cordon—or,
 when that write failed, the observed `NotReady` state—provide the available containment
 signal. If a target cannot be restored, it remains unavailable and blocks another
-intentional node disruption. Repair or reinstall follows the existing disaster-recovery
-boundary, after which `maintenance-exit` can accept a supported persisted lifecycle
+intentional node disruption. Repair or reinstall follows the [platform recovery boundary](010-talos-flux-platform.md#independent-platform-recovery), after which `maintenance-exit` can accept a supported persisted lifecycle
 record. Permanent replacement or etcd-member removal requires a separate reviewed plan.
-
-## Established-cluster observation
-
-### Cluster status
-
-`cluster status [node]` is the semantic move of the current read-only Talos and etcd
-diagnostic view. The optional target remains useful for focused service, discovery, and
-recent-log inspection.
-
-### Cluster verify
-
-`cluster verify` is a new established-cluster aggregate, not the current pre-Cilium
-implementation under a new name. It composes existing authoritative verifiers where
-possible and remains limited to:
-
-- the expected Kubernetes Nodes;
-- etcd membership and health;
-- Talos machine and volume health;
-- Cilium;
-- Longhorn; and
-- foundation networking, DNS, Gateway, certificate, and trusted HTTPS dependencies.
-
-It does not duplicate those checks into one large new script and does not include
-arbitrary application health.
-
-The current pre-Cilium behavior becomes a private bootstrap prerequisite invoked by the
-Cilium bootstrap transaction. Its `NotReady` expectation and bounded kubeconfig handoff
-remain bootstrap-specific and are not exposed as established-cluster acceptance.
-
-## Related disruptive operations
-
-### Longhorn volume resize
-
-`node resize-longhorn` retains its existing destructive Talos-volume contract and exact
-confirmation while moving to the established-node domain. It holds the shared
-disruption Lease for its complete two-reboot transaction and refuses another active or
-persistent node lifecycle condition.
-
-The rename does not authorize a live resize merely to prove the new command name.
 
 ### Etcd join retry
 
@@ -750,284 +438,48 @@ AND exact expected etcd membership is healthy
 AND no relevant etcd alarms remain
 ```
 
-## Authority and credential boundary
 
-These observational commands remain usable with linked-worktree scoped credentials:
+## Recover contained lifecycle state
 
-```text
-node maintenance-check
-cluster status
-cluster verify
+After a failed reboot, maintenance return, or abrupt-loss test, correct the blocking
+condition and physically start the node when necessary. Inspect its persisted lifecycle
+kind and use the matching administrative implementation:
+
+```bash
+NODE_LIFECYCLE_CONFIRM='accept:<node>:<kind>' \
+  mise exec -- just node maintenance-exit <node>
 ```
 
-The observer receives only missing `get`, `list`, and `watch` access for:
+Only supported `maintenance`, `reboot`, and `abrupt-loss` records for the exact node can
+be accepted. Recovery restores owned Longhorn settings while still cordoned and makes
+annotation removal/uncordon the final accepted mutation. Never downgrade to code unable
+to interpret a record while any node is contained. An unknown/malformed annotation key
+blocks admission even if its value cannot be parsed; a free Lease never overrides it.
 
-- the shared Lease;
-- PersistentVolumes, for PVC and PV identity checks;
-- Longhorn Replicas; and
-- Longhorn Settings.
+## Coordination and validation
 
-Existing read access covers the other required objects. Observer and diagnostic roles do
-not receive create, update, patch, delete, eviction, exec, port-forward, shutdown, or
-reboot authority.
+Lease operations use optimistic resource-version ownership; only the current holder can
+renew or release, and release clears holder without deleting the object. Conflicts require
+fresh reads; expiry never authorizes overwriting a newer claim. Campaign children verify
+the exported parent and never release it. Renewal failure creates a failure signal checked
+with current holder immediately before mutation. Publication uses an independent Lease.
 
-Mutating node lifecycle and abrupt-loss commands are operator-run and refuse scoped
-linked-worktree credentials before mutation. They require the authorized main-clone
-Kubernetes and Talos credentials. Permission failure never causes broader-credential
-fallback, RBAC modification, or ad hoc privilege escalation.
+Offline tests use injected commands/clocks and independent transition, failure, and
+concurrency oracles without live access. They must detect mutation before authority,
+eviction/PDB bypass, inconsistent restore, lost ownership, false rollback after disruption,
+and uncordon before acceptance. Native acceptance is separate: verify scoped RBAC and
+observational checks, then one graceful reboot, a maintenance cycle, and electrical loss
+last. Reestablish all three nodes between disruptions; do not exercise destructive resize
+merely to prove its interface.
 
-Confirmation is an execution-intent and target-binding guard, not authorization.
+Plex-specific persistence and SMB remount evidence stays with its cross-node reschedule
+test; cluster lifecycle checks affected workloads without turning arbitrary application
+health into an aggregate platform invariant. Electrical loss remains standalone because
+it requires explicit physical target selection and attended removal/restoration.
 
-## Implementation structure
-
-The root Justfile imports thin `.just/node.just` and `.just/cluster.just` modules. Public
-recipes delegate to focused controllers under `scripts/node/` and `scripts/cluster/`.
-The shared node controller owns target resolution, Lease handling, structured-state
-parsing, optimistic patches, checks, drain, Longhorn handling, Talos operations,
-acceptance, and error reporting. The attended abrupt-loss controller is Python so its
-clock, prompts, observations, and evidence state are directly injectable in offline
-tests; a thin Bash bridge reuses the same Lease and lifecycle recovery functions.
-
-The existing Bash Lease implementation moves to a shared `scripts/lib/` location and
-retains focused tests. A large inline Just implementation is rejected because the state
-machine and failure injection would be difficult to test. A separate Python lifecycle
-owner is also rejected because it would duplicate or split Lease ownership. Small pure
-helpers remain possible only when a demonstrated parsing need justifies them.
-
-Public commands share internal primitives but do not implement themselves by invoking
-another public lifecycle command. Each transaction owns its confirmation, state,
-failure boundary, and safety-critical rechecks.
-
-## Resilience-test allocation
-
-The application-specific `plex-node-reboot` test is retired. Its useful assertions remain
-under `plex-cross-node-reschedule`, which already verifies:
-
-- Plex replacement readiness on another node;
-- unchanged PVC identity;
-- Longhorn attachment to the landing node;
-- persistence-marker survival; and
-- SMB media remount.
-
-The new `node-abrupt-loss` scenario is target-node-driven and cluster-scoped. It does not
-depend on Plex being scheduled on the selected target. If Plex is affected, generic
-workload and storage inventory observes it, while the durable Plex-specific contract
-continues to belong to `plex-cross-node-reschedule`.
-
-`node-abrupt-loss` is cataloged as a standalone operator-run resilience test. It is not
-added to a frozen campaign because it requires explicit physical target selection and
-two attended electrical actions.
-
-## Command migration
-
-The semantic moves update all repository-owned consumers in one change:
-
-- root and module recipes;
-- internal dependencies;
-- scripts and fixtures;
-- catalog entries and campaign membership;
-- focused tests and validators;
-- README command tables and examples;
-- testing references;
-- guides and runbooks; and
-- the current repository command-lifecycle reference where needed.
-
-Old public names, deprecated aliases, and parallel confirmation terminology are removed.
-`plex-node-reboot` source, catalog registration, tests, and campaign references are also
-removed.
-
-Code must not be downgraded to a version that cannot interpret the lifecycle annotation
-while any Node remains annotated or cordoned. Recovery with the matching implementation
-must complete first.
-
-## Validation
-
-Cluster-independent validation uses economical table-driven and state-transition tests
-instead of duplicating similar cases. Focused coverage proves:
-
-- exact new command domains and removal of old names;
-- confirmation and credential guards;
-- observer read grants and continued mutation denial;
-- Lease acquire, renew, ownership loss, expiry, and release behavior;
-- lifecycle record parsing and fail-closed schema handling;
-- optimistic concurrency on Node and Longhorn objects;
-- every compare-and-restore branch;
-- atomic Node containment and final acceptance patches;
-- drain arguments and absence of eviction, PDB, unmanaged-pod, or storage bypasses;
-- operation-specific reboot and maintenance storage behavior;
-- failure containment before and after every material disruption boundary;
-- absence of automatic uncordon cleanup;
-- passive abrupt-loss observation, continuous probes, and separate primary/recovery
-  outcomes;
-- `retry-join` requested-member, exact-membership, and alarm postconditions;
-- removal of `plex-node-reboot` with retained Plex reschedule coverage;
-- standalone abrupt-loss catalog registration and campaign exclusion; and
-- complete documentation migration without old public command names.
-
-The implementation adds at most two new top-level offline harness cases:
-
-- one node-lifecycle case for state transitions, ordered calls, failure injection,
-  workload readiness, storage handling, and recovery; and
-- one cluster-commands case for command migration, established verification composition,
-  and the private pre-Cilium bootstrap prerequisite.
-
-Existing Lease, bootstrap recovery, observer access, resilience-controller, catalog, and
-dispatch suites are extended in place. State combinations and failure boundaries are
-data rows or subtests inside those cases rather than separate process-heavy scripts. The
-expected addition is approximately 40 to 60 logical rows across the new and extended
-suites, not 40 to 60 new top-level test processes.
-
-The CI runtime budget for this specification is:
-
-```text
-expected added runtime: no more than 7 seconds
-review ceiling: 10 seconds or 1.5% of the current hosted just-ci median,
-                whichever is lower
-```
-
-The focused lifecycle tests and a same-machine before-and-after `just ci` comparison are
-reported during implementation review. This is a review budget, not a timing assertion
-inside CI. If the focused additions exceed the ceiling, implementation must first remove
-avoidable process starts, repeated parsing, rendering, or duplicated cases. An exception
-requires a concrete coverage and runtime justification.
-
-The implemented top-level cases measured 2.08 seconds for `node-lifecycle` and 0.69
-seconds for `cluster-commands` on the implementation workstation, or 2.77 seconds
-combined. The additional rows in existing Python, catalog, and access tests use injected
-commands and clocks. Their expected total CI increase remains below four seconds and the
-seven-second budget; hosted CI timing remains the final comparison.
-
-Offline lifecycle tests use fake command adapters, an injected clock, and immediate
-fixture results. They perform no cluster access, network access, real sleep, watch, retry
-delay, Helm render added solely for lifecycle coverage, or destructive action. Attended
-reboot, maintenance, and electrical-loss validation remains outside CI and campaigns.
-
-The canonical pre-merge gate remains:
-
-```text
-mise exec -- just ci
-```
-
-No destructive live cluster execution is required to prove implementation control flow
-when command stubs and fixtures provide independent ordering and failure evidence.
-
-## Live validation
-
-Linked-worktree credentials cannot run disruptive validation. After merge and required
-Flux reconciliation, operator-owned live validation increases disruption in this order:
-
-1. Verify the updated scoped observer RBAC.
-2. Run `cluster status`, `cluster verify`, and `maintenance-check` against each node.
-3. Run one graceful `node reboot` transaction.
-4. Run one `maintenance-enter`, physical power-on, and `maintenance-exit` cycle.
-5. Run `node-abrupt-loss` last with actual electrical disconnection and restoration.
-
-All three nodes must be fully established before advancing to the next disruptive step.
-`node resize-longhorn` is not executed merely to validate its rename.
-
-## Alternatives rejected
-
-### Talos-owned client drain
-
-Talos exposes client-side drain options, but that path owns cordon and uncordon behavior
-without this repository's independent PDB, workload, Longhorn, persistent containment,
-and recovery-acceptance contract. The repository therefore owns drain explicitly and
-uses Talos only for the machine reboot or shutdown stage.
-
-### Full replica evacuation for every reboot
-
-This would convert a short routine disruption into expensive storage reconstruction and
-discard reusable replicas. Routine reboot instead proves a safe surviving replica and
-retains target replicas. Arbitrary-duration maintenance performs complete evacuation.
-
-### Full replica reconstruction during every abrupt-loss test
-
-Waiting through the replenishment interval and rebuilding every affected replica before
-power restoration would test extended storage reconstruction, not only abrupt node loss.
-The default records degraded behavior and requires final convergence after restoration.
-
-### Immediate out-of-service intervention
-
-Adding the Kubernetes out-of-service taint immediately would force pod deletion and
-volume detach, hiding autonomous failure behavior. The default test stays passive.
-
-### Separate persistent lifecycle resource
-
-A ConfigMap or custom resource would create synchronization and ownership states without
-a current need. The versioned Node annotation holds the minimum recovery record.
-
-### Separate recovery commands
-
-`reboot-recover`, `abrupt-loss-recover`, and `maintenance-cancel` would duplicate the
-same acceptance and uncordon boundary. `maintenance-exit` handles supported persistent
-kinds unless implementation evidence proves it cannot.
-
-### Compatibility aliases
-
-Aliases would preserve parallel terminology and weaken the command-lifecycle migration
-rule. Every repository-owned caller moves atomically.
-
-## Upstream basis
-
-The design was checked against the versions pinned by this repository and the matching
-upstream operational guidance:
-
-- [Talos 1.13.7 reboot CLI source](https://github.com/siderolabs/talos/blob/v1.13.7/cmd/talosctl/cmd/talos/reboot.go)
-  defines the optional client-side drain and deferred uncordon behavior.
-- [Talos 1.13.7 shutdown CLI source](https://github.com/siderolabs/talos/blob/v1.13.7/cmd/talosctl/cmd/talos/shutdown.go)
-  and its [machine shutdown sequence](https://github.com/siderolabs/talos/blob/v1.13.7/internal/app/machined/pkg/runtime/v1alpha1/v1alpha1_sequencer.go)
-  define the narrow effect of `shutdown --force` and the remaining orderly stop phases.
-- [Kubernetes drain](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_drain/)
-  defines eviction, DaemonSet, unmanaged-pod, and local-data behavior.
-- [Kubernetes non-graceful node shutdown](https://kubernetes.io/docs/concepts/cluster-administration/node-shutdown/)
-  defines the powered-off prerequisite and effect of the out-of-service taint.
-- [Longhorn 1.12.0 node maintenance](https://longhorn.io/docs/1.12.0/maintenance/maintenance/)
-  defines cordon, drain policy, reusable-replica, and planned-evacuation behavior.
-
-## Completion criteria
-
-The initiative is complete when:
-
-1. `maintenance-check` reports whether one selected node is safe to disrupt without
-   mutation.
-2. `maintenance-enter` safely drains, fully evacuates Longhorn replicas, shuts down, and
-   leaves exactly one node persistently contained.
-3. `maintenance-exit` restores lifecycle-owned state, accepts recovery, and uncordons as
-   its final mutation.
-4. `node reboot` performs a graceful drain without routine full replica evacuation and
-   keeps failed recovery cordoned.
-5. One shared Lease and persistent Node state enforce the one-node invariant across all
-   qualifying workflows.
-6. Failure semantics distinguish mutation, disruption, containment, recovery, and
-   unresolved incident state without false rollback claims.
-7. `node-abrupt-loss` passively measures a genuine electrical-loss event and separately
-   reports recovery.
-8. Plex-specific persistence coverage remains without `plex-node-reboot`.
-9. Established node and cluster commands use only the new public domains, with no old
-   aliases.
-10. `cluster verify` composes core established-platform verification while the
-    pre-Cilium gate remains private to bootstrap.
-11. `bootstrap retry-join` remains exceptional and proves the requested healthy member
-    result under shared serialization.
-12. Scoped identities gain required observations but no disruptive authority.
-13. Focused cluster-independent tests and `mise exec -- just ci` pass within the approved
-    incremental runtime budget.
-14. The specification is reconciled with the implemented and validated result before
-    merge.
-
-## Consequences
-
-Routine node operation becomes orderly and recoverable: the cluster proves it can lose
-one node, drains workloads, contains the target, accepts its return, and only then makes
-it schedulable. Planned maintenance can span an arbitrary physical-work interval without
-holding an active Lease. Reboot remains efficient by preserving reusable replicas.
-
-The repository also retains honest high-availability evidence. Abrupt electrical loss
-is tested explicitly without graceful preparation, application-specific Plex coverage
-stays with the Plex scenario, and passive behavior remains distinguishable from incident
-intervention.
-
-The design adds operational machinery and attended validation, but it avoids an
-in-cluster controller, another persistent resource, a transaction journal, compatibility
-aliases, and broader agent authority. The resulting lifecycle is explicit enough to
-recover safely while remaining proportional to a three-node homelab cluster.
+Repository-owned drain is deliberate: Talos client cleanup can uncordon before this
+contract accepts recovery. Full replica evacuation for every reboot would discard usable
+replicas and impose unnecessary reconstruction. A separate lifecycle custom resource,
+controller, or transaction journal would introduce synchronization without a current need.
+The Node's minimal recovery record and shared internal primitives are sufficient; each
+public operation owns its transaction rather than naively chaining public commands.

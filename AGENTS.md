@@ -1,294 +1,190 @@
 # Agent Instructions
 
-Canonical, vendor-neutral rules for agents and contributors. `CLAUDE.md` imports
-this file.
-
-## Repository context
-
 This repository manages a three-node Talos Linux and Flux GitOps Kubernetes cluster.
-Git is the source of truth, and merged changes to `main` can affect the live environment.
-Before changing a subsystem, inspect its current source and the applicable current
-guide, reference, or design specification only as needed. Do not load documentation
-merely because it exists alongside the source. Expand to related callers,
-dependencies, and tests only as needed.
+Git is the source of truth; merges to `main` can affect the live environment.
+This root file owns repository execution policy. Necessary tool adapters, such as
+`CLAUDE.md`, import or adapt it without duplicating policy. Do not add nested policy.
 
-This root file is the sole repository-policy surface; supporting documentation supplies
-procedure, not competing instructions. Use the current repository
-state and current documentation as the implementation baseline. Repository policy and
-current source state take precedence over historical specifications, transient plans,
-prior conversation context, and assumptions.
+## Scope and documentation
 
-## Communication style
+- Start with the task, applicable policy, relevant source, and tests. Read only needed
+  sections of owning specs; expand for actual cross-component constraints or uncertainty.
+  Do not preload documentation trees or prescribe a README/guide/spec reading bundle.
+- Documentation is not a default deliverable. Most fixes, refactors, dependency changes,
+  and implementation-only schema changes need no prose update. General documentation
+  belongs only in root `README.md` and `docs/specs/`: no nested READMEs, documentation
+  index, guides, references, runbooks, contribution manuals, archives, or substitutes.
+  Functional prompts, executable skills, machine-consumed Markdown, fixtures, and required
+  third-party notices are narrow exceptions based on actual function, not relabeling.
+- Source, schemas, migrations, configuration, and command help own exact implementation
+  facts. Do not duplicate field catalogs, defaults, versions, or command inventories in
+  prose. Preserve durable compatibility and migration reasoning that changes the contract.
+- Specs own current intent, important rationale, boundaries, and guarantees. Investigate
+  discrepancies between implementation and specs; do not silently rewrite requirements
+  to match code. Update the existing owner when its contract changes. Create a new spec
+  only for an explicitly agreed distinct durable subject, not for each issue or PR.
+  Reconcile changed contracts with the implemented and validated result before merge.
+- Use monotonically increasing three-digit spec identifiers, taking the next number after
+  the highest assigned identifier, including retired specs in Git history. Never reuse or
+  renumber merged identifiers. Git history is the archive. Preserve minimal independent
+  recovery prerequisites, authority boundaries, failure interpretation, and steps that
+  cannot be discovered from source or help in the owning spec.
+- Keep plans and temporary handoffs ignored under `.tmp/` (`.tmp/plans/` for plans; reuse
+  the owning spec's identifier where practical). Detailed evidence belongs in established
+  evidence stores. Neither specs nor comments are completion diaries.
+- Current repository policy and source are the implementation baseline. These artifact
+  and communication rules override skill defaults and older issue/spec instructions.
+  Preserve real requirements, not obsolete demands for guides, committed plans, or
+  exhaustive reports.
 
-Communicate with the operator in clear, concrete English.
+## Communication and completion
 
-Apply principles inspired by ASD-STE100 Simplified Technical English:
+Use clear, concrete English for a software engineer who may not know the subsystem.
+Lead with the outcome, explain unfamiliar terms when needed, and omit repeated process
+detail. Preserve literal APIs, identifiers, commands, configuration fields, and quotes.
 
-- Use plain language when doing so preserves the same meaning.
-- Avoid unnecessary jargon and abstract terminology.
-- Prefer concrete descriptions of behavior over abstract labels.
-- Reuse terminology already established in the conversation or task.
-- Provide relevant context when needed to explain an implementation or recommendation.
-- Briefly explain specialized or project-specific terms when their meaning may not be
-  obvious from context.
-- Prefer concrete examples when they help explain an abstract concept.
-- Present sequential steps in their logical order.
-- Break up long or complex sentences when doing so improves clarity.
-- Prefer active voice.
-- Be concise and direct. Avoid unnecessary verbosity while keeping important details.
-- Lead with the outcome. Omit repetition and incidental process detail. Expand only when
-  requested or necessary.
-- Simplify the wording, not the technical content.
-
-Write for a software engineer who may be unfamiliar with the specific tool, subsystem, or
-domain.
-
-Do not rewrite literal APIs, identifiers, commands, configuration fields, or quoted text
-solely to satisfy these style rules.
+- Post issue/PR comments only for a new decision and rationale, material finding, changed
+  blocker/dependency, answer or operator request, or meaningful acceptance/closure outcome.
+  Skip routine activity, unchanged status, and recaps available in the PR or CI. No comment
+  is required merely because a session ended.
+- Normally use 3–6 short sentences and fewer than 150 words; this is a default, not a cap
+  or template. Longer technical discussions must answer a real question and lead with a
+  summary. Include blocker, next action/responsible actor, and evidence links when relevant.
+- Keep exact versions, IDs, errors, and measurements only when needed to identify evidence,
+  reproduce failure, explain a decision, or act safely. Distinguish implementation,
+  deployment, and native acceptance; a CI pass alone does not establish completion.
+- Link retrievable evidence and procedures instead of copying inventories or transcripts.
+  A vanished `.tmp/` file is not a durable handoff. If no retained artifact exists, keep
+  the smallest irreplaceable evidence in the comment. Preserve private evidence boundaries;
+  do not create documents or reporting services to accommodate verbosity.
+- Keep issue bodies focused on current scope and acceptance. Refresh owned status-only text
+  when useful; preserve decision history, authorization provenance, and material outcome
+  changes. Do not move walls of text into bodies, specs, or collapsed blocks. Read current
+  scope and latest relevant status first; retrieve older discussion only as needed.
+- At completion, report the result and relevant validation or acceptance limits, remaining
+  non-sensitive risks, and required operator actions. Distinguish local checks from hosted
+  CI; pending validation stays pending. Omitted optional local CI is not a policy exception.
+  Report actionable security-sensitive risks privately, outside repository artifacts.
 
 ## Git and worktrees
 
-- Never commit or push directly to `main`. Published implementation work must use an
-  appropriate feature branch. A runtime-managed worktree may start and operate at
-  detached `HEAD`, including making local commits; detached state alone is not unsafe.
-  Preserve useful work on an appropriate feature branch before publication or removal
-  of the worktree.
+- Never commit or push directly to `main`. Publish implementation on a feature branch.
+  Runtime-managed detached worktrees may operate and commit locally; preserve useful
+  work on a feature branch before publication or removal.
 - Never merge or enable auto-merge without explicit operator authorization for that
   specific merge. General or stale approval does not count.
-- Perform implementation work in an isolated worktree unless the operator explicitly
-  authorizes work in the primary checkout. A worktree supplied by the operator or
-  supported agent runtime satisfies this requirement. Agents and supported agent
-  runtimes may create and manage task-owned worktrees when useful for filesystem
-  isolation or safe parallelism.
-- Treat the assigned or task-owned worktree as the filesystem boundary for repository
-  implementation files and inputs. Established pinned-toolchain workflows may access
-  their configured user-level installations, caches, and state when permitted by the
-  execution sandbox; this does not make the workflow operator-run. Do not use files from
-  another worktree or the primary checkout as implementation inputs, and do not modify
-  them unless explicitly authorized. Read-only inspection of committed Git objects,
-  refs, and history is allowed.
-- Do not modify, remove, repurpose, or prune a worktree owned by another active task or
-  whose ownership or preservation state is uncertain. Before removing a task-owned
-  worktree, preserve its useful work or intentionally discard it with appropriate
-  authority.
-- Stop if the current Git or worktree state is inconsistent or unsafe. Preserve
-  unrelated changes.
-- Keep each commit limited to one coherent change. Do not include unrelated edits, and
-  split changes when they can be independently reviewed or reverted.
-- Before each push, fetch `origin` and inspect `origin/main` and, when it exists, the
-  remote feature branch. If the remote feature branch contains unexpected commits absent
-  locally, stop rather than overwriting or automatically reconciling it. Otherwise, if
-  `origin/main` advanced, rebase the clean feature branch onto it and rerun relevant
-  focused checks as needed. Require fresh hosted validation for the updated candidate
-  and required base before merge.
-- Never rebase with uncommitted changes. If unrelated changes prevent a required rebase,
-  stop and ask the operator. When pushing rebased commits requires rewriting the assigned
-  remote feature branch, use only `--force-with-lease`; a failed lease is a hard stop.
-- Do not use `git reset --hard`, `git clean -fd`, repository-wide `git checkout .` or
-  `git restore .`, or an unconditional force-push. Hooks may enforce these rules, but
-  the rules remain mandatory independently of hooks.
+- Work in an isolated assigned or task-owned worktree unless the operator explicitly
+  authorizes the primary checkout. Treat that worktree as the boundary for implementation
+  files and inputs. Do not use or modify another checkout's files without authorization.
+  Read-only Git objects, refs, and history are allowed. Pinned workflows may use their
+  configured user installations, caches, and state within the execution sandbox.
+- Do not modify, remove, repurpose, or prune worktrees owned by other tasks or of uncertain
+  ownership/preservation state. Preserve useful work before removing your own worktree,
+  or obtain authority to discard it. Stop on inconsistent or unsafe Git/worktree state;
+  preserve unrelated changes. Keep commits coherent and independently reviewable.
+- Before every push, fetch `origin` and inspect `origin/main` and any remote feature
+  branch. Stop if that branch has unexpected commits absent locally. If main advanced,
+  rebase the clean feature branch and rerun relevant focused checks. Never rebase with
+  uncommitted changes; ask the operator if unrelated changes prevent a required rebase.
+  Rewrite the assigned remote branch only with `--force-with-lease`; a failed lease stops
+  the task. Require fresh hosted validation for the updated candidate and required base.
+- Never use `git reset --hard`, `git clean -fd`, repository-wide `git checkout .` or
+  `git restore .`, or unconditional force-push, regardless of hook enforcement.
 
-## Authority boundaries
+## Authority and credentials
 
-- Run established repository workflows through the pinned toolchain with
-  `mise exec -- just …`. When no recipe exists, use `mise exec -- <tool> …`
-  for repository-dependent tools whose pinned version matters. Ordinary
-  read-only filesystem and Git inspection may use standard shell commands.
-  Do not substitute unpinned tools for established pinned repository workflows.
-- Agent-owned workflows must proceed autonomously when permitted by repository policy.
-  Runtime or sandbox approval does not change whether an operation is agent-owned or
-  operator-run. Complete all independent safe work before stopping for required operator
-  action. Do not ask the operator to perform an agent-owned workflow that the agent can
-  run itself.
-- Treat confirmation as an execution-intent guard, not as operator authorization.
-- Treat repository `verify` and `check` workflows as observational toward their target. Use a
-  registered `test` workflow when evidence requires deliberate temporary mutation.
+- Run established workflows with `mise exec -- just …`; where no recipe exists, use
+  `mise exec -- <tool> …` for tools whose pinned version matters. Ordinary read-only
+  filesystem and Git inspection may use standard commands. Do not substitute unpinned
+  tools for established workflows.
+- Execute permitted agent-owned workflows autonomously; sandbox/runtime approval does not
+  make them operator-run. Finish independent safe work before stopping at an authority
+  boundary. Confirmation guards execution intent; it does not grant operator authority.
+- `verify` and `check` are observational toward their targets. Deliberate temporary
+  mutation belongs in a registered `test` workflow. Persistent Flux-managed changes go
+  through Git. Approved task-scoped testing, benchmarking, verification, diagnostics, and
+  cleanup may use reversible ephemeral cluster actions. Other privileged, destructive,
+  or persistent live mutations remain operator-run, except approved evidence publication.
+- For approved scoped cluster work, run `mise exec -- just kube kubeconfig` from the
+  assigned linked worktree and use its task-scoped credentials. Request Talos reader
+  credentials separately with `mise exec -- just talos readerconfig` only when needed.
+  Do not hand this bootstrap to the operator merely because credentials are involved.
+  Never seek, copy, adopt, or use elevated, write, administrative, or break-glass credentials
+  without explicit authorization for that credential and task.
+- Stop when scoped authority is insufficient. Do not broaden credentials, change RBAC,
+  or use ad-hoc privileged workarounds. Identify the specific operator action needed for
+  new authority, live mutation, ad-hoc exec/port-forward, sensitive runtime access, or
+  other work outside the approved workflow.
 - Use `mise exec -- just test record <suite-id|scoped-verification>` for intentional
   initiative completion, bootstrap, setup, initialization, recovery, and other infrequent
-  assurance evidence. This orchestration publishes each canonical child automatically.
-  Use `mise exec -- just test record-resume <session-id>` after an eligible publication
-  failure, or `mise exec -- just test publish <run-id>` to retain one already-finalized
-  canonical run without rerunning it. In a linked worktree, agents may use the scoped
-  `homelab-report-publisher` identity for approved publication without operator
-  confirmation; outside that context, manual publication requires exact run-scoped
-  confirmation. Publication authority does not authorize the selected suite's mutations
-  or broader credentials. Ordinary CI, iterative verification, and diagnostics remain
-  local. Feature-branch evidence remains candidate evidence; only clean deployed-main
-  evidence may drive authoritative latest links, Homepage status, and last-run metrics.
-- When an approved task needs scoped cluster access, agents must run
-  `mise exec -- just kube kubeconfig` themselves from their assigned linked worktree
-  and use the resulting task-scoped credentials. Request Talos reader credentials
-  separately with `mise exec -- just talos readerconfig` only when needed. Do not hand
-  this credential bootstrap off to the operator merely because credentials are involved. Agents may perform
-  approved scoped verification with those credentials without operator intervention.
-  Agents may not seek out, copy, adopt, or use elevated, write, administrative, or
-  break-glass credentials unless the operator explicitly authorizes that credential
-  for the specific task.
-- If an approved scoped workflow cannot proceed because it lacks required authority, stop
-  at that boundary. Do not retry with broader credentials, modify RBAC, or perform an
-  ad-hoc privileged operation as a workaround. Surface the specific required action to the
-  operator when it would require broader credentials, new authorization, live mutation,
-  ad-hoc exec or port-forward, sensitive runtime access, or another operation outside the
-  approved scoped workflow.
-- Persistent changes to Flux-managed state must go through Git. Agents may
-  perform task-scoped, reversible ephemeral cluster actions needed for approved
-  testing, benchmarking, verification, diagnostics, and cleanup of resources
-  they create for those purposes. Privileged, destructive, or persistent
-  live-state changes outside Git remain operator-run, except retained test evidence written
-  through the approved report publisher. That identity is limited to the
-  report namespace and the named publication Lease; it must not execute test suites.
-
-## Agent orchestration
-
-- Scale design and execution to the change's behavior, uncertainty, and risk; reassess
-  when its scope grows. Use supported skill workflows with these repository defaults:
-  - **Bounded change:** a known configuration adjustment, understood bug fix,
-    documentation or narrow test correction, or small refactor without architectural
-    change. Use short in-context reasoning/design, focused tests, and repository-required
-    validation. No durable specification or formal implementation plan is required by
-    default; use a transient plan only when sequencing adds value. Use one fresh final
-    review when substantive changes to behavior, configuration, or repository policy
-    warrant it.
-  - **Architectural change:** a new platform or service, security or credential boundary,
-    cross-component interface, migration/recovery architecture, or substantial operational
-    lifecycle. Use explicit brainstorming/design, a durable specification when the design
-    has lasting value, an implementation plan, and an independent final review.
-  - **Exploratory/spike work:** investigate a bounded question, retain only useful
-    conclusions and evidence, and treat production implementation as a new task that
-    must be classified before implementation.
-- Execute bounded changes directly in the current implementation context. When an
-  implementation plan exists, prefer native/inline execution in one implementation
-  context. Use subagent-driven execution only when context isolation, specialization,
-  per-task independent review, or safe parallelism provides a concrete benefit.
-- Add an abstraction, registry, report mechanism, persistent test layer, or subagent
-  stage only when it provides a concrete benefit. Process proportionality does not reduce
-  worktree, authority, credential, testing, or merge protections.
-- Use an economical model appropriate for each subagent role. Do not inherit the
-  coordinator's high-capability model by default when a lower-cost model can
-  reliably perform the task.
-- Freshly spawned subagents should use isolated task context when the runtime
-  supports it. Resuming an existing task-local subagent for a scoped fix or
-  clarification is allowed when retaining its context is useful. Use files for
-  substantial cross-agent handoffs when they improve context isolation or
-  durability.
-- Use a capable model for architecture, cross-cutting judgment, difficult
-  debugging, and reviews that genuinely require that level of reasoning. Use a
-  standard model for normal implementation, integration, and task review. Use a
-  fast model for mechanical, tightly scoped work. Do not escalate a review
-  model solely because it is a review.
-- If the same implementation approach fails twice, stop repeating it. Diagnose
-  the failure and change the approach, provide missing context, split the task,
-  or escalate to a more capable model.
-- Do not spawn additional subagents merely to obtain more opinions or repeat completed
-  analysis.
-- Prefer focused tests, diffs, queries, and bounded logs over broad command
-  output when they provide the required evidence.
-- Treat repeated context compaction, excessive retries, or rapidly growing
-  delegated work as signals to reassess the task rather than continuing
-  mechanically.
-
-## Secrets and credentials
-
-- Secret values committed to Git are SOPS-encrypted, and the age private key remains
-  with the operator.
-- Do not expose plaintext credential values in agent output, repository artifacts, or
-  commits. Handle task-scoped credentials only through approved repository workflows.
-- Secret-related implementation may manipulate templates, schemas, references,
-  non-secret metadata, or unchanged operator-supplied encrypted artifacts without
-  exposing the underlying values.
-- Use the repository's gitleaks and staged-blob checks. Never handle the age private key
-  or reuse legacy ciphertext as a substitute for operator-managed secret creation.
+  assurance evidence; it publishes each canonical child automatically. Resume eligible
+  publication failures with `just test record-resume <session-id>`, or retain a finalized
+  canonical run without rerunning via `just test publish <run-id>`, through mise.
+  Ordinary CI, iterative verification, and diagnostics stay local.
+- In linked worktrees, approved publication may use the scoped `homelab-report-publisher`
+  without operator confirmation. Elsewhere, manual publication needs exact run-scoped
+  confirmation. This identity is limited to the report namespace and named publication
+  Lease; it must not execute suites. Publication grants neither suite mutation authority
+  nor broader credentials. Feature evidence remains candidate evidence; only clean
+  deployed-main evidence may drive authoritative latest links, Homepage, and last-run metrics.
+- Commit secret values only as SOPS ciphertext; the age private key stays with the
+  operator. Never expose plaintext credentials in output, artifacts, or commits. Handle
+  task credentials only through approved workflows. Secret implementation may use
+  templates, schemas, references, non-secret metadata, and unchanged operator-supplied
+  ciphertext. Use gitleaks and staged-blob checks; never handle the age private key or
+  reuse legacy ciphertext instead of operator-managed secret creation.
 
 ## Public repository
 
-- Treat every committed file, branch name, commit message, pull request, review comment,
-  generated artifact, and CI log as public and permanently recoverable. Do not rely on
-  deletion or Git history rewriting to retract disclosed information.
-- Do not publish actionable descriptions of unresolved security gaps, exploit paths, or
-  remediation schedules. Track sensitive unimplemented controls privately. Public
-  documentation may describe residual risk as mitigated or accepted only when that
-  status is accurate and authorized.
-- Never commit live public IPv4 or IPv6 addresses, hardware serial numbers, MAC
-  addresses, credentials, or other unique infrastructure identifiers. Use RFC 5737 IPv4
-  documentation addresses, RFC 3849 IPv6 documentation addresses, synthetic identifiers
-  in test fixtures, and clearly marked placeholders in documentation.
-- Apply these rules to new and modified content. Do not rewrite history solely to
-  sanitize ordinary non-secret historical records. Treat exposed credentials or
-  materially sensitive information as an operator-led security incident requiring
-  containment and remediation.
+- Treat all committed files, branch names, messages, PRs, reviews, artifacts, and CI logs
+  as public and permanently recoverable. Deletion or history rewriting cannot retract
+  disclosure. Never publish actionable unresolved security gaps, exploit paths, or
+  remediation schedules. Keep sensitive unimplemented controls private; describe risk as
+  mitigated or accepted only when accurate and authorized.
+- Never commit live public IP addresses, hardware serials, MAC addresses, credentials, or
+  unique infrastructure identifiers. Use RFC 5737 IPv4 and RFC 3849 IPv6 documentation
+  addresses, synthetic fixtures, and clearly marked placeholders. Apply this to new and
+  modified content; do not rewrite history for ordinary non-secret historical records.
+  Exposed credentials or materially sensitive information require operator-led containment
+  and remediation.
 
-## Repository invariants
+## Execution and invariants
 
-- Do not edit generated files under `clusterconfig/`. Change `talos/talconfig.yaml` and
+- Scale process to behavior, uncertainty, and risk. Bounded configuration, bug, documentation,
+  test, and small refactor changes use short in-context reasoning, direct execution,
+  focused checks, and one fresh final review when behavior, configuration, or policy
+  warrants it. No durable spec or formal plan is required by default. Architectural work
+  needs explicit design, a durable spec when valuable, an implementation plan, and an
+  independent final review. Spikes retain useful findings; classify production work anew.
+- Prefer inline execution. Add abstractions, registries, report mechanisms, persistent test
+  layers, or subagents only for a concrete benefit. Delegation may provide specialization,
+  isolated context, independent review, or safe parallelism; use fresh isolated contexts
+  and economical models appropriate to each role. Resume task-local agents when useful.
+  Do not escalate solely for review or spawn agents to repeat completed analysis.
+- If an approach fails twice, diagnose and change it rather than repeat it. Reassess on
+  excessive retries, repeated context compaction, or growing delegation. Prefer focused
+  queries, logs, diffs, and tests. Proportionality never reduces safety protections.
+- Never edit generated `clusterconfig/` files. Change `talos/talconfig.yaml` and
   `talos/patches/`, then run `mise exec -- just talos source-validate`. Generation or
-  application requiring the age key or admin credentials remains operator-run.
-- Follow the pinned version and compatibility constraints documented in
-  `talos/README.md`, `kubernetes/README.md`, and relevant approved upgrade documentation.
-  Do not independently upgrade Talos, Kubernetes, or Cilium outside an approved upgrade
-  workflow.
-- Follow `kubernetes/apps/<domain>/<app>/` and the Flux patterns documented in
-  `kubernetes/README.md`.
-- A Deployment mounting a `ReadWriteOnce` PVC uses `Recreate`, or uses a StatefulSet; it
-  must not use `RollingUpdate`.
-- Durable design specifications belong in `docs/specs/`. A specification represents one
-  logical body of work, may evolve during implementation, and must be reconciled with the
-  implemented and validated result before merge. Post-merge corrections and evolutions
-  follow the Design lifecycle rules.
-- Implementation plans are transient execution artifacts. Store repository-local plans
-  under `.tmp/plans/`, keep them uncommitted, and use them for execution, task resumption,
-  and agent handoff.
-- A validation assertion must use an independent oracle or encode a genuine invariant.
-- Repeat safety-critical live preconditions immediately before consequential mutation.
-  Do not rely on an earlier plan or preflight as proof that target state is unchanged.
-
-## Design lifecycle
-
-- Use consecutive, monotonically increasing three-digit identifiers for durable design
-  specifications, such as `001-<name>.md`. Assign the next number after the highest
-  existing specification. After merge, do not reuse or renumber an identifier.
-- A specification is a living design record and may be updated during or after
-  implementation to reflect the current validated design for its subject.
-- Prefer updating an existing specification for iterative work on the same subject. Create
-  a new numbered specification when the work introduces a distinct design subject, not
-  merely because the earlier specification merged.
-- When a transient implementation plan corresponds to a numbered specification, use the
-  same numeric identifier and descriptive name where practical.
-- Repository-defined artifact locations override tool or skill defaults. Do not create
-  implementation plans under `docs/` unless the operator explicitly requests it.
+  application needing the age key or admin credentials remains operator-run.
+- Preserve pinned version and compatibility constraints in configuration and the owning
+  platform/upgrade specs. Do not independently upgrade Talos, Kubernetes, or Cilium outside
+  an approved upgrade workflow. Follow `kubernetes/apps/<domain>/<app>/` and existing Flux
+  patterns. Deployments mounting `ReadWriteOnce` PVCs use `Recreate`, or use StatefulSets.
+- Validation assertions need independent oracles or genuine invariants. Repeat safety-critical
+  live preconditions immediately before consequential mutation; earlier preflight is not proof.
 
 ## Validation
 
-- Before pushing, run focused validation appropriate to the change and ensure
-  commit-time checks pass. Ordinary documentation changes, including specification
-  updates, use applicable focused checks, then push without asking permission to omit
-  optional local CI.
-- A successful hosted `merge-gate` for the exact candidate and required base is the
-  authoritative validation gate before merge. Missing or failed hosted validation must
-  not fall back to a local passing result. Do not manually reduce required validation
-  groups. Passing validation does not replace explicit operator authorization for that
-  specific merge.
-- Local `mise exec -- just ci`, `mise exec -- just test ci-publish`, and
-  `mise exec -- just test ci-publish-full` are optional for reproducing hosted failures,
-  validating CI, harness, or selection changes when useful, or an explicit operator
-  request. Do not automatically run them for every PR creation or update. When using
-  `ci-publish` or `ci-publish-full`, keep the committed feature worktree clean and
-  untouched while the command runs.
-- `just ci` is the canonical full, cluster-independent, secret-free validation command.
-  Cluster-dependent verification, status, preflight, and diagnostic workflows remain
-  outside it.
-- After candidate edits or rebases, rerun relevant focused checks as needed and require
-  fresh hosted evidence for the updated candidate and required base before merge. Do not
-  reuse an earlier candidate's passing result.
-- Commit-time hooks provide staged-file feedback. Use `mise exec -- just repo lint` when
-  repository-wide hook coverage is useful.
-- Follow the relevant testing documentation for additional task-specific or scoped live
-  validation.
-
-## Completion
-
-Report changed files, validation performed and its results, validation not performed and
-why, remaining non-sensitive risks, and required operator actions. Distinguish focused
-local results from hosted CI status; report pending hosted validation as pending. An
-intentionally omitted optional local CI run is not a policy exception. Report actionable
-security-sensitive risks to the operator outside repository artifacts rather than
-publishing them.
+- Before pushing, run applicable focused checks and pass commit-time checks. Documentation
+  changes may then push without asking to omit optional local CI. Use
+  `mise exec -- just repo lint` when repository-wide hook coverage is useful.
+- Hosted `merge-gate` for the exact candidate and required base is the authoritative
+  pre-merge gate. Never replace missing/failed hosted evidence with local results or
+  manually reduce required groups. Rerun focused checks as needed after edits/rebases and
+  require fresh hosted evidence. Passing checks never replace specific merge authorization.
+- `mise exec -- just ci` is the full cluster-independent, secret-free local gate; live
+  verification, status, preflight, and diagnostics remain outside it. Local CI and
+  `just test ci-publish` / `ci-publish-full` are optional for failure reproduction,
+  CI/harness/selection work, or explicit requests, not automatic PR deliverables. Keep
+  the committed feature worktree clean and untouched during either publication workflow.
