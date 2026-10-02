@@ -134,13 +134,8 @@ These files contain administrator credentials or generated secret material. Do n
 commit, copy into a linked worktree, or supply them to an agent task. The SOPS age
 identity remains operator-held and outside every checkout.
 
-The behavior of `mise exec -- just talos kubeconfig` depends on where it runs. The
-recipe compares the current Git worktree root with Git's primary-checkout root:
-
-- In the primary checkout, it follows the administrator download path described above.
-- In a linked worktree, it follows the scoped credential path described below.
-
-The identical command therefore does not imply identical authority.
+`mise exec -- just talos kubeconfig` is always an operator administrator download.
+Scoped Kubernetes access uses the separate `mise exec -- just kube kubeconfig` command.
 
 ## Create or receive a task worktree
 
@@ -227,34 +222,28 @@ not grant cluster access.
 
 ## Add scoped access only when needed
 
-When an approved agent-owned task actually needs live inspection or scoped verification,
-the agent that owns the linked worktree must run this command itself from that worktree:
+When an approved agent task needs cluster access, the agent runs this from its
+assigned linked worktree after the operator has enrolled the workstation:
 
 ```bash
-mise exec -- just talos kubeconfig
+mise exec -- just kube kubeconfig
+# Only when approved Talos node inspection is needed:
+mise exec -- just talos readerconfig
 ```
 
-The operator normally does not run this scoped bootstrap on the agent's behalf. The
-primary checkout must already contain its valid administrator credential pair because
-the installer uses that authority to mint narrower credentials, but it does not copy
-either administrator identity into the worktree.
+The Kubernetes command installs a private `.kube/config` with four exec contexts:
+observer (default), diagnostic, report publisher, and campaign coordinator. The
+plugin issues tokens with a 10-minute maximum lifetime through the private
+workstation AppRole enrollment. It does not need a Kubernetes administrator
+credential. Existing administrator kubeconfigs require deliberate operator migration.
 
-The linked-worktree path creates ignored, worktree-local files with mode `0600`:
+The separate Talos command retains the existing primary-checkout Talos signing
+workflow and installs only the 90-day `os:reader` credential at `.talos/config`.
+Both files have mode `0600`. Missing enrollment or Talos signing prerequisites
+require the corresponding operator lifecycle action; do not adopt broader credentials.
 
-- `.kube/config` contains 30-day credentials for exactly
-  `homelab-observer`, `homelab-diagnostic`, and `homelab-report-publisher`;
-  `homelab-observer` is current. `test record` and `test publish` select the publisher only while
-  retaining evidence; it is never a suite-execution credential.
-- `.talos/config` contains a 90-day Talos credential with exactly the `os:reader` role.
-
-Re-run the same command from the linked worktree when an approved task needs to replace
-expired scoped credentials. If the prerequisite primary-checkout administrator
-credentials are missing, the agent stops and asks the operator to restore that
-operator-owned prerequisite; the operator still does not run the worktree command for
-the agent.
-
-See [Agent cluster access](agent-cluster-access.md) for observer, diagnostic, and publisher
-permissions, approved workflows, and the boundary for insufficient scoped access.
+See [Agent cluster access](agent-cluster-access.md) for profile permissions,
+credential lifecycles, outage behavior, and the shared-workstation trust boundary.
 
 ## Operator and agent responsibilities
 

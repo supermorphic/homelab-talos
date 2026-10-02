@@ -16,7 +16,7 @@ expected_names=$'nuc1\nnuc2\nnuc3'
 expected_endpoints=$'192.168.90.10\n192.168.90.11\n192.168.90.12'
 
 [[ -f "$kubeconfig" ]] || {
-  echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
+  echo "Missing $kubeconfig; run mise exec -- just kube kubeconfig first." >&2
   exit 1
 }
 [[ -f "$talosconfig" ]] || {

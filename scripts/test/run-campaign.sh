@@ -132,7 +132,7 @@ source_state() {
     return 1
   }
   [[ -f "$kubeconfig" ]] || {
-    echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
+    echo "Missing $kubeconfig; use just kube kubeconfig for scoped suites, or supply the selected suite's explicitly authorized operator credential." >&2
     return 1
   }
   remote_ref="$(git ls-remote --exit-code origin refs/heads/main)" || {

@@ -27,78 +27,8 @@ set -euo pipefail
 printf '%q ' "$@" >>"$FAKE_CALL_LOG"
 printf '\n' >>"$FAKE_CALL_LOG"
 
-kubeconfig=''
-args=("$@")
-for ((index = 0; index < ${#args[@]}; index++)); do
-  if [[ "${args[$index]}" == '--kubeconfig' ]]; then
-    kubeconfig="${args[$((index + 1))]}"
-  fi
-done
-
-if [[ " $* " == *' create token homelab-observer '* ]]; then
-  [[ "$kubeconfig" == "$EXPECTED_MAIN_KUBECONFIG" ]] || {
-    echo "observer token used wrong kubeconfig: $kubeconfig" >&2
-    exit 66
-  }
-  [[ "${FAKE_FAIL_STAGE:-}" != 'observer-token' ]] || exit 71
-  printf '%s\n' 'fake-observer-token'
-  exit 0
-fi
-if [[ " $* " == *' create token homelab-diagnostic '* ]]; then
-  [[ "$kubeconfig" == "$EXPECTED_MAIN_KUBECONFIG" ]] || {
-    echo "diagnostic token used wrong kubeconfig: $kubeconfig" >&2
-    exit 66
-  }
-  [[ "${FAKE_FAIL_STAGE:-}" != 'diagnostic-token' ]] || exit 72
-  printf '%s\n' 'fake-diagnostic-token'
-  exit 0
-fi
-if [[ " $* " == *' create token homelab-report-publisher '* ]]; then
-  [[ "$kubeconfig" == "$EXPECTED_MAIN_KUBECONFIG" ]] || {
-    echo "publisher token used wrong kubeconfig: $kubeconfig" >&2
-    exit 66
-  }
-  [[ "${FAKE_FAIL_STAGE:-}" != 'publisher-token' ]] || exit 73
-  printf '%s\n' 'fake-publisher-token'
-  exit 0
-fi
-
-if [[ " $* " == *' config view '* ]]; then
-  case "$*" in
-    *'jsonpath={.clusters[0].cluster.server}'*)
-      yq -r '.clusters[0].cluster.server' "$kubeconfig"
-      ;;
-    *'jsonpath={.clusters[0].cluster.certificate-authority-data}'*)
-      yq -r '.clusters[0].cluster.certificate-authority-data' "$kubeconfig"
-      ;;
-    *'jsonpath={.current-context}'*)
-      yq -r '.current-context' "$kubeconfig"
-      ;;
-    *'jsonpath={range .contexts[*]}{.name}{"\n"}{end}'*)
-      yq -r '.contexts[].name' "$kubeconfig"
-      ;;
-    *'jsonpath={range .users[*]}{.name}{"\n"}{end}'*)
-      yq -r '.users[].name' "$kubeconfig"
-      ;;
-    *'jsonpath={.users[?(@.name == "homelab-observer")].user.token}'*)
-      yq -r '.users[] | select(.name == "homelab-observer") | .user.token' "$kubeconfig"
-      ;;
-    *'jsonpath={.users[?(@.name == "homelab-diagnostic")].user.token}'*)
-      yq -r '.users[] | select(.name == "homelab-diagnostic") | .user.token' "$kubeconfig"
-      ;;
-    *'jsonpath={.users[?(@.name == "homelab-report-publisher")].user.token}'*)
-      yq -r '.users[] | select(.name == "homelab-report-publisher") | .user.token' "$kubeconfig"
-      ;;
-    *)
-      echo "unexpected fake kubectl config query: $*" >&2
-      exit 65
-      ;;
-  esac
-  exit 0
-fi
-
-echo "unexpected fake kubectl arguments: $*" >&2
-exit 64
+[[ "$*" == *' config view '* && "$*" == *'jsonpath={.clusters[0].cluster.server}'* ]] || exit 64
+printf '%s\n' 'https://192.168.90.20:6443'
 EOF
 
 cat >"$fake_bin/talosctl" <<'EOF'
@@ -171,42 +101,15 @@ EOF
 cat >"$fake_bin/mktemp" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-count=0
-[[ ! -f "$FAKE_MKTEMP_COUNTER" ]] || count="$(<"$FAKE_MKTEMP_COUNTER")"
-count=$((count + 1))
-printf '%s\n' "$count" >"$FAKE_MKTEMP_COUNTER"
-if [[ "${FAKE_FAIL_STAGE:-}" == 'second-mktemp' && "$count" -eq 2 ]]; then
-  exit 74
-fi
+[[ "${FAKE_FAIL_STAGE:-}" != mktemp ]] || exit 74
 exec "$REAL_MKTEMP_BIN" "$@"
 EOF
 
 cat >"$fake_bin/mv" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-count=0
-[[ ! -f "$FAKE_MV_COUNTER" ]] || count="$(<"$FAKE_MV_COUNTER")"
-count=$((count + 1))
-printf '%s\n' "$count" >"$FAKE_MV_COUNTER"
-if [[ "${FAKE_FAIL_STAGE:-}" == 'publish-kube' && "$count" -eq 1 ]]; then
-  exit 75
-fi
-if [[ "${FAKE_FAIL_STAGE:-}" == 'publish-talos' && "$count" -eq 2 ]]; then
-  exit 76
-fi
-if [[ "${FAKE_FAIL_STAGE:-}" == 'rollback-move-failure' && "$count" -eq 2 ]]; then
-  exit 76
-fi
-if [[ "${FAKE_FAIL_STAGE:-}" == 'rollback-move-failure' && "$count" -eq 3 ]]; then
-  exit 77
-fi
+[[ "${FAKE_FAIL_STAGE:-}" != publish-talos ]] || exit 75
 exec "$REAL_MV_BIN" "$@"
-EOF
-
-cat >"$fake_bin/publication-hook" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-[[ "${FAKE_FAIL_STAGE:-}" != 'publication-abort' ]] || exit 78
 EOF
 
 chmod +x \
@@ -214,8 +117,7 @@ chmod +x \
   "$fake_bin/kubectl" \
   "$fake_bin/talosctl" \
   "$fake_bin/mktemp" \
-  "$fake_bin/mv" \
-  "$fake_bin/publication-hook"
+  "$fake_bin/mv"
 
 file_mode() {
   local mode
@@ -262,12 +164,9 @@ run_installer() {
     TALOSCTL_BIN="$fake_bin/talosctl" \
     MKTEMP_BIN="$fake_bin/mktemp" \
     MV_BIN="$fake_bin/mv" \
-    PUBLICATION_HOOK_BIN="$fake_bin/publication-hook" \
     FAKE_WORKTREE_ROOT="$worktree_root" \
     FAKE_GIT_COMMON_DIR="$main_root/.git" \
     FAKE_CALL_LOG="$worktree_root/calls.log" \
-    FAKE_MKTEMP_COUNTER="$worktree_root/mktemp.count" \
-    FAKE_MV_COUNTER="$worktree_root/mv.count" \
     REAL_MKTEMP_BIN="$real_mktemp_bin" \
     REAL_MV_BIN="$real_mv_bin" \
     EXPECTED_MAIN_KUBECONFIG="$main_root_physical/.kube/config" \
@@ -317,7 +216,7 @@ if rg -q '^config new ' "$main_case/calls.log"; then
   exit 1
 fi
 
-# The same recipe must delegate linked worktrees to the scoped installer.
+# The separate reader recipe must leave Kubernetes credentials untouched.
 recipe_worktree="$fixture/recipe-worktree"
 mkdir -p "$recipe_worktree"
 : >"$recipe_worktree/calls.log"
@@ -330,164 +229,76 @@ env \
   FAKE_CALL_LOG="$recipe_worktree/calls.log" \
   EXPECTED_MAIN_KUBECONFIG="$main_case_physical/.kube/config" \
   EXPECTED_MAIN_TALOSCONFIG="$main_case_physical/.talos/config" \
-  just --justfile "$main_case/.justfile" talos kubeconfig >/dev/null
-[[ "$(yq -r '.current-context' "$recipe_worktree/.kube/config")" == 'homelab-observer' ]]
+  just --justfile "$main_case/.justfile" talos readerconfig >/dev/null
+[[ ! -e "$recipe_worktree/.kube/config" ]]
 rg -q '^config new ' "$recipe_worktree/calls.log"
 
-# Missing either main-clone credential refuses before creating worktree outputs.
-for missing in kube talos; do
-  case_root="$fixture/missing-$missing"
-  main_root="$case_root/main"
-  worktree_root="$case_root/worktree"
-  make_main_credentials "$main_root"
-  mkdir -p "$worktree_root"
-  rm -f -- "$main_root/.$missing/config"
-  output="$case_root/output.log"
-  if run_installer "$worktree_root" "$main_root" >"$output" 2>&1; then
-    echo "Installer accepted a missing main-clone $missing config." >&2
-    exit 1
-  fi
-  rg -q "Missing main-clone .$missing/config" "$output"
-  [[ ! -e "$worktree_root/.kube/config" ]]
-  [[ ! -e "$worktree_root/.talos/config" ]]
-done
-
-# A successful worktree install emits only scoped credentials with fixed lifetimes.
-success_root="$fixture/success"
-success_main="$success_root/main"
-success_worktree="$success_root/worktree"
-make_main_credentials "$success_main"
-mkdir -p "$success_worktree"
-run_installer "$success_worktree" "$success_main" >/dev/null
-
-kubeconfig="$success_worktree/.kube/config"
-talosconfig="$success_worktree/.talos/config"
-[[ "$(yq -r '.clusters[0].cluster.server' "$kubeconfig")" == 'https://192.168.90.20:6443' ]]
-[[ "$(yq -r '.clusters[0].cluster."certificate-authority-data"' "$kubeconfig")" == 'bWFpbi1jYS1kYXRh' ]]
-[[ "$(yq -r '.current-context' "$kubeconfig")" == 'homelab-observer' ]]
-[[ "$(yq -r '.contexts[].name' "$kubeconfig" | sort)" == $'homelab-diagnostic\nhomelab-observer\nhomelab-report-publisher' ]]
-[[ "$(yq -r '.users[].name' "$kubeconfig" | sort)" == $'homelab-diagnostic\nhomelab-observer\nhomelab-report-publisher' ]]
-[[ "$(yq -r '.users[] | select(.name == "homelab-observer") | .user.token' "$kubeconfig")" == 'fake-observer-token' ]]
-[[ "$(yq -r '.users[] | select(.name == "homelab-diagnostic") | .user.token' "$kubeconfig")" == 'fake-diagnostic-token' ]]
-[[ "$(yq -r '.users[] | select(.name == "homelab-report-publisher") | .user.token' "$kubeconfig")" == 'fake-publisher-token' ]]
-if rg -q 'main-admin-token-must-not-be-copied|homelab-admin' "$kubeconfig"; then
-  echo 'Worktree kubeconfig copied a main-clone admin identity.' >&2
-  exit 1
-fi
-[[ "$(file_mode "$kubeconfig")" == '600' ]]
-[[ "$(file_mode "$talosconfig")" == '600' ]]
-rg -q '^--kubeconfig .* --namespace kube-system create token homelab-observer --duration=720h ' "$success_worktree/calls.log"
-rg -q '^--kubeconfig .* --namespace kube-system create token homelab-diagnostic --duration=720h ' "$success_worktree/calls.log"
-rg -q '^--kubeconfig .* --namespace kube-system create token homelab-report-publisher --duration=720h ' "$success_worktree/calls.log"
-rg -Fq -- '--roles os:reader --crt-ttl 2160h --talosconfig ' "$success_worktree/calls.log"
-rg -Fq -- '--nodes 192.168.90.10 --endpoints 192.168.90.10\,192.168.90.11\,192.168.90.12 ' "$success_worktree/calls.log"
-
-# Every external staging failure preserves both originals and removes temp files.
-for failed_stage in observer-token diagnostic-token publisher-token talos-new; do
-  case_root="$fixture/failure-$failed_stage"
-  main_root="$case_root/main"
-  worktree_root="$case_root/worktree"
-  make_main_credentials "$main_root"
-  mkdir -p "$worktree_root/.kube" "$worktree_root/.talos"
-  printf '%s\n' 'original-kubeconfig' >"$worktree_root/.kube/config"
-  printf '%s\n' 'original-talosconfig' >"$worktree_root/.talos/config"
-  if run_installer "$worktree_root" "$main_root" FAKE_FAIL_STAGE="$failed_stage" >/dev/null 2>&1; then
-    echo "Installer accepted failed stage: $failed_stage" >&2
-    exit 1
-  fi
-  [[ "$(<"$worktree_root/.kube/config")" == 'original-kubeconfig' ]]
-  [[ "$(<"$worktree_root/.talos/config")" == 'original-talosconfig' ]]
-  [[ -z "$(find "$worktree_root/.kube" "$worktree_root/.talos" -type f ! -name config -print -quit)" ]]
-done
-
-# A failed second temp allocation must not leak the first temp or alter originals.
-case_root="$fixture/failure-second-mktemp"
-main_root="$case_root/main"
-worktree_root="$case_root/worktree"
+# Missing Talos source fails; Kubernetes admin credentials are never needed.
+main_root="$fixture/missing/main"
+worktree_root="$fixture/missing/worktree"
 make_main_credentials "$main_root"
-mkdir -p "$worktree_root/.kube" "$worktree_root/.talos"
-printf '%s\n' 'original-kubeconfig' >"$worktree_root/.kube/config"
-printf '%s\n' 'original-talosconfig' >"$worktree_root/.talos/config"
-if run_installer "$worktree_root" "$main_root" FAKE_FAIL_STAGE=second-mktemp >/dev/null 2>&1; then
-  echo 'Installer accepted a failed second temporary-file allocation.' >&2
+mkdir -p "$worktree_root"
+rm "$main_root/.talos/config"
+if run_installer "$worktree_root" "$main_root" >"$fixture/missing.log" 2>&1; then
+  echo 'Installer accepted a missing Talos config.' >&2
   exit 1
 fi
-[[ "$(<"$worktree_root/.kube/config")" == 'original-kubeconfig' ]]
-[[ "$(<"$worktree_root/.talos/config")" == 'original-talosconfig' ]]
-[[ -z "$(find "$worktree_root/.kube" "$worktree_root/.talos" -type f ! -name config -print -quit)" ]]
+rg -q 'Missing main-clone .talos/config' "$fixture/missing.log"
+[[ ! -e "$worktree_root/.talos/config" ]]
 
-# Either publication-move failure rolls back both destinations to their prior pair.
-for failed_stage in publish-kube publish-talos; do
-  for prior_state in existing absent; do
-    case_root="$fixture/failure-$failed_stage-$prior_state"
-    main_root="$case_root/main"
-    worktree_root="$case_root/worktree"
+for prior in existing absent; do
+  main_root="$fixture/success-$prior/main"
+  worktree_root="$fixture/success-$prior/worktree"
+  make_main_credentials "$main_root"
+  rm -r "$main_root/.kube"
+  mkdir -p "$worktree_root"
+  if [[ "$prior" == existing ]]; then
+    mkdir -p "$worktree_root/.kube"
+    printf '%s\n' 'existing-kubeconfig-preserved' >"$worktree_root/.kube/config"
+  fi
+  run_installer "$worktree_root" "$main_root" >/dev/null
+  if [[ "$prior" == existing ]]; then
+    [[ "$(<"$worktree_root/.kube/config")" == existing-kubeconfig-preserved ]]
+  else
+    [[ ! -e "$worktree_root/.kube" ]]
+  fi
+  [[ "$(file_mode "$worktree_root/.talos/config")" == 600 ]]
+  [[ "$(file_mode "$worktree_root/.talos")" == 700 ]]
+  rg -Fq -- '--roles os:reader --crt-ttl 2160h --talosconfig ' "$worktree_root/calls.log"
+  if rg -q 'kubectl|create token|--kubeconfig' "$worktree_root/calls.log"; then
+    echo 'Talos reader installation used Kubernetes authority.' >&2
+    exit 1
+  fi
+done
+
+# One atomic Talos rename needs no two-file rollback. Failures retain originals.
+for failed_stage in mktemp talos-new publish-talos; do
+  for prior in existing absent; do
+    main_root="$fixture/failure-$failed_stage-$prior/main"
+    worktree_root="$fixture/failure-$failed_stage-$prior/worktree"
     make_main_credentials "$main_root"
-    mkdir -p "$worktree_root/.kube" "$worktree_root/.talos"
-    if [[ "$prior_state" == 'existing' ]]; then
-      printf '%s\n' 'original-kubeconfig' >"$worktree_root/.kube/config"
-      printf '%s\n' 'original-talosconfig' >"$worktree_root/.talos/config"
+    mkdir -p "$worktree_root/.talos" "$worktree_root/.kube"
+    printf '%s\n' original-kubeconfig >"$worktree_root/.kube/config"
+    if [[ "$prior" == existing ]]; then
+      printf '%s\n' original-talosconfig >"$worktree_root/.talos/config"
     fi
     if run_installer "$worktree_root" "$main_root" FAKE_FAIL_STAGE="$failed_stage" >/dev/null 2>&1; then
-      echo "Installer accepted publication failure: $failed_stage ($prior_state)" >&2
+      echo "Installer accepted failed stage: $failed_stage" >&2
       exit 1
     fi
-    if [[ "$prior_state" == 'existing' ]]; then
-      [[ "$(<"$worktree_root/.kube/config")" == 'original-kubeconfig' ]]
-      [[ "$(<"$worktree_root/.talos/config")" == 'original-talosconfig' ]]
+    [[ "$(<"$worktree_root/.kube/config")" == original-kubeconfig ]]
+    if [[ "$prior" == existing ]]; then
+      [[ "$(<"$worktree_root/.talos/config")" == original-talosconfig ]]
     else
-      [[ ! -e "$worktree_root/.kube/config" ]]
       [[ ! -e "$worktree_root/.talos/config" ]]
     fi
-    [[ -z "$(find "$worktree_root/.kube" "$worktree_root/.talos" -type f ! -name config -print -quit)" ]]
+    [[ -z "$(find "$worktree_root/.talos" -type f ! -name config -print -quit)" ]]
   done
 done
 
-# A rollback move failure preserves and reports the sole recoverable old file.
-case_root="$fixture/failure-rollback-move"
-main_root="$case_root/main"
-worktree_root="$case_root/worktree"
-make_main_credentials "$main_root"
-mkdir -p "$worktree_root/.kube" "$worktree_root/.talos"
-printf '%s\n' 'original-kubeconfig' >"$worktree_root/.kube/config"
-printf '%s\n' 'original-talosconfig' >"$worktree_root/.talos/config"
-output="$case_root/output.log"
-if run_installer "$worktree_root" "$main_root" FAKE_FAIL_STAGE=rollback-move-failure >"$output" 2>&1; then
-  echo 'Installer accepted a publication plus rollback move failure.' >&2
+if run_installer "$main_case" "$main_case" >"$fixture/main-refusal.log" 2>&1; then
+  echo 'Reader installation accepted the main clone.' >&2
   exit 1
 fi
-worktree_root_physical="$(cd -- "$worktree_root" && pwd -P)"
-recovery_kubeconfig="$worktree_root_physical/.kube/config.rollback"
-[[ -f "$recovery_kubeconfig" ]] || {
-  echo 'Rollback failure deleted the only recoverable kubeconfig backup.' >&2
-  exit 1
-}
-[[ "$(<"$recovery_kubeconfig")" == 'original-kubeconfig' ]]
-[[ "$(file_mode "$recovery_kubeconfig")" == '600' ]]
-[[ "$(<"$worktree_root/.talos/config")" == 'original-talosconfig' ]]
-[[ ! -e "$worktree_root/.talos/config.rollback" ]]
-rg -Fq 'RECOVERY REQUIRED' "$output"
-rg -Fq "$recovery_kubeconfig" "$output"
-[[ -z "$(find "$worktree_root/.kube" "$worktree_root/.talos" -type f ! -name config ! -name config.rollback -print -quit)" ]]
-
-# An abort hook between publication moves exercises state-aware EXIT restoration.
-case_root="$fixture/failure-publication-abort"
-main_root="$case_root/main"
-worktree_root="$case_root/worktree"
-make_main_credentials "$main_root"
-mkdir -p "$worktree_root/.kube" "$worktree_root/.talos"
-printf '%s\n' 'original-kubeconfig' >"$worktree_root/.kube/config"
-printf '%s\n' 'original-talosconfig' >"$worktree_root/.talos/config"
-output="$case_root/output.log"
-if run_installer "$worktree_root" "$main_root" FAKE_FAIL_STAGE=publication-abort >"$output" 2>&1; then
-  echo 'Installer accepted an abort between publication moves.' >&2
-  exit 1
-fi
-[[ "$(<"$worktree_root/.kube/config")" == 'original-kubeconfig' ]]
-[[ "$(<"$worktree_root/.talos/config")" == 'original-talosconfig' ]]
-[[ ! -e "$worktree_root/.kube/config.rollback" ]]
-[[ ! -e "$worktree_root/.talos/config.rollback" ]]
-rg -Fq 'restored the prior credential pair' "$output"
-[[ -z "$(find "$worktree_root/.kube" "$worktree_root/.talos" -type f ! -name config -print -quit)" ]]
-
-echo 'Worktree credential installation contract passed.'
+rg -q 'main clone' "$fixture/main-refusal.log"
+echo 'Separate Talos reader installation tests passed.'

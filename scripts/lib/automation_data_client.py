@@ -9,6 +9,7 @@ import re
 import selectors
 import stat
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -155,27 +156,22 @@ def assert_tunnel_active(port: int) -> None:
 
 
 def scoped_kubeconfig(kubeconfig: Path | None) -> Path:
-    """Accept only the three-context scoped worktree credential layout."""
-    selected = kubeconfig or Path(__file__).resolve().parents[2] / ".kube" / "config"
+    """Accept the checkout-bound exec configuration and preserve observer default."""
+    root = Path(__file__).resolve().parents[2]
+    # This module is also shipped alone to cluster workloads. Load the local
+    # credential helper only for this workstation-only tunnel operation.
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from scripts.openbao.configuration import SafeError
+    from scripts.openbao.credentials import validate_scoped_kubeconfig
+
+    selected = kubeconfig or root / ".kube" / "config"
     try:
         selected = validate_private_file(selected)
-        data = yaml.safe_load(selected.read_text())
-        contexts = {item["name"]: item["context"] for item in data["contexts"]}
-        users = {item["name"]: item["user"] for item in data["users"]}
-        expected = {"homelab-observer", "homelab-diagnostic", "homelab-report-publisher"}
-        if set(contexts) != expected or set(users) != expected or \
-                data.get("current-context") != "homelab-observer" or \
-                any(contexts[name] != {"cluster": "homelab", "user": name}
-                    for name in expected) or \
-                any(set(users[name]) != {"token"} or not users[name]["token"]
-                    for name in expected):
-            raise ValueError("scoped_contexts_invalid")
-        clusters = {item["name"]: item["cluster"] for item in data["clusters"]}
-        if set(clusters) != {"homelab"} or \
-                not str(clusters["homelab"].get("server", "")).startswith("https://") or \
-                not clusters["homelab"].get("certificate-authority-data"):
-            raise ValueError("scoped_cluster_invalid")
-    except (OSError, KeyError, TypeError, ValueError, yaml.YAMLError) as exc:
+        validate_scoped_kubeconfig(selected, root)
+        if yaml.safe_load(selected.read_text()).get("current-context") != "homelab-observer":
+            raise ValueError("observer_default_required")
+    except (OSError, KeyError, TypeError, ValueError, yaml.YAMLError, SafeError) as exc:
         raise PrivateTunnelUnavailable("scoped_kubeconfig_required") from exc
     return selected
 

@@ -47,31 +47,15 @@ for credential in "$kubeconfig" "$talosconfig"; do
     fail "scoped credential must have mode 0600: $credential."
 done
 
+uv run --locked --no-dev python -m scripts.openbao.credentials validate "$kubeconfig" ||
+  fail 'expected a canonical scoped Kubernetes credential; run just kube kubeconfig.'
+
 kube_view="$(
   kubectl --kubeconfig "$kubeconfig" config view --raw --output json
 )" || fail 'cannot inspect the scoped Kubernetes credential.'
 [[ "$(yq -r '."current-context" // ""' - <<<"$kube_view")" == \
   'homelab-observer' ]] ||
   fail 'Kubernetes current context must be homelab-observer.'
-[[ "$(yq -r '[.contexts[]?.name] | sort | join(",")' - <<<"$kube_view")" == \
-  'homelab-diagnostic,homelab-observer,homelab-report-publisher' ]] ||
-  fail 'Kubernetes credential must contain exactly the three scoped contexts.'
-[[ "$(yq -r '[.users[]?.name] | sort | join(",")' - <<<"$kube_view")" == \
-  'homelab-diagnostic,homelab-observer,homelab-report-publisher' ]] ||
-  fail 'Kubernetes credential must contain exactly the three scoped users.'
-[[ "$(yq -r '[.clusters[]?.name] | sort | join(",")' - <<<"$kube_view")" == \
-  'homelab' ]] ||
-  fail 'Kubernetes credential must contain exactly the homelab cluster.'
-[[ "$(yq -r '[.contexts[]? |
-  [.name, .context.cluster, .context.user] | join(":")] | sort | join(",")' \
-  - <<<"$kube_view")" == \
-  'homelab-diagnostic:homelab:homelab-diagnostic,homelab-observer:homelab:homelab-observer,homelab-report-publisher:homelab:homelab-report-publisher' ]] ||
-  fail 'Kubernetes contexts do not map to the intended scoped users.'
-[[ "$(yq -r '[.users[]? | select(
-  (.user.token // "") != "" and ([.user | keys[]] | sort | join(",")) == "token"
-)] | length' - <<<"$kube_view")" == '3' ]] ||
-  fail 'Kubernetes users must be token-only scoped identities; admin credentials are forbidden.'
-
 talos_info="$(
   talosctl config info --talosconfig "$talosconfig" --output json
 )" || fail 'cannot inspect the scoped Talos credential.'

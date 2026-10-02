@@ -6,8 +6,14 @@ Design for [issue 450](https://github.com/supermorphic/homelab-talos/issues/450)
 The operator selected AppRole and requested explicit credential lifecycles,
 revocation of existing issuance authority, standard Kubernetes exec credentials,
 and caller-level lifetime and outage tests. The operator approved the design.
-Additive broker, workstation lifecycle, and exec-helper implementation is underway.
-Deployment, live acceptance, and legacy caller retirement remain pending.
+The additive broker, workstation lifecycle, and exec helper are deployed. Operator
+configuration apply and workstation enrollment passed. Caller cutover uses the
+shared canonical validator and separates Talos reader installation from Kubernetes
+setup. [Deployed-main acceptance](https://tests.lab.supermorphic.com/reports/20261002T011416Z-431b7b32799e-operator-3c0b3142/awesome/)
+passed on `431b7b32799e3813703af63721ab270113a22c45`, including cleanup,
+parallel checkout use, expiry/refresh, outage behavior, revocation, and rotation.
+Deployment of caller retirement and its final deployed-main acceptance remain
+pending; issue 450 stays open until both complete.
 
 [Specification 030](030-openbao-kubernetes-credential-broker.md) records the
 completed platform dependency, issue 449, including retained issuance, expiry,
@@ -251,9 +257,9 @@ The current caller inventory includes:
 - `scripts/test/scoped-campaign-preflight.sh`,
   `scripts/test/lib/report-publication.sh`, and `scripts/test/run-campaign.sh`;
 - diagnostic selection in `scripts/test/scenarios/{ntfy-publish,plex-network-policy}.sh`
-  and token-only validation in `scripts/test/scenarios/openbao_issuance.py`;
+  and canonical configuration validation in `scripts/test/scenarios/openbao_issuance.py`;
 - catalog validation, compatibility checks, policy tests, and shell/Python tests
-  that encode the three-context or embedded-token representation.
+  that check the four-context exec representation.
 
 Inspect these callers and repeat the repository-wide search before changing the
 representation. Update repository-owned messages, Just consumers, guides, and
@@ -301,8 +307,9 @@ these administrative operations.
 
 Retain existing linked-worktree Talos `os:reader` generation, lifetime, and
 authority boundary. Give it a separate `mise exec -- just talos readerconfig`
-entrypoint. After cutover, `install-worktree-credentials.sh` handles only Talos;
-remove its Kubernetes TokenRequest, kubeconfig parsing, and paired publication.
+entrypoint. `install-worktree-credentials.sh` handles only Talos, using one atomic
+file replacement. Kubernetes TokenRequest, kubeconfig parsing, and paired publication
+are removed from that installer.
 Talos may still depend on the existing primary-checkout administrator workflow.
 This exception must not leak into Kubernetes issuance.
 

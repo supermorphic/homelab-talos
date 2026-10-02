@@ -104,7 +104,8 @@ initialization, provisioning, restore, or recovery. Invoke it deliberately from 
 committed source:
 
 ```bash
-mise exec -- just talos kubeconfig
+mise exec -- just kube kubeconfig
+mise exec -- just talos readerconfig
 mise exec -- just test record verification.foundation
 # Or record the complete registered scoped verification campaign:
 mise exec -- just test record scoped-verification
@@ -113,7 +114,7 @@ mise exec -- just test record scoped-verification
 `record` prints its selection and source revision, checks prerequisites, and
 supplies publication intent: an agent does not need an operator confirmation or separate
 manual publication step. The worktree installer supplies `homelab-report-publisher` as
-the third scoped context. Verification keeps using observer/diagnostic; only publication
+one of the four scoped contexts. Verification keeps using observer/diagnostic; only publication
 uses the publisher identity. After this feature's sources and RBAC deploy through Git,
 reinstall worktree credentials before first use. Do not use broader credentials if the
 publication preflight fails.
@@ -179,7 +180,7 @@ checkout changes before starting; both the plan and run reject a dirty checkout.
 Install credentials as described in
 [Agent cluster access](agent-cluster-access.md#what-the-installer-creates).
 Preflight requires the worktree's `.kube/config` and `.talos/config` files with mode
-`0600`, the installer's three scoped Kubernetes contexts with `homelab-observer`
+`0600`, the canonical four scoped Kubernetes exec contexts with `homelab-observer`
 current, and a Talos identity with exactly the `os:reader` role. Then run:
 
 ```bash

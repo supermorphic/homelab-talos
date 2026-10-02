@@ -190,7 +190,7 @@ the merged source revision, and `automation-data-postgresql` remains suspended.
 ### 2. Reconcile the private platform
 
 From a clean checkout whose implementation matches deployed `origin/main`, obtain the
-task-scoped kubeconfig and run the guarded bootstrap:
+explicitly authorized operator kubeconfig and run the guarded bootstrap:
 
 ```bash
 mise exec -- just talos kubeconfig
@@ -483,7 +483,7 @@ NocoDB source credentials and human UI accounts have separate responsibilities.
 3. Create an owned `0700` directory outside every checkout, then activate and validate:
 
    ```bash
-   mise exec -- just talos kubeconfig
+   mise exec -- just kube kubeconfig
    export AUTOMATION_DATA_LOGIN_DIRECTORY=/ABSOLUTE/PRIVATE/PATH/application-logins
    AUTOMATION_DATA_LOGIN_ACTIVATE_CONFIRM='activate:automation-data:sample:interview' \
      mise exec -- just kube automation-data-login-activate sample interview

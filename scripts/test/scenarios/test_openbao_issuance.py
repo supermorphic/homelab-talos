@@ -597,7 +597,6 @@ class DiagnosticBoundaryTest(unittest.TestCase):
         from unittest.mock import patch
         identity = 'system:serviceaccount:kube-system:homelab-diagnostic'
         whoami = subprocess.CompletedProcess([], 0, json.dumps({'status': {'userInfo': {'username': identity}}}), '')
-        credential = subprocess.CompletedProcess([], 0, json.dumps({'users': [{'user': {'token': 'REDACTED'}}]}), '')
         cluster = subprocess.CompletedProcess([], 0, json.dumps({'metadata': {'uid': 'expected-cluster'}}), '')
         wrong_cluster = subprocess.CompletedProcess([], 0, json.dumps({'metadata': {'uid': 'other-cluster'}}), '')
         def denied(verb, *, article='', namespace='openbao'):
@@ -605,14 +604,13 @@ class DiagnosticBoundaryTest(unittest.TestCase):
                 f'Error from server (Forbidden): User "{identity}" cannot {verb} resource "pods/exec" in API group "" in {article}namespace "{namespace}"')
         with TemporaryDirectory() as directory:
             path = Path(directory) / 'config'; path.touch()
-            for responses, succeeds in [([whoami, credential, wrong_cluster], False), ([whoami, credential, cluster, denied('create'), denied('get')], True),
-                ([whoami, credential, cluster, denied('create', article='the '), denied('get', article='the ')], True),
-                ([whoami, credential, cluster, denied('create', namespace='other')], False),
-                ([whoami, credential, cluster, subprocess.CompletedProcess([], 1, '', 'NotFound')], False),
-                ([whoami, credential, cluster, subprocess.CompletedProcess([], 1, '', 'Upgrade request required')], False),
-                ([whoami, credential, cluster, subprocess.CompletedProcess([], 0, '', '')], False),
-                ([whoami, subprocess.CompletedProcess([], 0, json.dumps({'users': [{'user': {'token': 'REDACTED', 'as': identity}}]}), '')], False)]:
-                with patch.object(adapter.subprocess, 'run', side_effect=responses) as run:
+            for responses, succeeds in [([whoami, wrong_cluster], False), ([whoami, cluster, denied('create'), denied('get')], True),
+                ([whoami, cluster, denied('create', article='the '), denied('get', article='the ')], True),
+                ([whoami, cluster, denied('create', namespace='other')], False),
+                ([whoami, cluster, subprocess.CompletedProcess([], 1, '', 'NotFound')], False),
+                ([whoami, cluster, subprocess.CompletedProcess([], 1, '', 'Upgrade request required')], False),
+                ([whoami, cluster, subprocess.CompletedProcess([], 0, '', '')], False)]:
+                with patch.object(adapter, 'validate_scoped_kubeconfig') as validate, patch.object(adapter.subprocess, 'run', side_effect=responses) as run:
                     if succeeds:
                         try:
                             accepted = adapter.diagnostic_boundary(path, 'expected-cluster')
@@ -621,8 +619,25 @@ class DiagnosticBoundaryTest(unittest.TestCase):
                         self.assertTrue(accepted)
                         calls = [call.args[0] for call in run.call_args_list]
                         self.assertTrue(all('--as' not in command for command in calls))
-                        self.assertIn('create', calls[3]); self.assertIn('get', calls[4])
+                        validate.assert_called_once_with(path, adapter.ROOT)
+                        self.assertIn('create', calls[2]); self.assertIn('get', calls[3])
                         self.assertTrue(all('homelab-diagnostic' in command for command in calls))
                     else:
                         with self.assertRaises(adapter.issuance.AcceptanceError):
                             adapter.diagnostic_boundary(path, 'expected-cluster')
+
+    def test_invalid_config_is_rejected_before_any_api_request(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from unittest.mock import patch
+
+        from scripts.openbao.configuration import SafeError
+        from scripts.test.scenarios import openbao_issuance as adapter
+
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'config'
+            path.touch()
+            with patch.object(adapter, 'validate_scoped_kubeconfig', side_effect=SafeError('invalid-source')), patch.object(adapter.subprocess, 'run') as run:
+                with self.assertRaises(adapter.issuance.AcceptanceError):
+                    adapter.diagnostic_boundary(path, 'expected-cluster')
+                run.assert_not_called()

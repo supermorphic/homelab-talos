@@ -284,32 +284,20 @@ volume-status:
     }
     echo 'All node volumes healthy: longhorn ready and mounted at /var/mnt/longhorn (xfs, unencrypted); STATE and EPHEMERAL ready and luks2.'
 
-# In the main clone, fetch the ignored admin kubeconfig from Talos. In a linked
-# worktree, mint scoped Kubernetes and Talos credentials from main-clone admin
-# credentials without copying either admin identity.
+# Generate only Talos os:reader credentials for a linked worktree.
+readerconfig:
+    @just repo require-bash
+    @../scripts/repository/install-worktree-credentials.sh
+
+# Operator-only: download an admin kubeconfig from the explicit Talos credential.
+# Agent Kubernetes profiles use just kube kubeconfig instead.
 kubeconfig:
     #!/usr/bin/env bash
     set -euo pipefail
     just repo require-bash
 
-    git_bin="${GIT_BIN:-git}"
     kubectl_bin="${KUBECTL_BIN:-kubectl}"
     talosctl_bin="${TALOSCTL_BIN:-talosctl}"
-    repo_root="$("$git_bin" rev-parse --show-toplevel)"
-    git_common_dir="$("$git_bin" rev-parse --path-format=absolute --git-common-dir)"
-    [[ "$repo_root" == /* && "$git_common_dir" == /* && -d "$git_common_dir" ]] || {
-      echo 'Refusing credential install: Git worktree and common-directory paths must be absolute and valid.' >&2
-      exit 1
-    }
-    repo_root="$(cd -- "$repo_root" && pwd -P)"
-    git_common_dir="$(cd -- "$git_common_dir" && pwd -P)"
-    main_clone_root="$(cd -- "$(dirname -- "$git_common_dir")" && pwd -P)"
-
-    if [[ "$repo_root" != "$main_clone_root" ]]; then
-      exec env GIT_BIN="$git_bin" KUBECTL_BIN="$kubectl_bin" TALOSCTL_BIN="$talosctl_bin" \
-        ../scripts/repository/install-worktree-credentials.sh
-    fi
-
     talosconfig='{{talosconfig}}'
     kubeconfig='{{kubeconfig}}'
     nodes_csv='192.168.90.10,192.168.90.11,192.168.90.12'

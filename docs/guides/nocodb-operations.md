@@ -86,7 +86,7 @@ mise exec -- just kube automation-data-connect sample application/interview
 Use `sample migrator` for approved migration access. The helper selects the enrolled
 profile, rechecks current metadata and files, authenticates, and holds its fixed tunnel;
 it does not execute consumer queries or migrations. Agents obtain required scoped cluster
-access themselves with `mise exec -- just talos kubeconfig` in their assigned worktree.
+access themselves with `mise exec -- just kube kubeconfig` in their assigned worktree.
 
 [Inventory enrollment](automation-data-operations.md#private-credential-discovery-installation)
 and [consumer profiles](automation-data-operations.md#registered-application-logins-and-private-cli-access)
@@ -120,7 +120,8 @@ Start the attended rollout only when all of these conditions are true:
   manager, or encrypted Secret. Do not send them to an agent or place them in Git,
   command arguments, logs, or saved workflow executions.
 
-Obtain task-scoped credentials before an attended live command:
+Attended privileged lifecycle commands require an explicitly authorized operator
+credential. From the operator checkout, obtain it with:
 
 ```bash
 mise exec -- just talos kubeconfig

@@ -26,6 +26,7 @@ select_report_publication_context() {
       echo 'Publication requires homelab-report-publisher; reinstall scoped worktree credentials after deployment.' >&2
       return 1
     fi
+    uv run --locked --no-dev python -m scripts.openbao.credentials validate "$kubeconfig" || return 1
     mapping="$(kubectl --kubeconfig "$kubeconfig" --context homelab-report-publisher \
       config view --minify --output 'jsonpath={.contexts[0].context.user}')" || return 1
     [[ "$mapping" == homelab-report-publisher ]] || {

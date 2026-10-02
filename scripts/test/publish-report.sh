@@ -81,7 +81,7 @@ echo 'Scanning canonical test evidence for secrets.'
 gitleaks dir --redact --no-banner --max-archive-depth 1 "$run_dir"
 
 [[ -f "$kubeconfig" ]] || {
-  echo "Missing $kubeconfig; run just talos kubeconfig." >&2
+  echo "Missing $kubeconfig; run just kube kubeconfig." >&2
   exit 1
 }
 
