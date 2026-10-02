@@ -571,7 +571,7 @@ _flux-restart-raw: require-bash
     kubeconfig='{{kubeconfig}}'
     expected_confirmation='restart:flux-system:controllers'
     [[ -f "$kubeconfig" ]] || {
-      echo "Missing $kubeconfig; run just kube kubeconfig." >&2
+      echo "Missing $kubeconfig; this operator workflow requires an explicitly authorized kubeconfig (just talos kubeconfig in the operator checkout)." >&2
       exit 1
     }
 
