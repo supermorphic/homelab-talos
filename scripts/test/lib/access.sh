@@ -6,6 +6,8 @@ _TEST_ACCESS_CLOSE_STATUS=0
 _TEST_ACCESS_CATALOG_DIGEST=''
 _TEST_ACCESS_PURPOSE_PATHS=()
 _TEST_ACCESS_PURPOSE_CLOSE_STATUS=0
+TEST_ACCESS_PURPOSE_CONFIG=''
+export -n TEST_ACCESS_PURPOSE_CONFIG
 
 test_access_resolve() {
   uv run --locked --no-dev python -m scripts.test.access resolve "$1"

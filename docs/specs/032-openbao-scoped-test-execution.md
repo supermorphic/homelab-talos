@@ -74,8 +74,10 @@ their Kubernetes profile and declare their non-Kubernetes prerequisites.
 The physical-loss exception does not issue a Kubernetes test credential. Its
 existing node containment and recovery operations remain operator-run and require
 an explicitly supplied `NODE_OPERATOR_KUBECONFIG`. The dispatcher does not discover
-that credential, inherit it from another test, or remove it. Other null-profile
-suites run without Kubernetes credentials.
+that credential, inherit it from another test, or remove it. This operator input
+also performs the manual workflow's Lease and node admission checks, without
+issuing auxiliary test credentials. Other null-profile suites run without
+Kubernetes credentials.
 
 Use a small validated prerequisite vocabulary: `talos-reader`, `talos-operator`,
 `physical-power`, `application-credential`, `openbao-operator`, and

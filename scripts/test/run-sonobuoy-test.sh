@@ -149,6 +149,8 @@ standalone_private="$fixture_root/standalone-private"
 standalone_reports="$fixture_root/standalone-reports"
 standalone_run_id_file="$fixture_root/standalone.run-id"
 lease_state="$fixture_root/standalone-lease.json"
+printf '%s\n' '{"apiVersion":"coordination.k8s.io/v1","kind":"Lease","metadata":{"name":"homelab-test-run-lock","namespace":"flux-system","resourceVersion":"1"},"spec":{"holderIdentity":null,"leaseDurationSeconds":90}}' \
+  >"$lease_state"
 healthy_nodes="$fixture_root/healthy-nodes.json"
 printf '%s\n' '{"items":[{"metadata":{"name":"nuc1","annotations":{}},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"nuc2","annotations":{}},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"nuc3","annotations":{}},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' \
   >"$healthy_nodes"

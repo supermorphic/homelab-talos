@@ -22,6 +22,9 @@ cd "$repo_root"
 catalog="${TEST_CATALOG_PATH:-tests/catalog.yaml}"
 results_root="${TEST_RESULTS_ROOT:-.test-results}"
 kubeconfig=''
+observer_kubeconfig=''
+coordinator_kubeconfig=''
+export -n observer_kubeconfig coordinator_kubeconfig
 test_access_resolve "$suite_id" >/dev/null || exit 1
 entry_json="$(catalog_entry_by_id "$catalog" "$suite_id")"
 mutates_cluster="$(yq -r '.metadata.mutates_cluster' - <<<"$entry_json")"
@@ -81,7 +84,10 @@ finalized=false
 backend_pid=''
 
 finalize_catalog_access() {
-  if ! test_access_close; then
+  local config_cleanup_failed=false
+  test_access_close || config_cleanup_failed=true
+  test_access_purposes_close || config_cleanup_failed=true
+  if [[ "$config_cleanup_failed" == true ]]; then
     run_result='broken'
     cleanup_status='failed'
     local config_error="$run_dir/diagnostics/config-cleanup.xml"
@@ -109,7 +115,7 @@ finalize_incomplete_run() {
   set +e
   [[ "$original_exit" -ne 0 ]] || original_exit=1
   if [[ "$lease_acquired" == 'true' ]]; then
-    release_test_lease "$kubeconfig" "$run_id" >/dev/null 2>&1
+    release_test_lease "$coordinator_kubeconfig" "$run_id" >/dev/null 2>&1
     emergency_cleanup='failed'
     lease_acquired=false
   elif [[ "$lease_joined" == 'true' ]]; then
@@ -175,6 +181,18 @@ set -- "${TEST_ACCESS_ARGUMENTS[@]}"
 
 if [[ "$mutates_cluster" == 'true' && "$scenario_lease" == 'false' ]]; then
   lease_release_status='failed'
+  if [[ "$suite_id" == test.resilience.node-abrupt-loss ]]; then
+    # This null-profile boundary retains only its explicitly supplied operator input.
+    observer_kubeconfig="$kubeconfig"
+    coordinator_kubeconfig="$kubeconfig"
+  else
+    test_access_purpose_open campaign-observer "$run_id" || exit 1
+    observer_kubeconfig="$TEST_ACCESS_PURPOSE_CONFIG"
+    if [[ -z "${TEST_CAMPAIGN_LEASE_HOLDER:-}" ]]; then
+      test_access_purpose_open campaign-coordinator "$run_id" || exit 1
+      coordinator_kubeconfig="$TEST_ACCESS_PURPOSE_CONFIG"
+    fi
+  fi
   if [[ -n "${TEST_CAMPAIGN_LEASE_HOLDER:-}" ]]; then
     if verify_test_lease_holder "$kubeconfig" "$TEST_CAMPAIGN_LEASE_HOLDER"; then
       lease_joined=true
@@ -184,9 +202,9 @@ if [[ "$mutates_cluster" == 'true' && "$scenario_lease" == 'false' ]]; then
       primary_exit_code=1
       run_result='broken'
     fi
-  elif acquire_test_lease "$kubeconfig" "$run_id"; then
+  elif acquire_test_lease "$coordinator_kubeconfig" "$run_id" 5 existing-only; then
     lease_acquired=true
-    start_test_lease_renewal "$kubeconfig" "$run_id" \
+    start_test_lease_renewal "$coordinator_kubeconfig" "$run_id" \
       "$run_dir_abs/diagnostics/lease-renewal-failed"
   else
     write_result_case_junit "$run_dir/junit.xml" "$suite_id" lease-acquisition broken 0
@@ -197,7 +215,7 @@ fi
 
 if [[ "$mutates_cluster" == 'true' &&
   ("$lease_acquired" == 'true' || "$lease_joined" == 'true') ]]; then
-  if assert_established_disruption_admissible "$kubeconfig"; then
+  if assert_established_disruption_admissible "$observer_kubeconfig"; then
     disruption_admitted=true
   else
     write_result_case_junit "$run_dir/junit.xml" "$suite_id" \
@@ -210,7 +228,7 @@ fi
 if [[ "$mutates_cluster" == 'true' && "$disruption_admitted" == 'true' ]]; then
   lease_ready=false
   if [[ "$lease_acquired" == 'true' ]]; then
-    if verify_test_lease_holder "$kubeconfig" "$run_id" &&
+    if verify_test_lease_holder "$coordinator_kubeconfig" "$run_id" &&
       [[ ! -e "$run_dir_abs/diagnostics/lease-renewal-failed" ]]; then
       lease_ready=true
     fi
@@ -305,7 +323,7 @@ if [[ "$lease_acquired" == 'true' ]]; then
   lease_release_status='passed'
   [[ ! -f "$run_dir/diagnostics/lease-renewal-failed" ]] ||
     lease_finalization_failed=true
-  release_test_lease "$kubeconfig" "$run_id" ||
+  release_test_lease "$coordinator_kubeconfig" "$run_id" ||
     lease_finalization_failed=true
   lease_acquired=false
 elif [[ "$lease_joined" == 'true' ]]; then
