@@ -207,12 +207,14 @@ if [[ "$args" == *' create --filename '* ]]; then
 			printf '%s\n' create-preflight >>"$events"
 		else
 			printf '%s\n' create-restore-job >>"$events"
-			yq -o=json '.' "$manifest" | jq -e --arg configmap "${NOCODB_RESTORE_BACKUP_CONFIGMAP:?}" '
+			yq -o=json '.' "$manifest" | jq -e '
+          .spec.template.spec.containers[0].command == ["/bin/sh", "-eu", "/helpers/nocodb-restore.sh"] and
+          (.spec.template.spec.containers[0] | has("args") | not) and
           (.spec.template.spec.containers[0].volumeMounts[] | select(.name == "backups") |
             .readOnly == true and .subPath == "automation-data-20260904T023000Z" and
             .mountPath == "/backups/automation-data-20260904T023000Z") and
           ([.spec.template.spec.volumes[] | select(.name == "scripts") |
-            select(.configMap.name == $configmap)] | length) == 1
+            select(.configMap.name == "automation-data-test-helpers-v1")] | length) == 1
         ' >/dev/null
 		fi
 	fi
