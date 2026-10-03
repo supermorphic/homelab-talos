@@ -1581,6 +1581,11 @@ homepage-lidarr-secrets:
 homepage-mylar3-secrets:
     @scripts/repository/homepage-mylar3-secrets.sh
 
+# Write the operator-supplied Komga widget key, register its encrypted Secret,
+# and stamp the Homepage rollout revision. Never reads Komga's runtime database.
+homepage-komga-secrets:
+    @scripts/repository/homepage-komga-secrets.sh
+
 # Write ONLY the SOPS-encrypted Homepage Sonarr widget Secret
 # (homepage-sonarr in the homepage namespace) from SONARR_API_KEY.
 # Independent of the other Homepage widget credentials. Never echoes the value.

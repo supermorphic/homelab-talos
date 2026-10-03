@@ -23,6 +23,7 @@ spec:
         # Homepage Portainer Secret writer stamps the encrypted blob revision.
         homepage-portainer-sops-hash: "58e54581cc4a050be953188b6e56fdcd779cda9f"
         homepage-mylar3-sops-hash: dae8502f0468d4e689fdabf3e1c2303c0b367185
+        homepage-komga-sops-hash: 63238561b900c45916c2e52b62457d7247bfa4d2
       labels:
         app.kubernetes.io/name: homepage
     spec:
@@ -126,6 +127,14 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: homepage-mylar3
+                  key: apiKey
+                  optional: true
+            # Komga widget key; the operator-run writer registers the encrypted
+            # Secret and stamps a pod revision for initial setup and rotation.
+            - name: HOMEPAGE_VAR_KOMGA_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: homepage-komga
                   key: apiKey
                   optional: true
             # Seerr widget API key (optional: widget blank until
