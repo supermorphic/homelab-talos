@@ -25,11 +25,11 @@ controllers:
           TZ: America/Denver
           JAVA_TOOL_OPTIONS: "-Xmx1g -XX:ActiveProcessorCount=2"
         resources:
-          # Provisional until idle/scan measurements. Leave native image decoding
-          # and JVM overhead headroom above the heap; do not throttle scan CPU.
+          # Covers the observed post-scan working set; larger-library sizing is
+          # pending. Leave JVM/native headroom above the heap and scan CPU unbounded.
           requests:
             cpu: 100m
-            memory: 512Mi
+            memory: 1Gi
           limits:
             memory: 2Gi
         securityContext:
