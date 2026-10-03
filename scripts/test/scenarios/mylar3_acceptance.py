@@ -207,6 +207,9 @@ verify_test_lease_holder "$1" "$HOMELAB_DISRUPTION_LEASE_HOLDER"
             )
 
     def verify_integrity(self) -> None:
+        # Record preflight preserves observer as current context. Select the
+        # scoped inspection identity explicitly without changing that context.
+        self.base.extend(["--context", "homelab-diagnostic"])
         self.require_exec()
         evidence = self.probe(self.pod())
         atomic_write_json(

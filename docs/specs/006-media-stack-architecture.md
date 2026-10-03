@@ -378,9 +378,11 @@ login/integration preservation, or backup restoration; those gates remain attend
 Supply `MYLAR_ACCEPTANCE_FIXTURE` as the path to a private JSON object containing
 `download_path`, `library_path` and a string `issue_id`. Both paths must identify the
 same imported comic under the comics download and library roots. For an independent
-integrity check without pod replacement, first select scoped diagnostic credentials
-with `mise exec -- just kube kubeconfig diagnostic`, then run
-`mise exec -- just test record test.mylar3-integrity`. It checks both files and the database read-only, retaining only
+integrity check without pod replacement, bootstrap scoped credentials with
+`mise exec -- just kube kubeconfig`, then run
+`mise exec -- just test record test.mylar3-integrity`. Keep the observer current
+context required by recording; the suite selects diagnostic access explicitly.
+It checks both files and the database read-only, retaining only
 sanitized results. The fixture is supplied explicitly and is not part of the
 general verification campaign.
 

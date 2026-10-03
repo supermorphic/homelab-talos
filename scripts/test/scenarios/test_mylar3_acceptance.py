@@ -174,6 +174,20 @@ class IntegritySafety(unittest.TestCase):
             self.acceptance.verify_integrity()
         probe.assert_not_called()
 
+    def test_integrity_selects_diagnostic_before_authority_check(self):
+        def require_exec():
+            self.assertEqual(
+                self.acceptance.base,
+                ["kubectl", "--kubeconfig", "synthetic-config", "--context", "homelab-diagnostic"],
+            )
+            raise ScenarioFailure("synthetic denial")
+
+        with (
+            patch.object(self.acceptance, "require_exec", side_effect=require_exec),
+            self.assertRaises(ScenarioFailure),
+        ):
+            self.acceptance.verify_integrity()
+
     def test_replacement_checks_exec_subresource(self):
         with (
             patch.object(self.acceptance, "call", return_value="no") as call,
@@ -184,6 +198,7 @@ class IntegritySafety(unittest.TestCase):
             call.call_args.args,
             ("auth", "can-i", "create", "pods", "--subresource=exec", "-n", "media"),
         )
+        self.assertEqual(self.acceptance.base, ["kubectl", "--kubeconfig", "synthetic-config"])
 
     def test_integrity_entrypoint_never_replaces_pod(self):
         fixture = self.run_dir / "fixture.json"
