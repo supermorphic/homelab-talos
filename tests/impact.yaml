@@ -215,6 +215,7 @@ core_paths:
   - scripts/test/gatus-media-integration-secrets-test.sh
   - scripts/test/homepage-portainer-rollout-test.sh
   - scripts/test/homepage-mylar3-secrets-test.sh
+  - scripts/test/homepage-komga-secrets-test.sh
   - scripts/test/hooks-install-test.sh
   - scripts/test/hooks-test.sh
   - scripts/test/install-worktree-credentials-test.sh
