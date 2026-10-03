@@ -12,7 +12,7 @@ metadata:
     gethomepage.dev/description: "Comics"
     gethomepage.dev/pod-selector: "app.kubernetes.io/name=mylar3"
     gethomepage.dev/group: "Media"
-    gethomepage.dev/icon: "mylar3.svg"
+    gethomepage.dev/icon: "mylar-3.svg"
     gethomepage.dev/href: "https://mylar3.lab.supermorphic.com"
 spec:
   hostnames:
