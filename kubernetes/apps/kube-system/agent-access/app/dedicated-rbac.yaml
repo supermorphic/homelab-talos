@@ -69,3 +69,62 @@ subjects:
   - kind: ServiceAccount
     name: homelab-test-conformance
     namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-flux-restart
+  namespace: flux-system
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [source-controller, kustomize-controller, helm-controller, notification-controller]
+    verbs: [patch, update]
+  - apiGroups: [source.toolkit.fluxcd.io]
+    resources: [gitrepositories]
+    resourceNames: [flux-system]
+    verbs: [patch, update]
+  - apiGroups: [kustomize.toolkit.fluxcd.io]
+    resources: [kustomizations]
+    resourceNames: [flux-canary, cluster-apps]
+    verbs: [patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-flux-restart
+  namespace: flux-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-flux-restart
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-flux-restart
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-flux-restart-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-flux-restart
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-flux-restart-observation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-observer-extra
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-flux-restart
+    namespace: kube-system

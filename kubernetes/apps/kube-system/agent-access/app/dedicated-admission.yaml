@@ -1,0 +1,117 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-flux-restart
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:
+      - apps
+      apiVersions:
+      - v1
+      operations:
+      - UPDATE
+      resources:
+      - deployments
+  matchConditions:
+  - name: dedicated-profile
+    expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-flux-restart'
+  variables:
+  - name: annotations
+    expression: 'has(object.spec.template.metadata.annotations) ? object.spec.template.metadata.annotations
+      : {}'
+  - name: previous
+    expression: 'has(oldObject.spec.template.metadata.annotations) ? oldObject.spec.template.metadata.annotations
+      : {}'
+  - name: key
+    expression: '''kubectl.kubernetes.io/restartedAt'''
+  validations:
+  - expression: |-
+      request.namespace == 'flux-system' && request.subResource == '' &&
+      request.name in ['source-controller', 'kustomize-controller', 'helm-controller', 'notification-controller'] &&
+      object.metadata.name == request.name && object.metadata.namespace == request.namespace &&
+      object.all(k, k in ['metadata', 'spec'] || (k in oldObject && object[k] == oldObject[k])) &&
+      oldObject.all(k, k in ['metadata', 'spec'] || k in object) &&
+      object.metadata.all(k, k in ['resourceVersion', 'managedFields', 'generation'] || (k in oldObject.metadata && object.metadata[k] == oldObject.metadata[k])) && oldObject.metadata.all(k, k in ['resourceVersion', 'managedFields', 'generation'] || k in object.metadata) &&
+      object.spec.all(k, k == 'template' || (k in oldObject.spec && object.spec[k] == oldObject.spec[k])) &&
+      oldObject.spec.all(k, k == 'template' || k in object.spec) &&
+      object.spec.template.all(k, k == 'metadata' || (k in oldObject.spec.template && object.spec.template[k] == oldObject.spec.template[k])) &&
+      oldObject.spec.template.all(k, k == 'metadata' || k in object.spec.template) &&
+      object.spec.template.metadata.all(k, k == 'annotations' || (k in oldObject.spec.template.metadata && object.spec.template.metadata[k] == oldObject.spec.template.metadata[k])) &&
+      oldObject.spec.template.metadata.all(k, k == 'annotations' || k in object.spec.template.metadata)
+    message: Only the four Flux controller templates may restart; preserve their workloads, metadata and
+      status.
+  - expression: |-
+      variables.key in variables.annotations &&
+      variables.annotations[variables.key].matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$') &&
+      variables.annotations.all(k, k == variables.key || (k in variables.previous && variables.annotations[k] == variables.previous[k])) &&
+      variables.previous.all(k, k == variables.key || k in variables.annotations)
+    message: Only the canonical restart timestamp may change.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-flux-restart
+spec:
+  policyName: homelab-test-flux-restart
+  validationActions:
+  - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-flux-restart-reconcile
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:
+      - source.toolkit.fluxcd.io
+      apiVersions:
+      - v1
+      operations:
+      - UPDATE
+      resources:
+      - gitrepositories
+    - apiGroups:
+      - kustomize.toolkit.fluxcd.io
+      apiVersions:
+      - v1
+      operations:
+      - UPDATE
+      resources:
+      - kustomizations
+  matchConditions:
+  - name: dedicated-profile
+    expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-flux-restart'
+  variables:
+  - name: annotations
+    expression: 'has(object.metadata.annotations) ? object.metadata.annotations : {}'
+  - name: previous
+    expression: 'has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}'
+  - name: requestedAt
+    expression: '''reconcile.fluxcd.io/requestedAt'''
+  validations:
+  - expression: |-
+      request.namespace == 'flux-system' && request.subResource == '' && (
+        (request.resource.group == 'source.toolkit.fluxcd.io' && request.resource.resource == 'gitrepositories' && request.name == 'flux-system') ||
+        (request.resource.group == 'kustomize.toolkit.fluxcd.io' && request.resource.resource == 'kustomizations' && request.name in ['flux-canary', 'cluster-apps'])) &&
+      object.metadata.name == oldObject.metadata.name && object.metadata.namespace == oldObject.metadata.namespace && object.spec == oldObject.spec && (has(object.metadata.labels) == has(oldObject.metadata.labels)) && (!has(object.metadata.labels) || object.metadata.labels == oldObject.metadata.labels) && (has(object.metadata.ownerReferences) == has(oldObject.metadata.ownerReferences)) && (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences == oldObject.metadata.ownerReferences) && (has(object.metadata.finalizers) == has(oldObject.metadata.finalizers)) && (!has(object.metadata.finalizers) || object.metadata.finalizers == oldObject.metadata.finalizers) && (has(object.metadata.generateName) == has(oldObject.metadata.generateName)) && (!has(object.metadata.generateName) || object.metadata.generateName == oldObject.metadata.generateName)
+    message: Request reconciliation on the named source and two approved Kustomizations; preserve their
+      specification and ownership.
+  - expression: |-
+      variables.requestedAt in variables.annotations && variables.annotations[variables.requestedAt].matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$') && variables.annotations.all(k, k == variables.requestedAt ||
+        (k in variables.previous && variables.annotations[k] == variables.previous[k])) &&
+      variables.previous.all(k, k == variables.requestedAt || k in variables.annotations)
+    message: The reconciliation timestamp is the only annotation a test may change.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-flux-restart-reconcile
+spec:
+  policyName: homelab-test-flux-restart-reconcile
+  validationActions:
+  - Deny

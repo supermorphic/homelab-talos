@@ -566,7 +566,8 @@ ordinary_admission_params := {
 }
 
 ordinary_role_names := object.keys(ordinary_role_contracts)
-ordinary_admission_names := object.keys(ordinary_admission_rules)
+controlled_admission_rules := object.union(ordinary_admission_rules, dedicated_admission_rules)
+controlled_admission_names := object.keys(controlled_admission_rules)
 runner_subjects := [{"kind": "ServiceAccount", "name": "homelab-test-runner", "namespace": "kube-system"}]
 
 ordinary_documents(kind, name, namespace) := [document |
@@ -642,7 +643,7 @@ runner_observation_exact(bindings, name, role_name) if {
 }
 
 deny contains msg if {
-	some name in ordinary_admission_names
+	some name in controlled_admission_names
 	some kind in {"ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding"}
 	guards := publisher_documents(kind, name)
 	count(guards) != 1
@@ -653,10 +654,10 @@ ordinary_admission_exact(document, name) if {
 	metadata_namespace(document) == ""
 	spec := object.get(document, "spec", {})
 	spec.failurePolicy == "Fail"
-	spec.matchConstraints == {"resourceRules": ordinary_admission_rules[name]}
+	spec.matchConstraints == {"resourceRules": controlled_admission_rules[name]}
 	conditions := object.get(spec, "matchConditions", [])
 	count(conditions) >= 1
-	conditions[0] == {"name": "test-runner", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'"}
+	conditions[0] == object.get(dedicated_admission_conditions, name, {"name": "test-runner", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'"})
 	validations := object.get(spec, "validations", [])
 	count(validations) > 0
 	every validation in validations { is_string(validation.expression); validation.expression != ""; validation.expression != "true"}
@@ -672,7 +673,7 @@ deny contains msg if {
 	some document in documents
 	document.kind == "ValidatingAdmissionPolicy"
 	name := metadata_name(document)
-	name in ordinary_admission_names
+	name in controlled_admission_names
 	not ordinary_admission_exact(document, name)
 	msg := sprintf("test-runner policy %s must fail closed over its declared API requests", [name])
 }
@@ -681,7 +682,7 @@ deny contains msg if {
 	some document in documents
 	document.kind == "ValidatingAdmissionPolicyBinding"
 	name := metadata_name(document)
-	name in ordinary_admission_names
+	name in controlled_admission_names
 	not ordinary_admission_binding_exact(document, name)
 	msg := sprintf("test-runner policy binding %s must deny without bypass selectors", [name])
 }

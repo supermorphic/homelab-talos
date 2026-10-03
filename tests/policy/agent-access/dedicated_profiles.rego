@@ -33,3 +33,43 @@ conformance_binding_exact(bindings) if {
 deny contains "conformance administrator exception must bind only its dedicated account once" if {
 	not conformance_binding_exact(publisher_documents("ClusterRoleBinding", "homelab-test-conformance"))
 }
+
+dedicated_role_contracts := {"homelab-test-flux-restart": {
+	"namespace": "flux-system",
+	"rules": [
+		{"apiGroups": ["apps"], "resources": ["deployments"], "resourceNames": ["source-controller", "kustomize-controller", "helm-controller", "notification-controller"], "verbs": ["patch", "update"]},
+		{"apiGroups": ["source.toolkit.fluxcd.io"], "resources": ["gitrepositories"], "resourceNames": ["flux-system"], "verbs": ["patch", "update"]},
+		{"apiGroups": ["kustomize.toolkit.fluxcd.io"], "resources": ["kustomizations"], "resourceNames": ["flux-canary", "cluster-apps"], "verbs": ["patch", "update"]},
+	],
+	"subjects": [{"kind": "ServiceAccount", "name": "homelab-test-flux-restart", "namespace": "kube-system"}],
+}}
+
+dedicated_observation_contracts := {
+	"homelab-test-flux-restart-view": {"role": "view", "account": "homelab-test-flux-restart"},
+	"homelab-test-flux-restart-observation": {"role": "homelab-observer-extra", "account": "homelab-test-flux-restart"},
+}
+
+dedicated_observation_exact(bindings, name, contract) if {
+	count(bindings) == 1
+	metadata_namespace(bindings[0]) == ""
+	has_binding(name, contract.role, {sprintf("ServiceAccount:kube-system:%s", [contract.account])})
+}
+
+deny contains msg if {
+	some name, contract in dedicated_observation_contracts
+	not dedicated_observation_exact(publisher_documents("ClusterRoleBinding", name), name, contract)
+	msg := sprintf("dedicated observation binding %s must match its one declared account", [name])
+}
+
+dedicated_admission_rules := {
+	"homelab-test-flux-restart": [{"apiGroups": ["apps"], "apiVersions": ["v1"], "operations": ["UPDATE"], "resources": ["deployments"]}],
+	"homelab-test-flux-restart-reconcile": [
+		{"apiGroups": ["source.toolkit.fluxcd.io"], "apiVersions": ["v1"], "operations": ["UPDATE"], "resources": ["gitrepositories"]},
+		{"apiGroups": ["kustomize.toolkit.fluxcd.io"], "apiVersions": ["v1"], "operations": ["UPDATE"], "resources": ["kustomizations"]},
+	],
+}
+
+dedicated_admission_conditions := {
+	"homelab-test-flux-restart": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-flux-restart'"},
+	"homelab-test-flux-restart-reconcile": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-flux-restart'"},
+}
