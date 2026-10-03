@@ -96,7 +96,7 @@ def validate_access(entry: dict) -> None:
         raise SafeError("invalid-source")
 
 
-def resolve_suite_access(repo_root: Path, suite_id: str) -> dict:
+def _canonical_entry(repo_root: Path, suite_id: str) -> tuple[dict, str]:
     catalog_path = repo_root / "tests/catalog.yaml"
     override = os.environ.get("TEST_CATALOG_PATH")
     if override and Path(override).absolute() != catalog_path.absolute():
@@ -119,9 +119,14 @@ def resolve_suite_access(repo_root: Path, suite_id: str) -> dict:
         validate_access(entry)
     except (OSError, KeyError, TypeError, AttributeError, yaml.YAMLError):
         raise SafeError("invalid-source") from None
+    return entry, hashlib.sha256(raw).hexdigest()
+
+
+def resolve_suite_access(repo_root: Path, suite_id: str) -> dict:
+    entry, catalog_digest = _canonical_entry(repo_root, suite_id)
     return {
         "suite_id": suite_id,
-        "catalog_digest": hashlib.sha256(raw).hexdigest(),
+        "catalog_digest": catalog_digest,
         **entry["access"],
     }
 
@@ -166,10 +171,41 @@ def remove_invocation(repo_root: Path, config_path: Path) -> None:
     credentials.remove_invocation_files(repo_root, config_path)
 
 
+def validate_inherited_invocation(repo_root: Path, suite_id: str, config_path: Path) -> dict:
+    """Retain a checked parent for the same suite or an observational child."""
+    parent = validate_invocation(repo_root, config_path)
+    if parent["suite_id"] == suite_id:
+        return parent
+    entry, catalog_digest = _canonical_entry(repo_root, suite_id)
+    profile = entry["access"]["profile"]
+    same_base = profile in {"observer", "debugger"} and profile == parent["profile"]
+    cilium_verification = (
+        parent["suite_id"] == "test.cilium-connectivity"
+        and suite_id == "verification.cilium"
+        and profile == "debugger"
+    )
+    if (
+        catalog_digest != parent["catalog_digest"]
+        or not (profile == "observer" or same_base or cilium_verification)
+        or entry["metadata"]["mutates_cluster"] is not False
+        or not set(entry["access"]["prerequisites"]) <= set(parent["prerequisites"])
+    ):
+        raise SafeError("invalid-source")
+    return parent
+
+
 def main(argv: list[str]) -> int:
     root = Path(__file__).resolve().parents[2]
     try:
-        if len(argv) == 4 and argv[1] == "prepare":
+        if len(argv) == 3 and argv[1] == "resolve":
+            import json
+
+            print(json.dumps(resolve_suite_access(root, argv[2])))
+        elif len(argv) == 4 and argv[1] == "inherit":
+            import json
+
+            print(json.dumps(validate_inherited_invocation(root, argv[2], Path(argv[3]))))
+        elif len(argv) == 4 and argv[1] == "prepare":
             path = prepare_invocation(root, argv[2], argv[3])
             if path is not None:
                 print(path)

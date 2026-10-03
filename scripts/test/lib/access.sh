@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Shell bridge to the canonical Python authority and invocation lifecycle.
+
+_TEST_ACCESS_OWNED_PATH=''
+
+test_access_resolve() {
+  uv run --locked --no-dev python -m scripts.test.access resolve "$1"
+}
+
+test_access_open() {
+  local suite_id="$1" run_id="$2" declaration profile config parent
+  declaration="$(test_access_resolve "$suite_id")" || return 1
+  profile="$(yq -r '.profile // "null"' - <<<"$declaration")" || return 1
+  if [[ "$profile" == 'null' ]]; then
+    export TEST_KUBECONFIG='' TEST_ACCESS_CONFIG='' KUBECONFIG=/dev/null
+    return 0
+  fi
+  parent="${TEST_ACCESS_CONFIG:-}"
+  if [[ -n "$parent" ]]; then
+    [[ -z "${TEST_KUBECONFIG:-}" || "$TEST_KUBECONFIG" == "$parent" ]] || {
+      echo 'Test config does not match its parent invocation.' >&2
+      return 1
+    }
+    uv run --locked --no-dev python -m scripts.test.access inherit "$suite_id" "$parent" \
+      >/dev/null || return 1
+    config="$parent"
+  else
+    [[ -z "${TEST_KUBECONFIG:-}" ]] || {
+      echo 'Tests select credentials from the catalog; an unbound TEST_KUBECONFIG is not accepted.' >&2
+      return 1
+    }
+    config="$(uv run --locked --no-dev python -m scripts.test.access prepare "$suite_id" "$run_id")" || return 1
+    _TEST_ACCESS_OWNED_PATH="$config"
+    if ! uv run --locked --no-dev python -m scripts.test.access validate "$config" >/dev/null; then
+      test_access_close || true
+      return 1
+    fi
+  fi
+  [[ "$config" == /* && -f "$config" ]] || {
+    test_access_close || true
+    echo 'Test invocation did not produce a usable private config.' >&2
+    return 1
+  }
+  export TEST_KUBECONFIG="$config" TEST_ACCESS_CONFIG="$config" KUBECONFIG="$config"
+}
+
+test_access_check() {
+  [[ -n "${TEST_ACCESS_CONFIG:-}" ]] || return 0
+  uv run --locked --no-dev python -m scripts.test.access inherit "$1" "$TEST_ACCESS_CONFIG" \
+    >/dev/null
+}
+
+test_access_arguments() {
+  local argument expects_config=false
+  TEST_ACCESS_ARGUMENTS=()
+  for argument in "$@"; do
+    if [[ "$expects_config" == 'true' ]]; then
+      [[ "$argument" == "${TEST_KUBECONFIG:-}" && -n "$argument" ]] || {
+        echo 'Backend kubeconfig must be the selected invocation config.' >&2
+        return 1
+      }
+      expects_config=false
+    fi
+    case "$argument" in
+      @test-kubeconfig@) argument="${TEST_KUBECONFIG:-}" ;;
+      .kube/config|*/.kube/config|--context|--context=*|use-context|set-context)
+        echo 'Static Kubernetes credentials and manual context selection are not accepted by test dispatch.' >&2
+        return 1
+        ;;
+      --kubeconfig) expects_config=true ;;
+      --kubeconfig=*)
+        [[ -n "${TEST_KUBECONFIG:-}" && "$argument" == "--kubeconfig=$TEST_KUBECONFIG" ]] || {
+          echo 'Backend kubeconfig must be the selected invocation config.' >&2
+          return 1
+        }
+        ;;
+    esac
+    TEST_ACCESS_ARGUMENTS+=("$argument")
+  done
+  [[ "$expects_config" == 'false' ]]
+}
+
+test_access_close() {
+  [[ -n "$_TEST_ACCESS_OWNED_PATH" ]] || return 0
+  uv run --locked --no-dev python -m scripts.test.access remove "$_TEST_ACCESS_OWNED_PATH" || return 1
+  _TEST_ACCESS_OWNED_PATH=''
+}
