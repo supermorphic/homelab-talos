@@ -1,0 +1,97 @@
+# Komga indexes Mylar's library without modifying its files. Attended library
+# and account setup is described in the media architecture specification.
+controllers:
+  komga:
+    type: deployment
+    replicas: 1
+    strategy: Recreate
+    pod:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsUser: 568
+        runAsGroup: 568
+        runAsNonRoot: true
+        fsGroup: 568
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+    containers:
+      app:
+        image:
+          repository: ghcr.io/gotson/komga
+          tag: 1.28.1
+        env:
+          TZ: America/Denver
+          JAVA_TOOL_OPTIONS: "-Xmx1g -XX:ActiveProcessorCount=2"
+        resources:
+          # Provisional until idle/scan measurements. Leave native image decoding
+          # and JVM overhead headroom above the heap; do not throttle scan CPU.
+          requests:
+            cpu: 100m
+            memory: 512Mi
+          limits:
+            memory: 2Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        probes:
+          readiness:
+            enabled: true
+            custom: true
+            spec:
+              httpGet:
+                path: /actuator/health
+                port: 25600
+              timeoutSeconds: 5
+              periodSeconds: 10
+              failureThreshold: 3
+          liveness:
+            enabled: true
+            custom: true
+            spec:
+              httpGet:
+                path: /actuator/health
+                port: 25600
+              timeoutSeconds: 5
+              periodSeconds: 30
+              failureThreshold: 5
+          startup:
+            enabled: true
+            custom: true
+            spec:
+              httpGet:
+                path: /actuator/health
+                port: 25600
+              timeoutSeconds: 5
+              periodSeconds: 5
+              failureThreshold: 120
+service:
+  app:
+    controller: komga
+    ports:
+      http:
+        port: 25600
+persistence:
+  config:
+    type: persistentVolumeClaim
+    accessMode: ReadWriteOnce
+    size: 10Gi
+    storageClass: longhorn
+    annotations:
+      helm.sh/resource-policy: keep
+    globalMounts:
+      - path: /config
+  data:
+    type: persistentVolumeClaim
+    existingClaim: media-data
+    globalMounts:
+      - path: /data/media/comics
+        subPath: media/comics
+        readOnly: true
+  tmp:
+    type: emptyDir
+    globalMounts:
+      - path: /tmp
