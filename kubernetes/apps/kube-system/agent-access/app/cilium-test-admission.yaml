@@ -1,0 +1,62 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-cilium-namespaces
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - ''
+        apiVersions:
+          - v1
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - namespaces
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'
+  variables:
+    - name: item
+      expression: 'request.operation == ''DELETE'' ? oldObject : object'
+  validations:
+    - expression: request.namespace == '' && request.subResource == '' && request.name in ['cilium-test-1','cilium-test-ccnp1','cilium-test-ccnp2']
+        && variables.item.apiVersion == 'v1' && variables.item.kind == 'Namespace' && variables.item.metadata.name
+        == request.name && (!has(variables.item.metadata.namespace) || variables.item.metadata.namespace
+        == '') && variables.item.all(k, k in ['apiVersion','kind','metadata','spec','status']) && !has(variables.item.metadata.ownerReferences)
+        && (!has(variables.item.metadata.finalizers) || variables.item.metadata.finalizers.size() == 0)
+        && variables.item.spec.all(k, k == 'finalizers' && variables.item.spec[k] == ['kubernetes']) &&
+        (request.operation == 'CREATE' || (has(variables.item.metadata.uid) && variables.item.metadata.uid
+        != ''))
+      message: Only the three registered connectivity fixture namespaces may be allocated, updated or
+        removed.
+    - expression: variables.item.metadata.labels['app.kubernetes.io/name'] == 'cilium-cli' && variables.item.metadata.labels['pod-security.kubernetes.io/enforce']
+        == 'privileged' && variables.item.metadata.labels.all(k, k in ['app.kubernetes.io/name','pod-security.kubernetes.io/enforce']
+        || (k == 'kubernetes.io/metadata.name' && variables.item.metadata.labels[k] == request.name))
+        && variables.item.metadata.annotations['homelab.supermorphic.com/test-run'].matches('^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$')
+        && variables.item.metadata.annotations.all(k, k == 'homelab.supermorphic.com/test-run' || (k ==
+        'clustermesh.cilium.io/global' && variables.item.metadata.annotations[k] == 'true'))
+      message: Fixture identity, privileged connectivity mode and checked run ownership are mandatory.
+    - expression: 'request.operation == ''UPDATE'' ? (oldObject.metadata.annotations[''homelab.supermorphic.com/test-run'']
+        == object.metadata.annotations[''homelab.supermorphic.com/test-run''] && oldObject.metadata.annotations.all(k,
+        k in object.metadata.annotations && object.metadata.annotations[k] == oldObject.metadata.annotations[k])
+        && object.metadata.labels == oldObject.metadata.labels && object.metadata.all(k, k in [''resourceVersion'',''managedFields'',''annotations'']
+        || (k in oldObject.metadata && object.metadata[k] == oldObject.metadata[k])) && oldObject.metadata.all(k,
+        k in [''resourceVersion'',''managedFields'',''annotations''] || (k in object.metadata && object.metadata[k]
+        == oldObject.metadata[k])) && object.all(k, k == ''metadata'' || (k in oldObject && object[k]
+        == oldObject[k])) && oldObject.all(k, k == ''metadata'' || (k in object && object[k] == oldObject[k])))
+        : true'
+      message: The pinned client may only add its global-namespace annotation; existing namespace identity
+        and specification remain unchanged.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-cilium-namespaces
+spec:
+  policyName: homelab-test-cilium-namespaces
+  validationActions:
+    - Deny

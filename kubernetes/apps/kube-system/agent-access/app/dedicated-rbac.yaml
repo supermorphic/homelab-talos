@@ -551,3 +551,100 @@ subjects:
   - kind: ServiceAccount
     name: homelab-test-openbao-restore
     namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: homelab-test-cilium-namespaces
+rules:
+  - apiGroups:
+      - ''
+    resources:
+      - namespaces
+    verbs:
+      - create
+  - apiGroups:
+      - ''
+    resources:
+      - namespaces
+    resourceNames:
+      - cilium-test-1
+      - cilium-test-ccnp1
+      - cilium-test-ccnp2
+    verbs:
+      - update
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-cilium-namespaces
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-test-cilium-namespaces
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-cilium-connectivity
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-cilium-connectivity-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-cilium-connectivity
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-cilium-connectivity-observation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-observer-extra
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-cilium-connectivity
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-cilium-helm-observation
+  namespace: kube-system
+rules:
+  - apiGroups:
+      - ''
+    resources:
+      - secrets
+    verbs:
+      - list
+  - apiGroups:
+      - ''
+    resources:
+      - secrets
+    resourceNames:
+      - cilium-etcd-secrets
+    verbs:
+      - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-cilium-helm-observation
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-cilium-helm-observation
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-cilium-connectivity
+    namespace: kube-system

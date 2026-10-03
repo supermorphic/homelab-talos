@@ -354,3 +354,57 @@ test_restore_requires_fixed_exec_guard if {
 	messages := deny with input as fixture
 	count(messages) > 0
 }
+
+dedicated_cilium_namespace_fixture := [
+	cluster_role("homelab-test-cilium-namespaces", [
+		{"apiGroups": [""], "resources": ["namespaces"], "verbs": ["create"]},
+		{"apiGroups": [""], "resources": ["namespaces"], "resourceNames": ["cilium-test-1", "cilium-test-ccnp1", "cilium-test-ccnp2"], "verbs": ["update", "delete"]},
+	]),
+	cluster_role_binding("homelab-test-cilium-namespaces", ["homelab-test-cilium-connectivity"], "homelab-test-cilium-namespaces"),
+	cluster_role_binding("homelab-test-cilium-connectivity-view", ["homelab-test-cilium-connectivity"], "view"),
+	cluster_role_binding("homelab-test-cilium-connectivity-observation", ["homelab-test-cilium-connectivity"], "homelab-observer-extra"),
+	role("homelab-test-cilium-helm-observation", "kube-system", [
+		{"apiGroups": [""], "resources": ["secrets"], "verbs": ["list"]},
+		{"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["cilium-etcd-secrets"], "verbs": ["get"]},
+	]),
+	role_binding("homelab-test-cilium-helm-observation", "kube-system", "homelab-test-cilium-connectivity", "kube-system", "homelab-test-cilium-helm-observation"),
+	{
+		"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingAdmissionPolicy", "metadata": {"name": "homelab-test-cilium-namespaces"},
+		"spec": {
+			"failurePolicy": "Fail", "matchConstraints": {"resourceRules": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["namespaces"]}]},
+			"matchConditions": [{"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'"}],
+			"validations": [{"expression": "object.kind == 'Namespace'"}],
+		},
+	},
+	flux_guard_binding("homelab-test-cilium-namespaces"),
+]
+
+test_cilium_cannot_receive_generic_namespace_deletion if {
+	fixture := runner_change("ClusterRole", "homelab-test-cilium-namespaces", [{"op": "remove", "path": "/rules/1/resourceNames"}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_cilium_requires_namespace_parent_guard if {
+	fixture := [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ValidatingAdmissionPolicy", "homelab-test-cilium-namespaces"]]
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_cilium_cannot_receive_other_namespace_secret_inventory if {
+	fixture := runner_change("Role", "homelab-test-cilium-helm-observation", [{"op": "replace", "path": "/metadata/namespace", "value": "openbao"}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_cilium_secret_inventory_cannot_receive_secret_write if {
+	fixture := runner_change("Role", "homelab-test-cilium-helm-observation", [{"op": "add", "path": "/rules/0/verbs/-", "value": "update"}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_cilium_privileged_namespace_lifecycle_cannot_bind_ordinary_runner if {
+	fixture := runner_change("ClusterRoleBinding", "homelab-test-cilium-namespaces", [{"op": "add", "path": "/subjects/-", "value": {"kind": "ServiceAccount", "name": "homelab-test-runner", "namespace": "kube-system"}}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}

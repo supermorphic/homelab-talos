@@ -35,6 +35,7 @@ deny contains "conformance administrator exception must bind only its dedicated 
 }
 
 dedicated_role_contracts := {
+	"homelab-test-cilium-helm-observation": {"namespace": "kube-system", "rules": [{"apiGroups": [""], "resources": ["secrets"], "verbs": ["list"]}, {"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["cilium-etcd-secrets"], "verbs": ["get"]}], "subjects": [{"kind": "ServiceAccount", "name": "homelab-test-cilium-connectivity", "namespace": "kube-system"}]},
 	"homelab-test-openbao-restore-runtime": {"namespace": "openbao-restore-test", "rules": [{"apiGroups": ["apps"], "resources": ["statefulsets"], "verbs": ["create"]}, {"apiGroups": ["apps"], "resources": ["statefulsets"], "resourceNames": ["scratch"], "verbs": ["delete"]}, {"apiGroups": [""], "resources": ["persistentvolumeclaims", "secrets", "configmaps"], "verbs": ["create"]}, {"apiGroups": [""], "resources": ["persistentvolumeclaims"], "resourceNames": ["scratch-data"], "verbs": ["delete"]}, {"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["scratch-seal"], "verbs": ["get", "delete"]}, {"apiGroups": [""], "resources": ["secrets"], "verbs": ["list"]}, {"apiGroups": [""], "resources": ["configmaps"], "resourceNames": ["scratch-config"], "verbs": ["delete"]}, {"apiGroups": [""], "resources": ["pods"], "resourceNames": ["scratch-0"], "verbs": ["delete"]}, {"apiGroups": [""], "resources": ["pods/exec"], "resourceNames": ["scratch-0"], "verbs": ["get", "create"]}], "subjects": [{"kind": "ServiceAccount", "name": "homelab-test-openbao-restore", "namespace": "kube-system"}]},
 	"homelab-test-openbao-issuer-runtime": {"namespace": "openbao", "rules": [{"apiGroups": [""], "resources": ["pods"], "verbs": ["create", "delete"]}, {"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["get", "create"]}], "subjects": [{"kind": "ServiceAccount", "name": "homelab-test-openbao-issuance", "namespace": "kube-system"}]},
 	"homelab-test-openbao-acceptance-runtime": {"namespace": "openbao-acceptance", "rules": [{"apiGroups": [""], "resources": ["pods"], "verbs": ["create", "delete"]}, {"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["get", "create"]}], "subjects": [{"kind": "ServiceAccount", "name": "homelab-test-openbao-issuance", "namespace": "kube-system"}, {"kind": "ServiceAccount", "name": "homelab-test-openbao-ha", "namespace": "kube-system"}]},
@@ -71,6 +72,8 @@ dedicated_role_contracts := {
 }
 
 dedicated_observation_contracts := {
+	"homelab-test-cilium-connectivity-observation": {"role": "homelab-observer-extra", "account": "homelab-test-cilium-connectivity"},
+	"homelab-test-cilium-connectivity-view": {"role": "view", "account": "homelab-test-cilium-connectivity"},
 	"homelab-test-openbao-restore-view": {"role": "view", "account": "homelab-test-openbao-restore"},
 	"homelab-test-openbao-restore-observation": {"role": "homelab-observer-extra", "account": "homelab-test-openbao-restore"},
 	"homelab-test-openbao-issuance-observation": {"role": "homelab-observer-extra", "account": "homelab-test-openbao-issuance"},
@@ -98,6 +101,7 @@ deny contains msg if {
 }
 
 dedicated_admission_rules := {
+	"homelab-test-cilium-namespaces": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["namespaces"]}],
 	"homelab-test-openbao-restore-pod-delete": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["DELETE"], "resources": ["pods"]}],
 	"homelab-test-openbao-restore-exec": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CONNECT"], "resources": ["pods/exec"]}],
 	"homelab-test-openbao-restore-private": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["secrets", "configmaps"]}],
@@ -118,6 +122,7 @@ dedicated_admission_rules := {
 }
 
 dedicated_admission_conditions := {
+	"homelab-test-cilium-namespaces": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'"},
 	"homelab-test-openbao-restore-pod-delete": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-openbao-restore'"},
 	"homelab-test-openbao-restore-exec": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-openbao-restore'"},
 	"homelab-test-openbao-restore-private": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-openbao-restore'"},
@@ -134,7 +139,7 @@ dedicated_admission_conditions := {
 	"homelab-test-flux-restart-reconcile": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-flux-restart'"},
 }
 
-dedicated_cluster_contracts := {"homelab-test-node-scheduling": {
+dedicated_cluster_contracts := {"homelab-test-cilium-namespaces": {"rules": [{"apiGroups": [""], "resources": ["namespaces"], "verbs": ["create"]}, {"apiGroups": [""], "resources": ["namespaces"], "resourceNames": ["cilium-test-1", "cilium-test-ccnp1", "cilium-test-ccnp2"], "verbs": ["update", "delete"]}], "account": "homelab-test-cilium-connectivity"}, "homelab-test-node-scheduling": {
 	"rules": [{"apiGroups": [""], "resources": ["nodes"], "resourceNames": ["nuc1", "nuc2", "nuc3"], "verbs": ["patch"]}],
 	"account": "homelab-test-node-reschedule",
 }}
