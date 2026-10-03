@@ -19,6 +19,16 @@ class RecipeRoutingTests(unittest.TestCase):
                 with self.subTest(suite=entry["metadata"]["id"]):
                     self.assertFalse(argument.endswith(".kube/config"))
 
+    def test_conformance_public_recipe_does_not_choose_an_operator_config(self):
+        result = subprocess.run(
+            ["just", "--dry-run", "kube", "conformance"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertNotIn(".kube/config", result.stdout + result.stderr)
+
     def test_public_kube_wrappers_leave_credential_selection_to_coordinator(self):
         data = json.loads(
             subprocess.check_output(["just", "--dump", "--dump-format", "json"], cwd=ROOT)
@@ -49,6 +59,29 @@ class RecipeRoutingTests(unittest.TestCase):
                 output = result.stdout + result.stderr
                 self.assertIn(selected, output)
                 self.assertNotIn(".kube/config", output)
+
+    def test_chainsaw_script_branches_do_not_select_another_credential(self):
+        def scripts(value):
+            if isinstance(value, dict):
+                operation = value.get("script")
+                if isinstance(operation, dict) and "content" in operation:
+                    yield operation["content"]
+                for child in value.values():
+                    yield from scripts(child)
+            elif isinstance(value, list):
+                for child in value:
+                    yield from scripts(child)
+
+        violations = []
+        for path in (ROOT / "tests/chainsaw").rglob("chainsaw-test.yaml"):
+            document = yaml.safe_load(path.read_text())
+            for content in scripts(document):
+                if any(
+                    forbidden in content
+                    for forbidden in (".kube/config", "--context", "use-context", "set-context")
+                ):
+                    violations.append(str(path.relative_to(ROOT)))
+        self.assertEqual(violations, [], "Every try/catch/finally must retain selected access")
 
 
 if __name__ == "__main__":

@@ -5,6 +5,14 @@ source scripts/test/lib/results.sh
 
 fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/homelab-sonobuoy-test.XXXXXX")"
 trap 'rm -rf -- "$fixture_root"' EXIT
+mkdir "$fixture_root/bin"
+TEST_FIXTURE_REAL_UV="$(command -v uv)"
+export TEST_FIXTURE_REAL_UV
+export TEST_FIXTURE_ACCESS_ROOT="$fixture_root"
+export TEST_FIXTURE_ACCESS_TRACE="$fixture_root/access-trace"
+cp tests/fixtures/test-access/fake-uv.sh "$fixture_root/bin/uv"
+cp tests/fixtures/result-coordinator/fake-kubectl.sh "$fixture_root/bin/kubectl"
+export PATH="$fixture_root/bin:$PATH"
 run_dir="$fixture_root/run"
 fragment_dir="$run_dir/diagnostics/fragments"
 archive_root="$fixture_root/archive/plugins/e2e/results/global"
@@ -159,10 +167,10 @@ TEST_CAMPAIGN_LEASE_FAILURE_MARKER="$fixture_root/outer-lease-renewal-failed" \
   TEST_KUBECTL_BIN=tests/fixtures/result-coordinator/fake-kubectl.sh \
   TEST_SONOBUOY_PRIVATE_ROOT="$standalone_private" \
   TEST_RESULTS_ROOT="$standalone_results" \
-  TEST_KUBECONFIG="$fixture_root/kubeconfig" \
+  TEST_KUBECONFIG='' \
   TEST_EXECUTION_ORIGIN=agent \
   TEST_RUN_ID_FILE="$standalone_run_id_file" \
-    scripts/test/run-conformance.sh "$fixture_root/kubeconfig" >/dev/null
+    scripts/test/run-conformance.sh >/dev/null
 
 standalone_run_id="$(cat "$standalone_run_id_file")"
 standalone_run="$standalone_results/$standalone_run_id"

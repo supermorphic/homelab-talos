@@ -66,7 +66,7 @@ spec:
             content: >-
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
-              scripts/test/scenarios/test_reports_persistence.py prepare .kube/config
+              scripts/test/scenarios/test_reports_persistence.py prepare "${TEST_KUBECONFIG:?}"
     - name: delete-caddy-pod-natively-and-prove-recovery
       try:
         - delete:
@@ -102,7 +102,7 @@ spec:
             content: >-
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
-              scripts/test/scenarios/test_reports_persistence.py recover .kube/config
+              scripts/test/scenarios/test_reports_persistence.py recover "${TEST_KUBECONFIG:?}"
     - name: assert-replacement-runtime-and-storage
       try:
         - assert:
@@ -130,4 +130,4 @@ spec:
             content: >-
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
-              scripts/test/scenarios/test_reports_persistence.py verify .kube/config
+              scripts/test/scenarios/test_reports_persistence.py verify "${TEST_KUBECONFIG:?}"

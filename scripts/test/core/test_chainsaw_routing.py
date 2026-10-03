@@ -166,6 +166,21 @@ fi
         self.assertEqual(summary["phases"]["assertion"]["status"], "not-classified")
         self.assertEqual(summary["phases"]["cleanup"]["status"], "failed")
 
+    def test_conformance_rejects_unbound_config_before_issuance(self):
+        config = self.root / "unbound"
+        config.touch()
+        result = subprocess.run(
+            ["scripts/test/run-conformance.sh", str(config)],
+            cwd=ROOT,
+            env=self.environment,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse((self.root / "trace").exists())
+
     def test_signal_waits_for_backend_cleanup_before_removing_config(self):
         result = self.execute(TEST_FIXTURE_CHAINSAW_SIGNAL="true")
         self.assertEqual(result.returncode, 143, result.stderr)

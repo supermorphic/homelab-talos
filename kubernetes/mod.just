@@ -345,7 +345,7 @@ media-policy-validate:
 # MODE=certified runs the full certified-conformance suite (~1.5-2h) and IS upstream
 # conformance evidence — run it only for major Kubernetes upgrades / platform changes.
 conformance: require-bash
-    @scripts/test/run-conformance.sh {{quote(kubeconfig)}}
+    @scripts/test/run-conformance.sh
 
 # Inspect an active Sonobuoy run without retrieving, deleting, or changing it.
 conformance-status: require-bash
