@@ -234,8 +234,155 @@ class TestAccessPolicyTests(unittest.TestCase):
                 "homelab-test-restore-jobs",
                 "homelab-test-restore-request-jobs",
                 "homelab-test-nocodb-application-probe",
+                "homelab-test-provisioning-jobs",
                 "homelab-test-workload-security",
             )
+        )
+
+    def test_provisioning_jobs_keep_canonical_programs_credentials_and_volume_modes(self):
+        jobs = RestoreFixtureTests.render_provisioning_jobs()
+        self.assertEqual(len(jobs), 3)
+        for job in jobs:
+            request = self.request("jobs", "automation-data", name=job["metadata"]["name"])
+            request["resource"]["group"] = "batch"
+            self.assertTrue(self.admits_jobs(request, job), job["metadata"]["name"])
+            self.assertTrue(self.admits_jobs({**request, "operation": "DELETE"}, None, job))
+            self.assertFalse(self.admits_jobs({**request, "operation": "UPDATE"}, job, job))
+            for field in (
+                "name",
+                "namespace",
+                "family",
+                "run",
+                "label",
+                "template-label",
+                "image",
+                "command",
+                "args",
+                "host",
+                "env",
+                "helper",
+                "claim",
+                "mount",
+                "subpath",
+                "identity",
+                "token",
+                "sidecar",
+                "deadline",
+                "retries",
+                "resources",
+                "owner",
+                "annotation",
+            ):
+                bad, req = copy.deepcopy(job), copy.deepcopy(request)
+                pod = bad["spec"]["template"]["spec"]
+                container = pod["containers"][0]
+                if field == "name":
+                    bad["metadata"]["name"] = "production"
+                elif field == "namespace":
+                    req["namespace"] = "media"
+                elif field == "family":
+                    bad["metadata"]["labels"]["homelab-talos/test"] = "other"
+                elif field == "run":
+                    bad["metadata"]["labels"]["homelab-talos/run-id"] = "other"
+                elif field == "label":
+                    bad["metadata"]["labels"]["other"] = "value"
+                elif field == "template-label":
+                    bad["spec"]["template"]["metadata"]["labels"]["app.kubernetes.io/name"] = (
+                        "other"
+                    )
+                elif field == "image":
+                    container["image"] = "busybox:latest"
+                elif field == "command":
+                    container["command"] = ["sh", "-c", "env"]
+                elif field == "args":
+                    container["args"] = ["other"]
+                elif field == "host":
+                    host = next((e for e in container["env"] if e["name"] == "PGHOST"), None)
+                    if host is None:
+                        container["env"].append({"name": "PGHOST", "value": "other"})
+                    else:
+                        host["value"] = "other"
+                elif field == "env":
+                    container["env"].append({"name": "PGSERVICEFILE", "value": "/tmp/other"})
+                elif field == "helper":
+                    next(v["configMap"] for v in pod["volumes"] if "configMap" in v)["name"] = (
+                        "other"
+                    )
+                elif field == "claim":
+                    pod["volumes"].append(
+                        {"name": "other", "persistentVolumeClaim": {"claimName": "production"}}
+                    )
+                elif field == "mount":
+                    container["volumeMounts"][0]["mountPath"] = "/other"
+                elif field == "subpath":
+                    container["volumeMounts"][0]["subPathExpr"] = "other"
+                elif field == "identity":
+                    pod["serviceAccountName"] = "other"
+                elif field == "token":
+                    pod["automountServiceAccountToken"] = True
+                elif field == "sidecar":
+                    pod["containers"].append(copy.deepcopy(container))
+                elif field == "deadline":
+                    bad["spec"]["activeDeadlineSeconds"] = 3600
+                elif field == "retries":
+                    bad["spec"]["backoffLimit"] = 10
+                elif field == "resources":
+                    container["resources"]["limits"]["memory"] = "4Gi"
+                elif field == "owner":
+                    bad["metadata"]["ownerReferences"] = [{"uid": "other"}]
+                else:
+                    bad["spec"]["template"]["metadata"]["annotations"] = {
+                        "test.example/inject": "true"
+                    }
+                with self.subTest(job=job["metadata"]["name"], field=field):
+                    self.assertFalse(self.admits_jobs(req, bad))
+        readonly = copy.deepcopy(jobs[1])
+        next(
+            v["persistentVolumeClaim"]
+            for v in readonly["spec"]["template"]["spec"]["volumes"]
+            if "persistentVolumeClaim" in v
+        )["readOnly"] = False
+        self.assertFalse(self.admits_jobs(self.request("jobs", "automation-data"), readonly))
+
+    def test_backup_owner_is_bound_to_actual_named_cronjob_without_blocking_cleanup(self):
+        job = RestoreFixtureTests.render_provisioning_jobs()[2]
+        cronjob = {
+            "metadata": {
+                "name": "automation-data-postgresql-backup",
+                "namespace": "automation-data",
+                "uid": "synthetic-cronjob",
+            }
+        }
+        policy = "homelab-test-provisioning-backup-source"
+        req = self.request("jobs", "automation-data", name=job["metadata"]["name"])
+        self.assertTrue(self.admits(policy, req, job, params=cronjob))
+        self.assertFalse(self.admits(policy, req, job))
+        for field in ("uid", "name", "namespace", "deleting"):
+            source = copy.deepcopy(cronjob)
+            source["metadata"][{"deleting": "deletionTimestamp"}.get(field, field)] = "other"
+            with self.subTest(field=field):
+                self.assertFalse(self.admits(policy, req, job, params=source))
+        self.assertEqual(
+            self.policy(policy)["matchConstraints"]["resourceRules"][0]["operations"],
+            ["CREATE", "UPDATE"],
+        )
+        binding = next(
+            d["spec"]
+            for d in self.documents
+            if d["kind"] == "ValidatingAdmissionPolicyBinding"
+            and d["spec"]["policyName"] == policy
+        )
+        self.assertEqual(
+            binding["paramRef"],
+            {
+                "name": "automation-data-postgresql-backup",
+                "namespace": "automation-data",
+                "parameterNotFoundAction": "Deny",
+            },
+        )
+        self.assertEqual(
+            binding["matchResources"]["objectSelector"]["matchLabels"],
+            {"homelab-talos/test": "automation-data-provisioning", "homelab-talos/role": "backup"},
         )
 
     def test_optional_application_probe_has_fixed_executable_and_credential_target(self):

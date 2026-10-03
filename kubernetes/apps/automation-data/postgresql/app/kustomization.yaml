@@ -26,6 +26,8 @@ configMapGenerator:
       - nocodb-restore.sh=test-helpers/nocodb-restore.sh
       - nocodb-restore-assertions.sh=test-helpers/nocodb-restore-assertions.sh
       - nocodb-application-probe.sh=test-helpers/nocodb-application-probe.sh
+      - provision-error.sh=test-helpers/provision-error.sh
+      - automation-data-bundle.sh=test-helpers/automation-data-bundle.sh
       - backup.sh=scripts/backup.sh
       - update-backup-status.sql=scripts/update-backup-status.sql
   - name: automation-data-postgresql-init

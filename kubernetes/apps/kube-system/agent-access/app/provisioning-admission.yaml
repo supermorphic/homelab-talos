@@ -1,0 +1,172 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-provisioning-jobs
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [batch]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [jobs]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: provisioning
+      expression: >-
+        (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/test'] == 'automation-data-provisioning'
+  variables:
+    - name: job
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: run
+      expression: variables.job.metadata.labels['homelab-talos/run-id']
+    - name: backup
+      expression: variables.job.metadata.name == 'automation-data-backup-' + variables.run
+    - name: bundle
+      expression: variables.job.metadata.name == 'automation-data-bundle-' + variables.run
+    - name: labels
+      expression: >-
+        variables.backup ?
+          {'app.kubernetes.io/name': 'automation-data-postgresql-backup', 'homelab-talos/test': 'automation-data-provisioning', 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'backup'} :
+          {'app.kubernetes.io/name': 'automation-data-postgresql-backup', 'homelab-talos/test': 'automation-data-provisioning', 'homelab-talos/run-id': variables.run}
+    - name: values
+      expression: >-
+        variables.bundle ? {} : variables.backup ?
+          {'PGDATABASE': 'automation_data_control', 'PGHOST': 'automation-data-postgresql', 'PGPORT': '5432', 'PGUSER': 'automation_data_backup', 'BACKUP_DIR': '/backups'} :
+          {'PGDATABASE': 'automation_data_control', 'PGHOST': 'automation-data-postgresql', 'PGPORT': '5432', 'PGUSER': 'automation_data_backup'}
+    - name: pod
+      expression: variables.job.spec.template.spec
+    - name: container
+      expression: variables.pod.containers[0]
+  validations:
+    - expression: >-
+        request.operation != 'UPDATE' && request.namespace == 'automation-data' &&
+        variables.run.matches('^[0-9a-f]{12}$') &&
+        (variables.backup || variables.bundle || variables.job.metadata.name == 'automation-data-error-' + variables.run) &&
+        variables.job.metadata.labels == variables.labels &&
+        (variables.backup ?
+          variables.job.metadata.annotations == {'cronjob.kubernetes.io/instantiate': 'manual'} &&
+          variables.job.metadata.ownerReferences.size() == 1 &&
+          variables.job.metadata.ownerReferences[0].apiVersion == 'batch/v1' &&
+          variables.job.metadata.ownerReferences[0].kind == 'CronJob' &&
+          variables.job.metadata.ownerReferences[0].name == 'automation-data-postgresql-backup' &&
+          variables.job.metadata.ownerReferences[0].uid != '' && variables.job.metadata.ownerReferences[0].controller &&
+          (!has(variables.job.metadata.ownerReferences[0].blockOwnerDeletion) || !variables.job.metadata.ownerReferences[0].blockOwnerDeletion) :
+          !has(variables.job.metadata.ownerReferences) && !has(variables.job.metadata.annotations)) &&
+        variables.labels.all(k, variables.job.spec.template.metadata.labels[k] == variables.labels[k]) &&
+        variables.job.spec.template.metadata.labels.all(k, k in variables.labels || k in [
+          'batch.kubernetes.io/controller-uid', 'batch.kubernetes.io/job-name', 'controller-uid', 'job-name']) &&
+        variables.job.spec.activeDeadlineSeconds == (variables.backup ? 1800 : 300) &&
+        (!has(variables.job.spec.suspend) || !variables.job.spec.suspend) &&
+        !has(variables.job.spec.podFailurePolicy) && !has(variables.job.spec.successPolicy) &&
+        variables.pod.securityContext.runAsNonRoot && variables.pod.securityContext.runAsUser == 70 &&
+        variables.pod.securityContext.runAsGroup == 70 &&
+        ((variables.backup || variables.bundle) ?
+          variables.pod.securityContext.fsGroup == 70 && variables.pod.securityContext.fsGroupChangePolicy == 'OnRootMismatch' :
+          !has(variables.pod.securityContext.fsGroup) && !has(variables.pod.securityContext.fsGroupChangePolicy)) &&
+        !has(variables.pod.nodeName) && !has(variables.pod.nodeSelector) && !has(variables.pod.affinity) &&
+        !has(variables.pod.readinessGates) && !has(variables.pod.schedulingGates) &&
+        variables.container.name == (variables.backup ? 'backup' : variables.bundle ? 'validate-bundle' : 'record-error') &&
+        variables.container.image == 'postgres:17.11-alpine3.24' &&
+        variables.container.command == (variables.backup ? ['/scripts/backup.sh'] :
+          ['/bin/sh', '-eu', '/helpers/' + (variables.bundle ? 'automation-data-bundle.sh' : 'provision-error.sh')]) &&
+        !has(variables.container.args) &&
+        (!has(variables.container.securityContext.runAsUser) || variables.container.securityContext.runAsUser == 70) &&
+        (!has(variables.container.securityContext.runAsGroup) || variables.container.securityContext.runAsGroup == 70) &&
+        variables.container.resources.requests == {'cpu': (variables.backup ? '50m' : '10m'), 'memory': (variables.backup ? '64Mi' : '32Mi')} &&
+        variables.container.resources.limits == {'memory': (variables.backup ? '512Mi' : '128Mi')} &&
+        !has(variables.container.resources.claims)
+      message: Provisioning jobs must retain their fixed canonical program and bounded parent shape.
+    - expression: >-
+        variables.bundle ?
+          variables.container.env.size() == 1 && variables.container.env[0].name == 'EXPECTED_DATABASE_SET_BASE64' &&
+          !has(variables.container.env[0].valueFrom) && variables.container.env[0].value.size() <= 131072 &&
+          variables.container.env[0].value.matches('^[A-Za-z0-9+/]+={0,2}$') :
+          variables.container.env.size() == variables.values.size() + 1 &&
+          variables.values.all(k, variables.container.env.exists(e, e.name == k && e.value == variables.values[k] && !has(e.valueFrom))) &&
+          variables.container.env.exists(e, e.name == 'PGPASSWORD' && (!has(e.value) || e.value == '') &&
+            e.valueFrom.secretKeyRef.name == 'postgresql-credentials' && e.valueFrom.secretKeyRef.key == 'backup-password' &&
+            !has(e.valueFrom.configMapKeyRef) && !has(e.valueFrom.fieldRef) && !has(e.valueFrom.resourceFieldRef))
+      message: Provisioning jobs may use only the backup role or a bounded expected inventory.
+    - expression: >-
+        variables.pod.volumes.size() == (variables.backup || variables.bundle ? 3 : 2) &&
+        variables.pod.volumes.exists(v, v.name == 'tmp' && has(v.emptyDir)) &&
+        variables.pod.volumes.exists(v, v.name == (variables.backup ? 'backup-script' : 'helpers') &&
+          v.configMap.name == 'automation-data-test-helpers-v1' && !has(v.configMap.items) &&
+          (!has(v.configMap.optional) || !v.configMap.optional) &&
+          (!variables.backup || v.configMap.defaultMode == 365)) &&
+        (!(variables.backup || variables.bundle) || variables.pod.volumes.exists(v, v.name == 'backups' &&
+          v.persistentVolumeClaim.claimName == 'automation-data-postgresql-backups' &&
+          (variables.bundle ? v.persistentVolumeClaim.readOnly : !has(v.persistentVolumeClaim.readOnly) || !v.persistentVolumeClaim.readOnly))) &&
+        variables.container.volumeMounts.size() == (variables.backup ? 4 : variables.bundle ? 3 : 2) &&
+        variables.container.volumeMounts.exists(m, m.name == 'tmp' && m.mountPath == '/tmp' &&
+          !has(m.subPath) && !has(m.subPathExpr) && (!has(m.readOnly) || !m.readOnly)) &&
+        (!(variables.backup || variables.bundle) || variables.container.volumeMounts.exists(m, m.name == 'backups' &&
+          m.mountPath == '/backups' && !has(m.subPath) && !has(m.subPathExpr) &&
+          (variables.bundle ? m.readOnly : !has(m.readOnly) || !m.readOnly))) &&
+        (variables.backup ? ['backup.sh', 'update-backup-status.sql'].all(k,
+          variables.container.volumeMounts.exists(m, m.name == 'backup-script' && m.mountPath == '/scripts/' + k &&
+            m.readOnly && m.subPath == k && !has(m.subPathExpr))) :
+          variables.container.volumeMounts.exists(m, m.name == 'helpers' && m.mountPath == '/helpers' &&
+            m.readOnly && !has(m.subPath) && !has(m.subPathExpr))) &&
+        variables.container.volumeMounts.all(m, !has(m.mountPropagation) || m.mountPropagation == 'None')
+      message: Provisioning jobs may mount only fixed helpers, their intended backup input or output, and scratch space.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-provisioning-jobs
+spec:
+  policyName: homelab-test-provisioning-jobs
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-provisioning-backup-source
+spec:
+  failurePolicy: Fail
+  paramKind:
+    apiVersion: batch/v1
+    kind: CronJob
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [batch]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [jobs]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: backup
+      expression: >-
+        object.metadata.labels['homelab-talos/test'] == 'automation-data-provisioning' &&
+        object.metadata.labels['homelab-talos/role'] == 'backup'
+  validations:
+    - expression: >-
+        has(params.metadata) && params.metadata.name == 'automation-data-postgresql-backup' &&
+        params.metadata.namespace == 'automation-data' && !has(params.metadata.deletionTimestamp) &&
+        object.metadata.ownerReferences.size() == 1 && object.metadata.ownerReferences[0].uid == params.metadata.uid
+      message: The manual backup Job must retain the current named CronJob controller reference.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-provisioning-backup-source
+spec:
+  policyName: homelab-test-provisioning-backup-source
+  validationActions: [Deny]
+  paramRef:
+    name: automation-data-postgresql-backup
+    namespace: automation-data
+    parameterNotFoundAction: Deny
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: automation-data
+    objectSelector:
+      matchLabels:
+        homelab-talos/test: automation-data-provisioning
+        homelab-talos/role: backup

@@ -16,6 +16,122 @@ N8N = ROOT / "kubernetes/apps/automation/n8n/app"
 
 class RestoreFixtureTests(unittest.TestCase):
     @staticmethod
+    def render_provisioning_jobs():
+        source = (ROOT / "scripts/test/scenarios/automation-data-provisioning.sh").read_text()
+        functions = []
+        for name in ("error_job_manifest", "helper_job_manifest", "backup_job_manifest"):
+            start = source.index(name + "() {")
+            functions.append(source[start : source.index("\n}\n", start) + 3])
+        rendered = subprocess.run(
+            ["kustomize", "build", str(POSTGRES)], capture_output=True, text=True, check=True
+        )
+        cronjob = next(
+            d
+            for d in yaml.safe_load_all(rendered.stdout)
+            if d["kind"] == "CronJob"
+            and d["metadata"]["name"] == "automation-data-postgresql-backup"
+        )
+        backup = {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "name": "synthetic-client-generated-job",
+                "namespace": "automation-data",
+                "annotations": {"cronjob.kubernetes.io/instantiate": "manual"},
+                "ownerReferences": [
+                    {
+                        "apiVersion": "batch/v1",
+                        "kind": "CronJob",
+                        "name": "automation-data-postgresql-backup",
+                        "uid": "synthetic-cronjob",
+                        "controller": True,
+                    }
+                ],
+                "labels": cronjob["spec"]["jobTemplate"]["metadata"]["labels"],
+            },
+            "spec": cronjob["spec"]["jobTemplate"]["spec"],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            template = Path(temporary, "backup.yaml")
+            template.write_text(yaml.safe_dump(backup))
+            script = (
+                """set -euo pipefail
+run_hash=012345abcdef
+error_job=automation-data-error-$run_hash
+backup_job=automation-data-backup-$run_hash
+helper_job=automation-data-bundle-$run_hash
+expected_database_set_base64=YXV0b21hdGlvbl9kYXRhX2FjY2VwdGFuY2UK
+"""
+                + "\n".join(functions)
+                + '\nerror_job_manifest\nprintf "\\n---\\n"\nhelper_job_manifest\nprintf "\\n---\\n"\nbackup_job_manifest "$1"\n'
+            )
+            result = subprocess.run(
+                ["bash", "-c", script, "fixture", str(template)],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        return list(yaml.safe_load_all(result.stdout))
+
+    def test_provisioning_uses_fixed_programs_and_preserves_backup_and_readonly_bundle(self):
+        jobs = self.render_provisioning_jobs()
+        self.assertEqual(
+            [j["metadata"]["name"] for j in jobs],
+            [
+                "automation-data-error-012345abcdef",
+                "automation-data-bundle-012345abcdef",
+                "automation-data-backup-012345abcdef",
+            ],
+        )
+        for job, command in zip(
+            jobs,
+            [
+                ["/bin/sh", "-eu", "/helpers/provision-error.sh"],
+                ["/bin/sh", "-eu", "/helpers/automation-data-bundle.sh"],
+                ["/scripts/backup.sh"],
+            ],
+            strict=True,
+        ):
+            pod = job["spec"]["template"]["spec"]
+            self.assertEqual(pod["containers"][0]["command"], command)
+            self.assertNotIn("args", pod["containers"][0])
+            self.assertFalse(pod["automountServiceAccountToken"])
+            helpers = [v["configMap"] for v in pod["volumes"] if "configMap" in v]
+            self.assertEqual(len(helpers), 1)
+            self.assertEqual(helpers[0]["name"], "automation-data-test-helpers-v1")
+
+        def claim(job):
+            return next(
+                v["persistentVolumeClaim"]
+                for v in job["spec"]["template"]["spec"]["volumes"]
+                if "persistentVolumeClaim" in v
+            )
+
+        self.assertTrue(claim(jobs[1])["readOnly"])
+        self.assertFalse(claim(jobs[2]).get("readOnly", False))
+        self.assertEqual(jobs[2]["spec"]["backoffLimit"], 1)
+        self.assertEqual(
+            jobs[2]["metadata"].get("ownerReferences"),
+            [
+                {
+                    "apiVersion": "batch/v1",
+                    "kind": "CronJob",
+                    "name": "automation-data-postgresql-backup",
+                    "uid": "synthetic-cronjob",
+                    "controller": True,
+                }
+            ],
+        )
+        self.assertEqual(
+            jobs[2]["metadata"].get("annotations"), {"cronjob.kubernetes.io/instantiate": "manual"}
+        )
+        self.assertEqual(
+            (POSTGRES / "test-helpers/automation-data-bundle.sh").read_text(),
+            (ROOT / "scripts/test/lib/automation-data-bundle.sh").read_text(),
+        )
+
+    @staticmethod
     def render_restore_request_jobs():
         jobs = []
         with tempfile.TemporaryDirectory() as directory:
@@ -272,6 +388,8 @@ restore_job=nc-restore-$run_hash-load
             "nocodb-restore.sh",
             "nocodb-restore-assertions.sh",
             "nocodb-application-probe.sh",
+            "provision-error.sh",
+            "automation-data-bundle.sh",
         ):
             self.assertEqual(helpers["data"][name], (POSTGRES / "test-helpers" / name).read_text())
 

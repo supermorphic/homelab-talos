@@ -198,13 +198,19 @@ for scenario_contract in \
   "domain='automation_data_acceptance'" \
   "error_domain='automation_data_backup_error'" \
   'secretKeyRef' \
-  'record_operation_error' \
+  '/helpers/provision-error.sh' \
   '--from=cronjob/automation-data-postgresql-backup' \
   'automation-data-postgresql-backups", "readOnly": true' \
   'backup_timestamp_after' \
   'credential_signature'; do
   rg -Fq -- "$scenario_contract" "$scenario" ||
     fail "the attended provisioning scenario omits $scenario_contract"
+done
+provision_error_helper='kubernetes/apps/automation-data/postgresql/app/test-helpers/provision-error.sh'
+for fixture_contract in 'SELECT FROM pg_database' 'SELECT FROM pg_roles' \
+  "PERFORM platform_operations.record_operation_error('automation_data_backup_error', 'acceptance_backup_error');"; do
+  rg -Fq -- "$fixture_contract" "$provision_error_helper" ||
+    fail "the fixed provisioning helper omits $fixture_contract"
 done
 ! rg -n 'echo[^\n]*(provisioning_token|PGPASSWORD)|printf[^\n]*PGPASSWORD|globals\.sql[^\n]*(cat|less|head|tail)' \
   "$scenario" >/dev/null ||

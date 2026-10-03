@@ -23,8 +23,10 @@ export error_job='automation-data-error-123456789abc'
 export run_hash='123456789abc'
 error_job_manifest >"$temp_dir/error-job.yaml"
 
-command="$(yq -r '.spec.template.spec.containers[] | select(.name == "record-error") | .args[0]' \
-  "$temp_dir/error-job.yaml")"
+yq -o=json '.' "$temp_dir/error-job.yaml" | jq -e '.spec.template.spec.containers[0].command == ["/bin/sh", "-eu", "/helpers/provision-error.sh"] and
+  (.spec.template.spec.containers[0] | has("args") | not) and
+  ([.spec.template.spec.volumes[] | select(.name == "helpers" and .configMap.name == "automation-data-test-helpers-v1")] | length) == 1 and
+  ([.spec.template.spec.containers[0].volumeMounts[] | select(.name == "helpers" and .readOnly == true)] | length) == 1' >/dev/null
 
 mkdir "$temp_dir/bin"
 cat >"$temp_dir/bin/psql" <<'EOF'
@@ -34,7 +36,8 @@ cat >"$PSQL_STDIN_FILE"
 EOF
 chmod +x "$temp_dir/bin/psql"
 
-PSQL_STDIN_FILE="$temp_dir/fixture.sql" PSQL_ARGS_FILE="$temp_dir/psql-args" PATH="$temp_dir/bin:$PATH" /bin/sh -ceu "$command"
+PSQL_STDIN_FILE="$temp_dir/fixture.sql" PSQL_ARGS_FILE="$temp_dir/psql-args" PATH="$temp_dir/bin:$PATH" \
+  /bin/sh -eu kubernetes/apps/automation-data/postgresql/app/test-helpers/provision-error.sh
 mapfile -t actual_args <"$temp_dir/psql-args"
 expected_args=(
   '--no-psqlrc'

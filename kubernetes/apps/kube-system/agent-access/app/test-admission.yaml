@@ -382,7 +382,8 @@ spec:
   validations:
     - expression: >-
         request.operation != 'UPDATE' &&
-        ((variables.family == 'qbit-manage-policy' && variables.run.matches('^[a-z0-9]{8,24}$') && request.namespace == 'media') ||
+        ((variables.family == 'automation-data-provisioning' && variables.run.matches('^[0-9a-f]{12}$') && request.namespace == 'automation-data') ||
+         (variables.family == 'qbit-manage-policy' && variables.run.matches('^[a-z0-9]{8,24}$') && request.namespace == 'media') ||
          (variables.run.matches('^[0-9a-f]{12}$') && variables.family in ['n8n-restore-drill', 'n8n-persistence'] &&
           ((request.namespace == 'automation' && (variables.family == 'n8n-persistence' ||
           variables.job.metadata.labels['homelab-talos/role'] == 'database-helper')) ||
@@ -397,12 +398,15 @@ spec:
             variables.job.metadata.labels['homelab-talos/role'] in ['restore', 'preflight', 'request'])))) &&
         variables.job.spec.template.metadata.labels['homelab-talos/test'] == variables.family &&
         variables.job.spec.template.metadata.labels['homelab-talos/run-id'] == variables.run &&
-        !has(variables.job.metadata.ownerReferences) && !has(variables.job.metadata.annotations) &&
+        ((variables.family == 'automation-data-provisioning' && variables.job.metadata.name == 'automation-data-backup-' + variables.run) ||
+          (!has(variables.job.metadata.ownerReferences) && !has(variables.job.metadata.annotations))) &&
         !has(variables.job.spec.template.metadata.annotations) &&
         variables.job.spec.template.metadata.labels.all(k, k in [
           'homelab-talos/test', 'homelab-talos/run-id', 'homelab-talos/role', 'homelab-talos/e2e-run', 'homelab-talos/e2e-target',
-          'batch.kubernetes.io/controller-uid', 'batch.kubernetes.io/job-name', 'controller-uid', 'job-name']) &&
-        variables.job.spec.backoffLimit == 0 &&
+          'batch.kubernetes.io/controller-uid', 'batch.kubernetes.io/job-name', 'controller-uid', 'job-name'] ||
+          (variables.family == 'automation-data-provisioning' && k == 'app.kubernetes.io/name')) &&
+        variables.job.spec.backoffLimit == (variables.family == 'automation-data-provisioning' &&
+          variables.job.metadata.name == 'automation-data-backup-' + variables.run ? 1 : 0) &&
         (!has(variables.job.spec.parallelism) || variables.job.spec.parallelism == 1) &&
         (!has(variables.job.spec.completions) || variables.job.spec.completions == 1) &&
         (!has(variables.job.spec.manualSelector) || !variables.job.spec.manualSelector)
@@ -815,9 +819,10 @@ spec:
       expression: variables.pod.containers[0]
   validations:
     - expression: >-
-        !has(variables.workload.metadata.ownerReferences) &&
+        ((variables.workload.metadata.labels['homelab-talos/test'] == 'automation-data-provisioning' &&
+          variables.workload.metadata.name == 'automation-data-backup-' + variables.workload.metadata.labels['homelab-talos/run-id']) ||
+          (!has(variables.workload.metadata.ownerReferences) && !has(variables.workload.metadata.annotations))) &&
         (!has(variables.workload.metadata.finalizers) || variables.workload.metadata.finalizers.size() == 0) &&
-        !has(variables.workload.metadata.annotations) &&
         !has(variables.workload.spec.template.metadata.annotations) &&
         !has(variables.workload.spec.template.metadata.ownerReferences) &&
         !has(variables.workload.spec.template.metadata.finalizers) &&
