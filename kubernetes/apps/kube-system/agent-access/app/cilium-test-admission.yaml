@@ -246,3 +246,66 @@ spec:
   policyName: homelab-test-cilium-cluster-policies
   validationActions:
     - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-cilium-copy-diagnostics
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - ''
+        apiVersions:
+          - v1
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - pods
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'
+  variables:
+    - name: item
+      expression: 'request.operation == ''DELETE'' ? oldObject : object'
+    - name: pod
+      expression: variables.item.spec
+    - name: container
+      expression: variables.pod.containers[0]
+  validations:
+    - expression: request.operation in ['CREATE','DELETE'] && request.namespace == 'kube-system' && request.subResource
+        == '' && request.name.matches('^sysdump-[a-z0-9]{5}$') && variables.item.apiVersion == 'v1' &&
+        variables.item.kind == 'Pod' && variables.item.metadata.name == request.name && variables.item.metadata.generateName
+        == 'sysdump-' && variables.item.metadata.namespace == request.namespace && (request.operation
+        == 'CREATE' || (has(variables.item.metadata.uid) && variables.item.metadata.uid != '')) && (!has(variables.item.metadata.ownerReferences)
+        || variables.item.metadata.ownerReferences.size() == 0) && (!has(variables.item.metadata.finalizers)
+        || variables.item.metadata.finalizers.size() == 0)
+      message: Only native generated sysdump recovery Pods in kube-system may be created or deleted; no
+        Pod updates.
+    - expression: variables.pod.containers.size() == 1 && (!has(variables.pod.initContainers) || variables.pod.initContainers.size()
+        == 0) && (!has(variables.pod.ephemeralContainers) || variables.pod.ephemeralContainers.size()
+        == 0) && variables.pod.restartPolicy == 'Never' && has(variables.pod.nodeName) && variables.pod.nodeName
+        != '' && variables.container.command == ['/bin/sleep','1d'] && (!has(variables.container.args)
+        || variables.container.args.size() == 0) && (!has(variables.container.envFrom) || variables.container.envFrom.size()
+        == 0) && (!has(variables.container.stdin) || !variables.container.stdin) && (!has(variables.container.tty)
+        || !variables.container.tty)
+      message: Retain one noninteractive native recovery sleeper on the selected source node.
+    - expression: (variables.pod.serviceAccountName == 'cilium' && variables.container.name == 'cilium-agent'
+        && variables.container.image.matches('^quay[.]io/cilium/cilium(:|@).+$')) || (variables.pod.serviceAccountName
+        == 'tetragon' && variables.container.name == 'tetragon' && variables.container.image.matches('^quay[.]io/cilium/tetragon(:|@).+$'))
+        || (variables.pod.serviceAccountName == 'spire-server' && variables.container.name == 'spire-server'
+        && variables.container.image.matches('^ghcr[.]io/spiffe/spire-server(:|@).+$'))
+      message: Only registered privileged Cilium, Tetragon and SPIRE component runtime families may be
+        copied.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-cilium-copy-diagnostics
+spec:
+  policyName: homelab-test-cilium-copy-diagnostics
+  validationActions:
+    - Deny

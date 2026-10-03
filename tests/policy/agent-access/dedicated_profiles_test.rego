@@ -540,3 +540,37 @@ test_cilium_diagnostic_inventory_cannot_bind_other_profiles if {
 	messages := deny with input as runner_change("ClusterRoleBinding", "homelab-test-cilium-diagnostic-observation", [{"op": "replace", "path": "/subjects/0/name", "value": "homelab-diagnostic"}])
 	count(messages) > 0
 }
+
+dedicated_cilium_copy_fixture := [
+	role("homelab-test-cilium-copy-diagnostics", "kube-system", [{"apiGroups": [""], "resources": ["pods"], "verbs": ["create", "delete"]}]),
+	role_binding("homelab-test-cilium-copy-diagnostics", "kube-system", "homelab-test-cilium-connectivity", "kube-system", "homelab-test-cilium-copy-diagnostics"),
+	{
+		"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingAdmissionPolicy", "metadata": {"name": "homelab-test-cilium-copy-diagnostics"},
+		"spec": {
+			"failurePolicy": "Fail", "matchConstraints": {"resourceRules": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["pods"]}]},
+			"matchConditions": [{"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'"}],
+			"validations": [{"expression": "object.metadata.generateName == 'sysdump-'"}],
+		},
+	},
+	flux_guard_binding("homelab-test-cilium-copy-diagnostics"),
+]
+
+test_cilium_copy_recovery_cannot_write_production_openbao if {
+	messages := deny with input as runner_change("Role", "homelab-test-cilium-copy-diagnostics", [{"op": "replace", "path": "/metadata/namespace", "value": "openbao"}])
+	count(messages) > 0
+}
+
+test_cilium_copy_recovery_cannot_patch_pods if {
+	messages := deny with input as runner_change("Role", "homelab-test-cilium-copy-diagnostics", [{"op": "add", "path": "/rules/0/verbs/-", "value": "patch"}])
+	count(messages) > 0
+}
+
+test_cilium_copy_recovery_cannot_bind_other_profile if {
+	messages := deny with input as runner_change("RoleBinding", "homelab-test-cilium-copy-diagnostics", [{"op": "replace", "path": "/subjects/0/name", "value": "homelab-test-openbao-ha"}])
+	count(messages) > 0
+}
+
+test_cilium_copy_recovery_requires_admission if {
+	messages := deny with input as [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ValidatingAdmissionPolicy", "homelab-test-cilium-copy-diagnostics"]]
+	count(messages) > 0
+}

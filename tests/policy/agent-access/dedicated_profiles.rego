@@ -35,6 +35,7 @@ deny contains "conformance administrator exception must bind only its dedicated 
 }
 
 dedicated_role_contracts := {
+	"homelab-test-cilium-copy-diagnostics": {"namespace": "kube-system", "rules": [{"apiGroups": [""], "resources": ["pods"], "verbs": ["create", "delete"]}], "subjects": [{"kind": "ServiceAccount", "name": "homelab-test-cilium-connectivity", "namespace": "kube-system"}]},
 	"homelab-test-cilium-system-runtime": {"namespace": "kube-system", "rules": [{"apiGroups": [""], "resources": ["pods/exec", "pods/portforward"], "verbs": ["get", "create"]}, {"apiGroups": [""], "resources": ["pods/proxy"], "verbs": ["get"]}], "subjects": [{"kind": "ServiceAccount", "name": "homelab-test-cilium-connectivity", "namespace": "kube-system"}]},
 	"homelab-test-cilium-ephemeral-diagnostics": {"namespace": "kube-system", "rules": [{"apiGroups": [""], "resources": ["pods/ephemeralcontainers"], "verbs": ["patch"]}], "subjects": [{"kind": "ServiceAccount", "name": "homelab-test-cilium-connectivity", "namespace": "kube-system"}]},
 	"homelab-test-cilium-helm-observation": {"namespace": "kube-system", "rules": [{"apiGroups": [""], "resources": ["secrets"], "verbs": ["list"]}, {"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["cilium-etcd-secrets"], "verbs": ["get"]}], "subjects": [{"kind": "ServiceAccount", "name": "homelab-test-cilium-connectivity", "namespace": "kube-system"}]},
@@ -103,6 +104,7 @@ deny contains msg if {
 }
 
 dedicated_admission_rules := {
+	"homelab-test-cilium-copy-diagnostics": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["pods"]}],
 	"homelab-test-cilium-cluster-policies": [{"apiGroups": ["cilium.io"], "apiVersions": ["v2"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["ciliumclusterwidenetworkpolicies"]}],
 	"homelab-test-cilium-system-connect": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CONNECT"], "resources": ["pods/exec", "pods/portforward"]}],
 	"homelab-test-cilium-ephemeral-diagnostics": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["UPDATE"], "resources": ["pods/ephemeralcontainers"]}],
@@ -127,6 +129,7 @@ dedicated_admission_rules := {
 }
 
 dedicated_admission_conditions := {
+	"homelab-test-cilium-copy-diagnostics": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'"},
 	"homelab-test-cilium-cluster-policies": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'"},
 	"homelab-test-cilium-system-connect": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'"},
 	"homelab-test-cilium-ephemeral-diagnostics": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'"},

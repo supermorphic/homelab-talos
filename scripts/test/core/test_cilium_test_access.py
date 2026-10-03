@@ -537,6 +537,98 @@ class CiliumAccessTests(unittest.TestCase):
             ],
         )
 
+    def test_sysdump_copy_recovery_keeps_the_registered_privileged_runtime_family(self):
+        policy = "homelab-test-cilium-copy-diagnostics"
+        roles = [
+            d
+            for d in self.documents
+            if d["kind"] == "Role"
+            and d["metadata"]["name"] == "homelab-test-cilium-copy-diagnostics"
+        ]
+        self.assertEqual(len(roles), 1)
+        self.assertEqual(roles[0]["metadata"]["namespace"], "kube-system")
+        self.assertEqual(
+            roles[0]["rules"],
+            [{"apiGroups": [""], "resources": ["pods"], "verbs": ["create", "delete"]}],
+        )
+        req = {
+            "operation": "CREATE",
+            "namespace": "kube-system",
+            "name": "sysdump-abcde",
+            "subResource": "",
+            "resource": {"group": "", "version": "v1", "resource": "pods"},
+            "userInfo": {"username": IDENTITY},
+        }
+        for account, container, image in (
+            ("cilium", "cilium-agent", "quay.io/cilium/cilium:v1.19.0"),
+            ("tetragon", "tetragon", "quay.io/cilium/tetragon:v1.6.0"),
+            ("spire-server", "spire-server", "ghcr.io/spiffe/spire-server:1.14.1"),
+        ):
+            obj = {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {
+                    "name": req["name"],
+                    "generateName": "sysdump-",
+                    "namespace": "kube-system",
+                },
+                "spec": {
+                    "serviceAccountName": account,
+                    "nodeName": "fixture-node",
+                    "hostNetwork": True,
+                    "hostPID": False,
+                    "hostIPC": False,
+                    "dnsPolicy": "ClusterFirstWithHostNet",
+                    "securityContext": {},
+                    "restartPolicy": "Never",
+                    "tolerations": [{"operator": "Exists"}],
+                    "volumes": [
+                        {"name": "source-runtime", "hostPath": {"path": "/synthetic-runtime"}}
+                    ],
+                    "containers": [
+                        {
+                            "name": container,
+                            "image": image,
+                            "command": ["/bin/sleep", "1d"],
+                            "env": [{"name": "SOURCE", "value": "synthetic"}],
+                            "volumeMounts": [{"name": "source-runtime", "mountPath": "/runtime"}],
+                            "securityContext": {"capabilities": {"add": ["NET_ADMIN"]}},
+                        }
+                    ],
+                },
+            }
+            self.assertTrue(self.admits(policy, req, obj))
+            stored = copy.deepcopy(obj)
+            stored["metadata"]["uid"] = "sysdump-fixture"
+            self.assertTrue(self.admits(policy, {**req, "operation": "DELETE"}, None, stored))
+            self.assertFalse(self.admits(policy, {**req, "operation": "UPDATE"}, stored, stored))
+            for field, value in (
+                ("serviceAccountName", "openbao"),
+                ("serviceAccountName", "default"),
+                ("restartPolicy", "Always"),
+                ("initContainers", [obj["spec"]["containers"][0]]),
+                ("ephemeralContainers", [obj["spec"]["containers"][0]]),
+            ):
+                bad = copy.deepcopy(obj)
+                bad["spec"][field] = value
+                self.assertFalse(self.admits(policy, req, bad))
+            for field, value in (
+                ("command", ["/bin/sh"]),
+                ("args", ["extra"]),
+                ("envFrom", [{"secretRef": {"name": "other"}}]),
+                ("image", "example.invalid/unregistered:latest"),
+                ("stdin", True),
+                ("tty", True),
+            ):
+                bad = copy.deepcopy(obj)
+                bad["spec"]["containers"][0][field] = value
+                self.assertFalse(self.admits(policy, req, bad))
+            bad = copy.deepcopy(obj)
+            bad["spec"]["containers"].append(copy.deepcopy(obj["spec"]["containers"][0]))
+            self.assertFalse(self.admits(policy, req, bad))
+            for field, value in (("namespace", "openbao"), ("name", "openbao-0")):
+                self.assertFalse(self.admits(policy, {**req, field: value}, obj))
+
 
 if __name__ == "__main__":
     unittest.main()
