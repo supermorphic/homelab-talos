@@ -2,6 +2,8 @@
 # Shell bridge to the canonical Python authority and invocation lifecycle.
 
 _TEST_ACCESS_OWNED_PATH=''
+_TEST_ACCESS_CLOSE_STATUS=0
+_TEST_ACCESS_CATALOG_DIGEST=''
 
 test_access_resolve() {
   uv run --locked --no-dev python -m scripts.test.access resolve "$1"
@@ -10,6 +12,7 @@ test_access_resolve() {
 test_access_open() {
   local suite_id="$1" run_id="$2" declaration profile config parent
   declaration="$(test_access_resolve "$suite_id")" || return 1
+  _TEST_ACCESS_CATALOG_DIGEST="$(yq -r '.catalog_digest' - <<<"$declaration")" || return 1
   profile="$(yq -r '.profile // "null"' - <<<"$declaration")" || return 1
   if [[ "$profile" == 'null' ]]; then
     export TEST_KUBECONFIG='' TEST_ACCESS_CONFIG='' KUBECONFIG=/dev/null
@@ -45,7 +48,13 @@ test_access_open() {
 }
 
 test_access_check() {
-  [[ -n "${TEST_ACCESS_CONFIG:-}" ]] || return 0
+  local declaration
+  if [[ -z "${TEST_ACCESS_CONFIG:-}" ]]; then
+    declaration="$(test_access_resolve "$1")" || return 1
+    [[ "$(yq -r '.catalog_digest' - <<<"$declaration")" == "$_TEST_ACCESS_CATALOG_DIGEST" &&
+       "$(yq -r '.profile // "null"' - <<<"$declaration")" == null ]]
+    return "$?"
+  fi
   uv run --locked --no-dev python -m scripts.test.access inherit "$1" "$TEST_ACCESS_CONFIG" \
     >/dev/null
 }
@@ -81,7 +90,11 @@ test_access_arguments() {
 }
 
 test_access_close() {
-  [[ -n "$_TEST_ACCESS_OWNED_PATH" ]] || return 0
-  uv run --locked --no-dev python -m scripts.test.access remove "$_TEST_ACCESS_OWNED_PATH" || return 1
+  local owned="$_TEST_ACCESS_OWNED_PATH"
+  [[ -n "$owned" ]] || return "$_TEST_ACCESS_CLOSE_STATUS"
   _TEST_ACCESS_OWNED_PATH=''
+  if ! uv run --locked --no-dev python -m scripts.test.access remove "$owned"; then
+    _TEST_ACCESS_CLOSE_STATUS=1
+  fi
+  return "$_TEST_ACCESS_CLOSE_STATUS"
 }

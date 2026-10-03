@@ -5,6 +5,7 @@ set -euo pipefail
 source scripts/lib/common.sh
 source scripts/test/lib/catalog.sh
 source scripts/test/lib/results.sh
+source scripts/test/lib/access.sh
 source scripts/lib/lease.sh
 source scripts/lib/disruption-admission.sh
 require_bash
@@ -20,7 +21,8 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 catalog="${TEST_CATALOG_PATH:-tests/catalog.yaml}"
 results_root="${TEST_RESULTS_ROOT:-.test-results}"
-kubeconfig="${TEST_KUBECONFIG:-.kube/config}"
+kubeconfig=''
+test_access_resolve "$suite_id" >/dev/null || exit 1
 entry_json="$(catalog_entry_by_id "$catalog" "$suite_id")"
 mutates_cluster="$(yq -r '.metadata.mutates_cluster' - <<<"$entry_json")"
 confirmation_type="$(yq -r '.confirmation.type' - <<<"$entry_json")"
@@ -58,11 +60,6 @@ case "$confirmation_type" in
     ;;
 esac
 
-[[ -f "$kubeconfig" ]] || {
-  echo "Missing $kubeconfig; use just kube kubeconfig for scoped suites, or supply the selected suite's explicitly authorized operator credential." >&2
-  exit 1
-}
-
 execution_origin="$(resolve_execution_origin)"
 run_dir="$(create_run_directory "$results_root" "$execution_origin")"
 run_id="$(basename "$run_dir")"
@@ -81,6 +78,7 @@ lease_joined=false
 lease_release_status='not-required'
 disruption_admitted=false
 finalized=false
+backend_pid=''
 
 # Invoked indirectly by the EXIT trap below.
 # shellcheck disable=SC2329
@@ -116,6 +114,7 @@ finalize_incomplete_run() {
     "$original_exit" not-classified failed "$emergency_cleanup" \
     not-required not-applicable unavailable
   scripts/test/validate-run.sh "$run_dir" >/dev/null 2>&1
+  test_access_close || echo 'Private test config cleanup failed.' >&2
   echo "Test coordinator finalized an interrupted run: $run_dir" >&2
 }
 trap finalize_incomplete_run EXIT
@@ -127,6 +126,11 @@ handle_signal() {
     INT) signal_exit_code=130 ;;
     TERM) signal_exit_code=143 ;;
   esac
+  if [[ -n "$backend_pid" ]]; then
+    kill -s "$1" "$backend_pid" 2>/dev/null || true
+    wait "$backend_pid" || true
+    backend_pid=''
+  fi
   exit "$signal_exit_code"
 }
 trap 'handle_signal INT' INT
@@ -135,6 +139,11 @@ write_run_id_output "$run_id"
 # The output file identifies this wrapper to its parent campaign. Nested catalog
 # suites create their own canonical runs and must not overwrite the parent's pointer.
 unset TEST_RUN_ID_FILE
+
+test_access_open "$suite_id" "$run_id" || exit 1
+kubeconfig="${TEST_KUBECONFIG:-}"
+test_access_arguments "$@" || exit 1
+set -- "${TEST_ACCESS_ARGUMENTS[@]}"
 
 if [[ "$mutates_cluster" == 'true' && "$scenario_lease" == 'false' ]]; then
   lease_release_status='failed'
@@ -201,10 +210,17 @@ fi
 
 if [[ "$mutates_cluster" != 'true' || "$scenario_lease" == 'true' ||
   "$disruption_admitted" == 'true' ]]; then
+  test_access_check "$suite_id" || exit 1
   set +e
-  "$@" 2>&1 | tee "$run_dir/logs/console.log"
-  primary_exit_code="${PIPESTATUS[0]}"
+  python -m scripts.test.run_bound_backend "$run_dir/logs/console.log" -- "$@" &
+  backend_pid="$!"
+  wait "$backend_pid"
+  primary_exit_code="$?"
+  backend_pid=''
   set -e
+  case "$primary_exit_code" in
+    130|143) signal_exit_code="$primary_exit_code" ;;
+  esac
   if [[ "$signal_exit_code" -ne 0 ]]; then
     primary_exit_code="$signal_exit_code"
   fi
@@ -327,8 +343,11 @@ fi
 append_lifecycle_junit "$run_dir/junit.xml" "$suite_id" \
   "$external_dependency_status" "$cleanup_status" "$recovery_status" \
   passed "$run_result"
-cluster_name="$(lease_kubectl "$kubeconfig" config view --minify \
-  --output jsonpath='{.clusters[0].name}' 2>/dev/null || true)"
+cluster_name=''
+if [[ -n "$kubeconfig" ]]; then
+  cluster_name="$(lease_kubectl "$kubeconfig" config view --minify \
+    --output jsonpath='{.clusters[0].name}' 2>/dev/null || true)"
+fi
 [[ -n "$cluster_name" ]] || cluster_name='unavailable'
 write_environment "$run_dir" "$run_id" "$entry_json" "$execution_origin" \
   "$started_at" "$finished_at" "${TEST_NAMESPACE:-all}" \
@@ -340,6 +359,23 @@ write_summary "$run_dir" "$run_id" "$entry_json" "$execution_origin" \
   "$primary_exit_code" "$assertion_status" passed "$cleanup_status" \
   "$recovery_status" "$external_dependency_status" "$cluster_name"
 scripts/test/validate-run.sh "$run_dir"
+
+if ! test_access_close; then
+  run_result='broken'
+  cleanup_status='failed'
+  config_error="$run_dir/diagnostics/config-cleanup.xml"
+  write_result_case_junit "$config_error" "$suite_id" config-cleanup broken 0
+  cp "$run_dir/junit.xml" "$run_dir/diagnostics/pre-config-cleanup-junit.xml"
+  merge_junit_reports "$run_dir/junit.xml" "$suite_id" \
+    "$run_dir/diagnostics/pre-config-cleanup-junit.xml" "$config_error"
+  normalize_native_artifacts "$run_dir" "$run_id"
+  write_evidence_index "$run_dir" "$run_id"
+  write_summary "$run_dir" "$run_id" "$entry_json" "$execution_origin" \
+    "$started_at" "$finished_at" "$duration_seconds" "$run_result" \
+    "$primary_exit_code" "$assertion_status" passed "$cleanup_status" \
+    "$recovery_status" "$external_dependency_status" "$cluster_name"
+  scripts/test/validate-run.sh "$run_dir"
+fi
 
 finalized=true
 trap - EXIT INT TERM
