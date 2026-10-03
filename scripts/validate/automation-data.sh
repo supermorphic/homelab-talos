@@ -217,7 +217,7 @@ for restore_contract_value in \
   'automation-data-postgresql-backups' \
   'n8n-postgresql-backups' \
   'N8N_ENCRYPTION_KEY' \
-  'automation-data-canary' \
+  '/helpers/automation-data-restore-request.mjs' \
   'restored_runtime_credential=authenticated' \
   'n8n_routes_target_service' \
   'storage": "20Gi"'; do

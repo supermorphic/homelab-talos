@@ -391,9 +391,10 @@ spec:
          (variables.run.matches('^[0-9a-f]{12}$') &&
           ((variables.family == 'automation-data-restore-drill' &&
             ((request.namespace == 'automation-data' && variables.job.metadata.labels['homelab-talos/role'] == 'ad-restore') ||
-             (request.namespace == 'automation' && variables.job.metadata.labels['homelab-talos/role'] == 'n8n-restore'))) ||
+             (request.namespace == 'automation' && variables.job.metadata.labels['homelab-talos/role'] == 'n8n-restore') ||
+             (request.namespace == 'gatus' && variables.job.metadata.labels['homelab-talos/role'] == 'request'))) ||
            (variables.family == 'nocodb-restore-drill' && request.namespace == 'automation-data' &&
-            variables.job.metadata.labels['homelab-talos/role'] in ['restore', 'preflight'])))) &&
+            variables.job.metadata.labels['homelab-talos/role'] in ['restore', 'preflight', 'request'])))) &&
         variables.job.spec.template.metadata.labels['homelab-talos/test'] == variables.family &&
         variables.job.spec.template.metadata.labels['homelab-talos/run-id'] == variables.run &&
         !has(variables.job.metadata.ownerReferences) && !has(variables.job.metadata.annotations) &&

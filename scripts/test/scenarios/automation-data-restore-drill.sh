@@ -432,20 +432,7 @@ n8n_application_manifests() {
 }
 
 request_job_manifest() {
-  local request_script
-  request_script="$(cat <<'EOF'
-const endpoint = `http://${process.env.APP_NAME}.automation.svc.cluster.local:5678/webhook/automation-data-canary`;
-const response = await fetch(endpoint, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Platform-Canary': process.env.CANARY_TOKEN}, body: '{}', signal: AbortSignal.timeout(60000)});
-if (!response.ok) throw new Error(`Recovery canary returned HTTP ${response.status}`);
-const body = await response.json();
-const keys = Object.keys(body).sort();
-if (JSON.stringify(keys) !== JSON.stringify(['database','executionId','role','status'])) throw new Error('Unexpected recovery response keys');
-if (body.status !== 'ok' || body.database !== 'automation_data_canary' || body.role !== 'automation_data_canary_runtime' || typeof body.executionId !== 'string' || body.executionId.length === 0) throw new Error('Restored runtime identity mismatch');
-console.log('restored_runtime_credential=authenticated');
-EOF
-)"
   REQUEST_JOB="$request_job" APP_NAME="$n8n_app" RUN_HASH="$run_hash" \
-    REQUEST_SCRIPT="$request_script" \
     yq --null-input --output-format yaml '
       {
         "apiVersion": "batch/v1", "kind": "Job",
@@ -457,8 +444,7 @@ EOF
           "spec": {"automountServiceAccountToken": false, "restartPolicy": "Never", "securityContext": {"runAsNonRoot": true, "seccompProfile": {"type": "RuntimeDefault"}},
             "containers": [{
               "name": "request", "image": "docker.n8n.io/n8nio/n8n:2.36.7", "imagePullPolicy": "IfNotPresent",
-              "command": ["node", "--input-type=module", "--eval"],
-              "args": [strenv(REQUEST_SCRIPT)],
+              "command": ["node", "/helpers/automation-data-restore-request.mjs"],
               "env": [
                 {"name": "APP_NAME", "value": strenv(APP_NAME)},
                 {"name": "CANARY_TOKEN", "valueFrom": {"secretKeyRef": {"name": "n8n-canary", "key": "token"}}},
@@ -466,8 +452,8 @@ EOF
               ],
               "resources": {"requests": {"cpu": "10m", "memory": "32Mi"}, "limits": {"memory": "128Mi"}},
               "securityContext": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}, "readOnlyRootFilesystem": true, "runAsNonRoot": true, "runAsUser": 1000, "runAsGroup": 1000},
-              "volumeMounts": [{"name": "tmp", "mountPath": "/tmp"}]
-            }], "volumes": [{"name": "tmp", "emptyDir": {}}]
+              "volumeMounts": [{"name": "tmp", "mountPath": "/tmp"}, {"name": "helpers", "mountPath": "/helpers", "readOnly": true}]
+            }], "volumes": [{"name": "tmp", "emptyDir": {}}, {"name": "helpers", "configMap": {"name": "n8n-test-request-helpers-v1"}}]
           }
         }}
       }'

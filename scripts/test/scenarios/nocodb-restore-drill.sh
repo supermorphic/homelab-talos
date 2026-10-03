@@ -298,9 +298,7 @@ restore_job_manifest() {
 }
 
 request_job_manifest() {
-	local request_script
-	request_script="$(nocodb_restore_request_script)"
-	JOB_NAME="$request_job" APP_SERVICE="$app_service" REQUEST_SCRIPT="$request_script" \
+	JOB_NAME="$request_job" APP_SERVICE="$app_service" \
 		RUN_HASH="$run_hash" SOURCE_REGISTRY="$(jq -c . "$temp_dir/source-registry.json")" yq --null-input --output-format yaml '
       {
         "apiVersion":"batch/v1","kind":"Job",
@@ -313,7 +311,7 @@ request_job_manifest() {
             "securityContext":{"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}},
             "containers":[{
               "name":"request","image":"docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9","imagePullPolicy":"IfNotPresent",
-              "command":["node","--input-type=module","--eval"],"args":[strenv(REQUEST_SCRIPT)],
+              "command":["node","/helpers/nocodb-restore-request.mjs"],
               "env":[
                 {"name":"APP_SERVICE","value":strenv(APP_SERVICE)},{"name":"RUN_HASH","value":strenv(RUN_HASH)},
                 {"name":"SOURCE_REGISTRY","value":strenv(SOURCE_REGISTRY)},
@@ -323,8 +321,8 @@ request_job_manifest() {
               ],
               "resources":{"requests":{"cpu":"10m","memory":"64Mi"},"limits":{"memory":"256Mi"}},
               "securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true,"runAsNonRoot":true,"runAsUser":1000,"runAsGroup":1000},
-              "volumeMounts":[{"name":"tmp","mountPath":"/tmp"}]
-            }],"volumes":[{"name":"tmp","emptyDir":{}}]
+              "volumeMounts":[{"name":"tmp","mountPath":"/tmp"},{"name":"helpers","mountPath":"/helpers","readOnly":true}]
+            }],"volumes":[{"name":"tmp","emptyDir":{}},{"name":"helpers","configMap":{"name":"nocodb-test-helpers-v1"}}]
           }
         }}
       }

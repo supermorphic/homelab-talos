@@ -13,6 +13,7 @@ configMapGenerator:
     namespace: gatus
     files:
       - test-helpers/n8n-restore-request.mjs
+      - test-helpers/automation-data-restore-request.mjs
     options:
       immutable: true
   - name: gatus-values

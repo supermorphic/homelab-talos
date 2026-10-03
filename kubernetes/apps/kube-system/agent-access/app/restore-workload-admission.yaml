@@ -364,3 +364,86 @@ metadata:
 spec:
   policyName: homelab-test-restore-jobs
   validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-restore-request-jobs
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [batch]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [jobs]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: restore-request-family
+      expression: >-
+        (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/test'] in ['automation-data-restore-drill', 'nocodb-restore-drill'] &&
+        (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/role'] == 'request'
+  variables:
+    - name: job
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: family
+      expression: variables.job.metadata.labels['homelab-talos/test']
+    - name: run
+      expression: variables.job.metadata.labels['homelab-talos/run-id']
+    - name: nc
+      expression: variables.family == 'nocodb-restore-drill'
+    - name: prefix
+      expression: "(variables.nc ? 'nc' : 'ad') + '-restore-' + variables.run"
+    - name: pod
+      expression: variables.job.spec.template.spec
+    - name: container
+      expression: variables.pod.containers[0]
+    - name: expectedValues
+      expression: >-
+        variables.nc ? {'APP_SERVICE': variables.prefix + '-nocodb', 'RUN_HASH': variables.run, 'HOME': '/tmp'} :
+          {'APP_NAME': variables.prefix + '-n8n', 'HOME': '/tmp'}
+    - name: expectedSecrets
+      expression: "variables.nc ? {'ADMIN_EMAIL': 'NC_ADMIN_EMAIL', 'ADMIN_PASSWORD': 'NC_ADMIN_PASSWORD'} : {'CANARY_TOKEN': 'token'}"
+  validations:
+    - expression: >-
+        request.operation != 'UPDATE' && variables.run.matches('^[0-9a-f]{12}$') &&
+        request.namespace == (variables.nc ? 'automation-data' : 'gatus') &&
+        variables.job.metadata.name == variables.prefix + '-request' &&
+        variables.job.metadata.labels == {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'request'} &&
+        variables.job.spec.template.metadata.labels['homelab-talos/role'] == 'request' &&
+        variables.job.spec.activeDeadlineSeconds == (variables.nc ? 600 : 300) &&
+        variables.pod.securityContext.runAsNonRoot && !has(variables.pod.securityContext.runAsUser) &&
+        !has(variables.pod.securityContext.runAsGroup) && !has(variables.pod.securityContext.fsGroup) &&
+        variables.container.name == 'request' && variables.container.image == (variables.nc ?
+          'docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9' : 'docker.n8n.io/n8nio/n8n:2.36.7') &&
+        variables.container.command == ['node', '/helpers/' + (variables.nc ? 'nocodb' : 'automation-data') + '-restore-request.mjs'] &&
+        !has(variables.container.args) && variables.container.imagePullPolicy == 'IfNotPresent' &&
+        variables.container.securityContext.runAsUser == 1000 && variables.container.securityContext.runAsGroup == 1000 &&
+        variables.container.securityContext.runAsNonRoot &&
+        variables.container.resources.requests == {'cpu': '10m', 'memory': (variables.nc ? '64Mi' : '32Mi')} &&
+        variables.container.resources.limits == {'memory': (variables.nc ? '256Mi' : '128Mi')} && !has(variables.container.resources.claims)
+      message: Restore requests must execute the fixed application proof against their run-owned endpoint.
+    - expression: >-
+        variables.container.env.size() == (variables.nc ? 6 : 3) &&
+        variables.expectedValues.all(k, variables.container.env.exists(e, e.name == k && e.value == variables.expectedValues[k] && !has(e.valueFrom))) &&
+        variables.expectedSecrets.all(k, variables.container.env.exists(e, e.name == k && (!has(e.value) || e.value == '') &&
+          e.valueFrom.secretKeyRef.name == (variables.nc ? 'nocodb-credentials' : 'n8n-canary') && e.valueFrom.secretKeyRef.key == variables.expectedSecrets[k] &&
+          !has(e.valueFrom.configMapKeyRef) && !has(e.valueFrom.fieldRef) && !has(e.valueFrom.resourceFieldRef))) &&
+        (!variables.nc || variables.container.env.exists(e, e.name == 'SOURCE_REGISTRY' && !has(e.valueFrom) && e.value.size() > 0 && e.value.size() <= 65536)) &&
+        variables.pod.volumes.size() == 2 &&
+        variables.pod.volumes.exists(v, v.name == 'helpers' && v.configMap.name == (variables.nc ? 'nocodb-test-helpers-v1' : 'n8n-test-request-helpers-v1') && !has(v.configMap.items)) &&
+        variables.pod.volumes.exists(v, v.name == 'tmp' && has(v.emptyDir)) &&
+        variables.container.volumeMounts.size() == 2 &&
+        variables.container.volumeMounts.exists(m, m.name == 'helpers' && m.mountPath == '/helpers' && m.readOnly && !has(m.subPath) && !has(m.subPathExpr)) &&
+        variables.container.volumeMounts.exists(m, m.name == 'tmp' && m.mountPath == '/tmp' && !has(m.subPath) && !has(m.subPathExpr)) &&
+        variables.container.volumeMounts.all(m, !has(m.mountPropagation) || m.mountPropagation == 'None')
+      message: Restore requests may use only fixed helpers, scratch storage, and their existing application credentials.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-restore-request-jobs
+spec:
+  policyName: homelab-test-restore-request-jobs
+  validationActions: [Deny]

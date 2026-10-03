@@ -231,6 +231,7 @@ class TestAccessPolicyTests(unittest.TestCase):
                 "homelab-test-n8n-request-jobs",
                 "homelab-test-qbit-manage-jobs",
                 "homelab-test-restore-jobs",
+                "homelab-test-restore-request-jobs",
                 "homelab-test-workload-security",
             )
         )
@@ -878,6 +879,85 @@ class TestAccessPolicyTests(unittest.TestCase):
                     )
                 with self.subTest(job=obj["metadata"]["name"], change=change):
                     self.assertFalse(allowed(bad, request))
+
+    def test_restore_request_jobs_cannot_change_endpoints_programs_or_credentials(self):
+        for obj in RestoreFixtureTests.render_restore_request_jobs():
+            req = self.request("jobs", obj["metadata"]["namespace"], name=obj["metadata"]["name"])
+            req["resource"]["group"] = "batch"
+            self.assertTrue(self.admits_jobs(req, obj))
+            self.assertTrue(self.admits_jobs({**req, "operation": "DELETE"}, None, obj))
+            self.assertFalse(self.admits_jobs({**req, "operation": "UPDATE"}, obj, obj))
+            for change in (
+                "namespace",
+                "name",
+                "role",
+                "endpoint",
+                "identity",
+                "token",
+                "image",
+                "command",
+                "args",
+                "env",
+                "secret",
+                "helper",
+                "path",
+                "write-helper",
+                "wider-volume",
+                "deadline",
+                "registry-secret",
+            ):
+                bad, request = copy.deepcopy(obj), copy.deepcopy(req)
+                pod = bad["spec"]["template"]["spec"]
+                app = pod["containers"][0]
+                if change == "namespace":
+                    request["namespace"] = "security"
+                elif change == "name":
+                    bad["metadata"]["name"] = "production"
+                elif change == "role":
+                    bad["metadata"]["labels"]["homelab-talos/role"] = "other"
+                elif change == "endpoint":
+                    app["env"][0]["value"] = "production"
+                elif change == "identity":
+                    pod["serviceAccountName"] = "elevated"
+                elif change == "token":
+                    pod["automountServiceAccountToken"] = True
+                elif change == "image":
+                    app["image"] = "busybox:latest"
+                elif change == "command":
+                    app["command"] = ["node", "--eval", "console.log(process.env)"]
+                elif change == "args":
+                    app["args"] = ["--eval", "other"]
+                elif change == "env":
+                    app["env"].append({"name": "NODE_OPTIONS", "value": "--require=/tmp/other.js"})
+                elif change == "secret":
+                    next(e for e in app["env"] if "valueFrom" in e)["valueFrom"]["secretKeyRef"][
+                        "name"
+                    ] = "other"
+                elif change == "helper":
+                    next(v for v in pod["volumes"] if "configMap" in v)["configMap"]["name"] = (
+                        "mutable-script"
+                    )
+                elif change == "path":
+                    next(m for m in app["volumeMounts"] if m["name"] == "helpers")["subPath"] = (
+                        "other.mjs"
+                    )
+                elif change == "write-helper":
+                    next(m for m in app["volumeMounts"] if m["name"] == "helpers")["readOnly"] = (
+                        False
+                    )
+                elif change == "wider-volume":
+                    pod["volumes"][0] = {"name": "tmp", "secret": {"secretName": "other"}}
+                elif change == "deadline":
+                    bad["spec"]["activeDeadlineSeconds"] = 86400
+                else:
+                    app["env"].append(
+                        {
+                            "name": "SOURCE_REGISTRY",
+                            "valueFrom": {"secretKeyRef": {"name": "other", "key": "password"}},
+                        }
+                    )
+                with self.subTest(job=obj["metadata"]["name"], change=change):
+                    self.assertFalse(self.admits_jobs(request, bad))
 
     def test_restore_database_job_grant_has_no_other_automation_data_mutation(self):
         roles = [
@@ -2139,7 +2219,10 @@ class TestAccessPolicyTests(unittest.TestCase):
         ]
         self.assertEqual(len(helpers), 1)
         self.assertTrue(helpers[0]["immutable"])
-        self.assertEqual(set(helpers[0]["data"]), {"n8n-restore-request.mjs"})
+        self.assertEqual(
+            set(helpers[0]["data"]),
+            {"n8n-restore-request.mjs", "automation-data-restore-request.mjs"},
+        )
 
     def test_fixed_request_program_preserves_authenticated_canary_contract(self):
         program = (
