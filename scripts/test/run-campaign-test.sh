@@ -26,6 +26,13 @@ yq -i '
   ]
 ' "$catalog"
 mkdir -p "$fixture/bin"
+TEST_FIXTURE_REAL_UV="$(command -v uv)"
+export TEST_FIXTURE_REAL_UV
+export TEST_FIXTURE_ACCESS_ROOT="$fixture"
+export TEST_FIXTURE_ACCESS_TRACE="$fixture/access-trace"
+cp tests/fixtures/test-access/fake-uv.sh "$fixture/bin/uv"
+cp tests/fixtures/result-coordinator/fake-kubectl.sh "$fixture/bin/kubectl"
+export PATH="$fixture/bin:$PATH"
 ln -s "$repo_root/tests/fixtures/campaign/fake-mise.sh" "$fixture/bin/mise"
 touch "$fixture/kubeconfig"
 
@@ -393,6 +400,7 @@ mutating_catalog="$mutating_root/catalog.yaml"
 mkdir -p "$mutating_root"
 touch "$mutating_root/commands" "$mutating_root/publishes" \
   "$mutating_root/lease-calls" "$mutating_root/kubeconfig"
+printf '%s\n' '{"apiVersion":"coordination.k8s.io/v1","kind":"Lease","metadata":{"name":"homelab-test-run-lock","namespace":"flux-system","resourceVersion":"1"},"spec":{"holderIdentity":null,"leaseDurationSeconds":90}}' >"$mutating_root/lease.json"
 cp tests/catalog.yaml "$mutating_catalog"
 yq -i '
   .campaigns."mutating-fixture" = {
@@ -445,8 +453,14 @@ KUBECONFIG="$mutating_root/kubeconfig" \
 TEST_CAMPAIGN_CONFIRM="$mutating_confirmation" \
   "$repo_root/scripts/test/run-campaign.sh" run mutating-fixture \
   >"$mutating_root/run.log" 2>&1
-[[ "$(rg -c ' create .*--filename -$' "$mutating_root/lease-calls")" == 1 ]]
-[[ "$(rg -c ' replace .*--filename -$' "$mutating_root/lease-calls")" == 1 ]]
+if rg -q ' create .*--filename -$' "$mutating_root/lease-calls"; then
+  echo 'Campaign attempted to create its Git-managed Lease.' >&2
+  exit 1
+fi
+[[ "$(rg -c ' replace .*--filename -$' "$mutating_root/lease-calls")" -ge 2 ]]
+while IFS= read -r line; do
+  [[ "$line" != *' replace '* || "$line" == *-campaign-coordinator/config* ]]
+done <"$mutating_root/lease-calls"
 [[ "$(yq -r '.spec.holderIdentity // ""' "$mutating_root/lease.json")" == '' ]]
 [[ "$(cat "$mutating_root/commands")" == mutating-pass ]]
 # Recording is explicit execution intent. It freezes a clean candidate
@@ -465,9 +479,7 @@ yq -i '
     .runner.command) = "mise exec -- just fixture acceptance-fail" |
   (.suites[] | select(.metadata.id == "test.ntfy-publish") |
     .runner.command) = "NTFY_PUBLISH_TEST_CONFIRM=test:ntfy:publish:media-critical-homelab mise exec -- just fixture acceptance-operator" |
-  (.suites[] | select(.metadata.id == "test.ntfy-publish") |
-    .metadata.mutates_cluster) = false
-  | (.suites[] | select(.metadata.id == "test.nocodb-local-integration") |
+  (.suites[] | select(.metadata.id == "test.nocodb-local-integration") |
     .runner.command) = "mise exec -- just fixture acceptance-shared"
   | (.suites[] | select(.metadata.id == "validation.ci") |
     .runner.command) = "mise exec -- just fixture acceptance-validation"
@@ -481,6 +493,10 @@ run_acceptance() {
   mkdir -p "$root"
   touch "$root/commands" "$root/publishes" "$root/publish-contexts" \
     "$root/preflight-calls"
+  if [[ ! -f "$root/lease.json" ]]; then
+    printf '%s\n' '{"apiVersion":"coordination.k8s.io/v1","kind":"Lease","metadata":{"name":"homelab-test-run-lock","namespace":"flux-system","resourceVersion":"1"},"spec":{"holderIdentity":"","leaseDurationSeconds":90}}' >"$root/lease.json"
+  fi
+  cp "$mutating_root/nodes.json" "$root/nodes.json"
   PATH="$fixture/bin:$PATH" \
   CAMPAIGN_TEST_REPO_ROOT="$repo_root" \
   CAMPAIGN_TEST_COMMAND_CALLS="$root/commands" \
@@ -494,6 +510,12 @@ run_acceptance() {
   TEST_CAMPAIGN_TEST_MODE=true \
   TEST_RECORD_LINKED_WORKTREE="$linked" \
   TEST_CAMPAIGN_SKIP_LEASE=true \
+  TEST_LEASE_KUBECTL="$repo_root/tests/fixtures/campaign/fake-lease-kubectl.sh" \
+  CAMPAIGN_TEST_LEASE_STATE="$root/lease.json" \
+  CAMPAIGN_TEST_LEASE_CALLS="$root/lease-calls" \
+  TEST_LEASE_SLEEP=false \
+  DISRUPTION_KUBECTL="$repo_root/tests/fixtures/disruption-admission/fake-kubectl.sh" \
+  DISRUPTION_TEST_NODES="$root/nodes.json" \
   TEST_CAMPAIGN_SOURCE_CHECK_BIN="$repo_root/tests/fixtures/campaign/source-check.sh" \
   TEST_CAMPAIGN_PUBLISH_BIN="$repo_root/tests/fixtures/campaign/fake-publisher.sh" \
   TEST_SCOPED_PREFLIGHT_BIN="$repo_root/tests/fixtures/campaign/pass-scoped-preflight.sh" \
@@ -686,8 +708,8 @@ acceptance_campaign_manifest="$(find "$acceptance_campaign_root/campaigns" \
   $'acceptance-pass\nacceptance-fail' ]]
 [[ "$(wc -l <"$acceptance_campaign_root/publish-contexts" | tr -d ' ')" == '2' ]]
 
-# A linked-worktree invocation stays scoped even if execution-origin metadata is
-# overridden. It also excludes diagnostics and intentional failure fixtures.
+# Missing suite confirmation, diagnostics and ordinary offline iteration remain
+# ineligible regardless of execution-origin metadata.
 for forbidden_selection in test.ntfy-publish validation.nocodb diagnostics.cluster \
   chainsaw.smoke.cluster.diagnostics-self-test; do
   forbidden_root="$fixture/acceptance-forbidden-${forbidden_selection//./-}"
@@ -720,12 +742,30 @@ set -e
 NTFY_PUBLISH_TEST_CONFIRM=test:ntfy:publish:media-critical-homelab \
   run_acceptance "$operator_root/confirmed" false \
   "$repo_root/scripts/test/run-campaign.sh" record \
-  test.ntfy-publish >"$operator_root/confirmed.log" 2>&1
+  test.ntfy-publish >"$operator_root/confirmed.log" 2>&1 || {
+    cat "$operator_root/confirmed.log" >&2
+    exit 1
+  }
 [[ "$(cat "$operator_root/confirmed/commands")" == 'acceptance-operator' ]]
 operator_manifest="$(find "$operator_root/confirmed/campaigns" -name campaign.json -print)"
 operator_run_id="$(yq -r '.runs[0].run_id' "$operator_manifest")"
 [[ "$(cat "$operator_root/confirmed/publish-contexts")" == \
   "$(printf 'unset\tfalse\tpublish:test-report:%s' "$operator_run_id")" ]]
+
+# A linked worktree may record a mutating suite with an explicit scoped
+# profile. The suite's exact intent guard still applies; Talos is not needed.
+NTFY_PUBLISH_TEST_CONFIRM=test:ntfy:publish:media-critical-homelab \
+  run_acceptance "$operator_root/linked" true \
+  "$repo_root/scripts/test/run-campaign.sh" record \
+  test.ntfy-publish >"$operator_root/linked.log" 2>&1 || {
+    cat "$operator_root/linked.log" >&2
+    exit 1
+  }
+[[ "$(cat "$operator_root/linked/commands")" == acceptance-operator ]]
+if rg -q '\.talos/config' "$operator_root/linked/preflight-calls"; then
+  echo 'Record session required Talos for a suite with no Talos prerequisite.' >&2
+  exit 1
+fi
 
 acceptance_resume_root="$fixture/acceptance-resume"
 mkdir -p "$acceptance_resume_root"

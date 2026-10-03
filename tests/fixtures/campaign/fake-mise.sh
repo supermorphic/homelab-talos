@@ -12,7 +12,19 @@ set -euo pipefail
   exit 2
 }
 
+[[ -z "${TEST_KUBECONFIG:-}" && -z "${TEST_ACCESS_CONFIG:-}" && "$KUBECONFIG" == /dev/null ]] || {
+  echo 'Campaign passed orchestration credentials to a suite.' >&2
+  exit 2
+}
+[[ -z "${TEST_ACCESS_PURPOSE_CONFIG+x}" && -z "${observer_kubeconfig+x}" &&
+   -z "${coordinator_kubeconfig+x}" ]]
 target="$5"
+if [[ "$target" != acceptance-agent ]]; then
+  [[ -z "${TALOSCONFIG:-}" ]] || {
+    echo 'Campaign passed Talos access without a declared prerequisite.' >&2
+    exit 2
+  }
+fi
 case "$target" in
   pass)
     suite_id='verification.metrics-server'
@@ -40,7 +52,9 @@ case "$target" in
     ;;
   scoped-nested)
     suite_id='verification.metrics-server'
-    command=(bash -c '"${CAMPAIGN_TEST_REPO_ROOT:?}/scripts/test/run-catalog-suite.sh" verification.cilium -- true')
+    # Expansion belongs to the child shell.
+    # shellcheck disable=SC2016
+    command=(bash -c '"${CAMPAIGN_TEST_REPO_ROOT:?}/scripts/test/run-catalog-suite.sh" verification.flux -- true')
     ;;
   mutating-pass)
     suite_id='test.cilium-connectivity'
