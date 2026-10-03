@@ -408,3 +408,35 @@ test_cilium_privileged_namespace_lifecycle_cannot_bind_ordinary_runner if {
 	messages := deny with input as fixture
 	count(messages) > 0
 }
+
+dedicated_cilium_ephemeral_fixture := [
+	role("homelab-test-cilium-ephemeral-diagnostics", "kube-system", [{"apiGroups": [""], "resources": ["pods/ephemeralcontainers"], "verbs": ["patch"]}]),
+	role_binding("homelab-test-cilium-ephemeral-diagnostics", "kube-system", "homelab-test-cilium-connectivity", "kube-system", "homelab-test-cilium-ephemeral-diagnostics"),
+	{
+		"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingAdmissionPolicy", "metadata": {"name": "homelab-test-cilium-ephemeral-diagnostics"},
+		"spec": {
+			"failurePolicy": "Fail", "matchConstraints": {"resourceRules": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["UPDATE"], "resources": ["pods/ephemeralcontainers"]}]},
+			"matchConditions": [{"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'"}],
+			"validations": [{"expression": "object.kind == 'Pod'"}],
+		},
+	},
+	flux_guard_binding("homelab-test-cilium-ephemeral-diagnostics"),
+]
+
+test_cilium_ephemeral_grant_cannot_patch_whole_production_pods if {
+	fixture := runner_change("Role", "homelab-test-cilium-ephemeral-diagnostics", [{"op": "replace", "path": "/rules/0/resources", "value": ["pods"]}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_cilium_ephemeral_grant_cannot_bind_debugger if {
+	fixture := runner_change("RoleBinding", "homelab-test-cilium-ephemeral-diagnostics", [{"op": "add", "path": "/subjects/-", "value": {"kind": "ServiceAccount", "name": "homelab-diagnostic", "namespace": "kube-system"}}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_cilium_ephemeral_diagnostics_requires_complete_parent_guard if {
+	fixture := [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ValidatingAdmissionPolicy", "homelab-test-cilium-ephemeral-diagnostics"]]
+	messages := deny with input as fixture
+	count(messages) > 0
+}

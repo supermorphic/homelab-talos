@@ -60,3 +60,73 @@ spec:
   policyName: homelab-test-cilium-namespaces
   validationActions:
     - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-cilium-ephemeral-diagnostics
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - ''
+        apiVersions:
+          - v1
+        operations:
+          - UPDATE
+        resources:
+          - pods/ephemeralcontainers
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'
+  variables:
+    - name: before
+      expression: 'has(oldObject.spec.ephemeralContainers) ? oldObject.spec.ephemeralContainers : []'
+    - name: after
+      expression: object.spec.ephemeralContainers
+    - name: added
+      expression: variables.after[variables.after.size() - 1]
+    - name: source
+      expression: oldObject.spec.containers.filter(c, c.name == variables.added.targetContainerName)[0]
+  validations:
+    - expression: request.namespace == 'kube-system' && request.subResource == 'ephemeralcontainers' &&
+        request.name == oldObject.metadata.name && oldObject.metadata.namespace == 'kube-system' && oldObject.metadata.uid
+        != '' && ((variables.added.targetContainerName == 'cilium-agent' && oldObject.metadata.labels['k8s-app']
+        == 'cilium') || (variables.added.targetContainerName == 'tetragon' && oldObject.metadata.labels['app.kubernetes.io/name']
+        == 'tetragon') || (variables.added.targetContainerName == 'spire-server' && oldObject.metadata.labels.app
+        == 'spire-server'))
+      message: Stopped-container diagnostics may reach only existing Cilium, Tetragon or SPIRE server
+        containers in kube-system.
+    - expression: 'variables.after.size() == variables.before.size() + 1 && variables.after.filter(c,
+        c.name != variables.added.name) == variables.before && variables.added.name.matches(''^sysdump-[0-9]{1,10}$'')
+        && variables.added.command == [''/bin/sleep'',''1d''] && variables.added.image == variables.source.image
+        && (has(variables.added.env) ? variables.added.env : []) == (has(variables.source.env) ? variables.source.env
+        : []) && (has(variables.added.volumeMounts) ? variables.added.volumeMounts : []) == (has(variables.source.volumeMounts)
+        ? variables.source.volumeMounts : []) && has(variables.added.securityContext) == has(variables.source.securityContext)
+        && (has(variables.source.securityContext) ? variables.added.securityContext == variables.source.securityContext
+        : true) && variables.added.all(k, k in [''name'',''targetContainerName'',''image'',''command'',''env'',''volumeMounts'',''securityContext'']
+        || (k == ''resources'' && variables.added[k] == {}) || (k == ''imagePullPolicy'' && variables.added[k]
+        == ''IfNotPresent'') || (k == ''terminationMessagePath'' && variables.added[k] == ''/dev/termination-log'')
+        || (k == ''terminationMessagePolicy'' && variables.added[k] == ''File'') || (k in [''stdin'',''stdinOnce'',''tty'']
+        && !variables.added[k]))'
+      message: Append exactly one canonical sleeping sysdump container copied from its existing source;
+        preserve all earlier entries.
+    - expression: object.metadata.all(k, k in ['resourceVersion','managedFields'] || (k in oldObject.metadata
+        && object.metadata[k] == oldObject.metadata[k])) && oldObject.metadata.all(k, k in ['resourceVersion','managedFields']
+        || (k in object.metadata && object.metadata[k] == oldObject.metadata[k])) && object.spec.all(k,
+        k == 'ephemeralContainers' || (k in oldObject.spec && object.spec[k] == oldObject.spec[k])) &&
+        oldObject.spec.all(k, k == 'ephemeralContainers' || (k in object.spec && object.spec[k] == oldObject.spec[k]))
+        && object.all(k, k in ['metadata','spec'] || (k in oldObject && object[k] == oldObject[k])) &&
+        oldObject.all(k, k in ['metadata','spec'] || (k in object && object[k] == oldObject[k]))
+      message: Keep the complete stored Pod identity, specification, status and runtime authority unchanged
+        except for that appended container.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-cilium-ephemeral-diagnostics
+spec:
+  policyName: homelab-test-cilium-ephemeral-diagnostics
+  validationActions:
+    - Deny

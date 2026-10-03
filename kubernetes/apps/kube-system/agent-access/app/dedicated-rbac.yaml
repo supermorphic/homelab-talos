@@ -648,3 +648,30 @@ subjects:
   - kind: ServiceAccount
     name: homelab-test-cilium-connectivity
     namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-cilium-ephemeral-diagnostics
+  namespace: kube-system
+rules:
+  - apiGroups:
+      - ''
+    resources:
+      - pods/ephemeralcontainers
+    verbs:
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-cilium-ephemeral-diagnostics
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-cilium-ephemeral-diagnostics
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-cilium-connectivity
+    namespace: kube-system
