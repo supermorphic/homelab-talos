@@ -574,3 +574,44 @@ test_cilium_copy_recovery_requires_admission if {
 	messages := deny with input as [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ValidatingAdmissionPolicy", "homelab-test-cilium-copy-diagnostics"]]
 	count(messages) > 0
 }
+
+dedicated_cilium_namespaced_fixture := [
+	role("homelab-test-cilium-fixtures-1", "cilium-test-1", [{"apiGroups": ["apps"], "resources": ["deployments", "daemonsets"], "verbs": ["create", "delete"]}, {"apiGroups": [""], "resources": ["serviceaccounts", "services", "configmaps", "secrets"], "verbs": ["create"]}, {"apiGroups": [""], "resources": ["serviceaccounts", "services", "configmaps"], "verbs": ["delete"]}, {"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["cabundle", "externaltarget-tls", "header-match"], "verbs": ["get", "update", "delete"]}, {"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["get", "create"]}, {"apiGroups": ["cilium.io"], "resources": ["ciliumnetworkpolicies"], "resourceNames": ["all-egress-deny", "all-entities-deny", "all-ingress-deny", "allow-all-egress", "allow-all-except-world", "allow-all-ingress", "allow-from-cilium-ingress", "cidr-deny", "client-egress-icmp", "client-egress-l7-http", "client-egress-l7-http-external-node", "client-egress-l7-http-from-any", "client-egress-l7-http-matchheader-secret", "client-egress-l7-http-matchheader-secret-port-range", "client-egress-l7-http-method", "client-egress-l7-http-method-port-range", "client-egress-l7-http-named-port", "client-egress-l7-http-port-range", "client-egress-l7-tls", "client-egress-l7-tls-other-sni", "client-egress-l7-tls-port-range", "client-egress-l7-tls-sni", "client-egress-node-local-dns", "client-egress-only-dns", "client-egress-only-port-53", "client-egress-tls-sni", "client-egress-tls-sni-double-wildcard", "client-egress-tls-sni-other", "client-egress-tls-sni-random-wildcard", "client-egress-tls-sni-wildcard", "client-egress-to-cidr", "client-egress-to-cidr-deny", "client-egress-to-cidr-k8s", "client-egress-to-cidr-lrp-deny", "client-egress-to-cidrgroup-deny", "client-egress-to-cidrgroup-deny-label", "client-egress-to-echo", "client-egress-to-echo-deny", "client-egress-to-echo-deny-port-range", "client-egress-to-echo-expression", "client-egress-to-echo-expression-deny", "client-egress-to-echo-expression-deny-port-range", "client-egress-to-echo-expression-port-range", "client-egress-to-echo-no-cluster-policy", "client-egress-to-echo-service-account", "client-egress-to-echo-service-account-deny", "client-egress-to-echo-service-account-deny-port-range", "client-egress-to-echo-service-account-port-range", "client-egress-to-entities-host", "client-egress-to-entities-k8s", "client-egress-to-entities-world", "client-egress-to-entities-world-port-range", "client-egress-to-fqdns-one.one.one.one", "client-egress-to-fqdns-proxy-one.one.one.one", "client-ingress-from-client2", "client-ingress-from-client2-icmp", "client-ingress-from-other-client-icmp-deny", "client-ingress-to-echo-named-port-deny", "client-with-service-account-egress-to-echo", "client-with-service-account-egress-to-echo-deny", "client-with-service-account-egress-to-echo-deny-port-range", "client-with-service-account-egress-to-echo-port-range", "echo-ingress-from-cidr", "echo-ingress-from-client-tiered-wildcard-pass-l7", "echo-ingress-from-other-client", "echo-ingress-from-other-client-deny", "echo-ingress-l7-http", "echo-ingress-l7-http-from-anywhere", "echo-ingress-l7-http-from-anywhere-port-range", "echo-ingress-l7-http-named-port", "echo-ingress-mutual-authentication", "echo-ingress-mutual-authentication-fail", "echo-ingress-mutual-authentication-fail-port-range", "echo-ingress-mutual-authentication-port-range", "entity-cluster", "host-cluster-egress", "host-cluster-ingress", "ingress-backend-deny", "ingress-entity-deny", "ingress-source-egress-deny-other-node", "world-entity-deny"], "verbs": ["get", "patch", "delete"]}, {"apiGroups": ["cilium.io"], "resources": ["ciliumlocalredirectpolicies"], "resourceNames": ["lrp-address-matcher-skip-redirect-from-backend-v4", "lrp-address-matcher-skip-redirect-from-backend-v6", "lrp-address-matcher-v4", "lrp-address-matcher-v6"], "verbs": ["get", "patch", "delete"]}, {"apiGroups": ["networking.k8s.io"], "resources": ["networkpolicies"], "resourceNames": ["all-egress-deny", "all-ingress-deny", "client-egress-to-cidr", "client-egress-to-cidr-cp-host", "client-egress-to-echo", "client-egress-to-echo-expression", "client-egress-to-echo-expression-port-range", "client-egress-to-node-cidr", "client-ingress-from-client2", "echo-ingress-from-other-client"], "verbs": ["get", "patch", "delete"]}]),
+	role_binding("homelab-test-cilium-fixtures-1", "cilium-test-1", "homelab-test-cilium-connectivity", "kube-system", "homelab-test-cilium-fixtures-1"),
+	role("homelab-test-cilium-fixtures-ccnp1", "cilium-test-ccnp1", [{"apiGroups": ["apps"], "resources": ["deployments"], "verbs": ["create", "delete"]}, {"apiGroups": [""], "resources": ["serviceaccounts"], "verbs": ["create", "delete"]}, {"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["get", "create"]}]),
+	role_binding("homelab-test-cilium-fixtures-ccnp1", "cilium-test-ccnp1", "homelab-test-cilium-connectivity", "kube-system", "homelab-test-cilium-fixtures-ccnp1"),
+	role("homelab-test-cilium-fixtures-ccnp2", "cilium-test-ccnp2", [{"apiGroups": ["apps"], "resources": ["deployments"], "verbs": ["create", "delete"]}, {"apiGroups": [""], "resources": ["serviceaccounts"], "verbs": ["create", "delete"]}, {"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["get", "create"]}]),
+	role_binding("homelab-test-cilium-fixtures-ccnp2", "cilium-test-ccnp2", "homelab-test-cilium-connectivity", "kube-system", "homelab-test-cilium-fixtures-ccnp2"),
+	{"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingAdmissionPolicy", "metadata": {"name": "homelab-test-cilium-fixtures"}, "spec": {"failurePolicy": "Fail", "matchConstraints": {"resourceRules": [{"apiGroups": ["apps"], "apiVersions": ["v1"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["deployments", "daemonsets"]}, {"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["serviceaccounts", "services", "configmaps", "secrets"]}, {"apiGroups": ["cilium.io"], "apiVersions": ["v2", "v2alpha1"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["ciliumnetworkpolicies", "ciliumlocalredirectpolicies"]}, {"apiGroups": ["networking.k8s.io"], "apiVersions": ["v1"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["networkpolicies"]}]}, "matchConditions": [{"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'"}], "validations": [{"expression": "request.namespace == 'cilium-test-1'"}]}},
+	flux_guard_binding("homelab-test-cilium-fixtures"),
+]
+
+test_cilium_fixtures_cannot_write_system_namespace if {
+	messages := deny with input as runner_change("Role", "homelab-test-cilium-fixtures-1", [{"op": "replace", "path": "/metadata/namespace", "value": "kube-system"}])
+	count(messages) > 0
+}
+
+test_cilium_fixtures_cannot_request_account_tokens if {
+	messages := deny with input as runner_change("Role", "homelab-test-cilium-fixtures-1", [{"op": "add", "path": "/rules/-", "value": {"apiGroups": [""], "resources": ["serviceaccounts/token"], "verbs": ["create"]}}])
+	count(messages) > 0
+}
+
+test_cilium_fixtures_cannot_read_arbitrary_secrets if {
+	messages := deny with input as runner_change("Role", "homelab-test-cilium-fixtures-1", [{"op": "remove", "path": "/rules/3/resourceNames"}])
+	count(messages) > 0
+}
+
+test_cilium_ccnp_namespace_cannot_receive_general_fixture_resources if {
+	messages := deny with input as runner_change("Role", "homelab-test-cilium-fixtures-ccnp1", [{"op": "add", "path": "/rules/-", "value": {"apiGroups": [""], "resources": ["secrets"], "verbs": ["create"]}}])
+	count(messages) > 0
+}
+
+test_cilium_ccnp_namespace_cannot_bind_ordinary_runner if {
+	messages := deny with input as runner_change("RoleBinding", "homelab-test-cilium-fixtures-ccnp2", [{"op": "replace", "path": "/subjects/0/name", "value": "homelab-test-runner"}])
+	count(messages) > 0
+}
+
+test_cilium_fixtures_require_parent_admission if {
+	messages := deny with input as [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ValidatingAdmissionPolicy", "homelab-test-cilium-fixtures"]]
+	count(messages) > 0
+}

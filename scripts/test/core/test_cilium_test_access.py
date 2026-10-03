@@ -1,6 +1,7 @@
 """Request and grant invariants for the dedicated pinned connectivity client."""
 
 import copy
+import json
 import unittest
 
 import yaml
@@ -628,6 +629,268 @@ class CiliumAccessTests(unittest.TestCase):
             self.assertFalse(self.admits(policy, req, bad))
             for field, value in (("namespace", "openbao"), ("name", "openbao-0")):
                 self.assertFalse(self.admits(policy, {**req, field: value}, obj))
+
+    def test_namespaced_fixture_roles_are_separate_from_system_runtime(self):
+        expected = {
+            "cilium-test-1": "homelab-test-cilium-fixtures-1",
+            "cilium-test-ccnp1": "homelab-test-cilium-fixtures-ccnp1",
+            "cilium-test-ccnp2": "homelab-test-cilium-fixtures-ccnp2",
+        }
+        for namespace, name in expected.items():
+            roles = [
+                d for d in self.documents if d["kind"] == "Role" and d["metadata"]["name"] == name
+            ]
+            self.assertEqual(len(roles), 1)
+            self.assertEqual(roles[0]["metadata"]["namespace"], namespace)
+            for rule in roles[0]["rules"]:
+                self.assertFalse(
+                    set(rule["resources"])
+                    & {
+                        "roles",
+                        "rolebindings",
+                        "namespaces",
+                        "nodes",
+                        "serviceaccounts/token",
+                        "persistentvolumeclaims",
+                    }
+                )
+                self.assertNotIn("*", rule["resources"] + rule["apiGroups"] + rule["verbs"])
+                self.assertNotIn("deletecollection", rule["verbs"])
+                if "secrets" in rule["resources"] and "get" in rule["verbs"]:
+                    self.assertEqual(
+                        rule["resourceNames"], ["cabundle", "externaltarget-tls", "header-match"]
+                    )
+            bindings = [
+                d
+                for d in self.documents
+                if d["kind"] == "RoleBinding" and d["metadata"]["name"] == name
+            ]
+            self.assertEqual(len(bindings), 1)
+            self.assertEqual(bindings[0]["metadata"]["namespace"], namespace)
+            self.assertEqual(
+                bindings[0]["subjects"],
+                [
+                    {
+                        "kind": "ServiceAccount",
+                        "name": "homelab-test-cilium-connectivity",
+                        "namespace": "kube-system",
+                    }
+                ],
+            )
+
+    def test_namespaced_policy_inventory_excludes_unregistered_and_production_targets(self):
+        families = json.loads(
+            (helpers.ROOT / "tests/fixtures/cilium/policy-names.json").read_text()
+        )["families"]
+        resources = {
+            "CiliumNetworkPolicy": ("cilium.io", "v2", "ciliumnetworkpolicies"),
+            "CiliumLocalRedirectPolicy": ("cilium.io", "v2", "ciliumlocalredirectpolicies"),
+            "NetworkPolicy": ("networking.k8s.io", "v1", "networkpolicies"),
+        }
+        policy = "homelab-test-cilium-fixtures"
+        for kind, names in families.items():
+            group, version, resource = resources[kind]
+            for name in names:
+                obj = {
+                    "apiVersion": f"{group}/{version}",
+                    "kind": kind,
+                    "metadata": {"name": name, "namespace": "cilium-test-1"},
+                    "spec": {"endpointSelector": {"matchLabels": {"kind": "client"}}},
+                }
+                req = {
+                    "operation": "CREATE",
+                    "namespace": "cilium-test-1",
+                    "name": name,
+                    "subResource": "",
+                    "resource": {"group": group, "version": version, "resource": resource},
+                    "userInfo": {"username": IDENTITY},
+                }
+                self.assertTrue(self.admits(policy, req, obj), name)
+                bad = copy.deepcopy(obj)
+                bad["metadata"]["name"] = "unregistered-policy"
+                self.assertFalse(self.admits(policy, {**req, "name": "unregistered-policy"}, bad))
+                self.assertFalse(self.admits(policy, {**req, "namespace": "openbao"}, obj))
+                self.assertFalse(self.admits(policy, {**req, "subResource": "status"}, obj))
+                self.assertFalse(
+                    self.admits(policy, {**req, "namespace": "cilium-test-ccnp1"}, obj)
+                )
+
+    def test_named_connectivity_workloads_keep_their_account_image_and_mount_family(self):
+        policy = "homelab-test-cilium-fixtures"
+        for namespace, name in (
+            ("cilium-test-1", "client"),
+            ("cilium-test-ccnp1", "client-ccnp"),
+            ("cilium-test-ccnp2", "client-ccnp"),
+        ):
+            obj = {
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": {
+                    "name": name,
+                    "namespace": namespace,
+                    "labels": {"name": name, "kind": "client"},
+                },
+                "spec": {
+                    "replicas": 1,
+                    "selector": {"matchLabels": {"name": name, "kind": "client"}},
+                    "template": {
+                        "metadata": {"name": name, "labels": {"name": name, "kind": "client"}},
+                        "spec": {
+                            "serviceAccountName": name,
+                            "containers": [
+                                {
+                                    "name": name,
+                                    "image": "quay.io/cilium/alpine-curl:v1.10.0@sha256:913e8c9f3d960dde03882defa0edd3a919d529c2eb167caa7f54194528bde364",
+                                    "command": ["/usr/bin/pause"],
+                                    "securityContext": {"capabilities": {"add": ["NET_RAW"]}},
+                                }
+                            ],
+                        },
+                    },
+                },
+            }
+            req = {
+                "operation": "CREATE",
+                "namespace": namespace,
+                "name": name,
+                "subResource": "",
+                "resource": {"group": "apps", "version": "v1", "resource": "deployments"},
+                "userInfo": {"username": IDENTITY},
+            }
+            self.assertTrue(self.admits(policy, req, obj))
+            stored = copy.deepcopy(obj)
+            stored["metadata"]["uid"] = "deployment-fixture"
+            self.assertTrue(self.admits(policy, {**req, "operation": "DELETE"}, None, stored))
+            self.assertFalse(self.admits(policy, {**req, "operation": "UPDATE"}, stored, stored))
+            for field, value in (
+                ("serviceAccountName", "openbao"),
+                ("initContainers", [{}]),
+                ("volumes", [{"name": "host", "hostPath": {"path": "/synthetic-runtime"}}]),
+                ("volumes", [{"name": "other", "secret": {"secretName": "unregistered"}}]),
+            ):
+                bad = copy.deepcopy(obj)
+                bad["spec"]["template"]["spec"][field] = value
+                self.assertFalse(self.admits(policy, req, bad))
+            for field, value in (
+                ("image", "example.invalid/unregistered:latest"),
+                ("envFrom", [{"secretRef": {"name": "unregistered"}}]),
+            ):
+                bad = copy.deepcopy(obj)
+                bad["spec"]["template"]["spec"]["containers"][0][field] = value
+                self.assertFalse(self.admits(policy, req, bad))
+            bad = copy.deepcopy(obj)
+            bad["metadata"]["name"] = "unregistered"
+            self.assertFalse(self.admits(policy, {**req, "name": "unregistered"}, bad))
+
+    def test_fixture_connections_keep_the_same_profile_and_forbid_interactive_or_other_namespace_access(
+        self,
+    ):
+        policy = "homelab-test-cilium-system-connect"
+        for namespace, pod, container in (
+            ("cilium-test-1", "client-7654321-abcde", "client"),
+            ("cilium-test-1", "host-netns-abcde", "host-netns"),
+            ("cilium-test-ccnp1", "client-ccnp-7654321-abcde", "client-ccnp"),
+            ("cilium-test-ccnp2", "client-ccnp-7654321-abcde", "client-ccnp"),
+        ):
+            req = {
+                "operation": "CONNECT",
+                "namespace": namespace,
+                "name": pod,
+                "subResource": "exec",
+                "resource": {"group": "", "version": "v1", "resource": "pods"},
+                "userInfo": {"username": IDENTITY},
+            }
+            obj = {
+                "container": container,
+                "command": ["/usr/bin/curl", "http://synthetic.example"],
+                "stdin": False,
+                "tty": False,
+                "stdout": True,
+                "stderr": True,
+            }
+            self.assertTrue(self.admits(policy, req, obj))
+            for field, value in (("stdin", True), ("tty", True), ("container", "openbao")):
+                self.assertFalse(self.admits(policy, req, {**obj, field: value}))
+            self.assertFalse(self.admits(policy, {**req, "namespace": "openbao"}, obj))
+            self.assertFalse(self.admits(policy, {**req, "subResource": "portforward"}, {}))
+            self.assertFalse(self.admits(policy, {**req, "name": "production-7654321-abcde"}, obj))
+
+    def test_fixture_accounts_services_configmaps_and_test_secrets_have_finite_targets(self):
+        policy = "homelab-test-cilium-fixtures"
+        inputs = [
+            ("ServiceAccount", "client", {}),
+            ("ConfigMap", "coredns-configmap", {"data": {"Corefile": ". { local ready log }"}}),
+            ("ConfigMap", "frr-config", {"data": {"frr.conf": "synthetic"}}),
+            (
+                "Service",
+                "echo-same-node",
+                {
+                    "spec": {
+                        "type": "NodePort",
+                        "selector": {"name": "echo-same-node"},
+                        "ports": [{"name": "http", "port": 8080}],
+                    }
+                },
+            ),
+            ("Secret", "cabundle", {"type": "Opaque", "data": {"ca.crt": "dGVzdA=="}}),
+            (
+                "Secret",
+                "externaltarget-tls",
+                {
+                    "type": "kubernetes.io/tls",
+                    "data": {"tls.crt": "dGVzdA==", "tls.key": "dGVzdA=="},
+                },
+            ),
+            ("Secret", "header-match", {"type": "Opaque", "data": {"value": "dGVzdA=="}}),
+        ]
+        for kind, name, fields in inputs:
+            obj = {
+                "apiVersion": "v1",
+                "kind": kind,
+                "metadata": {"name": name, "namespace": "cilium-test-1"},
+                **fields,
+            }
+            req = {
+                "operation": "CREATE",
+                "namespace": "cilium-test-1",
+                "name": name,
+                "subResource": "",
+                "resource": {
+                    "group": "",
+                    "version": "v1",
+                    "resource": {
+                        "ServiceAccount": "serviceaccounts",
+                        "ConfigMap": "configmaps",
+                        "Service": "services",
+                        "Secret": "secrets",
+                    }[kind],
+                },
+                "userInfo": {"username": IDENTITY},
+            }
+            self.assertTrue(self.admits(policy, req, obj))
+            bad = copy.deepcopy(obj)
+            bad["metadata"]["name"] = "unregistered"
+            self.assertFalse(self.admits(policy, {**req, "name": "unregistered"}, bad))
+            bad = copy.deepcopy(obj)
+            bad["metadata"]["namespace"] = "kube-system"
+            self.assertFalse(self.admits(policy, {**req, "namespace": "kube-system"}, bad))
+            if kind == "Secret":
+                bad = copy.deepcopy(obj)
+                bad["data"]["unregistered"] = "dGVzdA=="
+                self.assertFalse(self.admits(policy, req, bad))
+                self.assertFalse(
+                    self.admits(
+                        policy, req, {**obj, "type": "kubernetes.io/service-account-token"}
+                    )
+                )
+            if kind == "ServiceAccount":
+                self.assertFalse(
+                    self.admits(policy, req, {**obj, "secrets": [{"name": "unregistered"}]})
+                )
+            if kind == "Service":
+                bad = copy.deepcopy(obj)
+                bad["spec"]["selector"] = {"name": "production"}
+                self.assertFalse(self.admits(policy, req, bad))
 
 
 if __name__ == "__main__":
