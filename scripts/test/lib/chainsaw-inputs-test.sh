@@ -278,6 +278,7 @@ for expected_case in \
 	scripts/test/run-native-junit-validator-test.sh \
 	scripts/test/n8n-failure-notifications-test.sh \
 	scripts/test/homepage-mylar3-secrets-test.sh \
+	scripts/test/mylar3-verify-test.sh \
 	scripts/test/monitoring-flux-exporter-test.sh \
 	scripts/test/monitoring-verify-test.sh \
 	scripts/test/gatus-verifier-test.sh; do
