@@ -6,7 +6,8 @@ cilium_chart := "oci://quay.io/cilium/charts/cilium"
 cilium_values := "kubernetes/apps/kube-system/cilium/app/values.yaml"
 cilium_app := "kubernetes/apps/kube-system/cilium/app"
 talosconfig := ".talos/config"
-kubeconfig := ".kube/config"
+kubeconfig := env("TEST_KUBECONFIG", ".kube/config")
+test_kubeconfig := "@test-kubeconfig@"
 git_url := "https://forgejo.infra.supermorphic.com/supermorphic/homelab-talos.git"
 
 # Render the pinned Cilium chart to standard output without writing generated YAML.
@@ -34,7 +35,7 @@ web-research-local-integration-test: require-bash
 # homelab-diagnostic. This suite is intentionally outside automatic campaigns.
 web-research-live-contract-test: require-bash
     @scripts/test/run-catalog-suite.sh test.web-research-live-contract -- \
-      scripts/test/scenarios/web-research-live-contract.sh {{quote(kubeconfig)}}
+      scripts/test/scenarios/web-research-live-contract.sh {{quote(test_kubeconfig)}}
 
 # Validate the staged NocoDB source and its pinned OCI Helm render. This is local,
 # secret-free, and remains safe while the Flux Kustomization is suspended.
@@ -43,7 +44,7 @@ nocodb-validate: require-bash
 
 # Observe deployed NocoDB only through scoped Kubernetes and Prometheus/Gatus reads.
 nocodb-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.nocodb -- scripts/verify/nocodb.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.nocodb -- scripts/verify/nocodb.sh {{quote(test_kubeconfig)}}
 
 # Reconcile every eligible NocoDB source for one managed domain through the fixed private
 # webhook. Guard: NOCODB_SOURCE_SYNC_CONFIRM='sync:nocodb:<domain>'.
@@ -90,11 +91,11 @@ nocodb-pair-retry domain pair access_kind quiesced_operation_id: require-bash
 # Run the catalog-coordinated synthetic NocoDB reader/operator acceptance lifecycle.
 # Guard: NOCODB_ACCESS_TEST_CONFIRM='test:nocodb:access'.
 nocodb-access-test: require-bash
-    @scripts/test/run-catalog-suite.sh test.nocodb-access -- scripts/test/scenarios/nocodb-access.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh test.nocodb-access -- scripts/test/scenarios/nocodb-access.sh {{quote(test_kubeconfig)}}
 
 # Explicit source-pair acceptance variant; requires its additional attended inputs.
 nocodb-access-source-pair-test: require-bash
-    @scripts/test/run-catalog-suite.sh test.nocodb-access-source-pair -- scripts/test/scenarios/nocodb-access.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh test.nocodb-access-source-pair -- scripts/test/scenarios/nocodb-access.sh {{quote(test_kubeconfig)}}
 
 # Run the registered disposable Podman integration. It binds loopback ports only and
 # never uses cluster credentials or production endpoints.
@@ -104,11 +105,11 @@ nocodb-local-integration-test: require-bash
 # Restore one complete NocoDB logical bundle into isolated PostgreSQL with fresh
 # application scratch. Guard: NOCODB_RESTORE_CONFIRM='restore:nocodb:metadata'.
 nocodb-restore-drill: require-bash
-    @scripts/test/run-catalog-suite.sh test.nocodb-restore-drill -- scripts/test/scenarios/nocodb-restore-drill.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh test.nocodb-restore-drill -- scripts/test/scenarios/nocodb-restore-drill.sh {{quote(test_kubeconfig)}}
 
 # Explicit restore extension; retains both restore and source-pair confirmations.
 nocodb-restore-drill-extension: require-bash
-    @scripts/test/run-catalog-suite.sh test.nocodb-restore-drill-extension -- scripts/test/scenarios/nocodb-restore-drill.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh test.nocodb-restore-drill-extension -- scripts/test/scenarios/nocodb-restore-drill.sh {{quote(test_kubeconfig)}}
 
 # Validate specification 023 source, rendered n8n chart, database, backup, routes,
 # containment, monitoring, and secret structure. Cluster-independent; part of just ci.
@@ -164,27 +165,27 @@ automation-data-upgrade: require-bash
 # Observe the deployed automation-data platform without reading Secrets, querying
 # PostgreSQL, invoking n8n, execing into a Pod, or opening a port-forward.
 automation-data-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.automation-data -- scripts/verify/automation-data.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.automation-data -- scripts/verify/automation-data.sh {{quote(test_kubeconfig)}}
 
 # Exercise dynamic provisioning, least-privilege enforcement, explicit credential
 # rotation, and recoverable backup behavior after exact attended confirmation.
 automation-data-provisioning-test: require-bash
-    @scripts/test/run-catalog-suite.sh test.automation-data-provisioning -- scripts/test/scenarios/automation-data-provisioning.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh test.automation-data-provisioning -- scripts/test/scenarios/automation-data-provisioning.sh {{quote(test_kubeconfig)}}
 
 # Restore n8n plus every automation-data database into run-owned isolated services,
 # prove the restored encrypted runtime credential, and create a fresh recovery backup.
 automation-data-restore-drill: require-bash
-    @scripts/test/run-catalog-suite.sh test.automation-data-restore-drill -- scripts/test/scenarios/automation-data-restore-drill.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh test.automation-data-restore-drill -- scripts/test/scenarios/automation-data-restore-drill.sh {{quote(test_kubeconfig)}}
 
 # Run the observational n8n live acceptance contract. It sends no canary request;
 # private bootstrap sets N8N_VERIFY_MODE=private while the public route is absent.
 n8n-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.n8n -- scripts/verify/n8n.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.n8n -- scripts/verify/n8n.sh {{quote(test_kubeconfig)}}
 
 # Restore the newest valid logical dump into an isolated temporary database and
 # prove the retained n8n key can decrypt the restored canary credential.
 n8n-restore-drill: require-bash
-    @scripts/test/run-catalog-suite.sh test.n8n-restore-drill -- scripts/test/scenarios/n8n-restore-drill.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh test.n8n-restore-drill -- scripts/test/scenarios/n8n-restore-drill.sh {{quote(test_kubeconfig)}}
 
 # Print read-only live Cilium and Kubernetes status.
 cilium-status:
@@ -286,7 +287,7 @@ metrics-server-validate: require-bash
 # Verify metrics-server: Kustomization + HelmRelease Ready, deployment rolled out,
 # the metrics.k8s.io APIService Available, and kubectl top returns data.
 metrics-server-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.metrics-server -- scripts/verify/metrics-server.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.metrics-server -- scripts/verify/metrics-server.sh {{quote(test_kubeconfig)}}
 
 # Unit-test the offline configuration policies without contacting a cluster.
 validator-tests:
@@ -314,7 +315,7 @@ validator-tests:
 # live, read-only gate and must run only after agent-access is deployed and scoped
 # credentials have been minted into the current worktree.
 agent-access-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.agent-access -- scripts/verify/agent-access.sh {{quote(kubeconfig)}} {{quote(talosconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.agent-access -- scripts/verify/agent-access.sh {{quote(test_kubeconfig)}} {{quote(talosconfig)}}
 
 # Enforce cross-application media source policy without contacting the cluster.
 media-policy-validate:
@@ -445,13 +446,13 @@ require-bash:
 
 # Verify the live Cilium state without changing cluster resources.
 cilium-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.cilium -- scripts/verify/cilium.sh {{quote(kubeconfig)}} {{quote(cilium_values)}}
+    @scripts/test/run-catalog-suite.sh verification.cilium -- scripts/verify/cilium.sh {{quote(test_kubeconfig)}} {{quote(cilium_values)}}
 
 # Run the state-changing Cilium connectivity suite and clean up its temporary
 # workloads after CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity.
 # Operator-only; intentionally separate from read-only verification.
 cilium-connectivity-test: require-bash
-    @scripts/test/run-catalog-suite.sh test.cilium-connectivity -- scripts/test/scenarios/cilium-connectivity.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh test.cilium-connectivity -- scripts/test/scenarios/cilium-connectivity.sh {{quote(test_kubeconfig)}}
 
 # Validate the complete local Flux source and pinned OCI render without mutating the cluster.
 flux-validate: require-bash
@@ -526,7 +527,7 @@ flux-status:
 
 # Verify final Flux ownership, source, SOPS, canary, and Cilium health.
 flux-verify revision="": flux-validate require-bash
-    @scripts/test/run-catalog-suite.sh verification.flux -- scripts/verify/flux.sh {{quote(kubeconfig)}} {{quote(revision)}}
+    @scripts/test/run-catalog-suite.sh verification.flux -- scripts/verify/flux.sh {{quote(test_kubeconfig)}} {{quote(revision)}}
 
 # Validate the complete local internal foundation graph, encrypted providers, and pinned chart renders.
 foundation-validate: require-bash
@@ -566,7 +567,7 @@ foundation-status:
 
 # Verify the complete live internal foundation acceptance gate.
 foundation-verify: foundation-validate require-bash
-    @scripts/test/run-catalog-suite.sh verification.foundation -- scripts/verify/foundation.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.foundation -- scripts/verify/foundation.sh {{quote(test_kubeconfig)}}
 
 # Restart the flux-system controllers and prove reconciliation resumes.
 flux-restart: require-bash
@@ -674,30 +675,30 @@ plex-validate: require-bash
 # Verify live Longhorn state without changing cluster resources: controllers,
 # node disks, default StorageClass, backup target, and recurring jobs.
 storage-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.storage -- scripts/verify/storage.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.storage -- scripts/verify/storage.sh {{quote(test_kubeconfig)}}
 
 # Create and remove a run-scoped PVC to prove Longhorn dynamic provisioning and
 # two-node replica anti-affinity after
 # STORAGE_PROVISIONING_CONFIRM=test:storage-provisioning. Operator-only and state-changing.
 storage-provisioning-test: require-bash
-    @scripts/test/run-catalog-suite.sh test.storage-provisioning -- scripts/test/scenarios/storage-provisioning.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh test.storage-provisioning -- scripts/test/scenarios/storage-provisioning.sh {{quote(test_kubeconfig)}}
 
 # Verify the live SMB CSI driver: Kustomization Ready, controller +
 # node plugin rolled out, and the CSIDriver registered.
 csi-driver-smb-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.csi-driver-smb -- scripts/verify/csi-driver-smb.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.csi-driver-smb -- scripts/verify/csi-driver-smb.sh {{quote(test_kubeconfig)}}
 
 # Verify the live shared media storage: Kustomizations Ready and the
 # static RWX media-data PVC Bound. The mount is exercised for real by Plex (PR 11-2)
 # and the media-hardlink integration test; binding a static PV is
 # a claimRef match and does not by itself prove the SMB mount works.
 media-storage-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.media-storage -- scripts/verify/media-storage.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.media-storage -- scripts/verify/media-storage.sh {{quote(test_kubeconfig)}}
 
 # Verify the live Plex app: Kustomization + HelmRelease Ready, rollout complete,
 # HTTPRoute Accepted, Pi-hole DNS, and /identity reachable over the internal gateway.
 plex-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.plex -- scripts/verify/plex.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.plex -- scripts/verify/plex.sh {{quote(test_kubeconfig)}}
 
 # Print UID/key preflight facts and sanitized Plex Relay lifecycle lines without
 # creating a session or mutating the cluster. Operator-only live diagnostic.
@@ -712,7 +713,7 @@ plex-network-observe seconds='300': require-bash
 # Prove Plex ingress and egress containment with run-scoped control/selected probes.
 # Operator-only and state-changing; creates and removes only run-scoped Pods.
 plex-network-policy-test: require-bash
-    @scripts/test/run-catalog-suite.sh test.plex-network-policy -- scripts/test/scenarios/plex-network-policy.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh test.plex-network-policy -- scripts/test/scenarios/plex-network-policy.sh {{quote(test_kubeconfig)}}
 
 # Validate the Intel GPU device plugin source: files, wiring, dependency,
 # pinned image, and the built DaemonSet manifest.
@@ -722,7 +723,7 @@ intel-gpu-plugin-validate: require-bash
 # Verify the live Intel GPU device plugin: Kustomization Ready, DaemonSet
 # rolled out, and every node advertising gpu.intel.com/i915 (QuickSync capacity).
 intel-gpu-plugin-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.intel-gpu-plugin -- scripts/verify/intel-gpu-plugin.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.intel-gpu-plugin -- scripts/verify/intel-gpu-plugin.sh {{quote(test_kubeconfig)}}
 
 # Validate the qBittorrent+Gluetun source: files, wiring, dependency,
 # encrypted ProtonVPN Secret, the sidecar/kill-switch essentials, and the pinned render.
@@ -732,7 +733,7 @@ qbittorrent-validate: require-bash
 # Verify the live qBittorrent: Kustomization + HelmRelease Ready, rollout,
 # HTTPRoute Accepted, DNS, and the WebUI reachable over the internal gateway.
 qbittorrent-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.qbittorrent -- scripts/verify/qbittorrent.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.qbittorrent -- scripts/verify/qbittorrent.sh {{quote(test_kubeconfig)}}
 
 # Validate the current *arr source (Prowlarr, Sonarr, Radarr, Lidarr): files, wiring, dependency
 # graph, no-secret ks, app-template chartRef, config-PVC (Longhorn RWO + Recreate + keep),
@@ -747,7 +748,7 @@ komga-validate: require-bash
 
 # Observe Komga readiness, storage and trusted private HTTPS without app credentials.
 komga-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.komga -- scripts/verify/komga.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.komga -- scripts/verify/komga.sh {{quote(test_kubeconfig)}}
 
 # Generate synthetic CBZ/Mylar data and a private attended-outcome template.
 komga-acceptance-fixture directory=".tmp/komga-acceptance":
@@ -767,13 +768,13 @@ mylar3-validate: require-bash
 
 # Observe Mylar3 deployment and private login availability with scoped credentials.
 mylar3-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.mylar3 -- scripts/verify/mylar3.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.mylar3 -- scripts/verify/mylar3.sh {{quote(test_kubeconfig)}}
 
 # Verify a current live *arr app: `just kube arr-verify <prowlarr|sonarr|radarr|lidarr>`.
 # Kustomization + HelmRelease Ready, rollout, HTTPRoute Accepted, DNS, and /ping over the
 # internal gateway. Operator-only (needs the cluster); not in `just ci`.
 arr-verify app: require-bash
-    @scripts/test/run-catalog-suite.sh verification.{{app}} -- scripts/verify/arr.sh {{quote(app)}} {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.{{app}} -- scripts/verify/arr.sh {{quote(app)}} {{quote(test_kubeconfig)}}
 
 # Validate the Seerr source: files, wiring, no-secret ks, app-template chartRef,
 # config-only PVC (Longhorn RWO + Recreate + keep at /app/config), HTTPRoute, Gatus probe,
@@ -800,12 +801,12 @@ alerts-coverage-validate: require-bash
 # Verify the live Seerr: Kustomization + HelmRelease Ready, rollout, HTTPRoute
 # Accepted, DNS, and /api/v1/status over the internal gateway. Operator-only; not in ci.
 seerr-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.seerr -- scripts/verify/seerr.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.seerr -- scripts/verify/seerr.sh {{quote(test_kubeconfig)}}
 
 # Verify live Tautulli resources, route, DNS, and exact non-redirecting HTTP 200 responses
 # from /status through the Service and internal gateway. Operator-only/read-only; not in ci.
 tautulli-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.tautulli -- scripts/verify/tautulli.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.tautulli -- scripts/verify/tautulli.sh {{quote(test_kubeconfig)}}
 
 # Validate the FlareSolverr source: files, wiring, no-secret ks, app-template chartRef,
 # stateless (no config PVC, no HTTPRoute), non-root + drop-ALL caps, /dev/shm memory,
@@ -818,7 +819,7 @@ flaresolverr-validate: require-bash
 # endpoints, and an in-cluster GET / "ready" probe over a port-forward (no HTTPRoute/DNS).
 # Operator-only; not in ci. Proves the service is UP, NOT that any indexer works.
 flaresolverr-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.flaresolverr -- scripts/verify/flaresolverr.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.flaresolverr -- scripts/verify/flaresolverr.sh {{quote(test_kubeconfig)}}
 
 # Validate the qbit_manage source: files, wiring, encrypted-Secret decryption, app-template
 # chartRef, non-root drop-ALL Recreate deployment, UI-less (no Service/HTTPRoute/Gatus),
@@ -837,7 +838,7 @@ qbit-manage-contain phase: require-bash
 # Verify the live qbit_manage: Kustomization + HelmRelease Ready, rollout, no crash-loop, and
 # a recent authenticated run with no config-parse/login failure. Operator-only; not in ci.
 qbit-manage-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.qbit-manage -- scripts/verify/qbit-manage.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.qbit-manage -- scripts/verify/qbit-manage.sh {{quote(test_kubeconfig)}}
 
 # Read the preserved application trace for one run-owned qbit_manage E2E Job.
 # The exact run/phase validation and labels prevent this diagnostic from reading
@@ -948,21 +949,21 @@ monitoring-validate: require-bash
 # resource kind, both Flux rules loaded and healthy, an active Alertmanager connection,
 # the expected ntfy route loaded, and the foundation still green. Does not send alerts.
 monitoring-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.monitoring -- scripts/verify/monitoring.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.monitoring -- scripts/verify/monitoring.sh {{quote(test_kubeconfig)}}
 
 # Verify centralized logging without printing raw log content.
 logging-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.logging -- scripts/verify/logging.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.logging -- scripts/verify/logging.sh {{quote(test_kubeconfig)}}
 
 # Verify the live cert-manager scrape target, production expiry metric identity,
 # security alert-rule health, and staging-resource pruning. Read-only; not in ci.
 security-alerts-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.security-alerts -- scripts/verify/security-alerts.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.security-alerts -- scripts/verify/security-alerts.sh {{quote(test_kubeconfig)}}
 
 # Diagnose the Flux resource-alert signal path stage by stage, preserving targeted,
 # sanitized evidence in a canonical test result. Read-only; never sends an alert.
 flux-alerts-diagnostics: require-bash
-    @scripts/test/run-catalog-suite.sh diagnostics.flux-alerts -- scripts/diagnose/flux-alerts.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh diagnostics.flux-alerts -- scripts/diagnose/flux-alerts.sh {{quote(test_kubeconfig)}}
 
 # Reset Grafana's DB admin password to the current grafana-admin Secret value. Grafana
 # only applies the admin password on first init, so a rotated/recreated Secret (e.g. the
@@ -1004,7 +1005,7 @@ gatus-validate: require-bash
 # Verify the live Gatus app: Kustomization + HelmRelease Ready, PVC bound,
 # HTTPRoute accepted, the dashboard reachable via HTTPS, and foundation green.
 gatus-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.gatus -- scripts/verify/gatus.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.gatus -- scripts/verify/gatus.sh {{quote(test_kubeconfig)}}
 
 # Validate the staged read-only Portainer design: encrypted bootstrap Secret,
 # read-only RBAC, Cilium isolation, internal route, retained Longhorn PVC, and
@@ -1042,7 +1043,7 @@ portainer-policy-validate:
 # Verify live Portainer readiness, storage, routing, isolation, and effective
 # impersonated Kubernetes authorization. Operator-only; not in `just ci`.
 portainer-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.portainer -- scripts/verify/portainer.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.portainer -- scripts/verify/portainer.sh {{quote(test_kubeconfig)}}
 
 # Validate the suspended persistent report host and guarded publishing contract.
 # Cluster-independent and included in `just ci`.
@@ -1052,7 +1053,7 @@ test-reports-validate: require-bash
 # Verify the live static report host, retained PVC, route, policy, and catalog.
 # Operator-only and read-only.
 test-reports-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.test-reports -- scripts/verify/test-reports.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.test-reports -- scripts/verify/test-reports.sh {{quote(test_kubeconfig)}}
 
 # Print scoped, read-only report-host reconciliation diagnostics. The dedicated
 # namespace contains no Secrets, so pod specs, events, and static-server logs are
@@ -1063,7 +1064,7 @@ test-reports-diagnostics: require-bash
 # Confirmation-guarded pod recreation proving the Portainer database remains on
 # the original PVC. Operator-only and intentionally separate from bootstrap.
 portainer-persistence-test: require-bash
-    @scripts/test/run-catalog-suite.sh test.portainer-persistence -- scripts/verify/portainer-persistence.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh test.portainer-persistence -- scripts/verify/portainer-persistence.sh {{quote(test_kubeconfig)}}
 
 # Validate the Homepage source: files, wiring, namespace gateway label,
 # dependency graph, pinned image, allowed-hosts, HTTPRoute, and the render.
@@ -1073,7 +1074,7 @@ homepage-validate: require-bash
 # Verify the live Homepage app: Kustomization Ready, deployment rolled out,
 # HTTPRoute accepted, dashboard reachable via HTTPS, and foundation green.
 homepage-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.homepage -- scripts/verify/homepage.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.homepage -- scripts/verify/homepage.sh {{quote(test_kubeconfig)}}
 
 # Validate the Trivy Operator source: files, wiring, staged suspend,
 # dependency, pinned chart, key scanner settings, and the render.
@@ -1083,7 +1084,7 @@ trivy-validate: require-bash
 # Verify the live Trivy Operator: Kustomization + HelmRelease Ready, operator
 # rolled out, report CRDs installed, and foundation green.
 trivy-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.trivy -- scripts/verify/trivy.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.trivy -- scripts/verify/trivy.sh {{quote(test_kubeconfig)}}
 
 # Validate the Tailscale operator source: files, wiring, staged suspend, cilium
 # dependency, SOPS decryption, pinned chart, privileged-namespace exception, the
@@ -1094,7 +1095,7 @@ tailscale-operator-validate: require-bash
 # Verify the live Tailscale operator: Kustomization + HelmRelease Ready, operator
 # rolled out, both ingress ProxyGroup replicas Ready, and foundation green.
 tailscale-operator-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.tailscale-operator -- scripts/verify/tailscale-operator.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.tailscale-operator -- scripts/verify/tailscale-operator.sh {{quote(test_kubeconfig)}}
 
 # Validate the Tailscale subnet-router source: files, staged Kustomization wiring +
 # operator dependency, hostnamePrefix HA Connector referencing the node-spread ProxyClass,
@@ -1107,7 +1108,7 @@ tailscale-subnet-router-validate: require-bash
 # devices, exactly the two /32 routes, two Ready replicas on distinct nodes, Envoy Gateway
 # Programmed, and a representative HTTPRoute Accepted. Route approval stays a manual step.
 tailscale-subnet-router-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.tailscale-subnet-router -- scripts/verify/tailscale-subnet-router.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.tailscale-subnet-router -- scripts/verify/tailscale-subnet-router.sh {{quote(test_kubeconfig)}}
 
 # Validate the ntfy source: files, wiring, staged suspend, dependency graph, SOPS
 # decryption, pinned image, hardened non-root pod, RWO PVC, server.yml (deny-all,
@@ -1120,12 +1121,12 @@ ntfy-validate: require-bash
 # endpoint healthy, anonymous access denied, the subscriber's exact runtime read-only
 # ACLs, per-token ACLs, and cache persistence.
 ntfy-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.ntfy -- scripts/verify/ntfy.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.ntfy -- scripts/verify/ntfy.sh {{quote(test_kubeconfig)}}
 
 # Send three real positive-path ntfy ACL test messages after observational preflight.
 # Guard: NTFY_PUBLISH_TEST_CONFIRM='test:ntfy:publish:media-critical-homelab'.
 ntfy-publish-test: require-bash
-    @scripts/test/run-catalog-suite.sh test.ntfy-publish -- scripts/test/scenarios/ntfy-publish.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh test.ntfy-publish -- scripts/test/scenarios/ntfy-publish.sh {{quote(test_kubeconfig)}}
 
 # Validate the alertmanager-ntfy adapter source: files, wiring, staged suspend, dependency
 # graph, SOPS decryption, pinned image, hardened pod, split config (dynamic topic/priority),
@@ -1138,7 +1139,7 @@ alertmanager-ntfy-validate: require-bash
 # complete, and the Alertmanager 'ntfy' receiver present. A synthetic notification remains
 # a separate explicit, confirmation-guarded E2E test.
 alertmanager-ntfy-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.alertmanager-ntfy -- scripts/verify/alertmanager-ntfy.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.alertmanager-ntfy -- scripts/verify/alertmanager-ntfy.sh {{quote(test_kubeconfig)}}
 
 # Exercise the real Flux failure rule and Alertmanager ntfy route for both firing and
 # resolved states. Aggregate webhook counters cannot prove test-specific ntfy publication,
@@ -1146,7 +1147,7 @@ alertmanager-ntfy-verify: require-bash
 # Kustomization. Operator-only; state-changing; allow about 25 minutes.
 # Guard: FLUX_ALERT_E2E_CONFIRM='test:flux-alert:firing-resolved'.
 flux-alert-delivery-test: require-bash
-    @scripts/test/run-catalog-suite.sh test.e2e.flux-alert-delivery -- scripts/test/scenarios/flux-alert-delivery.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh test.e2e.flux-alert-delivery -- scripts/test/scenarios/flux-alert-delivery.sh {{quote(test_kubeconfig)}}
 
 # Synchronize an API-managed ntfy consumer with its token from the canonical ntfy
 # Secret. Seerr uses its settings API; n8n creates or updates only the named Header Auth
@@ -1247,7 +1248,7 @@ openbao-validate: require-bash
 # Compare clean deployed source with live OpenBao configuration through the fixed
 # homelab-observer and sanitized reader metrics. No configuration writes or acceptance tokens.
 openbao-verify: require-bash
-    @scripts/test/run-catalog-suite.sh verification.openbao -- scripts/verify/openbao.sh {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh verification.openbao -- scripts/verify/openbao.sh {{quote(test_kubeconfig)}}
 
 # Apply reviewed OpenBao configuration with exact source/target/plan confirmation.
 openbao-config-apply: require-bash
@@ -1260,7 +1261,7 @@ openbao-backup-retrieve: require-bash
 # Attended isolated snapshot restore; explicit operator identity, exact per-run confirmation.
 openbao-restore-drill: require-bash
     @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}"
-    @TEST_KUBECONFIG="$OPENBAO_OPERATOR_KUBECONFIG" scripts/test/run-catalog-suite.sh test.openbao-restore-drill -- uv run --locked python -m scripts.test.scenarios.openbao_restore
+    @scripts/test/run-catalog-suite.sh test.openbao-restore-drill -- uv run --locked python -m scripts.test.scenarios.openbao_restore
 
 # Attended cleanup retry for one retained isolated restore run; no evidence rewriting.
 openbao-restore-cleanup run_id: require-bash
@@ -1269,12 +1270,12 @@ openbao-restore-cleanup run_id: require-bash
 # Attended real API issuance, denial, and actual expiration acceptance.
 openbao-issuance-test: require-bash
     @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}"
-    @TEST_KUBECONFIG="$OPENBAO_OPERATOR_KUBECONFIG" scripts/test/run-catalog-suite.sh test.openbao-issuance -- uv run --locked python -m scripts.test.scenarios.openbao_issuance
+    @scripts/test/run-catalog-suite.sh test.openbao-issuance -- uv run --locked python -m scripts.test.scenarios.openbao_issuance
 
 # Attended sequential follower and leader eviction under the catalog disruption Lease.
 openbao-ha-test: require-bash
     @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}"
-    @TEST_KUBECONFIG="$OPENBAO_OPERATOR_KUBECONFIG" scripts/test/run-catalog-suite.sh test.openbao-ha -- uv run --locked python -m scripts.test.scenarios.openbao_ha
+    @scripts/test/run-catalog-suite.sh test.openbao-ha -- uv run --locked python -m scripts.test.scenarios.openbao_ha
 
 # Attended standby-first replacement after a reviewed Git image update and fresh snapshot.
 openbao-upgrade: require-bash
@@ -1302,4 +1303,4 @@ kubeconfig profile="observer": require-bash
 # Attended profile/caller acceptance with isolated temporary workstation identities.
 agent-credentials-test: require-bash
     @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}" || { echo 'Set OPENBAO_OPERATOR_KUBECONFIG to an absolute operator kubeconfig path, or use just bootstrap openbao-agent <path> test.' >&2; exit 1; }
-    @TEST_KUBECONFIG="$OPENBAO_OPERATOR_KUBECONFIG" scripts/test/run-catalog-suite.sh test.agent-credentials -- uv run --locked python -m scripts.test.scenarios.agent_credentials
+    @scripts/test/run-catalog-suite.sh test.agent-credentials -- uv run --locked python -m scripts.test.scenarios.agent_credentials

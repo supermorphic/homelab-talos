@@ -16,7 +16,6 @@ require_bash
 target="$1"
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
-kubeconfig='.kube/config'
 
 case "$target" in
   qbittorrent)
@@ -37,9 +36,4 @@ case "$target" in
     ;;
 esac
 
-[[ -f "$kubeconfig" ]] || {
-  echo "Missing $kubeconfig; use just kube kubeconfig for scoped suites, or supply the selected suite's explicitly authorized operator credential." >&2
-  exit 1
-}
-
-exec scripts/test/run-catalog-suite.sh "$suite_id" -- "$probe" "$kubeconfig"
+exec scripts/test/run-catalog-suite.sh "$suite_id" -- "$probe" '@test-kubeconfig@'

@@ -3,7 +3,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 set working-directory := ".."
 
 talosconfig := ".talos/config"
-kubeconfig := ".kube/config"
+kubeconfig := env("TEST_KUBECONFIG", ".kube/config")
 
 # Print read-only status for the established cluster or one node.
 status node='all':

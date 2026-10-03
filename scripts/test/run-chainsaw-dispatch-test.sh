@@ -100,6 +100,6 @@ dispatch_calls="$fixture_root/calls"
     scripts/test/run-live-suite.sh resilience node-abrupt-loss nuc2
 )
 [[ "$(<"$dispatch_calls")" == \
-  'test.resilience.node-abrupt-loss -- uv run --locked --no-dev python scripts/test/scenarios/node_abrupt_loss.py nuc2 .kube/config .talos/config' ]]
+  'test.resilience.node-abrupt-loss -- uv run --locked --no-dev python scripts/test/scenarios/node_abrupt_loss.py nuc2 @test-kubeconfig@ .talos/config' ]]
 expect_dispatch_rejection 'node-abrupt-loss requires a target node' \
   resilience node-abrupt-loss
