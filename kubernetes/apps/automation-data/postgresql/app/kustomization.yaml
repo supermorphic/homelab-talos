@@ -11,6 +11,19 @@ resources:
   - ./servicemonitor.yaml
   - ./statefulset.yaml
 configMapGenerator:
+  - name: automation-data-test-helpers-v1
+    options:
+      immutable: true
+      disableNameSuffixHash: true
+    files:
+      - restore-validation.sh=test-helpers/restore-validation.sh
+      - restore-permissions.sh=test-helpers/restore-permissions.sh
+      - restore-selection.sh=test-helpers/restore-selection.sh
+      - restore-body.sh=test-helpers/restore-body.sh
+      - automation-data-restore.sh=test-helpers/automation-data-restore.sh
+      - nocodb-restore-preflight.sh=test-helpers/nocodb-restore-preflight.sh
+      - backup.sh=scripts/backup.sh
+      - update-backup-status.sql=scripts/update-backup-status.sql
   - name: automation-data-postgresql-init
     files:
       - init-platform.sh=scripts/init-platform.sh

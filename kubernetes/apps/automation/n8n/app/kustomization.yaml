@@ -17,6 +17,7 @@ configMapGenerator:
       - test-helpers/n8n-restore-common.sh
       - test-helpers/n8n-restore-load.sh
       - test-helpers/n8n-restore-drop.sh
+      - test-helpers/n8n-restore-isolated.sh
     options:
       immutable: true
   - name: n8n-values

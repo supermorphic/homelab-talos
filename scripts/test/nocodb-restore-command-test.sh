@@ -253,7 +253,8 @@ jq -e '
   .metadata.suite == "platform" and .metadata.tier == "integration" and
   .metadata.target == "nocodb" and .metadata.scenario == "metadata-record-restore" and
   .metadata.scope == "system" and .metadata.intent == "resilience" and
-  .metadata.mutates_cluster == true and .metadata.execution_owner == "human" and
+  .metadata.mutates_cluster == true and .metadata.execution_owner == "shared" and
+  .access.profile == "test-runner" and .access.prerequisites == [] and
   .confirmation.type == "exact" and
   .confirmation.variable == "NOCODB_RESTORE_CONFIRM" and
   .confirmation.expected == "restore:nocodb:metadata" and
@@ -263,6 +264,6 @@ jq -e '
   .dispatch.mode == "direct" and .dispatch.runtime == "bash" and
   .dispatch.path == "scripts/test/scenarios/nocodb-restore-drill.sh" and
   .dispatch.args == [".kube/config"] and .dispatch.selector == null
-' <<<"$entry_json" >/dev/null || fail 'catalog metadata does not preserve the attended resilience contract'
+' <<<"$entry_json" >/dev/null || fail 'catalog metadata does not preserve the scoped resilience contract'
 
 echo 'NocoDB restore command tests passed.'

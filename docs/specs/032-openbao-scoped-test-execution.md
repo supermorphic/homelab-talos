@@ -274,6 +274,12 @@ Kubernetes issuer does not supply or replace that application token.
 `NTFY_FLUX_ALERT_TOKEN_FILE` supplied through the ntfy operator workflow. Its
 Kubernetes profile is `test-runner`, and its catalog entry declares
 `application-credential` with human execution ownership.
+`test.automation-data-provisioning` keeps its person-supplied
+`AUTOMATION_DATA_PROVISIONING_TOKEN` for the private provisioning webhook. Its
+Kubernetes access uses `test-runner`; its catalog entry remains human-owned with
+the `application-credential` prerequisite. Fixed application test Jobs continue
+to use their existing Git-managed Secret references. Kubernetes credential
+issuance does not create or replace those application passwords.
 
 The OpenBao server's own Kubernetes **issuer credential** is a third, distinct
 credential. It is not a workstation test token and must not be distributed in a

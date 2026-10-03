@@ -40,6 +40,15 @@ class AccessContractTests(unittest.TestCase):
                 with self.assertRaises(catalog_validator.ValidationFailure):
                     self.validate(entry)
 
+    def test_provisioning_keeps_person_supplied_webhook_credentials(self):
+        entry = self.entry("test.automation-data-provisioning")
+        self.assertEqual(
+            entry["access"],
+            {"profile": "test-runner", "prerequisites": ["application-credential"]},
+        )
+        self.assertEqual(entry["metadata"]["execution_owner"], "human")
+        self.assertEqual(entry["confirmation"]["expected"], "test:automation-data:provisioning")
+
     def test_dedicated_binding_is_exact(self):
         cases = {
             "test.flux-restart": "test-flux-restart",

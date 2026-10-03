@@ -131,14 +131,14 @@ verification_contract="$(yq -o=json -I=0 '
   {
     "mutates": .metadata.mutates_cluster,
     "owner": .metadata.execution_owner,
-    "access": .access.tier,
+    "access": .access.profile,
     "confirmation": .confirmation.type,
     "command": .runner.command,
     "implementation": .runner.implementation
   }
 ' "$catalog")"
 [[ "$verification_contract" == \
-  '{"mutates":false,"owner":"human","access":"observer","confirmation":"none","command":"mise exec -- just kube automation-data-verify","implementation":"scripts/verify/automation-data.sh"}' ]] ||
+  '{"mutates":false,"owner":"shared","access":"observer","confirmation":"none","command":"mise exec -- just kube automation-data-verify","implementation":"scripts/verify/automation-data.sh"}' ]] ||
   fail 'the read-only automation-data catalog contract is missing or unsafe'
 
 provisioning_contract="$(yq -o=json -I=0 '
@@ -168,7 +168,7 @@ restore_contract="$(yq -o=json -I=0 '
   }
 ' "$catalog")"
 [[ "$restore_contract" == \
-  '{"mutates":true,"owner":"human","confirmation":{"type":"exact","variable":"AUTOMATION_DATA_RESTORE_CONFIRM","expected":"restore:automation-data:full-chain"},"command":"AUTOMATION_DATA_RESTORE_CONFIRM=restore:automation-data:full-chain mise exec -- just kube automation-data-restore-drill","implementation":"scripts/test/scenarios/automation-data-restore-drill.sh","dispatch":{"mode":"direct","runtime":"bash","path":"scripts/test/scenarios/automation-data-restore-drill.sh","args":[".kube/config"],"selector":null}}' ]] ||
+  '{"mutates":true,"owner":"shared","confirmation":{"type":"exact","variable":"AUTOMATION_DATA_RESTORE_CONFIRM","expected":"restore:automation-data:full-chain"},"command":"AUTOMATION_DATA_RESTORE_CONFIRM=restore:automation-data:full-chain mise exec -- just kube automation-data-restore-drill","implementation":"scripts/test/scenarios/automation-data-restore-drill.sh","dispatch":{"mode":"direct","runtime":"bash","path":"scripts/test/scenarios/automation-data-restore-drill.sh","args":[".kube/config"],"selector":null}}' ]] ||
   fail 'the attended automation-data restore catalog contract is missing or unsafe'
 
 verifier='scripts/verify/automation-data.sh'

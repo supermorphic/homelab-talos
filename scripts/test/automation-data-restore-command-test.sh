@@ -6,11 +6,11 @@ source scripts/test/lib/automation-data-restore-command.sh
 # shellcheck source=scripts/test/lib/n8n-restore-command.sh
 source scripts/test/lib/n8n-restore-command.sh
 
-rg -Fq 'read_platform_revision' scripts/test/lib/automation-data-restore-command.sh || {
+rg -Fq 'read_platform_revision' kubernetes/apps/automation-data/postgresql/app/test-helpers/restore-body.sh || {
   echo 'automation-data restore command test failed: upgraded classification bypasses the revision oracle' >&2
   exit 1
 }
-rg -Fq 'assert_nocodb_access_kind' scripts/test/lib/automation-data-restore-command.sh || {
+rg -Fq 'assert_nocodb_access_kind' kubernetes/apps/automation-data/postgresql/app/test-helpers/restore-body.sh || {
   echo 'automation-data restore command test failed: old classification accepts leftover extension functions' >&2
   exit 1
 }
