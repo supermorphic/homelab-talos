@@ -15,6 +15,7 @@ custom_js="$base/app/config/custom.js"
 allure_icon="$base/app/icons/allure.svg"
 allure_provenance="$base/app/icons/NOTICE.md"
 seerr_route='kubernetes/apps/media/seerr/app/httproute.yaml'
+mylar3_route='kubernetes/apps/media/mylar3/app/httproute.yaml'
 n8n_route='kubernetes/apps/automation/n8n/app/httproute.yaml'
 gatus_route='kubernetes/apps/monitoring/gatus/app/httproute.yaml'
 longhorn_route='kubernetes/apps/storage/longhorn/config/httproute.yaml'
@@ -241,6 +242,39 @@ assert_command_finds_nothing \
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_LIDARR_API_KEY") | .valueFrom.secretKeyRef.optional] | .[0]' "$dep")" == 'true' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_SEERR_API_KEY") | .valueFrom.secretKeyRef.name] | .[0]' "$dep")" == 'homepage-seerr' ]]
 [[ "$(yq -r '[.spec.template.spec.containers[].env[] | select(.name == "HOMEPAGE_VAR_SEERR_API_KEY") | .valueFrom.secretKeyRef.key] | .[0]' "$dep")" == 'apiKey' ]]
+
+# Homepage's native Mylar widget exposes these three fields. Keep the backend
+# private and the API key in a per-consumer Secret, never in discovery metadata.
+[[ "$(yq -r '[.metadata.annotations."gethomepage.dev/widget.type",
+  .metadata.annotations."gethomepage.dev/widget.url",
+  .metadata.annotations."gethomepage.dev/widget.key"] | join(",")' "$mylar3_route")" == \
+  'mylar,http://mylar3.media.svc.cluster.local:8090,{{HOMEPAGE_VAR_MYLAR3_API_KEY}}' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.fields" | from_json | join(",")' \
+  "$mylar3_route")" == 'series,issues,wanted' ]]
+[[ "$(yq -r '[.spec.template.spec.containers[].env[] |
+  select(.name == "HOMEPAGE_VAR_MYLAR3_API_KEY") | .valueFrom.secretKeyRef |
+  [.name, .key, .optional] | join(",")] | .[0]' "$dep")" == \
+  'homepage-mylar3,apiKey,true' ]]
+mylar3_secret="$base/app/homepage-mylar3.sops.yaml"
+if [[ -f "$mylar3_secret" ]]; then
+  [[ "$(sops filestatus "$mylar3_secret" | yq -r '.encrypted')" == 'true' ]]
+  [[ "$(yq -r '.sops.age[].recipient' "$mylar3_secret" | sort -u)" == \
+    "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
+  [[ "$(yq -r '[.metadata.name, .metadata.namespace] | join(",")' "$mylar3_secret")" == \
+    'homepage-mylar3,homepage' ]]
+  [[ "$(yq -r '.stringData.apiKey | test("^ENC\\[AES256_GCM,")' "$mylar3_secret")" == 'true' ]]
+  [[ "$(yq -r '[.resources[] | select(. == "./homepage-mylar3.sops.yaml")] | length' \
+    "$app_kustomization")" == '1' ]]
+  [[ "$(yq -r '.spec.template.metadata.annotations."homepage-mylar3-sops-hash"' "$dep")" == \
+    "$(git hash-object "$mylar3_secret")" ]]
+else
+  # Credentials are operator-provided. Do not leave Flux referencing a file
+  # that does not yet exist or fabricate an encrypted placeholder credential.
+  [[ "$(yq -r '[.resources[] | select(. == "./homepage-mylar3.sops.yaml")] | length' \
+    "$app_kustomization")" == '0' ]]
+  [[ "$(yq -r '.spec.template.metadata.annotations."homepage-mylar3-sops-hash" // ""' \
+    "$dep")" == '' ]]
+fi
 
 kustomize build "$base/app" >/dev/null
 

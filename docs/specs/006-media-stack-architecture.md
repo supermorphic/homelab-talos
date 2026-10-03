@@ -265,16 +265,30 @@ not support Mylar. Before enabling acquisition, open its private route from the
 credentials and select **Forms** authentication. Keep the base URL empty and
 in-application updates disabled. The login endpoint must return HTTP 200 without
 credentials. Basic authentication blocks the declared probes. Homepage discovers
-an application link without a credentialed widget; Gatus and `MediaEndpointDown`
-measure login availability, not acquisition health.
+the application link and its native `mylar` widget, displaying all supported fields:
+`series`, `issues` and `wanted`. Gatus and `MediaEndpointDown` measure login
+availability, not acquisition health.
 
 Enter the operator's ComicVine API key privately and verify a series lookup.
 Enable Mylar's API and use its generated key in Prowlarr's native **Mylar**
 application. These supported runtime settings persist beneath `/config/mylar`,
-including qBittorrent credentials. No Kubernetes consumer needs a Mylar credential
-in this change. A later desired-state credential must use an operator-created SOPS
-Secret, never plaintext or OpenBao. Do not reconcile the live config/database from
-an init script or ConfigMap.
+including qBittorrent credentials. Homepage uses the Mylar API key through its
+own `homepage-mylar3` SOPS Secret in the `homepage` namespace. Keep the key out of
+discovery annotations, plaintext Git and OpenBao. Do not reconcile the live
+config/database from an init script or ConfigMap.
+
+With Mylar's API enabled, the operator privately exports `MYLAR3_API_KEY` and
+loads their existing age identity. Set
+`HOMEPAGE_MYLAR3_SECRETS_CONFIRM=write:monitoring:homepage-mylar3:sops`, then run
+`mise exec -- just repo homepage-mylar3-secrets`. The recipe creates the encrypted
+Secret, registers it in Homepage's Kustomization and stamps its encrypted revision
+in the Homepage pod template. Commit those three files together through a PR.
+The same recipe rotates the key and refreshes Homepage's environment through Flux.
+The Secret reference is optional and its resource is absent until the operator
+creates it, so Homepage can start during setup. Widget values require that Secret
+and successful calls to Mylar's private Service on port 8090. Source validation
+does not establish authenticated widget data. The widget settings follow the
+[Homepage Mylar documentation](https://gethomepage.dev/widgets/services/mylar/).
 
 Create the comic download and library directories through the existing NAS
 management path if absent; require write access as UID/GID 568 without recursive

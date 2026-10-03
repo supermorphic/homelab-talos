@@ -1576,6 +1576,11 @@ homepage-lidarr-secrets:
     mv -- "$temp_dir/homepage-lidarr.sops.yaml" "$target"
     echo "Wrote SOPS-encrypted $target (homepage-lidarr in homepage)."
 
+# Write the operator-supplied Mylar3 widget key, register its encrypted Secret,
+# and stamp the Homepage rollout revision. Never reads Mylar's runtime config.
+homepage-mylar3-secrets:
+    @scripts/repository/homepage-mylar3-secrets.sh
+
 # Write ONLY the SOPS-encrypted Homepage Sonarr widget Secret
 # (homepage-sonarr in the homepage namespace) from SONARR_API_KEY.
 # Independent of the other Homepage widget credentials. Never echoes the value.

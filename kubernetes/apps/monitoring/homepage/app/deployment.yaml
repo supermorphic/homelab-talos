@@ -119,6 +119,14 @@ spec:
                   name: homepage-lidarr
                   key: apiKey
                   optional: true
+            # Mylar3 widget API key (operator-provided; the Secret writer also
+            # registers its encrypted resource and stamps the rollout revision).
+            - name: HOMEPAGE_VAR_MYLAR3_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: homepage-mylar3
+                  key: apiKey
+                  optional: true
             # Seerr widget API key (optional: widget blank until
             # `just repo homepage-seerr-secrets` creates the encrypted Secret).
             - name: HOMEPAGE_VAR_SEERR_API_KEY
