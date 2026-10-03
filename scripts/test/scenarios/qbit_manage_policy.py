@@ -555,24 +555,25 @@ class Kubectl:
         metadata = json.loads(current_text)["metadata"]
         if metadata.get("uid") != expected["uid"] or metadata.get("labels") != expected["labels"]:
             raise AssertionFailure("recorded Job ownership changed; refusing deletion")
-        options = {
-            "apiVersion": "v1",
-            "kind": "DeleteOptions",
-            "propagationPolicy": "Foreground",
-            "preconditions": {
-                "uid": expected["uid"],
-                "resourceVersion": metadata["resourceVersion"],
-            },
-        }
-        self.call(
-            "delete",
-            "--raw",
-            f"/apis/batch/v1/namespaces/{self.namespace}/jobs/{name}",
-            "-f",
-            "-",
-            input_text=json.dumps(options),
-            timeout=150,
-        )
+        if metadata.get("deletionTimestamp") is None:
+            options = {
+                "apiVersion": "v1",
+                "kind": "DeleteOptions",
+                "propagationPolicy": "Foreground",
+                "preconditions": {
+                    "uid": expected["uid"],
+                    "resourceVersion": metadata["resourceVersion"],
+                },
+            }
+            self.call(
+                "delete",
+                "--raw",
+                f"/apis/batch/v1/namespaces/{self.namespace}/jobs/{name}",
+                "-f",
+                "-",
+                input_text=json.dumps(options),
+                timeout=150,
+            )
         deadline = time.monotonic() + 120
         while True:
             current_text = self.call("get", "job", name, "-o", "json", "--ignore-not-found")

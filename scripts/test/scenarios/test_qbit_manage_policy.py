@@ -272,6 +272,21 @@ class OwnedJobCleanupTests(unittest.TestCase):
             self.assertEqual(body["propagationPolicy"], "Foreground")
             self.assertTrue(all("--selector" not in call.args for call in calls))
 
+    def test_cleanup_resumes_waiting_without_deleting_an_already_deleting_job(self):
+        client = qbm.Kubectl("synthetic.config")
+        with tempfile.TemporaryDirectory() as directory:
+            created = self.create_job(client, directory)
+            created["metadata"].update(
+                deletionTimestamp="2026-10-02T12:00:00Z", finalizers=["foregroundDeletion"]
+            )
+            with mock.patch.object(
+                client, "call", side_effect=[json.dumps(created), "", "", ""]
+            ) as command:
+                client.delete_owned_job(created["metadata"]["name"])
+            self.assertEqual(command.call_count, 2)
+            self.assertTrue(all(call.args[0] == "get" for call in command.call_args_list))
+            self.assertEqual(client.owned_jobs, {})
+
     def test_replaced_job_is_never_adopted_or_deleted(self):
         client = qbm.Kubectl("synthetic.config")
         with tempfile.TemporaryDirectory() as directory:
@@ -283,6 +298,37 @@ class OwnedJobCleanupTests(unittest.TestCase):
             ):
                 client.delete_labeled(qbm.RunIdentity(RUN_ID).resource_selector)
             self.assertEqual(command.call_count, 1)
+
+    def test_pending_cleanup_rejects_a_replacement_during_the_wait(self):
+        client = qbm.Kubectl("synthetic.config")
+        with tempfile.TemporaryDirectory() as directory:
+            created = self.create_job(client, directory)
+            created["metadata"]["deletionTimestamp"] = "2026-10-02T12:00:00Z"
+            replacement = copy.deepcopy(created)
+            replacement["metadata"]["uid"] = "synthetic-replacement"
+            with (
+                mock.patch.object(
+                    client, "call", side_effect=[json.dumps(created), json.dumps(replacement)]
+                ) as command,
+                self.assertRaisesRegex(qbm.AssertionFailure, "different Job"),
+            ):
+                client.delete_owned_job(created["metadata"]["name"])
+            self.assertTrue(all(call.args[0] == "get" for call in command.call_args_list))
+            self.assertIn(created["metadata"]["name"], client.owned_jobs)
+
+    def test_pending_cleanup_timeout_retains_ownership_and_reports_failure(self):
+        client = qbm.Kubectl("synthetic.config")
+        with tempfile.TemporaryDirectory() as directory:
+            created = self.create_job(client, directory)
+            created["metadata"]["deletionTimestamp"] = "2026-10-02T12:00:00Z"
+            with (
+                mock.patch.object(client, "call", return_value=json.dumps(created)) as command,
+                mock.patch.object(qbm.time, "monotonic", side_effect=[0, 121]),
+                self.assertRaisesRegex(qbm.AssertionFailure, "deadline"),
+            ):
+                client.delete_owned_job(created["metadata"]["name"])
+            self.assertTrue(all(call.args[0] == "get" for call in command.call_args_list))
+            self.assertIn(created["metadata"]["name"], client.owned_jobs)
 
     def test_cleanup_does_not_adopt_preexisting_run_labeled_objects(self):
         client = qbm.Kubectl("synthetic.config")

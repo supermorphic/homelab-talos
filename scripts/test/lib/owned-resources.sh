@@ -70,10 +70,12 @@ test_delete_owned() { # <ledger> <kind> <namespace> <name> <kubectl-command...>
     echo 'Recorded test resource ownership changed; refusing deletion.' >&2
     return 1
   }
-  options="$(jq -ce '{apiVersion:"v1",kind:"DeleteOptions",propagationPolicy:"Foreground",
-    preconditions:{uid:.metadata.uid,resourceVersion:.metadata.resourceVersion}}' <<<"$current")" || return 1
-  "$@" delete --raw "$prefix/namespaces/$namespace/$resource/$name" --filename - \
-    <<<"$options" >/dev/null || return 1
+  if jq -e '.metadata.deletionTimestamp == null' <<<"$current" >/dev/null; then
+    options="$(jq -ce '{apiVersion:"v1",kind:"DeleteOptions",propagationPolicy:"Foreground",
+      preconditions:{uid:.metadata.uid,resourceVersion:.metadata.resourceVersion}}' <<<"$current")" || return 1
+    "$@" delete --raw "$prefix/namespaces/$namespace/$resource/$name" --filename - \
+      <<<"$options" >/dev/null || return 1
+  fi
   deadline=$((SECONDS + 300))
   while true; do
     current="$("$@" get "$resource" "$name" --ignore-not-found --output json)" || return 1

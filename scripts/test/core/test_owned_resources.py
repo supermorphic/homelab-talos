@@ -41,7 +41,14 @@ class OwnedResourceTests(unittest.TestCase):
         fake.write_text("""#!/bin/sh
 case "$1" in
   create) cat "$FIXTURE_DIR/created.json" ;;
-  get) [ ! -f "$FIXTURE_DIR/state.json" ] || cat "$FIXTURE_DIR/state.json" ;;
+  get) if [ -f "$FIXTURE_DIR/state.json" ]; then
+    cat "$FIXTURE_DIR/state.json"
+    if [ -f "$FIXTURE_DIR/replace-during-wait" ]; then
+      cp "$FIXTURE_DIR/replacement.json" "$FIXTURE_DIR/state.json"
+      rm "$FIXTURE_DIR/replace-during-wait"
+    fi
+    if [ -f "$FIXTURE_DIR/gc-pending" ]; then rm "$FIXTURE_DIR/state.json"; fi
+  fi ;;
   delete) printf '%s\\n' "$*" >>"$FIXTURE_DIR/commands"; cat >>"$FIXTURE_DIR/calls.jsonl"; rm "$FIXTURE_DIR/state.json" ;;
   *) exit 2 ;;
 esac
@@ -95,6 +102,44 @@ esac
             'source "$1"; test_create_owned "$2" "$3" "$4"; test_delete_owned "$2" Pod media synthetic-probe "$4"'
         )
         self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.log.exists())
+
+    def test_cleanup_resumes_waiting_for_an_already_deleting_owned_object(self):
+        pending = json.loads(self.state.read_text())
+        pending["metadata"].update(
+            deletionTimestamp="2026-10-02T12:00:00Z", finalizers=["foregroundDeletion"]
+        )
+        self.state.write_text(json.dumps(pending))
+        (self.directory / "gc-pending").touch()
+        result = self.run_shell(
+            'source "$1"; test_create_owned "$2" "$3" "$4"; test_delete_owned "$2" Pod media synthetic-probe "$4"'
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.log.exists())
+
+    def test_pending_cleanup_rejects_a_replacement_during_the_wait(self):
+        pending = json.loads(self.state.read_text())
+        pending["metadata"]["deletionTimestamp"] = "2026-10-02T12:00:00Z"
+        self.state.write_text(json.dumps(pending))
+        replacement = json.loads(self.state.read_text())
+        replacement["metadata"]["uid"] = "synthetic-replacement"
+        (self.directory / "replacement.json").write_text(json.dumps(replacement))
+        (self.directory / "replace-during-wait").touch()
+        result = self.run_shell(
+            'source "$1"; test_create_owned "$2" "$3" "$4"; test_delete_owned "$2" Pod media synthetic-probe "$4"'
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("different object", result.stderr)
+        self.assertFalse(self.log.exists())
+
+    def test_pending_cleanup_timeout_reports_failure_without_deleting_again(self):
+        pending = json.loads(self.state.read_text())
+        pending["metadata"]["deletionTimestamp"] = "2026-10-02T12:00:00Z"
+        self.state.write_text(json.dumps(pending))
+        result = self.run_shell(
+            'source "$1"; sleep() { SECONDS=$((SECONDS + 301)); }; test_create_owned "$2" "$3" "$4"; test_delete_owned "$2" Pod media synthetic-probe "$4"'
+        )
+        self.assertEqual(result.returncode, 124, result.stderr)
         self.assertFalse(self.log.exists())
 
     def test_unrecorded_name_requires_no_cluster_request(self):
