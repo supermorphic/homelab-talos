@@ -212,7 +212,9 @@ if [[ "$mutates_cluster" != 'true' || "$scenario_lease" == 'true' ||
   "$disruption_admitted" == 'true' ]]; then
   test_access_check "$suite_id" || exit 1
   set +e
-  python -m scripts.test.run_bound_backend "$run_dir/logs/console.log" -- "$@" &
+  # Bash otherwise gives an asynchronous command /dev/null as stdin. Preserve
+  # the caller's input for attended password and recovery prompts.
+  python -m scripts.test.run_bound_backend "$run_dir/logs/console.log" -- "$@" <&0 &
   backend_pid="$!"
   wait "$backend_pid"
   primary_exit_code="$?"

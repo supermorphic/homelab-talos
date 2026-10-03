@@ -1,10 +1,14 @@
 """Backend supervision preserves output/exit status and waits for signal cleanup."""
 
 import os
+import pty
+import select
+import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -72,6 +76,78 @@ class BoundBackendTests(unittest.TestCase):
         self.assertNotEqual(process.returncode, 0)
         self.assertNotIn(b"CREDENTIAL_MARKER", output + error)
         self.assertEqual(error, b"Backend could not start.\n")
+
+    def test_attended_password_and_stdin_prompts_keep_terminal_and_hide_password(self):
+        backend = """from scripts.openbao.operator import private_prompt
+assert private_prompt('Operator password: ') == 'synthetic-private-value'
+assert input('Recovery confirmation: ') == 'confirm'
+print('ATTENDED_SUCCESS', flush=True)
+"""
+        harness = """import os,subprocess,sys
+original = os.tcgetpgrp(0)
+code = subprocess.call(['scripts/test/run-catalog-suite.sh', 'verification.metrics-server', '--', sys.executable, '-c', sys.argv[1]])
+assert os.tcgetpgrp(0) == original, 'Terminal foreground group was not restored'
+print('TERMINAL_RESTORED', flush=True)
+raise SystemExit(code)
+"""
+        binary_dir = self.root / "bin"
+        binary_dir.mkdir()
+        for source, name in (
+            ("tests/fixtures/test-access/fake-uv.sh", "uv"),
+            ("tests/fixtures/result-coordinator/fake-kubectl.sh", "kubectl"),
+        ):
+            shutil.copy2(ROOT / source, binary_dir / name)
+        environment = {
+            **os.environ,
+            "PATH": f"{binary_dir}:{os.environ['PATH']}",
+            "TEST_FIXTURE_REAL_UV": shutil.which("uv"),
+            "TEST_FIXTURE_ACCESS_TRACE": str(self.root / "access-trace"),
+            "TEST_FIXTURE_ACCESS_ROOT": str(self.root),
+            "TEST_RESULTS_ROOT": str(self.root / "results"),
+            "TEST_KUBECONFIG": "",
+            "TEST_ACCESS_CONFIG": "",
+            "TEST_EXECUTION_ORIGIN": "agent",
+        }
+        environment.pop("TEST_CATALOG_PATH", None)
+        pid, terminal = pty.fork()
+        if pid == 0:
+            os.chdir(ROOT)
+            os.execve(sys.executable, [sys.executable, "-c", harness, backend], environment)
+        output = bytearray()
+        reaped = False
+        try:
+
+            def receive(marker):
+                deadline = time.monotonic() + 10
+                while marker not in output:
+                    remaining = deadline - time.monotonic()
+                    self.assertGreater(remaining, 0, repr(bytes(output)))
+                    if select.select([terminal], [], [], remaining)[0]:
+                        try:
+                            chunk = os.read(terminal, 4096)
+                        except OSError:
+                            self.fail(repr(bytes(output)))
+                        self.assertTrue(chunk, repr(bytes(output)))
+                        output.extend(chunk)
+
+            receive(b"Operator password: ")
+            os.write(terminal, b"synthetic-private-value\n")
+            receive(b"Recovery confirmation: ")
+            os.write(terminal, b"confirm\n")
+            receive(b"TERMINAL_RESTORED")
+            _, status = os.waitpid(pid, 0)
+            reaped = True
+            self.assertEqual(os.waitstatus_to_exitcode(status), 0, repr(bytes(output)))
+            self.assertIn(b"ATTENDED_SUCCESS", output)
+            self.assertNotIn(b"synthetic-private-value", output)
+            logs = list((self.root / "results").glob("*/logs/console.log"))
+            self.assertEqual(len(logs), 1)
+            self.assertNotIn(b"synthetic-private-value", logs[0].read_bytes())
+        finally:
+            if not reaped:
+                os.kill(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
+            os.close(terminal)
 
     def test_interrupts_reach_child_group_and_wait_for_cleanup(self):
         grandchild = """import signal,sys,time
