@@ -7,6 +7,7 @@ temp_dir="$(mktemp -d /tmp/homelab-talos-flux-validate.XXXXXX)"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
 for file in \
+  'kubernetes/flux/clusters/prod/flux-system/gotk-sync.yaml' \
   'kubernetes/flux/clusters/prod/apps.yaml' \
   'kubernetes/apps/kustomization.yaml' \
   'kubernetes/apps/flux-system/kustomization.yaml' \
@@ -20,6 +21,15 @@ for file in \
     exit 1
   }
 done
+
+sync='kubernetes/flux/clusters/prod/flux-system/gotk-sync.yaml'
+source_spec="$(yq -r 'select(.kind == "GitRepository")' "$sync")"
+[[ "$(yq -r '.metadata.name + "/" + .metadata.namespace' - <<<"$source_spec")" == 'flux-system/flux-system' ]]
+[[ "$(yq -r '.spec.url' - <<<"$source_spec")" == 'https://forgejo.infra.supermorphic.com/supermorphic/homelab-talos.git' ]]
+[[ "$(yq -r '.spec.ref | keys | join(",")' - <<<"$source_spec")" == 'branch' ]]
+[[ "$(yq -r '.spec.ref.branch' - <<<"$source_spec")" == 'main' ]]
+[[ "$(yq -r '.spec.secretRef.name' - <<<"$source_spec")" == 'flux-system-forgejo' ]]
+[[ "$(yq -r 'select(.kind == "Kustomization") | .spec.path' "$sync")" == './kubernetes/flux/clusters/prod' ]]
 
 [[ "$(flux version --client | awk '{print $2}' | sed 's/^v//')" == "$expected_flux" ]]
 [[ "$(yq -r '.creation_rules[] | select(.path_regex | test("kubernetes")) | .encrypted_regex' .sops.yaml)" == '^(data|stringData)$' ]]
@@ -56,6 +66,7 @@ canary_ks='kubernetes/apps/flux-system/flux-canary/ks.yaml'
 [[ "$(yq -r '.spec.decryption.secretRef.name' "$canary_ks")" == 'sops-age' ]]
 
 kustomize build kubernetes/apps >"$temp_dir/apps.yaml"
+kustomize build kubernetes/flux/clusters/prod/flux-system >"$temp_dir/bootstrap.yaml"
 kustomize build kubernetes/apps/kube-system >"$temp_dir/kube-system.yaml"
 kustomize build kubernetes/apps/flux-system >"$temp_dir/flux-system.yaml"
 kustomize build kubernetes/apps/kube-system/cilium/app >"$temp_dir/cilium.yaml"
