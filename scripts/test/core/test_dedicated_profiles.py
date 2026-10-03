@@ -383,7 +383,7 @@ class DedicatedMemberTunnelTests(unittest.TestCase):
     admits = DedicatedFluxMutationTests.admits
     setUpClass = classmethod(DedicatedNodeMutationTests.setUpClass.__func__)
 
-    def test_ha_and_lifecycle_forward_only_the_three_member_api_ports(self):
+    def test_ha_and_lifecycle_forward_only_the_three_member_pods(self):
         for account in ("homelab-test-openbao-ha", "homelab-test-openbao-lifecycle"):
             for name in ("openbao-0", "openbao-1", "openbao-2"):
                 req = {
@@ -394,12 +394,11 @@ class DedicatedMemberTunnelTests(unittest.TestCase):
                     "name": name,
                     "userInfo": {"username": "system:serviceaccount:kube-system:" + account},
                 }
-                self.assertTrue(
-                    self.admits("homelab-test-openbao-member-tunnels", req, {"ports": [8200]})
-                )
-                for ports in ([8201], [8200, 8201], [], ["8200"]):
-                    self.assertFalse(
-                        self.admits("homelab-test-openbao-member-tunnels", req, {"ports": ports})
+                # Pinned kubectl sends no URL port options; stream headers choose
+                # the port after admission. The enforced boundary is the Pod.
+                for options in ({}, {"ports": []}, {"ports": [8200]}, {"ports": [8201]}):
+                    self.assertTrue(
+                        self.admits("homelab-test-openbao-member-tunnels", req, options)
                     )
                 for field, value in (
                     ("name", "openbao-issuer-fixture"),

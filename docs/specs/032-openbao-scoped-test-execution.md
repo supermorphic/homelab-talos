@@ -228,6 +228,11 @@ issued through the same OpenBao interface; none is a default or an error fallbac
 | `test-openbao-restore` | `test.openbao-restore-drill` | Isolated scratch resources, scratch Secret, storage observations and scratch runtime access. Retain attended snapshot/recovery inputs. |
 | `test-openbao-lifecycle` | `test.agent-credentials` | Observer reads and exact OpenBao member tunnels for attended workstation identity lifecycle acceptance. No member eviction or issuer-probe capability. |
 
+Member-tunnel authority covers runtime ports on the three named OpenBao Pods.
+The canonical test helpers use port `8200`. The enforced Kubernetes boundary is
+the Pod target; it does not provide a per-port permission boundary. OpenBao
+password and recovery steps remain attended as described below.
+
 The conformance profile must be described honestly as privileged. Bind its
 pre-existing account through Git; allow the pinned backend's ephemeral workload
 and RBAC lifecycle. Its token can exercise that authority during its lifetime.

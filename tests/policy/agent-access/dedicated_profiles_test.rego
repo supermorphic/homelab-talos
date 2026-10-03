@@ -160,7 +160,7 @@ dedicated_member_fixture := [
 		"spec": {
 			"failurePolicy": "Fail", "matchConstraints": {"resourceRules": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CONNECT"], "resources": ["pods/portforward"]}]},
 			"matchConditions": [{"name": "dedicated-profile", "expression": "request.userInfo.username in ['system:serviceaccount:kube-system:homelab-test-openbao-ha', 'system:serviceaccount:kube-system:homelab-test-openbao-lifecycle']"}],
-			"validations": [{"expression": "object.ports == [8200]"}],
+			"validations": [{"expression": "request.name in ['openbao-0', 'openbao-1', 'openbao-2']"}],
 		},
 	},
 	flux_guard_binding("homelab-test-openbao-member-tunnels"),
