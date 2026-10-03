@@ -4,9 +4,10 @@ import rego.v1
 
 # Reuse the media-manager fixture so the new app is held to the same storage and
 # private routing invariants, independent of its chosen image or chart values.
-mylar3_fixture := json.unmarshal(replace(json.marshal(lidarr_fixture(
-	{"media-storage", "internal-gateway"}, "media-data",
-)), "lidarr", "mylar3"))
+mylar3_fixture := json.unmarshal(replace(
+	json.marshal(lidarr_fixture({"media-storage", "internal-gateway"}, "media-data")),
+	"lidarr", "mylar3",
+))
 
 test_mylar3_uses_existing_media_contract if {
 	messages := deny with input as mylar3_fixture
