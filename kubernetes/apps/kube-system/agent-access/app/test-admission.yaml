@@ -16,9 +16,10 @@ spec:
       expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
     - name: probes-or-creation
       expression: >-
-        request.operation != 'DELETE' ||
-        (has(oldObject.metadata.labels) && 'homelab-talos/test' in oldObject.metadata.labels &&
-          oldObject.metadata.labels['homelab-talos/test'] == 'plex-network-policy')
+        !(request.operation == 'DELETE' ? oldObject : object).metadata.name.matches('^(qbprobe|qbsentinel|vpndis)-wan-[0-9]{1,10}$') &&
+        (request.operation != 'DELETE' ||
+         (has(oldObject.metadata.labels) && 'homelab-talos/test' in oldObject.metadata.labels &&
+          oldObject.metadata.labels['homelab-talos/test'] == 'plex-network-policy'))
   variables:
     - name: probe
       expression: "request.operation == 'DELETE' ? oldObject : object"
@@ -111,6 +112,7 @@ spec:
         (!has(object.tty) || !object.tty) &&
         ((request.name.matches('^(qbit-manage|sonarr|qbittorrent|plex)-[a-z0-9]{5,10}-[a-z0-9]{5}$') &&
           object.container == 'app') ||
+         (request.name.matches('^qbittorrent-[a-z0-9]{5,10}-[a-z0-9]{5}$') && object.container == 'gluetun') ||
          (request.name.matches('^plex-policy-(control|selected)-[0-9]{10}-[0-9]+$') &&
           (!has(object.container) || object.container in ['', 'probe']) && (!has(object.stdin) || !object.stdin)))
       message: Media runtime access is limited to the application container of registered targets and non-interactive policy probes.
@@ -744,8 +746,9 @@ spec:
       expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
     - name: application-disruption
       expression: >-
-        !has(oldObject.metadata.labels) || !('homelab-talos/test' in oldObject.metadata.labels) ||
-          oldObject.metadata.labels['homelab-talos/test'] != 'plex-network-policy'
+        !oldObject.metadata.name.matches('^(qbprobe|qbsentinel|vpndis)-wan-[0-9]{1,10}$') &&
+        (!has(oldObject.metadata.labels) || !('homelab-talos/test' in oldObject.metadata.labels) ||
+          oldObject.metadata.labels['homelab-talos/test'] != 'plex-network-policy')
   variables:
     - name: pod
       expression: oldObject

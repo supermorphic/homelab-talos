@@ -12,3 +12,4 @@ resources:
   - ./restore-network-admission.yaml
   - ./restore-extension-admission.yaml
   - ./provisioning-admission.yaml
+  - ./network-probe-admission.yaml

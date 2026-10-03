@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# qBittorrent/Gluetun read-only network probe (Required follow-up sequence item 1,
-# probe half). Reuses the NON-destructive baseline of the
-# qbittorrent-vpn-disconnect resilience scenario:
-# it only reads live state (no VPN stop, no pod recreation) and asserts the
-# forwarded-port agreement and VPN egress invariants.
+# qBittorrent/Gluetun network probe. Reads live application state and measures
+# non-VPN egress through one creation-owned temporary Pod. Checks forwarded-port
+# agreement, VPN egress and DNS isolation.
 #
 # The pure check_* functions below take plain strings and never touch Kubernetes, so
 # probe-test.sh sources this file and unit-tests them offline (in `just ci`). The live
@@ -14,6 +12,8 @@
 # may orchestrate this same script as a `command`/`script` operation (the smoke tier
 # cannot — safety.rego forbids command/script there).
 set -euo pipefail
+# shellcheck source=scripts/test/lib/wan-reference.sh
+source scripts/test/lib/wan-reference.sh
 
 # --- pure, cluster-free assertions (unit-tested by probe-test.sh) -----------------
 
@@ -94,11 +94,8 @@ probe_main() {
   resolvers="$(gapp sh -c 'grep "^nameserver" /etc/resolv.conf' 2>/dev/null |
     sed -E 's/^nameserver[[:space:]]+//' | tr -d '\r')"
 
-  # Home/WAN reference: a throwaway no-VPN pod egresses via the node WAN. Ephemeral
-  # (--rm); the only non-read action, and it changes no persistent cluster state.
-  home_ip="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" run "qbprobe-wan-$RANDOM" \
-    --image=curlimages/curl:8.11.1 --restart=Never --rm -i --quiet \
-    --command -- curl -sS -m 15 https://ifconfig.me/ip 2>/dev/null | tr -d '\r\n ' || true)"
+  # The no-VPN reference is returned after the creation-owned Pod is removed.
+  home_ip="$(wan_reference_ip "$kubeconfig" "qbprobe-wan-$RANDOM")" || return 1
   [[ -n "$home_ip" ]] || { echo 'Could not determine the node WAN IP (leak reference).' >&2; exit 1; }
 
   check_vpn_running "$vpn_status"

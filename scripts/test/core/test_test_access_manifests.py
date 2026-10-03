@@ -385,6 +385,115 @@ class TestAccessPolicyTests(unittest.TestCase):
             {"homelab-talos/test": "automation-data-provisioning", "homelab-talos/role": "backup"},
         )
 
+    def test_wan_reference_pods_cannot_select_other_commands_identity_or_endpoints(self):
+        result = subprocess.run(
+            [
+                "bash",
+                "-eu",
+                "-c",
+                "source scripts/test/lib/wan-reference.sh; wan_reference_manifest qbprobe-wan-1234 012345abcdef",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        pod = json.loads(result.stdout)
+        request = self.request("pods", "media", name=pod["metadata"]["name"])
+
+        def allowed(obj, req=request, old=None):
+            policies = ["homelab-test-probe-pods", "homelab-test-wan-reference-pods"]
+            if req["operation"] == "DELETE":
+                policies.append("homelab-test-disruption")
+            return all(self.admits(policy, req, obj, old) for policy in policies)
+
+        # The fixture is independent of the deployed CEL expressions.
+        self.assertEqual(
+            pod["spec"]["containers"][0]["command"],
+            ["curl", "-sS", "-m", "15", "https://ifconfig.me/ip"],
+        )
+        self.assertTrue(allowed(pod))
+        self.assertTrue(allowed(None, {**request, "operation": "DELETE"}, pod))
+        self.assertFalse(allowed(pod, {**request, "operation": "UPDATE"}, pod))
+        for field in (
+            "name",
+            "namespace",
+            "labels",
+            "run",
+            "image",
+            "command",
+            "args",
+            "env",
+            "volumes",
+            "identity",
+            "token",
+            "root",
+            "sidecar",
+            "hook",
+            "stdin",
+            "tty",
+            "deadline",
+            "host",
+            "owner",
+        ):
+            bad, req = copy.deepcopy(pod), copy.deepcopy(request)
+            container = bad["spec"]["containers"][0]
+            if field == "name":
+                bad["metadata"]["name"] = req["name"] = "production"
+            elif field == "namespace":
+                req["namespace"] = "automation-data"
+            elif field == "labels":
+                bad["metadata"]["labels"]["app.kubernetes.io/name"] = "qbittorrent"
+            elif field == "run":
+                bad["metadata"]["labels"]["homelab-talos/run-id"] = "other"
+            elif field == "image":
+                container["image"] = "busybox:latest"
+            elif field == "command":
+                container["command"][-1] = "https://unrelated.invalid"
+            elif field == "args":
+                container["args"] = ["other"]
+            elif field == "env":
+                container["env"] = [{"name": "PGPASSWORD", "value": "synthetic"}]
+            elif field == "volumes":
+                bad["spec"]["volumes"] = [
+                    {"name": "other", "secret": {"secretName": "production"}}
+                ]
+            elif field == "identity":
+                bad["spec"]["serviceAccountName"] = "other"
+            elif field == "token":
+                bad["spec"]["automountServiceAccountToken"] = True
+            elif field == "root":
+                bad["spec"]["securityContext"]["runAsUser"] = 0
+            elif field == "sidecar":
+                bad["spec"]["containers"].append(copy.deepcopy(container))
+            elif field == "hook":
+                container["lifecycle"] = {"postStart": {"exec": {"command": ["env"]}}}
+            elif field in ("stdin", "tty"):
+                container[field] = True
+            elif field == "deadline":
+                bad["spec"]["activeDeadlineSeconds"] = 1800
+            elif field == "host":
+                bad["spec"]["hostNetwork"] = True
+            else:
+                bad["metadata"]["ownerReferences"] = [{"uid": "other"}]
+            with self.subTest(field=field):
+                self.assertFalse(allowed(bad, req))
+
+    def test_gluetun_access_is_confined_to_registered_qbittorrent_runtime(self):
+        options = {
+            "container": "gluetun",
+            "command": ["wget", "http://localhost:8000/v1/vpn/status"],
+            "tty": False,
+        }
+        request = self.request("pods", "media", "CONNECT", "qbittorrent-1234567890-abcde")
+        request["subResource"] = "exec"
+        policy = "homelab-test-media-runtime"
+        self.assertTrue(self.admits(policy, request, options))
+        self.assertFalse(
+            self.admits(policy, {**request, "name": "sonarr-1234567890-abcde"}, options)
+        )
+        self.assertFalse(self.admits(policy, request, {**options, "container": "other"}))
+
     def test_optional_application_probe_has_fixed_executable_and_credential_target(self):
         helper = runpy.run_path(
             str(ROOT / "scripts/test/lib/automation-data-application-acceptance.py")
@@ -1717,7 +1826,7 @@ class TestAccessPolicyTests(unittest.TestCase):
             self.assertTrue(self.admits("homelab-test-media-runtime", req, obj))
             for field, value in (
                 ("name", "unrelated-756dbd787f-abcde"),
-                ("container", "gluetun"),
+                ("container", "other"),
                 ("container", "init-config"),
                 ("tty", True),
             ):

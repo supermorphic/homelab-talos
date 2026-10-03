@@ -97,12 +97,17 @@ kubectl() {
     printf '%s' "$fixture_vpn_ip"
   elif [[ "$command_line" == *'/etc/resolv.conf'* ]]; then
     printf 'nameserver 127.0.0.1\n'
-  elif [[ "$command_line" == *' run qbprobe-wan-'* ]]; then
-    printf '%s' "$fixture_home_ip"
   else
     echo 'Unexpected kubectl fixture command.' >&2
     return 64
   fi
+}
+
+# The shared Pod lifecycle has its own UID/Lease/client tests. This fixture covers
+# the caller's real comparison and output-redaction behavior.
+wan_reference_ip() {
+  [[ "$1" == fixture-kubeconfig && "$2" =~ ^qbprobe-wan-[0-9]+$ ]] || return 64
+  printf '%s' "$fixture_home_ip"
 }
 
 expect_redacted \
