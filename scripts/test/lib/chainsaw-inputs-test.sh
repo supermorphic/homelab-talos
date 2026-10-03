@@ -220,9 +220,10 @@ git -C "$validator_root" config user.name 'Chainsaw Validator Test'
 git -C "$validator_root" add tests
 git -C "$validator_root" commit -qm 'validator fixture'
 
-python_listing="$(bash "$validator_root/scripts/test/validate-chainsaw.sh" --list all |
-	sed -n 's/^python://p')"
+harness_listing="$(bash "$validator_root/scripts/test/validate-chainsaw.sh" --list all)"
+python_listing="$(sed -n 's/^python://p' <<<"$harness_listing")"
 [[ "$python_listing" == $'scripts/test/core\nscripts/test/scenarios\ntests/probes/vpn\nscripts/test' ]]
+expected_shell_cases="$(rg -c '^shell:' <<<"$harness_listing")"
 
 chainsaw_log="$fixture_root/chainsaw.log"
 yq_log="$fixture_root/yq.log"
@@ -262,8 +263,10 @@ if rg -q 'chainsaw-test\.ya?ml' "$yq_log"; then
 	echo 'Chainsaw test documents were reparsed with yq.' >&2
 	exit 1
 fi
-[[ "$(wc -l <"$shell_case_log" | tr -d ' ')" -eq 68 ]]
-rg -Fx 'Harness shell cases passed: cases=68 parallel_jobs=4.' "$passing_output" || {
+# The listing and real execution must agree. Count actual stub invocations as
+# the execution oracle so adding a registered case cannot stale a fixed total.
+[[ "$(wc -l <"$shell_case_log" | tr -d ' ')" -eq "$expected_shell_cases" ]]
+rg -Fx "Harness shell cases passed: cases=$expected_shell_cases parallel_jobs=4." "$passing_output" || {
 	cat "$passing_output" >&2
 	exit 1
 }
@@ -274,6 +277,7 @@ for expected_case in \
 	scripts/test/lib/harness-shell-runner-test.sh \
 	scripts/test/run-native-junit-validator-test.sh \
 	scripts/test/n8n-failure-notifications-test.sh \
+	scripts/test/homepage-mylar3-secrets-test.sh \
 	scripts/test/monitoring-flux-exporter-test.sh \
 	scripts/test/monitoring-verify-test.sh \
 	scripts/test/gatus-verifier-test.sh; do
