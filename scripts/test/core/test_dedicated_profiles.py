@@ -538,3 +538,222 @@ class DedicatedHAEvictionTests(unittest.TestCase):
                 }
             ],
         )
+
+
+class DedicatedProbePodTests(unittest.TestCase):
+    policy = DedicatedFluxMutationTests.policy
+    evaluate = DedicatedFluxMutationTests.evaluate
+    admits = DedicatedFluxMutationTests.admits
+    setUpClass = classmethod(DedicatedNodeMutationTests.setUpClass.__func__)
+
+    @staticmethod
+    def request(pod, profile, operation="CREATE", subresource=""):
+        return {
+            "resource": {"group": "", "version": "v1", "resource": "pods"},
+            "subResource": subresource,
+            "namespace": pod["metadata"]["namespace"],
+            "name": pod["metadata"]["name"],
+            "operation": operation,
+            "userInfo": {"username": "system:serviceaccount:kube-system:homelab-" + profile},
+        }
+
+    def test_actual_probe_parents_cannot_mount_other_identity_or_run_other_programs(self):
+        import copy
+
+        from scripts.test.scenarios.openbao_issuance import pod_document
+
+        for profile, issuer in (
+            ("test-openbao-issuance", True),
+            ("test-openbao-issuance", False),
+            ("test-openbao-ha", False),
+        ):
+            obj = pod_document("synthetic-run", issuer)
+            req = self.request(obj, profile)
+            self.assertTrue(self.admits("homelab-test-openbao-probe-pods", req, obj))
+            self.assertTrue(
+                self.admits(
+                    "homelab-test-openbao-probe-pods", {**req, "operation": "DELETE"}, None, obj
+                )
+            )
+            for change in (
+                "image",
+                "command",
+                "account",
+                "automount",
+                "extra-container",
+                "extra-volume",
+                "host-network",
+                "env",
+                "mount",
+                "owner",
+                "annotation",
+                "label",
+            ):
+                with self.subTest(profile=profile, issuer=issuer, change=change):
+                    bad = copy.deepcopy(obj)
+                    if change == "image":
+                        bad["spec"]["containers"][0]["image"] = "other:1"
+                    elif change == "command":
+                        bad["spec"]["containers"][0]["command"] = ["sh", "-c", "sleep 1800"]
+                    elif change == "account":
+                        bad["spec"]["serviceAccountName"] = "other"
+                    elif change == "automount":
+                        bad["spec"]["automountServiceAccountToken"] = True
+                    elif change == "extra-container":
+                        bad["spec"]["containers"].append(
+                            copy.deepcopy(bad["spec"]["containers"][0])
+                        )
+                    elif change == "extra-volume":
+                        bad["spec"]["volumes"].append(
+                            {"name": "other", "secret": {"secretName": "unrelated"}}
+                        )
+                    elif change == "host-network":
+                        bad["spec"]["hostNetwork"] = True
+                    elif change == "env":
+                        bad["spec"]["containers"][0]["env"] = [
+                            {
+                                "name": "OTHER",
+                                "valueFrom": {
+                                    "secretKeyRef": {"name": "unrelated", "key": "token"}
+                                },
+                            }
+                        ]
+                    elif change == "mount":
+                        bad["spec"]["containers"][0]["volumeMounts"][0]["mountPath"] = "/other"
+                    elif change == "owner":
+                        bad["metadata"]["ownerReferences"] = [{"uid": "other"}]
+                    elif change == "annotation":
+                        bad["metadata"]["annotations"]["other"] = "value"
+                    else:
+                        bad["metadata"]["labels"]["app.kubernetes.io/name"] = "other"
+                    self.assertFalse(self.admits("homelab-test-openbao-probe-pods", req, bad))
+            bad = copy.deepcopy(obj)
+            source = bad["spec"]["volumes"][0]["projected"]["sources"][0]
+            if issuer:
+                source["secret"]["name"] = "unrelated"
+            else:
+                source["serviceAccountToken"]["audience"] = "unrelated"
+            self.assertFalse(self.admits("homelab-test-openbao-probe-pods", req, bad))
+            if issuer:
+                self.assertFalse(
+                    self.admits(
+                        "homelab-test-openbao-probe-pods",
+                        self.request(obj, "test-openbao-ha"),
+                        obj,
+                    )
+                )
+
+    def test_safe_api_defaults_and_owned_update_do_not_change_probe_capabilities(self):
+        import copy
+
+        from scripts.test.scenarios.openbao_issuance import pod_document
+
+        obj = pod_document("synthetic-run", False)
+        req = self.request(obj, "test-openbao-ha")
+        defaulted = copy.deepcopy(obj)
+        defaulted["metadata"]["uid"] = "probe-fixture"
+        defaulted["spec"].update(
+            dnsPolicy="ClusterFirst",
+            schedulerName="default-scheduler",
+            terminationGracePeriodSeconds=30,
+            hostNetwork=False,
+            hostPID=False,
+            hostIPC=False,
+            serviceAccount="openbao-acceptance",
+        )
+        defaulted["spec"]["containers"][0].update(
+            imagePullPolicy="IfNotPresent",
+            terminationMessagePath="/dev/termination-log",
+            terminationMessagePolicy="File",
+        )
+        defaulted["spec"]["containers"][0]["securityContext"].update(
+            privileged=False, procMount="Default"
+        )
+        defaulted["spec"]["volumes"][0]["projected"]["defaultMode"] = 420
+        defaulted["spec"]["tolerations"] = [
+            {
+                "key": "node.kubernetes.io/not-ready",
+                "operator": "Exists",
+                "effect": "NoExecute",
+                "tolerationSeconds": 300,
+            }
+        ]
+        self.assertTrue(self.admits("homelab-test-openbao-probe-pods", req, defaulted))
+        stored = copy.deepcopy(defaulted)
+        stored["spec"]["nodeName"] = "fixture-node"
+        self.assertTrue(
+            self.admits(
+                "homelab-test-openbao-probe-pods", {**req, "operation": "DELETE"}, None, stored
+            )
+        )
+        self.assertFalse(self.admits("homelab-test-openbao-probe-pods", req, stored))
+        self.assertTrue(
+            self.admits(
+                "homelab-test-openbao-probe-pods", {**req, "operation": "UPDATE"}, stored, stored
+            )
+        )
+        bad = copy.deepcopy(stored)
+        bad["metadata"]["uid"] = "replacement"
+        self.assertFalse(
+            self.admits(
+                "homelab-test-openbao-probe-pods", {**req, "operation": "UPDATE"}, bad, stored
+            )
+        )
+
+    def test_exec_admits_only_canonical_bridge_and_issuer_claim_programs(self):
+        from scripts.openbao import issuer
+        from scripts.test.scenarios.openbao_issuance import BRIDGE, pod_document
+
+        for profile, is_issuer in (
+            ("test-openbao-issuance", True),
+            ("test-openbao-issuance", False),
+            ("test-openbao-ha", False),
+        ):
+            pod = pod_document("synthetic-run", is_issuer)
+            req = self.request(pod, profile, "CONNECT", "exec")
+            obj = {
+                "container": "probe",
+                "command": ["python", "-c", BRIDGE],
+                "stdin": True,
+                "stdout": True,
+                "stderr": True,
+                "tty": False,
+            }
+            self.assertTrue(self.admits("homelab-test-openbao-probe-exec", req, obj))
+            for key, value in (
+                ("container", "openbao"),
+                ("command", ["python", "-c", "print('unrelated')"]),
+                ("command", ["sh"]),
+                ("tty", True),
+                ("stdin", False),
+            ):
+                self.assertFalse(
+                    self.admits("homelab-test-openbao-probe-exec", req, {**obj, key: value})
+                )
+            self.assertFalse(
+                self.admits("homelab-test-openbao-probe-exec", {**req, "name": "openbao-0"}, obj)
+            )
+            if is_issuer:
+                claim = {
+                    **obj,
+                    "command": ["python", "-c", issuer.CLAIMS_PROBE, "openbao-issuer-token-v1"],
+                    "stdin": False,
+                }
+                self.assertTrue(self.admits("homelab-test-openbao-probe-exec", req, claim))
+                self.assertFalse(
+                    self.admits("homelab-test-openbao-probe-exec", req, {**claim, "stdin": True})
+                )
+                self.assertFalse(
+                    self.admits(
+                        "homelab-test-openbao-probe-exec",
+                        req,
+                        {**claim, "command": [*claim["command"][:-1], "other"]},
+                    )
+                )
+                self.assertFalse(
+                    self.admits(
+                        "homelab-test-openbao-probe-exec",
+                        self.request(pod, "test-openbao-ha", "CONNECT", "exec"),
+                        obj,
+                    )
+                )

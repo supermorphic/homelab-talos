@@ -335,3 +335,102 @@ subjects:
   - kind: ServiceAccount
     name: homelab-test-openbao-ha
     namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-openbao-acceptance-runtime
+  namespace: openbao-acceptance
+rules:
+  - apiGroups:
+      - ''
+    resources:
+      - pods
+    verbs:
+      - create
+      - delete
+  - apiGroups:
+      - ''
+    resources:
+      - pods/exec
+    verbs:
+      - get
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-openbao-acceptance-runtime
+  namespace: openbao-acceptance
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-openbao-acceptance-runtime
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-openbao-issuance
+    namespace: kube-system
+  - kind: ServiceAccount
+    name: homelab-test-openbao-ha
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-openbao-issuer-runtime
+  namespace: openbao
+rules:
+  - apiGroups:
+      - ''
+    resources:
+      - pods
+    verbs:
+      - create
+      - delete
+  - apiGroups:
+      - ''
+    resources:
+      - pods/exec
+    verbs:
+      - get
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-openbao-issuer-runtime
+  namespace: openbao
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-openbao-issuer-runtime
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-openbao-issuance
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-openbao-issuance-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-openbao-issuance
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-openbao-issuance-observation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-observer-extra
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-openbao-issuance
+    namespace: kube-system

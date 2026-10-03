@@ -225,3 +225,66 @@ test_ha_eviction_cannot_remove_guard if {
 	messages := deny with input as [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ValidatingAdmissionPolicy", "homelab-test-openbao-ha-eviction"]]
 	count(messages) > 0
 }
+
+dedicated_probe_fixture := [
+	cluster_role_binding("homelab-test-openbao-issuance-view", ["homelab-test-openbao-issuance"], "view"),
+	cluster_role_binding("homelab-test-openbao-issuance-observation", ["homelab-test-openbao-issuance"], "homelab-observer-extra"),
+	role("homelab-test-openbao-acceptance-runtime", "openbao-acceptance", [
+		{"apiGroups": [""], "resources": ["pods"], "verbs": ["create", "delete"]},
+		{"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["get", "create"]},
+	]),
+	{
+		"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "RoleBinding", "metadata": {"name": "homelab-test-openbao-acceptance-runtime", "namespace": "openbao-acceptance"},
+		"roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "homelab-test-openbao-acceptance-runtime"},
+		"subjects": [
+			{"kind": "ServiceAccount", "name": "homelab-test-openbao-issuance", "namespace": "kube-system"},
+			{"kind": "ServiceAccount", "name": "homelab-test-openbao-ha", "namespace": "kube-system"},
+		],
+	},
+	role("homelab-test-openbao-issuer-runtime", "openbao", [
+		{"apiGroups": [""], "resources": ["pods"], "verbs": ["create", "delete"]},
+		{"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["get", "create"]},
+	]),
+	role_binding("homelab-test-openbao-issuer-runtime", "openbao", "homelab-test-openbao-issuance", "kube-system", "homelab-test-openbao-issuer-runtime"),
+	probe_guard("homelab-test-openbao-probe-pods", ["CREATE", "UPDATE", "DELETE"], "pods"),
+	probe_guard("homelab-test-openbao-probe-exec", ["CONNECT"], "pods/exec"),
+	flux_guard_binding("homelab-test-openbao-probe-pods"),
+	flux_guard_binding("homelab-test-openbao-probe-exec"),
+]
+
+probe_guard(name, operations, resource) := {
+	"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingAdmissionPolicy", "metadata": {"name": name},
+	"spec": {
+		"failurePolicy": "Fail", "matchConstraints": {"resourceRules": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": operations, "resources": [resource]}]},
+		"matchConditions": [{"name": "dedicated-profile", "expression": "request.userInfo.username in ['system:serviceaccount:kube-system:homelab-test-openbao-issuance', 'system:serviceaccount:kube-system:homelab-test-openbao-ha']"}],
+		"validations": [{"expression": "object.kind == 'Pod'"}],
+	},
+}
+
+test_issuer_runtime_cannot_bind_ha_profile if {
+	fixture := runner_change("RoleBinding", "homelab-test-openbao-issuer-runtime", [{"op": "add", "path": "/subjects/-", "value": {"kind": "ServiceAccount", "name": "homelab-test-openbao-ha", "namespace": "kube-system"}}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_acceptance_runtime_cannot_bind_lifecycle_profile if {
+	fixture := runner_change("RoleBinding", "homelab-test-openbao-acceptance-runtime", [{"op": "add", "path": "/subjects/-", "value": {"kind": "ServiceAccount", "name": "homelab-test-openbao-lifecycle", "namespace": "kube-system"}}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_issuer_runtime_cannot_read_secrets_by_api if {
+	fixture := fixture_with_rule("homelab-test-openbao-issuer-runtime", [""], ["secrets"], ["get"])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_issuer_probe_cannot_remove_creation_guard if {
+	messages := deny with input as [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ValidatingAdmissionPolicy", "homelab-test-openbao-probe-pods"]]
+	count(messages) > 0
+}
+
+test_issuer_probe_cannot_remove_exec_guard if {
+	messages := deny with input as [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ValidatingAdmissionPolicy", "homelab-test-openbao-probe-exec"]]
+	count(messages) > 0
+}
