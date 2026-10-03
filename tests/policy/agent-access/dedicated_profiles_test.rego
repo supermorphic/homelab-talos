@@ -188,3 +188,40 @@ test_member_tunnels_cannot_remove_connect_guard if {
 	messages := deny with input as [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ValidatingAdmissionPolicy", "homelab-test-openbao-member-tunnels"]]
 	count(messages) > 0
 }
+
+dedicated_ha_eviction_fixture := [
+	role("homelab-test-openbao-ha-eviction", "openbao", [{"apiGroups": [""], "resources": ["pods/eviction"], "resourceNames": ["openbao-0", "openbao-1", "openbao-2"], "verbs": ["create"]}]),
+	role_binding("homelab-test-openbao-ha-eviction", "openbao", "homelab-test-openbao-ha", "kube-system", "homelab-test-openbao-ha-eviction"),
+	{
+		"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingAdmissionPolicy", "metadata": {"name": "homelab-test-openbao-ha-eviction"},
+		"spec": {
+			"failurePolicy": "Fail", "matchConstraints": {"resourceRules": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CREATE"], "resources": ["pods/eviction"]}]},
+			"matchConditions": [{"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-openbao-ha'"}],
+			"validations": [{"expression": "object.kind == 'Eviction'"}],
+		},
+	},
+	flux_guard_binding("homelab-test-openbao-ha-eviction"),
+]
+
+test_ha_eviction_cannot_bind_lifecycle if {
+	fixture := runner_change("RoleBinding", "homelab-test-openbao-ha-eviction", [{"op": "replace", "path": "/subjects/0/name", "value": "homelab-test-openbao-lifecycle"}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_ha_eviction_cannot_gain_production_pod_deletion if {
+	fixture := fixture_with_rule("homelab-test-openbao-ha-eviction", [""], ["pods"], ["delete"])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_ha_eviction_cannot_lose_named_subresource_scope if {
+	fixture := runner_change("Role", "homelab-test-openbao-ha-eviction", [{"op": "remove", "path": "/rules/0/resourceNames"}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_ha_eviction_cannot_remove_guard if {
+	messages := deny with input as [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ValidatingAdmissionPolicy", "homelab-test-openbao-ha-eviction"]]
+	count(messages) > 0
+}

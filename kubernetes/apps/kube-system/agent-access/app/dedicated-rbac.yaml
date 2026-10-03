@@ -304,3 +304,34 @@ subjects:
   - kind: ServiceAccount
     name: homelab-test-openbao-lifecycle
     namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-openbao-ha-eviction
+  namespace: openbao
+rules:
+  - apiGroups:
+      - ''
+    resources:
+      - pods/eviction
+    resourceNames:
+      - openbao-0
+      - openbao-1
+      - openbao-2
+    verbs:
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-openbao-ha-eviction
+  namespace: openbao
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-openbao-ha-eviction
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-openbao-ha
+    namespace: kube-system

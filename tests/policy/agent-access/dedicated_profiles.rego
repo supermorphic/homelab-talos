@@ -35,6 +35,11 @@ deny contains "conformance administrator exception must bind only its dedicated 
 }
 
 dedicated_role_contracts := {
+	"homelab-test-openbao-ha-eviction": {
+		"namespace": "openbao",
+		"rules": [{"apiGroups": [""], "resources": ["pods/eviction"], "resourceNames": ["openbao-0", "openbao-1", "openbao-2"], "verbs": ["create"]}],
+		"subjects": [{"kind": "ServiceAccount", "name": "homelab-test-openbao-ha", "namespace": "kube-system"}],
+	},
 	"homelab-test-openbao-member-tunnels": {
 		"namespace": "openbao",
 		"rules": [{"apiGroups": [""], "resources": ["pods/portforward"], "resourceNames": ["openbao-0", "openbao-1", "openbao-2"], "verbs": ["get", "create"]}],
@@ -86,6 +91,7 @@ deny contains msg if {
 }
 
 dedicated_admission_rules := {
+	"homelab-test-openbao-ha-eviction": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CREATE"], "resources": ["pods/eviction"]}],
 	"homelab-test-openbao-member-tunnels": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CONNECT"], "resources": ["pods/portforward"]}],
 	"homelab-test-node-plex-disruption": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["DELETE"], "resources": ["pods"]}],
 	"homelab-test-node-plex-runtime": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CONNECT"], "resources": ["pods/exec"]}],
@@ -98,6 +104,7 @@ dedicated_admission_rules := {
 }
 
 dedicated_admission_conditions := {
+	"homelab-test-openbao-ha-eviction": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-openbao-ha'"},
 	"homelab-test-openbao-member-tunnels": {"name": "dedicated-profile", "expression": "request.userInfo.username in ['system:serviceaccount:kube-system:homelab-test-openbao-ha', 'system:serviceaccount:kube-system:homelab-test-openbao-lifecycle']"},
 	"homelab-test-node-plex-disruption": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-node-reschedule'"},
 	"homelab-test-node-plex-runtime": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-node-reschedule'"},

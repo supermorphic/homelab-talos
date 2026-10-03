@@ -446,3 +446,95 @@ class DedicatedMemberTunnelTests(unittest.TestCase):
                 }
             ],
         )
+
+
+class DedicatedHAEvictionTests(unittest.TestCase):
+    policy = DedicatedFluxMutationTests.policy
+    evaluate = DedicatedFluxMutationTests.evaluate
+    admits = DedicatedFluxMutationTests.admits
+    setUpClass = classmethod(DedicatedNodeMutationTests.setUpClass.__func__)
+
+    def test_ha_eviction_requires_named_member_and_uid_version_preconditions(self):
+        import copy
+
+        for name in ("openbao-0", "openbao-1", "openbao-2"):
+            req = {
+                "resource": {"group": "", "version": "v1", "resource": "pods"},
+                "subResource": "eviction",
+                "namespace": "openbao",
+                "operation": "CREATE",
+                "name": name,
+                "userInfo": {
+                    "username": "system:serviceaccount:kube-system:homelab-test-openbao-ha"
+                },
+            }
+            obj = {
+                "apiVersion": "policy/v1",
+                "kind": "Eviction",
+                "metadata": {"name": name, "namespace": "openbao"},
+                "deleteOptions": {
+                    "preconditions": {"uid": "member-fixture", "resourceVersion": "12"}
+                },
+            }
+            self.assertTrue(self.admits("homelab-test-openbao-ha-eviction", req, obj))
+            for field in ("uid", "resourceVersion"):
+                bad = copy.deepcopy(obj)
+                del bad["deleteOptions"]["preconditions"][field]
+                self.assertFalse(self.admits("homelab-test-openbao-ha-eviction", req, bad))
+            for field, value in (
+                ("gracePeriodSeconds", 0),
+                ("propagationPolicy", "Orphan"),
+                ("orphanDependents", True),
+            ):
+                bad = copy.deepcopy(obj)
+                bad["deleteOptions"][field] = value
+                self.assertFalse(self.admits("homelab-test-openbao-ha-eviction", req, bad))
+            bad = copy.deepcopy(obj)
+            bad["metadata"]["name"] = "openbao-issuer-fixture"
+            self.assertFalse(
+                self.admits(
+                    "homelab-test-openbao-ha-eviction",
+                    {**req, "name": "openbao-issuer-fixture"},
+                    bad,
+                )
+            )
+            self.assertFalse(
+                self.admits("homelab-test-openbao-ha-eviction", {**req, "subResource": ""}, obj)
+            )
+
+    def test_eviction_is_not_bound_to_lifecycle_or_other_profiles(self):
+        bindings = [
+            d
+            for d in self.documents
+            if d["kind"] == "RoleBinding"
+            and d["roleRef"]["name"] == "homelab-test-openbao-ha-eviction"
+        ]
+        self.assertEqual(len(bindings), 1)
+        self.assertEqual(
+            bindings[0]["subjects"],
+            [
+                {
+                    "kind": "ServiceAccount",
+                    "name": "homelab-test-openbao-ha",
+                    "namespace": "kube-system",
+                }
+            ],
+        )
+        roles = [
+            d
+            for d in self.documents
+            if d["kind"] == "Role" and d["metadata"]["name"] == "homelab-test-openbao-ha-eviction"
+        ]
+        self.assertEqual(len(roles), 1)
+        self.assertEqual(roles[0]["metadata"]["namespace"], "openbao")
+        self.assertEqual(
+            roles[0]["rules"],
+            [
+                {
+                    "apiGroups": [""],
+                    "resources": ["pods/eviction"],
+                    "resourceNames": ["openbao-0", "openbao-1", "openbao-2"],
+                    "verbs": ["create"],
+                }
+            ],
+        )
