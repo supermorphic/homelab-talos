@@ -86,7 +86,12 @@ Consumers decide whether results supply sufficient usable evidence within their
 existing attempt and deadline budgets. Partial engine failure is acceptable when
 the remaining results suffice. Preserve actual engine metadata for provenance.
 The Gatus search canary exercises the default pair and accepts usable results from
-either engine. Search providers receive queries and the platform's outbound IP;
+either engine. Its fixed English query explicitly selects `language=en`; it does
+not inherit a browser locale or the native `auto` fallback to `all`. DuckDuckGo's
+all-region (`wt-wt`) search can return a CAPTCHA while localized requests succeed,
+as confirmed in [upstream issue 6779](https://github.com/searxng/searxng/issues/6779).
+This request setting does not change interactive search preferences.
+Search providers receive queries and the platform's outbound IP;
 the private service boundary does not promise anonymity from those providers.
 
 ## Automated authentication

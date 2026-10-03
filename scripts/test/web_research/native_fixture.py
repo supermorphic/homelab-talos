@@ -338,7 +338,9 @@ def searx_contract() -> None:
     )
     status, _, body = request(8080, "/", host="searxng", timeout=20)
     require(status == 200 and b"Private web search" in body, "searx-ui")
-    query = "/search?" + urllib.parse.urlencode({"q": "example domain", "format": "json"})
+    query = "/search?" + urllib.parse.urlencode(
+        {"q": "example domain", "format": "json", "language": "en"}
+    )
     status, _, body = request(8080, query, host="searxng", timeout=30)
     document = json.loads(body)
     results = document.get("results", [])
@@ -348,15 +350,17 @@ def searx_contract() -> None:
     print("PASS searxng-contract", flush=True)
 
 
+def gatus_statuses(host="gatus"):
+    status, _, body = request(8080, "/api/v1/endpoints/statuses", host=host, timeout=10)
+    if status != 200:
+        return None
+    try:
+        return json.loads(body)
+    except (TypeError, ValueError):
+        return None
+
+
 def gatus_contract() -> None:
-    def statuses(host="gatus"):
-        status, _, body = request(8080, "/api/v1/endpoints/statuses", host=host, timeout=10)
-        if status != 200:
-            return None
-        try:
-            return json.loads(body)
-        except (TypeError, ValueError):
-            return None
 
     expected = {
         "searxng",
@@ -366,7 +370,7 @@ def gatus_contract() -> None:
     }
 
     def all_passed() -> bool:
-        document = statuses()
+        document = gatus_statuses()
         if not isinstance(document, list):
             return False
         records = {
@@ -388,25 +392,40 @@ def gatus_contract() -> None:
 
     wait_for(all_passed, "gatus-parser", 180)
     print("PASS gatus-production-conditions", flush=True)
+    gatus_negative_contract()
 
-    expected_failures = {"missing-marker": 6, "failed-extraction": 3}
+
+def gatus_negative_contract() -> None:
+    expected_failures = {
+        "missing-marker": [6],
+        "failed-extraction": [3],
+        "search-empty": [1, 2, 3, 4],
+        "search-invalid-scheme": [3],
+        "search-missing-host": [4],
+        "search-partial": [],
+    }
 
     def negatives_fail_at_expected_condition() -> bool:
-        document = statuses("gatus-negative")
+        document = gatus_statuses("gatus-negative")
         if not isinstance(document, list):
             return False
         records = {item.get("name"): item for item in document if isinstance(item, dict)}
         if set(records) != set(expected_failures):
             return False
-        for name, failed_index in expected_failures.items():
+        for name, failed_indices in expected_failures.items():
             results = records[name].get("results", [])
-            if not results or results[0].get("success") is not False:
+            expected_success = not failed_indices
+            if not results or results[-1].get("success") is not expected_success:
                 return False
-            conditions = results[0].get("conditionResults", [])
-            if len(conditions) != 8 or [
+            if name == "search-partial" and (
+                len(results) < 2 or not all(result.get("success") is True for result in results[-2:])
+            ):
+                return False
+            conditions = results[-1].get("conditionResults", [])
+            if len(conditions) != (5 if name.startswith("search-") else 8) or [
                 index for index, condition in enumerate(conditions)
                 if condition.get("success") is not True
-            ] != [failed_index]:
+            ] != failed_indices:
                 return False
         return True
 
@@ -416,6 +435,36 @@ def gatus_contract() -> None:
 
 def gatus_stub() -> None:
     class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            parsed = urllib.parse.urlsplit(self.path)
+            parameters = urllib.parse.parse_qs(parsed.query)
+            if parsed.path not in (
+                "/search-partial", "/search-empty", "/search-invalid-scheme", "/search-missing-host"
+            ):
+                self.send_error(404)
+                return
+            # DDG's all-region CAPTCHA is represented by a healthy empty response.
+            # The positive fixture requires an explicit locale and tolerates Brave's
+            # rate limit; it must pass the unchanged production result conditions.
+            results = []
+            if parsed.path != "/search-empty" and parameters.get("language") == ["en"]:
+                scheme = "javascript" if parsed.path == "/search-invalid-scheme" else "https"
+                host = "" if parsed.path == "/search-missing-host" else "example.com"
+                results = [{
+                    "url": f"{scheme}://{host}/",
+                    "parsed_url": [scheme, host, "/", "", "", ""],
+                }]
+            body = json.dumps({
+                "results": results,
+                "unresponsive_engines": [["brave", "Suspended: too many requests"]]
+                + ([] if results else [["duckduckgo", "CAPTCHA"]]),
+            }).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_POST(self) -> None:
             if self.path not in ("/missing-marker", "/failed-extraction"):
                 self.send_error(404)
@@ -454,6 +503,7 @@ MODES = {
     "rotation": rotation_contract,
     "searx": searx_contract,
     "gatus": gatus_contract,
+    "gatus-negative": gatus_negative_contract,
     "gatus-stub": gatus_stub,
 }
 

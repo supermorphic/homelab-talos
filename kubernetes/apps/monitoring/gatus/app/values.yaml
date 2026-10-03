@@ -400,7 +400,8 @@ config:
         hide-errors: true
     - name: searxng-search-e2e
       group: Automation
-      url: "http://searxng.web-research.svc.cluster.local:8080/search?q=example%20domain&format=json"
+      # Pin the English fixture locale: implicit all-region DDG searches can CAPTCHA.
+      url: "http://searxng.web-research.svc.cluster.local:8080/search?q=example%20domain&format=json&language=en"
       method: GET
       interval: 30m
       client:

@@ -5,7 +5,7 @@ const https = require('node:https');
 const path = require('node:path');
 
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
-const SEARCH_URL = 'http://searxng.web-research.svc.cluster.local:8080/search';
+const SEARCH_URL = 'http://searxng.web-research.svc.cluster.local:8080/search?q=example%20domain&format=json&language=en';
 const CRAWL_URL = 'http://crawl4ai.envoy-gateway-system.svc.cluster.local:8080/crawl';
 const EXCLUDED_URL = 'http://crawl4ai.envoy-gateway-system.svc.cluster.local:8080/token';
 const STATIC_URL = 'https://httpbin.org/html';
@@ -495,10 +495,8 @@ async function main() {
   const records = [];
 
   records.push(await runPhase('search', async () => {
-    const url = new URL(SEARCH_URL);
-    url.searchParams.set('q', 'site:example.com "Example Domain"');
-    url.searchParams.set('format', 'json');
-    const response = await call(url, 30000);
+    // Match the scheduled Gatus Service request, including its synthetic locale.
+    const response = await call(SEARCH_URL, 20000, undefined, {'user-agent': 'Gatus/1.0'});
     try {
       const count = searchContract(response);
       return {status: response.status, size: response.body.length, count};
