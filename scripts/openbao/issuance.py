@@ -4,6 +4,8 @@ import base64
 import json
 from datetime import datetime
 
+from .credentials import PROFILES
+
 NAMESPACE = "openbao-acceptance"
 ACCOUNT = "openbao-issued-reader"
 IDENTITY = f"system:serviceaccount:{NAMESPACE}:{ACCOUNT}"
@@ -50,7 +52,7 @@ def token_claims(token, clock, *, identity=IDENTITY):
         raise AcceptanceError() from None
 
 
-def prove_identity(kube, token):
+def prove_identity(kube, token, *, identity=IDENTITY):
     body = call(
         kube,
         "POST",
@@ -59,7 +61,7 @@ def prove_identity(kube, token):
         token=token,
         payload={"apiVersion": "authentication.k8s.io/v1", "kind": "SelfSubjectReview"},
     )
-    if body.get("status", {}).get("userInfo", {}).get("username") != IDENTITY:
+    if body.get("status", {}).get("userInfo", {}).get("username") != identity:
         raise AcceptanceError()
 
 
@@ -128,6 +130,23 @@ def acceptance(bao, kube, clock, *, wait_expiry=True):
                 raise AcceptanceError() from None
 
 
+def _prove_tokenrequest(issuer, clock, payload, namespace, account):
+    """Authenticate each delegated token with Kubernetes; retain metadata only."""
+    path = f"/api/v1/namespaces/{namespace}/serviceaccounts/{account}/token"
+    body = call(issuer, "POST", path, {201}, payload=payload)
+    try:
+        token = body["status"]["token"]
+        identity = f"system:serviceaccount:{namespace}:{account}"
+        expires = token_claims(token, clock, identity=identity)
+        timestamp = datetime.fromisoformat(body["status"]["expirationTimestamp"])
+        if timestamp.timestamp() != expires:
+            raise AcceptanceError()
+        prove_identity(issuer, token, identity=identity)
+    except Exception:  # noqa: BLE001 -- Discard credential-bearing adapter exception text.
+        raise AcceptanceError() from None
+    return expires
+
+
 def issuer_boundary(issuer, clock, suffix, *, owner=None):
     """Exercise named subresource RBAC using the actual issuer Pod identity."""
     payload = {
@@ -135,20 +154,15 @@ def issuer_boundary(issuer, clock, suffix, *, owner=None):
         "kind": "TokenRequest",
         "spec": {"audiences": [AUDIENCE], "expirationSeconds": 600},
     }
-    path = f"/api/v1/namespaces/{NAMESPACE}/serviceaccounts/"
-    body = call(issuer, "POST", path + ACCOUNT + "/token", {201}, payload=payload)
-    try:
-        token = body["status"]["token"]
-        expires = token_claims(token, clock)
-        timestamp = datetime.fromisoformat(body["status"]["expirationTimestamp"])
-        if timestamp.timestamp() != expires:
-            raise AcceptanceError()
-        prove_identity(issuer, token)
-    except Exception:  # noqa: BLE001 -- Discard credential-bearing adapter exception text.
-        raise AcceptanceError() from None
+    expires = _prove_tokenrequest(issuer, clock, payload, NAMESPACE, ACCOUNT)
+    accounts = list(dict.fromkeys(PROFILES.values()))
+    for account in accounts:
+        _prove_tokenrequest(issuer, clock, payload, "kube-system", account)
     for namespace, account in [
         (NAMESPACE, "openbao-unapproved"),
         ("openbao-acceptance-wrong", ACCOUNT),
+        ("kube-system", "openbao-unapproved"),
+        ("openbao", "homelab-test-runner"),
     ]:
         call(
             issuer,
@@ -209,5 +223,6 @@ def issuer_boundary(issuer, clock, suffix, *, owner=None):
         "identity": IDENTITY,
         "expires_at": expires,
         "named_tokenrequest": True,
+        "agent_accounts": accounts,
         "boundary_denied": True,
     }

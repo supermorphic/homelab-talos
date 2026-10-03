@@ -553,7 +553,7 @@ profile_role_contracts := object.union(
 			"namespace": "kube-system",
 			"rules": [{
 				"apiGroups": [""], "resources": ["serviceaccounts/token"],
-				"resourceNames": ["homelab-observer", "homelab-diagnostic", "homelab-report-publisher", "homelab-campaign-coordinator"],
+				"resourceNames": ["homelab-observer", "homelab-diagnostic", "homelab-report-publisher", "homelab-campaign-coordinator", "homelab-test-runner", "homelab-test-flux-restart", "homelab-test-cilium-connectivity", "homelab-test-node-reschedule", "homelab-test-conformance", "homelab-test-openbao-issuance", "homelab-test-openbao-ha", "homelab-test-openbao-restore", "homelab-test-openbao-lifecycle"],
 				"verbs": ["create"],
 			}],
 			"subjects": [{"kind": "ServiceAccount", "name": "openbao", "namespace": "openbao"}],

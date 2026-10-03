@@ -28,6 +28,9 @@ DESIRED = ROOT / 'kubernetes/apps/security/openbao/config/desired.json'
 READ_RESPONSES = json.loads(
     (Path(__file__).parent / 'fixtures/openbao-2.7-read-responses.json').read_text()
 )
+# Proposed profile metadata uses synthetic fixtures; original captures remain unchanged.
+READ_RESPONSES.update(json.loads(
+    (Path(__file__).parent / 'fixtures/openbao-scoped-profile-responses.json').read_text())['responses'])
 AUTH_MOUNTS = READ_RESPONSES['GET sys/auth']
 SECRET_MOUNTS = READ_RESPONSES['GET sys/mounts']
 LIVE_READS = {path.removeprefix('GET '): value for path, value in READ_RESPONSES.items()
@@ -40,7 +43,23 @@ LIVE_INVENTORIES = {
     'approle-role': ['agent-workstation'],
     'policy': ['default', 'root', 'openbao-operator', 'openbao-backup',
                'openbao-acceptance', 'openbao-config-reader', 'agent-profiles'],
-    'issuance-role': ['openbao-acceptance', 'observer', 'diagnostic', 'publisher', 'campaign-coordinator'],
+    'issuance-role': [
+        'openbao-acceptance',
+        'observer',
+        'diagnostic',
+        'publisher',
+        'campaign-coordinator',
+        'debugger',
+        'test-runner',
+        'report-publisher',
+        'test-flux-restart',
+        'test-cilium-connectivity',
+        'test-node-reschedule',
+        'test-conformance',
+        'test-openbao-issuance',
+        'test-openbao-ha',
+        'test-openbao-restore',
+        'test-openbao-lifecycle'],
 }
 
 

@@ -52,8 +52,23 @@ assert all("*" not in path and not path.startswith("kubernetes/creds/")
            for path in reader_paths)
 assert all(path == "auth/token/revoke-self" or "update" not in rule["capabilities"]
            for path, rule in reader_paths.items())
-profiles = {"observer": "homelab-observer", "diagnostic": "homelab-diagnostic",
-            "publisher": "homelab-report-publisher", "campaign-coordinator": "homelab-campaign-coordinator"}
+profiles = {
+    "observer": "homelab-observer",
+    "diagnostic": "homelab-diagnostic",
+    "publisher": "homelab-report-publisher",
+    "campaign-coordinator": "homelab-campaign-coordinator",
+    "debugger": "homelab-diagnostic",
+    "test-runner": "homelab-test-runner",
+    "report-publisher": "homelab-report-publisher",
+    "test-flux-restart": "homelab-test-flux-restart",
+    "test-cilium-connectivity": "homelab-test-cilium-connectivity",
+    "test-node-reschedule": "homelab-test-node-reschedule",
+    "test-conformance": "homelab-test-conformance",
+    "test-openbao-issuance": "homelab-test-openbao-issuance",
+    "test-openbao-ha": "homelab-test-openbao-ha",
+    "test-openbao-restore": "homelab-test-openbao-restore",
+    "test-openbao-lifecycle": "homelab-test-openbao-lifecycle"
+}
 objects = {(o.kind, o.name): o for o in desired["objects"]}
 for profile, account in profiles.items():
     fields = objects[("issuance-role", profile)].fields

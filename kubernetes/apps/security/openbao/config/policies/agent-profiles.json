@@ -20,6 +20,61 @@
         "update"
       ]
     },
+    "kubernetes/creds/debugger": {
+      "capabilities": [
+        "update"
+      ]
+    },
+    "kubernetes/creds/test-runner": {
+      "capabilities": [
+        "update"
+      ]
+    },
+    "kubernetes/creds/report-publisher": {
+      "capabilities": [
+        "update"
+      ]
+    },
+    "kubernetes/creds/test-flux-restart": {
+      "capabilities": [
+        "update"
+      ]
+    },
+    "kubernetes/creds/test-cilium-connectivity": {
+      "capabilities": [
+        "update"
+      ]
+    },
+    "kubernetes/creds/test-node-reschedule": {
+      "capabilities": [
+        "update"
+      ]
+    },
+    "kubernetes/creds/test-conformance": {
+      "capabilities": [
+        "update"
+      ]
+    },
+    "kubernetes/creds/test-openbao-issuance": {
+      "capabilities": [
+        "update"
+      ]
+    },
+    "kubernetes/creds/test-openbao-ha": {
+      "capabilities": [
+        "update"
+      ]
+    },
+    "kubernetes/creds/test-openbao-restore": {
+      "capabilities": [
+        "update"
+      ]
+    },
+    "kubernetes/creds/test-openbao-lifecycle": {
+      "capabilities": [
+        "update"
+      ]
+    },
     "auth/token/revoke-self": {
       "capabilities": [
         "update"

@@ -104,7 +104,7 @@ valid_fixture_base := [
 	role_binding("homelab-campaign-coordinator", "flux-system", "homelab-campaign-coordinator", "kube-system", "homelab-campaign-coordinator"),
 	role("openbao-agent-tokenrequest", "kube-system", [{
 		"apiGroups": [""], "resources": ["serviceaccounts/token"],
-		"resourceNames": ["homelab-observer", "homelab-diagnostic", "homelab-report-publisher", "homelab-campaign-coordinator"],
+		"resourceNames": ["homelab-observer", "homelab-diagnostic", "homelab-report-publisher", "homelab-campaign-coordinator", "homelab-test-runner", "homelab-test-flux-restart", "homelab-test-cilium-connectivity", "homelab-test-node-reschedule", "homelab-test-conformance", "homelab-test-openbao-issuance", "homelab-test-openbao-ha", "homelab-test-openbao-restore", "homelab-test-openbao-lifecycle"],
 		"verbs": ["create"],
 	}]),
 	role_binding("openbao-agent-tokenrequest", "kube-system", "openbao", "openbao", "openbao-agent-tokenrequest"),
