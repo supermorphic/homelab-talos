@@ -6,6 +6,7 @@ source scripts/test/lib/catalog.sh
 source scripts/lib/lease.sh
 source scripts/test/lib/results.sh
 source scripts/test/lib/access.sh
+source scripts/lib/disruption-admission.sh
 require_bash
 
 [[ "$#" -ge 2 && "$#" -le 3 ]] || {
@@ -20,6 +21,9 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
 kubeconfig=''
+observer_kubeconfig=''
+coordinator_kubeconfig=''
+export -n observer_kubeconfig coordinator_kubeconfig
 namespace='flux-system'
 catalog="${TEST_CATALOG_PATH:-tests/catalog.yaml}"
 results_root="${TEST_RESULTS_ROOT:-.test-results}"
@@ -53,13 +57,18 @@ started_epoch="$EPOCHSECONDS"
 cluster_name='unavailable'
 lease_acquired=false
 lease_joined=false
+lease_cleanup_status='not-required'
 finalized=false
 backend_pid=''
 # Invoked indirectly by the EXIT trap below.
 # shellcheck disable=SC2329
 release_chainsaw_lease() {
   if [[ "$lease_acquired" == 'true' ]]; then
-    release_test_lease "$kubeconfig" "$run_id" >/dev/null 2>&1 || true
+    if release_test_lease "$coordinator_kubeconfig" "$run_id" >/dev/null 2>&1; then
+      lease_cleanup_status='passed'
+    else
+      lease_cleanup_status='failed'
+    fi
     lease_acquired=false
   fi
 }
@@ -85,7 +94,7 @@ finalize_incomplete_chainsaw_run() {
   write_evidence_index "$run_dir" "$run_id"
   write_summary "$run_dir" "$run_id" "$entry_json" "$execution_origin" \
     "$started_at" "$emergency_finished" "$emergency_duration" broken \
-    "$original_exit" not-classified failed not-required not-required \
+    "$original_exit" not-classified failed "$lease_cleanup_status" not-required \
     not-applicable "$cluster_name"
   scripts/test/validate-run.sh "$run_dir" >/dev/null 2>&1
   primary_exit_code="$original_exit"
@@ -116,7 +125,10 @@ trap 'handle_chainsaw_signal INT' INT
 trap 'handle_chainsaw_signal TERM' TERM
 
 finalize_chainsaw_access() {
-  if ! test_access_close; then
+  local config_cleanup_failed=false
+  test_access_close || config_cleanup_failed=true
+  test_access_purposes_close || config_cleanup_failed=true
+  if [[ "$config_cleanup_failed" == true ]]; then
     run_result='broken'
     cleanup_status='failed'
     local config_error="$run_dir/diagnostics/config-cleanup.xml"
@@ -145,16 +157,22 @@ cluster_name="$(kubectl --kubeconfig "$kubeconfig" config view --minify \
 [[ -n "$cluster_name" ]] || cluster_name='unavailable'
 test_access_check "$suite_id" || exit 1
 if [[ "$mutates_cluster" == 'true' ]]; then
+  test_access_purpose_open campaign-observer "$run_id" || exit 1
+  observer_kubeconfig="$TEST_ACCESS_PURPOSE_CONFIG"
+  if [[ -z "${TEST_CAMPAIGN_LEASE_HOLDER:-}" ]]; then
+    test_access_purpose_open campaign-coordinator "$run_id" || exit 1
+    coordinator_kubeconfig="$TEST_ACCESS_PURPOSE_CONFIG"
+  fi
   lease_ready=false
   if [[ -n "${TEST_CAMPAIGN_LEASE_HOLDER:-}" ]]; then
     if verify_test_lease_holder "$kubeconfig" "$TEST_CAMPAIGN_LEASE_HOLDER"; then
       lease_joined=true
       lease_ready=true
     fi
-  elif acquire_test_lease "$kubeconfig" "$run_id"; then
+  elif acquire_test_lease "$coordinator_kubeconfig" "$run_id" 5 existing-only; then
     lease_acquired=true
     lease_ready=true
-    start_test_lease_renewal "$kubeconfig" "$run_id" \
+    start_test_lease_renewal "$coordinator_kubeconfig" "$run_id" \
       "$(cd "$run_dir" && pwd)/diagnostics/lease-renewal-failed"
   fi
   if [[ "$lease_ready" != 'true' ]]; then
@@ -222,6 +240,16 @@ run_dir_abs="$(cd "$run_dir" && pwd)"
 export HOMELAB_TEST_RUN_DIR="$run_dir_abs"
 export HOMELAB_REPO_ROOT="$repo_root"
 test_access_check "$suite_id" || exit 1
+if [[ "$mutates_cluster" == true ]]; then
+  test_access_purpose_check campaign-observer "$run_id" "$observer_kubeconfig" || exit 1
+  assert_established_disruption_admissible "$observer_kubeconfig" || exit 1
+  if [[ "$lease_acquired" == true ]]; then
+    test_access_purpose_check campaign-coordinator "$run_id" "$coordinator_kubeconfig" || exit 1
+    verify_test_lease_holder "$coordinator_kubeconfig" "$run_id" || exit 1
+  else
+    verify_test_lease_holder "$kubeconfig" "$TEST_CAMPAIGN_LEASE_HOLDER" || exit 1
+  fi
+fi
 set +e
 python -m scripts.test.run_bound_backend "$run_dir/logs/chainsaw.log" -- \
   chainsaw test "$test_dir" \
@@ -295,32 +323,38 @@ if [[ "$lease_acquired" == 'true' ]]; then
   lease_finalization_failed=false
   [[ ! -f "$run_dir/diagnostics/lease-renewal-failed" ]] ||
     lease_finalization_failed=true
-  release_test_lease "$kubeconfig" "$run_id" ||
+  release_test_lease "$coordinator_kubeconfig" "$run_id" ||
     lease_finalization_failed=true
   if [[ "$lease_finalization_failed" == 'true' ]]; then
     diagnostics_status='failed'
+    lease_cleanup_status='failed'
+  else
+    lease_cleanup_status='passed'
   fi
   lease_acquired=false
 elif [[ "$lease_joined" == 'true' ]]; then
   if ! verify_test_lease_holder "$kubeconfig" "$TEST_CAMPAIGN_LEASE_HOLDER"; then
     diagnostics_status='failed'
+    lease_cleanup_status='failed'
   fi
   if [[ -n "${TEST_CAMPAIGN_LEASE_FAILURE_MARKER:-}" &&
     -e "$TEST_CAMPAIGN_LEASE_FAILURE_MARKER" ]]; then
     diagnostics_status='failed'
+    lease_cleanup_status='failed'
   fi
   lease_joined=false
 fi
 
 # State-changing scenarios drive cleanup/recovery in a trap/finally block and record its
 # outcome in recovery.json. Surface it separately without rewriting the primary assertion.
-cleanup_status='not-required'
+cleanup_status="$lease_cleanup_status"
 recovery_status='not-required'
 external_dependency_status='not-applicable'
 if [[ "$tier" == 'e2e' || "$tier" == 'resilience' ]]; then
   recovery_status="$(recorded_recovery_status "$run_dir")"
   cleanup_status="$recovery_status"
 fi
+[[ "$lease_cleanup_status" != failed ]] || cleanup_status='failed'
 if [[ "$tier" == 'e2e' && "$target" == 'qbit-manage-policy' ]]; then
   assertion_status="$(recorded_phase_status "$run_dir" assertion)"
   external_dependency_status="$(recorded_phase_status "$run_dir" external-dependency)"

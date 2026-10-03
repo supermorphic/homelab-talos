@@ -61,6 +61,11 @@ class CoordinationRoutingTests(unittest.TestCase):
                 "coordinator_kubeconfig": "/synthetic/ambient/coordinator",
             }
         )
+        with (self.root / "bin/chainsaw").open("a") as stream:
+            stream.write(
+                '\n[[ -z "${coordinator_kubeconfig+x}" && -z "${observer_kubeconfig+x}" ]]\n'
+                'printf \'{"status":"passed"}\\n\' > "$HOMELAB_TEST_RUN_DIR/recovery.json"\n'
+            )
 
     def execute(self):
         return subprocess.run(
@@ -147,6 +152,79 @@ class CoordinationRoutingTests(unittest.TestCase):
         self.assertGreaterEqual(len(writes), 2)
         for line in writes:
             self.assertIn(str(operator), line)
+
+    def test_chainsaw_mutator_separates_node_reads_and_lease_writes(self):
+        result = self.run_chainsaw()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        writes = [
+            line
+            for line in (self.root / "lease-calls").read_text().splitlines()
+            if " replace " in line
+        ]
+        self.assertGreaterEqual(len(writes), 2)
+        for line in writes:
+            self.assertIn("-campaign-coordinator/config", line)
+        nodes = (self.root / "node-calls").read_text().splitlines()
+        self.assertGreater(len(nodes), 0)
+        for line in nodes:
+            self.assertIn("-campaign-observer/config", line)
+        self.assertEqual(list((self.root / "private").glob("*/config")), [])
+
+    def run_chainsaw(self, **environment):
+        return subprocess.run(
+            ["scripts/test/run-chainsaw.sh", "resilience", "qbittorrent-vpn-disconnect"],
+            cwd=ROOT,
+            env={
+                **self.environment,
+                "CLUSTER_CHAOS_CONFIRM": "chaos:qbittorrent-vpn-disconnect",
+                **environment,
+            },
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+
+    def test_chainsaw_setup_failure_releases_with_coordinator_and_removes_configs(self):
+        result = self.run_chainsaw(DISRUPTION_TEST_API_FAILURE="true")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.root / "backend-config").exists())
+        writes = [
+            line
+            for line in (self.root / "lease-calls").read_text().splitlines()
+            if " replace " in line
+        ]
+        self.assertGreaterEqual(len(writes), 2)
+        for line in writes:
+            self.assertIn("-campaign-coordinator/config", line)
+        self.assertEqual(list((self.root / "private").glob("*/config")), [])
+
+    def test_chainsaw_failed_lease_release_preserves_primary_assertion(self):
+        lease_driver = self.root / "fail-release"
+        lease_driver.write_text("""#!/usr/bin/env bash
+set -euo pipefail
+for argument in "$@"; do
+  if [[ "$argument" == replace ]]; then
+    input="$(cat)"
+    [[ -n "$(yq -r '.spec.holderIdentity // ""' - <<<"$input")" ]] || exit 1
+    printf '%s\\n' "$input" | "$TEST_FIXTURE_LEASE_DELEGATE" "$@"
+    exit "$?"
+  fi
+done
+exec "$TEST_FIXTURE_LEASE_DELEGATE" "$@"
+""")
+        lease_driver.chmod(0o755)
+        result = self.run_chainsaw(
+            TEST_LEASE_KUBECTL=str(lease_driver),
+            TEST_FIXTURE_LEASE_DELEGATE=self.environment["TEST_LEASE_KUBECTL"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        paths = list((self.root / "results").glob("*/summary.json"))
+        self.assertEqual(len(paths), 1)
+        summary = json.loads(paths[0].read_text())
+        self.assertEqual(summary["result"], "broken")
+        self.assertEqual(summary["phases"]["assertion"]["status"], "passed")
+        self.assertEqual(summary["phases"]["cleanup"]["status"], "failed")
 
 
 if __name__ == "__main__":
