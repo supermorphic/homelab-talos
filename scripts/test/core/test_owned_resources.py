@@ -95,6 +95,35 @@ esac
             (self.directory / "commands").read_text(),
         )
 
+    def test_manifest_stream_creates_individually_and_records_each_api_uid(self):
+        objects = [json.loads(self.manifest.read_text()), json.loads(self.manifest.read_text())]
+        objects[1]["metadata"]["name"] = "synthetic-other"
+        self.manifest.write_text(json.dumps(objects))
+        self.fake.write_text("""#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == create && "$2" == --filename && "$4" == --output && "$5" == json ]]
+printf 'create\\n' >>"$FIXTURE_DIR/creates"
+yq -o=json '.metadata.uid = ("api-" + .metadata.name) | .metadata.resourceVersion = "1"' "$3"
+""")
+        result = self.run_shell('source "$1"; test_create_owned_stream "$2" "$4" <"$3"')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        records = [json.loads(line) for line in self.ledger.read_text().splitlines()]
+        self.assertEqual(len(records), 2)
+        self.assertEqual(
+            [record["metadata"]["uid"] for record in records],
+            ["api-synthetic-probe", "api-synthetic-other"],
+        )
+        self.assertEqual((self.directory / "creates").read_text(), "create\ncreate\n")
+
+    def test_failed_stream_does_not_lose_ownership_of_previously_created_objects(self):
+        obj = json.loads(self.manifest.read_text())
+        self.manifest.write_text(json.dumps([obj, obj]))
+        result = self.run_shell('source "$1"; test_create_owned_stream "$2" "$4" <"$3"')
+        self.assertNotEqual(result.returncode, 0)
+        records = [json.loads(line) for line in self.ledger.read_text().splitlines()]
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["metadata"]["uid"], "synthetic-owned")
+
     def test_replacement_is_not_adopted_or_deleted(self):
         self.created["metadata"]["uid"] = "synthetic-replacement"
         self.state.write_text(json.dumps(self.created))

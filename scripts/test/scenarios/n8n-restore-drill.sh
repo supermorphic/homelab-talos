@@ -5,6 +5,7 @@ source scripts/lib/common.sh
 source scripts/lib/n8n-verification.sh
 # shellcheck source=scripts/test/lib/job.sh
 source scripts/test/lib/job.sh
+source scripts/test/lib/owned-resources.sh
 # shellcheck source=scripts/test/lib/n8n-restore-command.sh
 source scripts/test/lib/n8n-restore-command.sh
 source scripts/lib/lease.sh
@@ -30,7 +31,7 @@ run_dir="${HOMELAB_TEST_RUN_DIR:-}"
   exit 1
 }
 [[ -f "$kubeconfig" ]] || {
-  echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
+  echo 'The restore drill requires the selected invocation config.' >&2
   exit 1
 }
 
@@ -52,6 +53,12 @@ k_auto=(kubectl --kubeconfig "$kubeconfig" --namespace "$automation_namespace")
 k_request=(kubectl --kubeconfig "$kubeconfig" --namespace "$request_namespace")
 k_cluster=(kubectl --kubeconfig "$kubeconfig")
 database_possible=false
+ledger="$run_dir/diagnostics/n8n-owned.jsonl"
+[[ ! -e "$ledger" ]] || {
+  echo 'Refusing to overwrite prior restore ownership evidence.' >&2
+  exit 1
+}
+: >"$ledger"
 
 automation_resource_absent() {
   local target="$1" resource
@@ -468,13 +475,13 @@ cleanup() {
   trap - EXIT INT TERM
   set +e
 
-  "${k_request[@]}" delete job "$request_job" --ignore-not-found --wait=true --timeout=2m >/dev/null 2>&1 || cleanup_ok=false
-  "${k_auto[@]}" delete deployment "$deployment" --ignore-not-found --wait=true --timeout=5m >/dev/null 2>&1 || cleanup_ok=false
-  "${k_auto[@]}" delete service "$service" --ignore-not-found --wait=true --timeout=2m >/dev/null 2>&1 || cleanup_ok=false
+  test_delete_owned "$ledger" Job "$request_namespace" "$request_job" "${k_request[@]}" || cleanup_ok=false
+  test_delete_owned "$ledger" Deployment "$automation_namespace" "$deployment" "${k_auto[@]}" || cleanup_ok=false
+  test_delete_owned "$ledger" Service "$automation_namespace" "$service" "${k_auto[@]}" || cleanup_ok=false
 
-  if [[ "$database_possible" == 'true' ]]; then
-    "${k_auto[@]}" delete job "$drop_job" --ignore-not-found --wait=true --timeout=2m >/dev/null 2>&1 || cleanup_ok=false
-    if database_job_manifest "$drop_job" drop | "${k_auto[@]}" create --filename - >/dev/null 2>&1 &&
+  if [[ "$database_possible" == true ]]; then
+    if verify_lease &&
+      database_job_manifest "$drop_job" drop | test_create_owned_stream "$ledger" "${k_auto[@]}" &&
       wait_for_job_terminal "$drop_job" 600 2 "${k_auto[@]}" >/dev/null 2>&1; then
       :
     else
@@ -483,10 +490,10 @@ cleanup() {
   fi
 
   for job in "$restore_job" "$drop_job"; do
-    "${k_auto[@]}" delete job "$job" --ignore-not-found --wait=true --timeout=2m >/dev/null 2>&1 || cleanup_ok=false
+    test_delete_owned "$ledger" Job "$automation_namespace" "$job" "${k_auto[@]}" || cleanup_ok=false
   done
-  "${k_request[@]}" delete ciliumnetworkpolicy "$request_policy" --ignore-not-found --wait=true --timeout=2m >/dev/null 2>&1 || cleanup_ok=false
-  "${k_auto[@]}" delete ciliumnetworkpolicy "$automation_policy" --ignore-not-found --wait=true --timeout=2m >/dev/null 2>&1 || cleanup_ok=false
+  test_delete_owned "$ledger" CiliumNetworkPolicy "$request_namespace" "$request_policy" "${k_request[@]}" || cleanup_ok=false
+  test_delete_owned "$ledger" CiliumNetworkPolicy "$automation_namespace" "$automation_policy" "${k_auto[@]}" || cleanup_ok=false
 
   request_resource_absent "job/$request_job" >/dev/null 2>&1 || cleanup_ok=false
   request_resource_absent "ciliumnetworkpolicy/$request_policy" >/dev/null 2>&1 || cleanup_ok=false
@@ -500,7 +507,7 @@ cleanup() {
     write_phase cleanup failed 'temporary database or one or more run-owned Kubernetes resources could not be removed'
   fi
   set -e
-  [[ "$cleanup_ok" == 'true' ]] || exit 1
+  if [[ "$cleanup_ok" != true && "$original_exit" == 0 ]]; then original_exit=1; fi
   exit "$original_exit"
 }
 trap cleanup EXIT
@@ -531,10 +538,10 @@ if n8n_routes_target_service automation "$service" <(printf '%s\n' "$routes_json
   exit 1
 fi
 
-policy_manifest | "${k_cluster[@]}" create --filename - >/dev/null
+policy_manifest | test_create_owned_stream "$ledger" "${k_cluster[@]}"
 verify_lease
 database_possible=true
-database_job_manifest "$restore_job" restore | "${k_auto[@]}" create --filename - >/dev/null
+database_job_manifest "$restore_job" restore | test_create_owned_stream "$ledger" "${k_auto[@]}"
 wait_for_job_terminal "$restore_job" 1800 2 "${k_auto[@]}"
 selected_dump="$("${k_auto[@]}" logs "job/$restore_job" | sed -n 's/^selected_dump=//p' | tail -n 1)"
 [[ "$selected_dump" =~ ^n8n-postgresql-[0-9]{8}T[0-9]{6}Z\.dump$ ]] || {
@@ -543,7 +550,7 @@ selected_dump="$("${k_auto[@]}" logs "job/$restore_job" | sed -n 's/^selected_du
 }
 
 verify_lease
-application_manifests | "${k_auto[@]}" create --filename - >/dev/null
+application_manifests | test_create_owned_stream "$ledger" "${k_auto[@]}"
 "${k_auto[@]}" rollout status "deployment/$deployment" --timeout=20m >/dev/null
 
 # Recheck after Service creation. The drill must remain cluster-internal and does
@@ -555,7 +562,7 @@ if n8n_routes_target_service automation "$service" <(printf '%s\n' "$routes_json
 fi
 
 verify_lease
-request_job_manifest | "${k_request[@]}" create --filename - >/dev/null
+request_job_manifest | test_create_owned_stream "$ledger" "${k_request[@]}"
 wait_for_job_terminal "$request_job" 600 2 "${k_request[@]}"
 
 RUN_HASH="$run_hash" DATABASE_NAME="$database_name" SELECTED_DUMP="$selected_dump" \

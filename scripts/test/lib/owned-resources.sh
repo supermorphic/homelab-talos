@@ -32,6 +32,26 @@ test_create_owned() { # <ledger> <one-object-json-or-yaml> <kubectl-command...>
   printf '%s\n' "$record" >>"$ledger"
 }
 
+# Existing restore builders emit arrays or YAML document streams. Create each
+# object separately so partial failures retain every returned creation UID.
+test_create_owned_stream() ( # <ledger> <kubectl-command...>; manifests on stdin
+  set -euo pipefail
+  local ledger="$1" temporary document
+  shift
+  umask 077
+  temporary="$(mktemp -d "${TMPDIR:-/tmp}/homelab-owned-create.XXXXXX")"
+  trap 'rm -rf -- "$temporary"' EXIT
+  yq -o=json -I=0 '.' - |
+    jq -c 'if type == "array" then .[] else . end |
+      if type == "object" and has("apiVersion") and has("kind") and has("metadata")
+      then . else error("invalid owned-resource manifest") end' >"$temporary/documents.jsonl"
+  [[ -s "$temporary/documents.jsonl" ]]
+  while IFS= read -r document <&3; do
+    printf '%s\n' "$document" >"$temporary/object.json"
+    test_create_owned "$ledger" "$temporary/object.json" "$@" 3<&-
+  done 3<"$temporary/documents.jsonl"
+)
+
 # Match one previously created object, then enforce its UID in the API DELETE.
 # Controller dependents are removed by foreground garbage collection.
 test_delete_owned() { # <ledger> <kind> <namespace> <name> <kubectl-command...>

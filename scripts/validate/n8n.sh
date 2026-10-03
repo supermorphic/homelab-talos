@@ -517,7 +517,7 @@ for marker in 'credentialDecryptionProvedByAuthenticatedCanary' \
   'write_phase cleanup failed' \
   'automation_policy="$resource_prefix-automation"' \
   'request_policy="$resource_prefix-request"' \
-  'policy_manifest | "${k_cluster[@]}" create --filename -' \
+  'policy_manifest | test_create_owned_stream "$ledger" "${k_cluster[@]}"' \
   'n8n_routes_target_service automation "$service"' \
   'request_resource_absent "ciliumnetworkpolicy/$request_policy"' \
   'automation_resource_absent "$target"'; do
