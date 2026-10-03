@@ -4,6 +4,8 @@
 _TEST_ACCESS_OWNED_PATH=''
 _TEST_ACCESS_CLOSE_STATUS=0
 _TEST_ACCESS_CATALOG_DIGEST=''
+_TEST_ACCESS_PURPOSE_PATHS=()
+_TEST_ACCESS_PURPOSE_CLOSE_STATUS=0
 
 test_access_resolve() {
   uv run --locked --no-dev python -m scripts.test.access resolve "$1"
@@ -107,4 +109,35 @@ test_access_close() {
     _TEST_ACCESS_CLOSE_STATUS=1
   fi
   return "$_TEST_ACCESS_CLOSE_STATUS"
+}
+
+test_access_purpose_check() {
+  uv run --locked --no-dev python -m scripts.test.access purpose-check "$1" "$2" "$3"
+}
+
+test_access_purpose_open() {
+  local purpose="$1" run_id="$2" config
+  TEST_ACCESS_PURPOSE_CONFIG=''
+  config="$(uv run --locked --no-dev python -m scripts.test.access purpose "$purpose" "$run_id")" || return 1
+  [[ "$config" == /* && -f "$config" ]] || {
+    echo 'Orchestration did not produce a private purpose config.' >&2
+    return 1
+  }
+  _TEST_ACCESS_PURPOSE_PATHS+=("$config")
+  test_access_purpose_check "$purpose" "$run_id" "$config" || return 1
+  # Shell callers consume this value; do not export orchestration paths to suites.
+  # shellcheck disable=SC2034
+  TEST_ACCESS_PURPOSE_CONFIG="$config"
+}
+
+test_access_purposes_close() {
+  local config
+  local owned=("${_TEST_ACCESS_PURPOSE_PATHS[@]}")
+  _TEST_ACCESS_PURPOSE_PATHS=()
+  for config in "${owned[@]}"; do
+    if ! uv run --locked --no-dev python -m scripts.test.access remove "$config"; then
+      _TEST_ACCESS_PURPOSE_CLOSE_STATUS=1
+    fi
+  done
+  return "$_TEST_ACCESS_PURPOSE_CLOSE_STATUS"
 }

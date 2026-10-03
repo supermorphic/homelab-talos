@@ -23,6 +23,17 @@ case "$1" in
     ;;
   validate) [[ -f "$2" && "$2" == "$TEST_FIXTURE_ACCESS_ROOT/private/"* ]] ;;
   inherit) [[ "$2" == 'verification.flux' && "$3" == "$TEST_FIXTURE_ACCESS_ROOT/private/parent/config" && -f "$3" ]] ;;
+  purpose)
+    case "$2" in campaign-observer|campaign-coordinator|report-publisher) ;; *) exit 2 ;; esac
+    config="$TEST_FIXTURE_ACCESS_ROOT/private/$3-$2/config"
+    mkdir -p "$(dirname "$config")"
+    printf 'synthetic purpose invocation\n' >"$config"
+    printf '%s\n' "$config"
+    ;;
+  purpose-check)
+    [[ "${TEST_FIXTURE_PURPOSE_CHECK_FAIL:-}" != true ]] || exit 7
+    [[ "$4" == "$TEST_FIXTURE_ACCESS_ROOT/private/$3-$2/config" && -f "$4" ]]
+    ;;
   remove) [[ "$2" == "$TEST_FIXTURE_ACCESS_ROOT/private/"* ]] && rm -- "$2" ;;
   *) exit 2 ;;
 esac
@@ -32,6 +43,32 @@ export TEST_FIXTURE_REAL_UV="$real_uv"
 export TEST_FIXTURE_ACCESS_TRACE="$fixture_root/trace"
 export TEST_FIXTURE_ACCESS_ROOT="$fixture_root"
 export PATH="$fixture_root/bin:$PATH"
+
+# Independent purposes never replace the selected suite or borrow its config.
+TEST_KUBECONFIG=/synthetic/selected-suite TEST_ACCESS_CONFIG=/synthetic/selected-suite \
+  bash -e -c 'source scripts/test/lib/access.sh
+    test_access_purpose_open campaign-observer purpose-run
+    observer="$TEST_ACCESS_PURPOSE_CONFIG"
+    test_access_purpose_open campaign-coordinator purpose-run
+    coordinator="$TEST_ACCESS_PURPOSE_CONFIG"
+    test_access_purpose_open report-publisher purpose-run
+    publisher="$TEST_ACCESS_PURPOSE_CONFIG"
+    [[ "$observer" != "$coordinator" && "$coordinator" != "$publisher" &&
+       "$observer" != "$publisher" && "$TEST_KUBECONFIG" == /synthetic/selected-suite &&
+       "$TEST_ACCESS_CONFIG" == /synthetic/selected-suite ]]
+    test_access_purpose_check campaign-observer purpose-run "$observer"
+    if test_access_purpose_check campaign-coordinator purpose-run "$observer"; then exit 1; fi
+    if test_access_purpose_check report-publisher other-run "$publisher"; then exit 1; fi
+    test_access_purposes_close
+    [[ ! -f "$observer" && ! -f "$coordinator" && ! -f "$publisher" ]]
+    test_access_purposes_close'
+TEST_FIXTURE_PURPOSE_CHECK_FAIL=true \
+  bash -e -c 'source scripts/test/lib/access.sh
+    if test_access_purpose_open report-publisher rejected-purpose; then exit 1; fi
+    [[ -z "$TEST_ACCESS_PURPOSE_CONFIG" ]]
+    test_access_purposes_close
+    [[ ! -f "$TEST_FIXTURE_ACCESS_ROOT/private/rejected-purpose-report-publisher/config" ]]'
+: >"$fixture_root/trace"
 
 # Null-profile execution does not read enrollment or prepare a config.
 KUBECONFIG=/synthetic/ambient-admin TEST_KUBECONFIG=/synthetic/explicit-admin \
