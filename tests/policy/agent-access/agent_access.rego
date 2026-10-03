@@ -28,11 +28,12 @@ expected_document_names := {
 		"homelab-observer-extra",
 		"homelab-test-runner-view",
 		"homelab-test-runner-observation",
+		"homelab-test-conformance",
 	},
 	"Lease": {"homelab-test-report-publish-lock", "homelab-test-run-lock"},
 	"Role": (((publisher_role_names | connection_role_names) | profile_role_names) | ordinary_role_names),
 	"RoleBinding": ((((publisher_role_names | diagnostic_role_names) | connection_role_names) | profile_role_names) | ordinary_role_names),
-	"ServiceAccount": {"homelab-observer", "homelab-diagnostic", "homelab-report-publisher", "homelab-campaign-coordinator", "homelab-test-runner"},
+	"ServiceAccount": {"homelab-observer", "homelab-diagnostic", "homelab-report-publisher", "homelab-campaign-coordinator", "homelab-test-runner"} | dedicated_account_names,
 	"ValidatingAdmissionPolicy": ordinary_admission_names,
 	"ValidatingAdmissionPolicyBinding": ordinary_admission_names,
 }

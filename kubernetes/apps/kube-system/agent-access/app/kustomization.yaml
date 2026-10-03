@@ -6,6 +6,7 @@ resources:
   - ./report-publication-lease.yaml
   - ./rbac.yaml
   - ./test-rbac.yaml
+  - ./dedicated-rbac.yaml
   - ./test-admission.yaml
   - ./restore-admission.yaml
   - ./restore-workload-admission.yaml
