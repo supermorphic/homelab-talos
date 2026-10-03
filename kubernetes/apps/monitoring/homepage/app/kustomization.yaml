@@ -19,6 +19,7 @@ resources:
   - ./rbac.yaml
   - ./service.yaml
   - ./homepage-mylar3.sops.yaml
+  - ./homepage-komga.sops.yaml
 configMapGenerator:
   - name: homepage-config
     namespace: homepage

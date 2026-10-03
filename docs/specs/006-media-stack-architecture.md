@@ -406,8 +406,8 @@ The internal Gateway terminates trusted HTTPS at the
 [declared route](../../kubernetes/apps/media/komga/app/httproute.yaml). Clients use
 the approved LAN or Tailscale subnet path and private DNS with normal certificate
 verification. Komga has no public Gateway attachment or public DNS registration.
-Homepage discovers its link. Gatus checks the upstream unauthenticated
-`/actuator/health` response and the existing `MediaEndpointDown` rule covers
+Homepage discovers its link and native Komga library counters. Gatus checks the
+upstream unauthenticated `/actuator/health` response and the existing `MediaEndpointDown` rule covers
 availability. These checks do not establish indexing or reading progress.
 
 ### Attended setup and native clients
@@ -418,9 +418,21 @@ UID. Do not create another share or recursively change ownership. Open private
 HTTPS and create the initial administrator using Komga's first-run interface.
 Create a separate reading account with access to the comic library and the
 stream/download permissions needed by the chosen client. Accounts and generated
-API keys stay in the durable application database. No desired-state credential
-is required for this deployment; any future Git-managed integration secret must
-use SOPS, never OpenBao or plaintext annotations.
+API keys stay in the durable application database. Homepage's integration key is
+stored separately in its SOPS-managed `homepage-komga` Secret, never OpenBao or
+plaintext annotations. The [native widget](https://gethomepage.dev/widgets/services/komga/)
+uses an API key from an account allowed to view the comic library; a dedicated
+non-administrator account is sufficient. Its counts reflect that account's access.
+The current list endpoints are selected by the widget version in the route source.
+
+Generate the Homepage key in Komga account settings. With the existing operator-held
+age identity loaded, privately export `KOMGA_API_KEY`, set
+`HOMEPAGE_KOMGA_SECRETS_CONFIRM=write:monitoring:homepage-komga:sops`, and run
+`mise exec -- just repo homepage-komga-secrets`. The command writes the encrypted
+Secret, registers it in Homepage's Kustomization and stamps its pod revision.
+Commit those three outputs together through a PR for setup or key rotation.
+Flux then reloads the credential through a Homepage rollout. Validate actual
+widget counts after deployment; source checks do not prove authenticated access.
 
 Add one library rooted at `/data/media/comics`. In
 [library options](https://komga.org/docs/guides/libraries/), enable scanning on
