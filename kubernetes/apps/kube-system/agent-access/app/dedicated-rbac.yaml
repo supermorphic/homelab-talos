@@ -710,3 +710,105 @@ subjects:
   - kind: ServiceAccount
     name: homelab-test-cilium-connectivity
     namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: homelab-test-cilium-cluster-policies
+rules:
+  - apiGroups:
+      - cilium.io
+    resources:
+      - ciliumclusterwidenetworkpolicies
+    resourceNames:
+      - allow-ingress-specific-namespace-ccnp
+      - allow-egress-specific-namespace-ccnp
+      - host-firewall-ingress
+      - host-firewall-egress
+    verbs:
+      - get
+      - patch
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-cilium-cluster-policies
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-test-cilium-cluster-policies
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-cilium-connectivity
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: homelab-test-cilium-diagnostic-observation
+rules:
+  - apiGroups:
+      - cilium.io
+    resources:
+      - ciliumcidrgroups
+      - ciliumegressgatewaypolicies
+      - ciliumlocalredirectpolicies
+      - ciliumendpointslices
+      - ciliumnodeconfigs
+      - ciliumpodippools
+      - ciliuml2announcementpolicies
+      - ciliumenvoyconfigs
+      - ciliumclusterwideenvoyconfigs
+      - ciliumgatewayclassconfigs
+      - ciliumbgppeeringpolicies
+      - ciliumbgpclusterconfigs
+      - ciliumbgppeerconfigs
+      - ciliumbgpadvertisements
+      - ciliumbgpnodeconfigs
+      - ciliumbgpnodeconfigoverrides
+      - podinfo
+      - tracingpolicies
+      - tracingpoliciesnamespaced
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - gateway.networking.k8s.io
+    resources:
+      - listenersets
+      - backendtlspolicies
+      - tlsroutes
+      - tcproutes
+      - udproutes
+      - grpcroutes
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - networking.k8s.io
+    resources:
+      - ingressclasses
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - policy.networking.k8s.io
+    resources:
+      - clusternetworkpolicies
+    verbs:
+      - get
+      - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-cilium-diagnostic-observation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-test-cilium-diagnostic-observation
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-cilium-connectivity
+    namespace: kube-system

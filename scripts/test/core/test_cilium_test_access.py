@@ -3,6 +3,8 @@
 import copy
 import unittest
 
+import yaml
+
 from scripts.test.core import test_dedicated_profiles as helpers
 
 IDENTITY = "system:serviceaccount:kube-system:homelab-test-cilium-connectivity"
@@ -364,6 +366,168 @@ class CiliumAccessTests(unittest.TestCase):
         self.assertEqual(len(bindings), 1)
         self.assertEqual(
             bindings[0]["subjects"],
+            [
+                {
+                    "kind": "ServiceAccount",
+                    "name": "homelab-test-cilium-connectivity",
+                    "namespace": "kube-system",
+                }
+            ],
+        )
+
+    def test_clusterwide_policy_grants_match_the_four_fixed_fixtures(self):
+        names = [
+            "allow-ingress-specific-namespace-ccnp",
+            "allow-egress-specific-namespace-ccnp",
+            "host-firewall-ingress",
+            "host-firewall-egress",
+        ]
+        role = [
+            d
+            for d in self.documents
+            if d["kind"] == "ClusterRole"
+            and d["metadata"]["name"] == "homelab-test-cilium-cluster-policies"
+        ]
+        self.assertEqual(len(role), 1)
+        self.assertEqual(
+            role[0]["rules"],
+            [
+                {
+                    "apiGroups": ["cilium.io"],
+                    "resources": ["ciliumclusterwidenetworkpolicies"],
+                    "resourceNames": names,
+                    "verbs": ["get", "patch", "delete"],
+                }
+            ],
+        )
+        binding = [
+            d
+            for d in self.documents
+            if d["kind"] == "ClusterRoleBinding"
+            and d["metadata"]["name"] == "homelab-test-cilium-cluster-policies"
+        ]
+        self.assertEqual(len(binding), 1)
+        self.assertEqual(
+            binding[0]["subjects"],
+            [
+                {
+                    "kind": "ServiceAccount",
+                    "namespace": "kube-system",
+                    "name": "homelab-test-cilium-connectivity",
+                }
+            ],
+        )
+
+    def test_clusterwide_policies_preserve_complete_canonical_specs(self):
+        policy = "homelab-test-cilium-cluster-policies"
+        for path in sorted((helpers.ROOT / "tests/fixtures/cilium/policies").glob("*.yaml")):
+            obj = yaml.safe_load(path.read_text())
+            req = {
+                "operation": "CREATE",
+                "namespace": "",
+                "name": obj["metadata"]["name"],
+                "subResource": "",
+                "resource": {
+                    "group": "cilium.io",
+                    "version": "v2",
+                    "resource": "ciliumclusterwidenetworkpolicies",
+                },
+                "userInfo": {"username": IDENTITY},
+            }
+            with self.subTest(name=req["name"]):
+                self.assertTrue(self.admits(policy, req, obj))
+                stored = copy.deepcopy(obj)
+                stored["metadata"].update(uid="policy-fixture", resourceVersion="1", generation=1)
+                stored["status"] = {"nodes": {"fixture-node": {"ok": True}}}
+                self.assertTrue(self.admits(policy, {**req, "operation": "DELETE"}, None, stored))
+                applied = copy.deepcopy(stored)
+                applied["metadata"]["resourceVersion"] = "2"
+                self.assertTrue(
+                    self.admits(policy, {**req, "operation": "UPDATE"}, applied, stored)
+                )
+                for key, value in (
+                    ("spec", {"endpointSelector": {}}),
+                    ("specs", [obj["spec"]]),
+                    ("arbitrary", True),
+                ):
+                    bad = copy.deepcopy(obj)
+                    bad[key] = value
+                    self.assertFalse(self.admits(policy, req, bad))
+                for field, value in (
+                    ("name", "production-policy"),
+                    ("namespace", "openbao"),
+                    ("annotations", {"arbitrary": "value"}),
+                    ("labels", {"arbitrary": "value"}),
+                    ("ownerReferences", [{"uid": "other"}]),
+                    ("finalizers", ["keep-me"]),
+                ):
+                    bad = copy.deepcopy(obj)
+                    bad["metadata"][field] = value
+                    self.assertFalse(self.admits(policy, req, bad))
+                self.assertFalse(self.admits(policy, {**req, "namespace": "cilium-test-1"}, obj))
+                self.assertFalse(self.admits(policy, {**req, "subResource": "status"}, obj))
+                replacement = copy.deepcopy(applied)
+                replacement["metadata"]["uid"] = "replacement"
+                self.assertFalse(
+                    self.admits(policy, {**req, "operation": "UPDATE"}, replacement, stored)
+                )
+
+    def test_failure_diagnostics_custom_resource_inventory_is_read_only(self):
+        roles = [
+            d
+            for d in self.documents
+            if d["kind"] == "ClusterRole"
+            and d["metadata"]["name"] == "homelab-test-cilium-diagnostic-observation"
+        ]
+        self.assertEqual(len(roles), 1)
+        expected = {
+            "cilium.io": {
+                "ciliumcidrgroups",
+                "ciliumegressgatewaypolicies",
+                "ciliumlocalredirectpolicies",
+                "ciliumendpointslices",
+                "ciliumnodeconfigs",
+                "ciliumpodippools",
+                "ciliuml2announcementpolicies",
+                "ciliumenvoyconfigs",
+                "ciliumclusterwideenvoyconfigs",
+                "ciliumgatewayclassconfigs",
+                "ciliumbgppeeringpolicies",
+                "ciliumbgpclusterconfigs",
+                "ciliumbgppeerconfigs",
+                "ciliumbgpadvertisements",
+                "ciliumbgpnodeconfigs",
+                "ciliumbgpnodeconfigoverrides",
+                "podinfo",
+                "tracingpolicies",
+                "tracingpoliciesnamespaced",
+            },
+            "gateway.networking.k8s.io": {
+                "listenersets",
+                "backendtlspolicies",
+                "tlsroutes",
+                "tcproutes",
+                "udproutes",
+                "grpcroutes",
+            },
+            "networking.k8s.io": {"ingressclasses"},
+            "policy.networking.k8s.io": {"clusternetworkpolicies"},
+        }
+        self.assertEqual(len(roles[0]["rules"]), len(expected))
+        for rule in roles[0]["rules"]:
+            self.assertEqual(len(rule["apiGroups"]), 1)
+            self.assertEqual(set(rule["resources"]), expected.pop(rule["apiGroups"][0]))
+            self.assertEqual(rule["verbs"], ["get", "list"])
+        self.assertEqual(expected, {})
+        binding = [
+            d
+            for d in self.documents
+            if d["kind"] == "ClusterRoleBinding"
+            and d["metadata"]["name"] == "homelab-test-cilium-diagnostic-observation"
+        ]
+        self.assertEqual(len(binding), 1)
+        self.assertEqual(
+            binding[0]["subjects"],
             [
                 {
                     "kind": "ServiceAccount",

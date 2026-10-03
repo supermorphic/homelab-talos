@@ -481,3 +481,62 @@ test_cilium_system_runtime_requires_connect_guard if {
 	messages := deny with input as fixture
 	count(messages) > 0
 }
+
+dedicated_cilium_cluster_policy_fixture := [
+	cluster_role("homelab-test-cilium-cluster-policies", [{"apiGroups": ["cilium.io"], "resources": ["ciliumclusterwidenetworkpolicies"], "resourceNames": ["allow-ingress-specific-namespace-ccnp", "allow-egress-specific-namespace-ccnp", "host-firewall-ingress", "host-firewall-egress"], "verbs": ["get", "patch", "delete"]}]),
+	cluster_role_binding("homelab-test-cilium-cluster-policies", ["homelab-test-cilium-connectivity"], "homelab-test-cilium-cluster-policies"),
+	{
+		"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingAdmissionPolicy", "metadata": {"name": "homelab-test-cilium-cluster-policies"},
+		"spec": {
+			"failurePolicy": "Fail", "matchConstraints": {"resourceRules": [{"apiGroups": ["cilium.io"], "apiVersions": ["v2"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["ciliumclusterwidenetworkpolicies"]}]},
+			"matchConditions": [{"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'"}],
+			"validations": [{"expression": "object.kind == 'CiliumClusterwideNetworkPolicy'"}],
+		},
+	},
+	flux_guard_binding("homelab-test-cilium-cluster-policies"),
+]
+
+test_cilium_cluster_policy_names_cannot_be_unbounded if {
+	messages := deny with input as runner_change("ClusterRole", "homelab-test-cilium-cluster-policies", [{"op": "remove", "path": "/rules/0/resourceNames"}])
+	count(messages) > 0
+}
+
+test_cilium_cluster_policy_cannot_bind_ordinary_runner if {
+	messages := deny with input as runner_change("ClusterRoleBinding", "homelab-test-cilium-cluster-policies", [{"op": "replace", "path": "/subjects/0/name", "value": "homelab-test-runner"}])
+	count(messages) > 0
+}
+
+test_cilium_cluster_policy_guard_must_cover_server_side_apply_creation if {
+	messages := deny with input as runner_change("ValidatingAdmissionPolicy", "homelab-test-cilium-cluster-policies", [{"op": "replace", "path": "/spec/matchConstraints/resourceRules/0/operations", "value": ["UPDATE", "DELETE"]}])
+	count(messages) > 0
+}
+
+test_cilium_cluster_policy_requires_parent_guard if {
+	messages := deny with input as [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ValidatingAdmissionPolicy", "homelab-test-cilium-cluster-policies"]]
+	count(messages) > 0
+}
+
+dedicated_cilium_observation_fixture := [
+	cluster_role("homelab-test-cilium-diagnostic-observation", [
+		{"apiGroups": ["cilium.io"], "resources": ["ciliumcidrgroups", "ciliumegressgatewaypolicies", "ciliumlocalredirectpolicies", "ciliumendpointslices", "ciliumnodeconfigs", "ciliumpodippools", "ciliuml2announcementpolicies", "ciliumenvoyconfigs", "ciliumclusterwideenvoyconfigs", "ciliumgatewayclassconfigs", "ciliumbgppeeringpolicies", "ciliumbgpclusterconfigs", "ciliumbgppeerconfigs", "ciliumbgpadvertisements", "ciliumbgpnodeconfigs", "ciliumbgpnodeconfigoverrides", "podinfo", "tracingpolicies", "tracingpoliciesnamespaced"], "verbs": ["get", "list"]},
+		{"apiGroups": ["gateway.networking.k8s.io"], "resources": ["listenersets", "backendtlspolicies", "tlsroutes", "tcproutes", "udproutes", "grpcroutes"], "verbs": ["get", "list"]},
+		{"apiGroups": ["networking.k8s.io"], "resources": ["ingressclasses"], "verbs": ["get", "list"]},
+		{"apiGroups": ["policy.networking.k8s.io"], "resources": ["clusternetworkpolicies"], "verbs": ["get", "list"]},
+	]),
+	cluster_role_binding("homelab-test-cilium-diagnostic-observation", ["homelab-test-cilium-connectivity"], "homelab-test-cilium-diagnostic-observation"),
+]
+
+test_cilium_diagnostic_inventory_cannot_write_resources if {
+	messages := deny with input as runner_change("ClusterRole", "homelab-test-cilium-diagnostic-observation", [{"op": "add", "path": "/rules/0/verbs/-", "value": "patch"}])
+	count(messages) > 0
+}
+
+test_cilium_diagnostic_inventory_cannot_grant_wildcard_resources if {
+	messages := deny with input as runner_change("ClusterRole", "homelab-test-cilium-diagnostic-observation", [{"op": "replace", "path": "/rules/0/resources", "value": ["*"]}])
+	count(messages) > 0
+}
+
+test_cilium_diagnostic_inventory_cannot_bind_other_profiles if {
+	messages := deny with input as runner_change("ClusterRoleBinding", "homelab-test-cilium-diagnostic-observation", [{"op": "replace", "path": "/subjects/0/name", "value": "homelab-diagnostic"}])
+	count(messages) > 0
+}

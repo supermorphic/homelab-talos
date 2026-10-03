@@ -183,3 +183,66 @@ spec:
   policyName: homelab-test-cilium-system-connect
   validationActions:
     - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-cilium-cluster-policies
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - cilium.io
+        apiVersions:
+          - v2
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - ciliumclusterwidenetworkpolicies
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'
+  variables:
+    - name: item
+      expression: 'request.operation == ''DELETE'' ? oldObject : object'
+  validations:
+    - expression: request.namespace == '' && request.subResource == '' && variables.item.apiVersion ==
+        'cilium.io/v2' && variables.item.kind == 'CiliumClusterwideNetworkPolicy' && variables.item.metadata.name
+        == request.name && (!has(variables.item.metadata.namespace) || variables.item.metadata.namespace
+        == '') && variables.item.all(k, k in ['apiVersion','kind','metadata','spec','status']) && (!has(variables.item.metadata.labels)
+        || variables.item.metadata.labels.size() == 0) && (!has(variables.item.metadata.annotations) ||
+        variables.item.metadata.annotations.size() == 0) && (!has(variables.item.metadata.ownerReferences)
+        || variables.item.metadata.ownerReferences.size() == 0) && (!has(variables.item.metadata.finalizers)
+        || variables.item.metadata.finalizers.size() == 0) && (request.operation == 'CREATE' || (has(variables.item.metadata.uid)
+        && variables.item.metadata.uid != ''))
+      message: Only canonical named cluster-wide connectivity fixtures without extra ownership or runtime
+        fields are permitted.
+    - expression: '(request.name == "allow-egress-specific-namespace-ccnp" && variables.item.spec == {"endpointSelector":
+        {"matchLabels": {"io.kubernetes.pod.namespace": "cilium-test-ccnp1", "kind": "ccnp"}}, "egress":
+        [{"toEndpoints": [{"matchLabels": {"io.kubernetes.pod.namespace": "cilium-test-ccnp2"}}]}]}) ||
+        (request.name == "allow-ingress-specific-namespace-ccnp" && variables.item.spec == {"endpointSelector":
+        {"matchLabels": {"io.kubernetes.pod.namespace": "cilium-test-ccnp1", "kind": "ccnp"}}, "ingress":
+        [{"fromEndpoints": [{"matchLabels": {"io.kubernetes.pod.namespace": "cilium-test-ccnp2"}}]}]})
+        || (request.name == "host-firewall-egress" && variables.item.spec == {"nodeSelector": {}, "egress":
+        [{"toEntities": ["health", "kube-apiserver", "remote-node", "world"]}, {"toEndpoints": [{"matchExpressions":
+        [{"key": "name", "operator": "NotIn", "values": ["echo-other-node"]}, {"key": "io.cilium.k8s.policy.cluster",
+        "operator": "Exists"}]}]}]}) || (request.name == "host-firewall-ingress" && variables.item.spec
+        == {"nodeSelector": {}, "ingress": [{"fromEntities": ["health", "kube-apiserver", "remote-node",
+        "world"]}, {"fromEndpoints": [{"matchExpressions": [{"key": "name", "operator": "NotIn", "values":
+        ["client"]}, {"key": "io.cilium.k8s.policy.cluster", "operator": "Exists"}]}]}]})'
+      message: Keep the complete pinned connectivity policy specification; host firewall fixtures are
+        an explicit dedicated exception.
+    - expression: 'request.operation == ''UPDATE'' ? object.metadata.uid == oldObject.metadata.uid : true'
+      message: Preserve the existing policy identity on apply.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-cilium-cluster-policies
+spec:
+  policyName: homelab-test-cilium-cluster-policies
+  validationActions:
+    - Deny

@@ -103,6 +103,7 @@ deny contains msg if {
 }
 
 dedicated_admission_rules := {
+	"homelab-test-cilium-cluster-policies": [{"apiGroups": ["cilium.io"], "apiVersions": ["v2"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["ciliumclusterwidenetworkpolicies"]}],
 	"homelab-test-cilium-system-connect": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CONNECT"], "resources": ["pods/exec", "pods/portforward"]}],
 	"homelab-test-cilium-ephemeral-diagnostics": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["UPDATE"], "resources": ["pods/ephemeralcontainers"]}],
 	"homelab-test-cilium-namespaces": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["namespaces"]}],
@@ -126,6 +127,7 @@ dedicated_admission_rules := {
 }
 
 dedicated_admission_conditions := {
+	"homelab-test-cilium-cluster-policies": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'"},
 	"homelab-test-cilium-system-connect": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'"},
 	"homelab-test-cilium-ephemeral-diagnostics": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'"},
 	"homelab-test-cilium-namespaces": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'"},
@@ -145,7 +147,7 @@ dedicated_admission_conditions := {
 	"homelab-test-flux-restart-reconcile": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-flux-restart'"},
 }
 
-dedicated_cluster_contracts := {"homelab-test-cilium-namespaces": {"rules": [{"apiGroups": [""], "resources": ["namespaces"], "verbs": ["create"]}, {"apiGroups": [""], "resources": ["namespaces"], "resourceNames": ["cilium-test-1", "cilium-test-ccnp1", "cilium-test-ccnp2"], "verbs": ["update", "delete"]}], "account": "homelab-test-cilium-connectivity"}, "homelab-test-node-scheduling": {
+dedicated_cluster_contracts := {"homelab-test-cilium-diagnostic-observation": {"rules": [{"apiGroups": ["cilium.io"], "resources": ["ciliumcidrgroups", "ciliumegressgatewaypolicies", "ciliumlocalredirectpolicies", "ciliumendpointslices", "ciliumnodeconfigs", "ciliumpodippools", "ciliuml2announcementpolicies", "ciliumenvoyconfigs", "ciliumclusterwideenvoyconfigs", "ciliumgatewayclassconfigs", "ciliumbgppeeringpolicies", "ciliumbgpclusterconfigs", "ciliumbgppeerconfigs", "ciliumbgpadvertisements", "ciliumbgpnodeconfigs", "ciliumbgpnodeconfigoverrides", "podinfo", "tracingpolicies", "tracingpoliciesnamespaced"], "verbs": ["get", "list"]}, {"apiGroups": ["gateway.networking.k8s.io"], "resources": ["listenersets", "backendtlspolicies", "tlsroutes", "tcproutes", "udproutes", "grpcroutes"], "verbs": ["get", "list"]}, {"apiGroups": ["networking.k8s.io"], "resources": ["ingressclasses"], "verbs": ["get", "list"]}, {"apiGroups": ["policy.networking.k8s.io"], "resources": ["clusternetworkpolicies"], "verbs": ["get", "list"]}], "account": "homelab-test-cilium-connectivity"}, "homelab-test-cilium-cluster-policies": {"rules": [{"apiGroups": ["cilium.io"], "resources": ["ciliumclusterwidenetworkpolicies"], "resourceNames": ["allow-ingress-specific-namespace-ccnp", "allow-egress-specific-namespace-ccnp", "host-firewall-ingress", "host-firewall-egress"], "verbs": ["get", "patch", "delete"]}], "account": "homelab-test-cilium-connectivity"}, "homelab-test-cilium-namespaces": {"rules": [{"apiGroups": [""], "resources": ["namespaces"], "verbs": ["create"]}, {"apiGroups": [""], "resources": ["namespaces"], "resourceNames": ["cilium-test-1", "cilium-test-ccnp1", "cilium-test-ccnp2"], "verbs": ["update", "delete"]}], "account": "homelab-test-cilium-connectivity"}, "homelab-test-node-scheduling": {
 	"rules": [{"apiGroups": [""], "resources": ["nodes"], "resourceNames": ["nuc1", "nuc2", "nuc3"], "verbs": ["patch"]}],
 	"account": "homelab-test-node-reschedule",
 }}
