@@ -193,7 +193,7 @@ diagnostic_test_bindings := [object.union(
 	name := concat("", ["homelab-diagnostic-", capability])
 ]
 
-valid_fixture := array.concat(valid_fixture_base, diagnostic_test_bindings)
+valid_fixture := array.concat(array.concat(valid_fixture_base, diagnostic_test_bindings), runner_fixture)
 
 combined_fixture := [{
 	"path": "kubernetes/apps/kube-system/agent-access/app/rbac.yaml",

@@ -1953,6 +1953,54 @@ class TestAccessPolicyTests(unittest.TestCase):
                     )
                 )
 
+    def test_rendered_access_satisfies_rego_and_missing_guards_are_rejected(self):
+        kinds = {
+            "ServiceAccount",
+            "Role",
+            "RoleBinding",
+            "ClusterRole",
+            "ClusterRoleBinding",
+            "Lease",
+            "ValidatingAdmissionPolicy",
+            "ValidatingAdmissionPolicyBinding",
+        }
+        docs = [d for d in self.documents if d["kind"] in kinds]
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory) / "access.yaml"
+
+            def validate(documents):
+                fixture.write_text(yaml.safe_dump_all(documents))
+                return subprocess.run(
+                    [
+                        "conftest",
+                        "test",
+                        "--combine",
+                        "--all-namespaces",
+                        "--policy",
+                        str(ROOT / "tests/policy/agent-access"),
+                        str(fixture),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+
+            result = validate(docs)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for kind, name in (
+                ("ServiceAccount", "homelab-test-runner"),
+                ("Role", "homelab-test-jobs"),
+                ("RoleBinding", "homelab-test-media-runtime"),
+                ("ValidatingAdmissionPolicy", "homelab-test-report-exec"),
+                ("ValidatingAdmissionPolicyBinding", "homelab-test-workload-security"),
+            ):
+                with self.subTest(kind=kind, name=name):
+                    result = validate(
+                        [d for d in docs if (d["kind"], d["metadata"]["name"]) != (kind, name)]
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("FAIL", result.stdout)
+
     def test_generalized_runner_has_no_unrestricted_mutation_or_secret_grants(self):
         accounts = [
             d
