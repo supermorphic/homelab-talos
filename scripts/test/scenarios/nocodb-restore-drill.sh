@@ -67,7 +67,6 @@ request_job="$prefix-request"
 application_probe_job="$prefix-app-probe"
 application_probe_secret="$prefix-app-credential"
 policy="$prefix-policy"
-backup_configmap=''
 kc=(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace")
 kcluster=(kubectl --kubeconfig "$kubeconfig")
 
@@ -254,83 +253,9 @@ database_manifests() {
 }
 
 restore_job_manifest() {
-	local command
-	command="$(automation_data_restore_job_command)"
-	command+="$(
-		cat <<'EOF'
-
-printf '%s\n' 'restore_stage=nocodb-source-registry'
-if [ "$restored_platform_revision" = '026-nocodb-v3' ]; then
-source_registry="$(psql --dbname=automation_data_control --tuples-only --no-align --command="
-SELECT jsonb_build_object(
-  'items', COALESCE(jsonb_agg(jsonb_build_object(
-    'domain', source.domain,
-    'pair', source.pair,
-    'accessKind', source.access_kind,
-    'state', source.state,
-    'baseId', source.base_id,
-    'sourceId', source.source_id,
-    'integrationId', source.integration_id,
-    'schema', CASE source.access_kind WHEN 'reader' THEN
-      COALESCE(mapping.reader_schema, 'read_model') ELSE
-      COALESCE(mapping.operator_schema, 'operator') END,
-    'valid', (platform_operations.validate_nocodb_access(source.domain, source.pair, source.access_kind)->>'valid')::boolean
-  ) ORDER BY source.pair, source.access_kind), '[]'::jsonb)
-)
-FROM platform_operations.managed_nocodb_sources AS source
-LEFT JOIN platform_operations.managed_nocodb_schema_mappings AS mapping
-  ON mapping.domain = source.domain AND mapping.pair = source.pair
-WHERE source.domain = 'automation_data_acceptance';
-")" || restore_fail nocodb-source-registry-query
-elif [ "$restored_platform_revision" = '026-nocodb-v2' ]; then
-source_registry="$(psql --dbname=automation_data_control --tuples-only --no-align --command="
-SELECT jsonb_build_object(
-  'items', COALESCE(jsonb_agg(jsonb_build_object(
-    'domain', source.domain,
-    'pair', 'default',
-    'accessKind', source.access_kind,
-    'state', source.state,
-    'baseId', source.base_id,
-    'sourceId', source.source_id,
-    'integrationId', source.integration_id,
-    'schema', CASE source.access_kind WHEN 'reader' THEN
-      COALESCE(mapping.reader_schema, 'read_model') ELSE
-      COALESCE(mapping.operator_schema, 'operator') END,
-    'valid', (platform_operations.validate_nocodb_access(source.domain, source.access_kind)->>'valid')::boolean
-  ) ORDER BY source.access_kind), '[]'::jsonb)
-)
-FROM platform_operations.managed_nocodb_sources AS source
-LEFT JOIN platform_operations.managed_nocodb_schema_mappings AS mapping
-  ON mapping.domain = source.domain
-WHERE source.domain = 'automation_data_acceptance';
-")" || restore_fail nocodb-source-registry-query
-else
-source_registry="$(psql --dbname=automation_data_control --tuples-only --no-align --command="
-SELECT jsonb_build_object(
-  'items', COALESCE(jsonb_agg(jsonb_build_object(
-    'domain', source.domain,
-    'pair', 'default',
-    'accessKind', source.access_kind,
-    'state', source.state,
-    'baseId', source.base_id,
-    'sourceId', source.source_id,
-    'integrationId', source.integration_id,
-    'schema', CASE source.access_kind WHEN 'reader' THEN 'read_model' ELSE 'operator' END,
-    'valid', (platform_operations.validate_nocodb_access(source.domain, source.access_kind)->>'valid')::boolean
-  ) ORDER BY source.access_kind), '[]'::jsonb)
-)
-FROM platform_operations.managed_nocodb_sources AS source
-WHERE source.domain = 'automation_data_acceptance';
-")" || restore_fail nocodb-source-registry-query
-fi
-# Validate decoded JSON in the caller; the pinned PostgreSQL image has no jq.
-test -n "$source_registry" || restore_fail nocodb-source-registry-shape
-printf 'source_registry_base64=%s\n' "$(printf '%s' "$source_registry" | base64 | tr -d '\n')"
-EOF
-	)"
-	JOB_NAME="$restore_job" JOB_COMMAND="$command" DATABASE_SERVICE="$database_service" \
+	JOB_NAME="$restore_job" DATABASE_SERVICE="$database_service" \
 		RUN_HASH="$run_hash" SELECTED_BUNDLE="$selected_bundle" \
-		BACKUP_CONFIGMAP="$backup_configmap" yq --null-input --output-format yaml '
+		BACKUP_CONFIGMAP="automation-data-test-helpers-v1" yq --null-input --output-format yaml '
       {
         "apiVersion":"batch/v1","kind":"Job",
         "metadata":{"name":strenv(JOB_NAME),"namespace":"automation-data","labels":{
@@ -342,7 +267,7 @@ EOF
             "securityContext":{"fsGroup":70,"fsGroupChangePolicy":"OnRootMismatch","runAsNonRoot":true,"runAsUser":70,"runAsGroup":70,"seccompProfile":{"type":"RuntimeDefault"}},
             "containers":[{
               "name":"restore","image":"postgres:17.11-alpine3.24","imagePullPolicy":"IfNotPresent",
-              "command":["/bin/sh","-ceu"],"args":[strenv(JOB_COMMAND)],
+              "command":["/bin/sh","-eu","/helpers/nocodb-restore.sh"],
               "env":[
                 {"name":"PGHOST","value":strenv(DATABASE_SERVICE)},{"name":"PGPORT","value":"5432"},{"name":"PGUSER","value":"postgres"},
                 {"name":"PGPASSWORD","valueFrom":{"secretKeyRef":{"name":"postgresql-credentials","key":"postgres-superuser-password"}}},
@@ -356,7 +281,8 @@ EOF
                 {"name":"post-recovery","mountPath":"/post-recovery"},
                 {"name":"scripts","mountPath":"/scripts/backup.sh","subPath":"backup.sh","readOnly":true},
                 {"name":"scripts","mountPath":"/scripts/update-backup-status.sql","subPath":"update-backup-status.sql","readOnly":true},
-                {"name":"tmp","mountPath":"/tmp"}
+                {"name":"tmp","mountPath":"/tmp"},
+                {"name":"scripts","mountPath":"/helpers","readOnly":true}
               ]
             }],
             "volumes":[
@@ -498,7 +424,6 @@ CONFIGMAP_NAME="$deployed_backup_configmap" jq -e '
 	echo 'The deployed backup ConfigMap is missing a required script key.' >&2
 	exit 1
 }
-backup_configmap="$deployed_backup_configmap"
 
 # This observational Job is the only resource allowed before the logical recovery input passes.
 preflight_manifest="$temp_dir/preflight.yaml"

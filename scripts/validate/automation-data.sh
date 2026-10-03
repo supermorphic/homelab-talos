@@ -212,8 +212,8 @@ done
 
 for restore_contract_value in \
   "expected_confirmation='restore:automation-data:full-chain'" \
-  'n8n_restore_job_command' \
-  'automation_data_restore_job_command' \
+  '/helpers/n8n-restore-isolated.sh' \
+  '/helpers/automation-data-restore.sh' \
   'automation-data-postgresql-backups' \
   'n8n-postgresql-backups' \
   'N8N_ENCRYPTION_KEY' \
@@ -306,8 +306,13 @@ request_job_manifest >"$temp_dir/request.yaml"
 kubeconform -strict -summary -ignore-missing-schemas "$temp_dir"/*.yaml >/dev/null
 
 [[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "scripts") | .configMap.name' \
-  "$temp_dir/automation-data-job.yaml")" == "$backup_configmap" ]] ||
-  fail 'the automation-data restore Job does not use the resolved backup ConfigMap'
+  "$temp_dir/automation-data-job.yaml")" == 'automation-data-test-helpers-v1' ]] ||
+  fail 'the automation-data restore Job does not use the fixed canonical backup helper'
+for restore_job_file in automation-data-job n8n-job; do
+  yq -e '.spec.template.spec.containers[0] | has("args") | not' \
+    "$temp_dir/$restore_job_file.yaml" >/dev/null ||
+    fail 'a restore Job accepts an inline executable program'
+done
 
 [[ "$(yq -r '.spec.template.spec.containers[0].env[].name' \
   "$temp_dir/automation-data-job.yaml" | LC_ALL=C sort | paste -sd, -)" == \

@@ -126,7 +126,18 @@ mkdir -p "$fixture/bin" "$fixture/preflight-run"
 printf '#!/bin/sh\nexit 0\n' >"$fixture/bin/pg_restore"
 printf '#!/bin/sh\necho unexpected-database-connection >&2\nexit 1\n' >"$fixture/bin/psql"
 chmod +x "$fixture/bin/pg_restore" "$fixture/bin/psql"
-preflight_command="$(yq -r '.spec.template.spec.containers[0].args[0]' "$preflight_manifest")"
+[[ "$(yq -o=json -I=0 '.spec.template.spec.containers[0].command' "$preflight_manifest")" == \
+  '["/bin/sh","-eu","/helpers/nocodb-restore-preflight.sh"]' ]] ||
+  fail 'preflight does not execute the fixed helper'
+yq -e '.spec.template.spec.containers[0] | has("args") | not' "$preflight_manifest" >/dev/null ||
+  fail 'preflight accepts an inline command'
+# Run the exact packaged selection functions and required-database assertion locally.
+preflight_helpers='kubernetes/apps/automation-data/postgresql/app/test-helpers'
+preflight_command="$(
+  cat "$preflight_helpers/restore-validation.sh"
+  sed '/^printf.*restore_stage=artifact-selection/d' "$preflight_helpers/restore-selection.sh"
+  sed -n '/^for required_database/,$p' "$preflight_helpers/nocodb-restore-preflight.sh"
+)"
 preflight_command="${preflight_command//\/tmp\/restore/$fixture\/preflight-run\/restore}"
 preflight_output="$(PATH="$fixture/bin:$PATH" BACKUP_DIR="$fixture/bundles" sh -ceu "$preflight_command")" ||
 	fail 'read-only preflight rejected the complete required database set'

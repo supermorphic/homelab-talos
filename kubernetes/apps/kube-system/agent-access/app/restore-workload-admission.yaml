@@ -240,3 +240,127 @@ metadata:
 spec:
   policyName: homelab-test-nocodb-applications
   validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-restore-jobs
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [batch]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [jobs]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: restore-database-family
+      expression: >-
+        (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/test'] in ['automation-data-restore-drill', 'nocodb-restore-drill'] &&
+        (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/role'] in ['ad-restore', 'n8n-restore', 'restore', 'preflight']
+  variables:
+    - name: job
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: family
+      expression: variables.job.metadata.labels['homelab-talos/test']
+    - name: run
+      expression: variables.job.metadata.labels['homelab-talos/run-id']
+    - name: role
+      expression: variables.job.metadata.labels['homelab-talos/role']
+    - name: n8n
+      expression: variables.role == 'n8n-restore'
+    - name: preflight
+      expression: variables.role == 'preflight'
+    - name: nc
+      expression: variables.family == 'nocodb-restore-drill'
+    - name: prefix
+      expression: "(variables.nc ? 'nc' : 'ad') + '-restore-' + variables.run"
+    - name: helper
+      expression: "variables.n8n ? 'n8n-test-helpers-v1' : 'automation-data-test-helpers-v1'"
+    - name: expectedValues
+      expression: >-
+        variables.preflight ? {'BACKUP_DIR': '/backups'} : variables.n8n ?
+          {'PGHOST': variables.prefix + '-n8n-db', 'PGPORT': '5432', 'PGUSER': 'n8n', 'RESTORE_DATABASE': 'n8n'} :
+          {'PGHOST': variables.prefix + '-db', 'PGPORT': '5432', 'PGUSER': 'postgres',
+           'BACKUP_DIR': '/backups', 'POST_RECOVERY_BACKUP_DIR': '/post-recovery'}
+    - name: expectedSecrets
+      expression: >-
+        variables.preflight ? {} : variables.n8n ? {'PGPASSWORD': 'n8n-password'} :
+          {'PGPASSWORD': 'postgres-superuser-password', 'AUTOMATION_DATA_BACKUP_PASSWORD': 'backup-password'}
+    - name: selector
+      expression: "variables.n8n ? 'N8N_RESTORE_DUMP' : 'AUTOMATION_DATA_RESTORE_BUNDLE'"
+    - name: pod
+      expression: variables.job.spec.template.spec
+    - name: container
+      expression: variables.pod.containers[0]
+  validations:
+    - expression: >-
+        request.operation != 'UPDATE' && variables.run.matches('^[0-9a-f]{12}$') &&
+        variables.job.metadata.labels == {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role': variables.role} &&
+        ((variables.nc && request.namespace == 'automation-data' && variables.role in ['restore', 'preflight'] &&
+          variables.job.metadata.name == variables.prefix + (variables.preflight ? '-preflight' : '-load')) ||
+         (!variables.nc && ((variables.n8n && request.namespace == 'automation' && variables.job.metadata.name == variables.prefix + '-n8n-load') ||
+          (variables.role == 'ad-restore' && request.namespace == 'automation-data' && variables.job.metadata.name == variables.prefix + '-ad-load')))) &&
+        variables.job.spec.template.metadata.labels['homelab-talos/role'] == variables.role &&
+        variables.job.spec.activeDeadlineSeconds == (variables.preflight ? 300 : 1800) &&
+        (!has(variables.job.spec.suspend) || !variables.job.spec.suspend) &&
+        !has(variables.job.spec.podFailurePolicy) && !has(variables.job.spec.successPolicy) &&
+        variables.pod.securityContext.runAsNonRoot && variables.pod.securityContext.runAsUser == 70 &&
+        variables.pod.securityContext.runAsGroup == 70 && variables.pod.securityContext.fsGroup == 70 &&
+        variables.pod.securityContext.fsGroupChangePolicy == 'OnRootMismatch' &&
+        variables.container.name == (variables.preflight ? 'preflight' : 'restore') &&
+        variables.container.image == 'postgres:17.11-alpine3.24' && variables.container.imagePullPolicy == 'IfNotPresent' &&
+        variables.container.command == ['/bin/sh', '-eu', '/helpers/' + (variables.preflight ? 'nocodb-restore-preflight.sh' :
+          variables.n8n ? 'n8n-restore-isolated.sh' : variables.nc ? 'nocodb-restore.sh' : 'automation-data-restore.sh')] &&
+        !has(variables.container.args) &&
+        (!has(variables.container.securityContext.runAsUser) || variables.container.securityContext.runAsUser == 70) &&
+        (!has(variables.container.securityContext.runAsGroup) || variables.container.securityContext.runAsGroup == 70) &&
+        variables.container.resources.requests == {'cpu': (variables.preflight ? '10m' : '50m'), 'memory': '64Mi'} &&
+        variables.container.resources.limits == {'memory': (variables.preflight ? '256Mi' : '512Mi')} &&
+        !has(variables.container.resources.claims)
+      message: Restore jobs must execute their immutable canonical program against a run-owned scratch database.
+    - expression: >-
+        variables.expectedValues.all(k, variables.container.env.exists(e, e.name == k && e.value == variables.expectedValues[k] && !has(e.valueFrom))) &&
+        variables.expectedSecrets.all(k, variables.container.env.exists(e, e.name == k && (!has(e.value) || e.value == '') &&
+          e.valueFrom.secretKeyRef.name == 'postgresql-credentials' && e.valueFrom.secretKeyRef.key == variables.expectedSecrets[k] &&
+          !has(e.valueFrom.configMapKeyRef) && !has(e.valueFrom.fieldRef) && !has(e.valueFrom.resourceFieldRef))) &&
+        variables.container.env.size() == variables.expectedValues.size() + variables.expectedSecrets.size() +
+          (variables.container.env.exists(e, e.name == variables.selector) ? 1 : 0) &&
+        variables.container.env.all(e, e.name in variables.expectedValues || e.name in variables.expectedSecrets ||
+          (!variables.preflight && !variables.nc && e.name == variables.selector && !has(e.valueFrom) &&
+           e.value.matches(variables.n8n ? '^n8n-postgresql-[0-9]{8}T[0-9]{6}Z\\.dump$' : '^automation-data-[0-9]{8}T[0-9]{6}Z$')))
+      message: Restore jobs may use only their fixed namespace credentials and a validated backup selector.
+    - expression: >-
+        variables.pod.volumes.size() == (variables.preflight || variables.n8n ? 3 : variables.nc ? 4 : 5) &&
+        variables.pod.volumes.exists(v, v.name == (variables.nc && !variables.preflight ? 'scripts' : 'helpers') &&
+          v.configMap.name == variables.helper && !has(v.configMap.items) && (!has(v.configMap.optional) || !v.configMap.optional)) &&
+        (variables.preflight || variables.n8n || variables.nc || variables.pod.volumes.exists(v, v.name == 'scripts' &&
+          v.configMap.name == variables.helper && !has(v.configMap.items))) &&
+        variables.pod.volumes.exists(v, v.name == 'backups' &&
+          v.persistentVolumeClaim.claimName == (variables.n8n ? 'n8n-postgresql-backups' : 'automation-data-postgresql-backups') &&
+          v.persistentVolumeClaim.readOnly) &&
+        variables.pod.volumes.exists(v, v.name == 'tmp' && has(v.emptyDir)) &&
+        (variables.preflight || variables.n8n || variables.pod.volumes.exists(v, v.name == 'post-recovery' && has(v.emptyDir))) &&
+        variables.container.volumeMounts.size() == (variables.preflight || variables.n8n ? 3 : 6) &&
+        variables.container.volumeMounts.exists(m, m.name == (variables.nc && !variables.preflight ? 'scripts' : 'helpers') &&
+          m.mountPath == '/helpers' && m.readOnly && !has(m.subPath) && !has(m.subPathExpr)) &&
+        variables.container.volumeMounts.exists(m, m.name == 'tmp' && m.mountPath == '/tmp' && !has(m.subPath) && !has(m.subPathExpr)) &&
+        variables.container.volumeMounts.exists(m, m.name == 'backups' && m.readOnly && !has(m.subPathExpr) &&
+          (variables.nc && !variables.preflight ? m.subPath.matches('^automation-data-[0-9]{8}T[0-9]{6}Z$') && m.mountPath == '/backups/' + m.subPath :
+            m.mountPath == '/backups' && !has(m.subPath))) &&
+        (variables.preflight || variables.n8n ||
+          (variables.container.volumeMounts.exists(m, m.name == 'post-recovery' && m.mountPath == '/post-recovery' && !has(m.subPath) && !has(m.subPathExpr)) &&
+           ['backup.sh', 'update-backup-status.sql'].all(k, variables.container.volumeMounts.exists(m,
+             m.name == 'scripts' && m.mountPath == '/scripts/' + k && m.subPath == k && m.readOnly && !has(m.subPathExpr))))) &&
+        variables.container.volumeMounts.all(m, !has(m.mountPropagation) || m.mountPropagation == 'None')
+      message: Restore jobs may mount only immutable helpers, read-only backup inputs, and scratch directories.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-restore-jobs
+spec:
+  policyName: homelab-test-restore-jobs
+  validationActions: [Deny]

@@ -1,22 +1,8 @@
 #!/usr/bin/env bash
 
 nocodb_restore_preflight_manifest() { # <job-name> <run-hash>
-	local job_name="$1" run_hash="$2" command
-	# Reuse the full checksum, manifest, archive-list, and selection contract, stopping
-	# before the first PostgreSQL connection or any restore operation.
-	command="$(automation_data_restore_job_command | sed '/^initial_database_count=/,$d' |
-		sed '/^printf.*restore_stage=artifact-selection/d')"
-	command+=$'\n'
-	command+="$(
-		cat <<'EOF'
-for required_database in nocodb automation_data_control automation_data_acceptance; do
-  encoded="$(printf '%s' "$required_database" | base64 | tr -d '\n')"
-  grep -Fxq "$encoded" /tmp/restore-expected-databases-base64 || restore_fail required-database-missing
-done
-printf 'selected_bundle=%s\n' "$selected_name"
-EOF
-	)"
-	JOB_NAME="$job_name" RUN_HASH="$run_hash" JOB_COMMAND="$command" \
+	local job_name="$1" run_hash="$2"
+	JOB_NAME="$job_name" RUN_HASH="$run_hash" \
 		yq --null-input --output-format yaml '
       {
         "apiVersion":"batch/v1", "kind":"Job",
@@ -29,13 +15,13 @@ EOF
             "securityContext":{"fsGroup":70,"fsGroupChangePolicy":"OnRootMismatch","runAsNonRoot":true,"runAsUser":70,"runAsGroup":70,"seccompProfile":{"type":"RuntimeDefault"}},
             "containers":[{
               "name":"preflight","image":"postgres:17.11-alpine3.24","imagePullPolicy":"IfNotPresent",
-              "command":["/bin/sh","-ceu"],"args":[strenv(JOB_COMMAND)],
+              "command":["/bin/sh","-eu","/helpers/nocodb-restore-preflight.sh"],
               "env":[{"name":"BACKUP_DIR","value":"/backups"}],
               "resources":{"requests":{"cpu":"10m","memory":"64Mi"},"limits":{"memory":"256Mi"}},
               "securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true},
-              "volumeMounts":[{"name":"backups","mountPath":"/backups","readOnly":true},{"name":"tmp","mountPath":"/tmp"}]
+              "volumeMounts":[{"name":"backups","mountPath":"/backups","readOnly":true},{"name":"tmp","mountPath":"/tmp"},{"name":"helpers","mountPath":"/helpers","readOnly":true}]
             }],
-            "volumes":[{"name":"backups","persistentVolumeClaim":{"claimName":"automation-data-postgresql-backups","readOnly":true}},{"name":"tmp","emptyDir":{}}]
+            "volumes":[{"name":"backups","persistentVolumeClaim":{"claimName":"automation-data-postgresql-backups","readOnly":true}},{"name":"tmp","emptyDir":{}},{"name":"helpers","configMap":{"name":"automation-data-test-helpers-v1"}}]
           }
         }}
       }

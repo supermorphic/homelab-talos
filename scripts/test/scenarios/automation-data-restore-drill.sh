@@ -312,26 +312,28 @@ policy_manifests() {
 }
 
 restore_job_manifest() {
-  local kind="$1" name command namespace role host user secret_name secret_key mounts volumes extra_env backup_configmap_name=''
+  local kind="$1" name command namespace role host user secret_name secret_key mounts volumes extra_env helper_name backup_configmap_name=''
   local selector_name='' selector_value='' selector_env='[]'
   case "$kind" in
     automation-data)
       [[ "$backup_configmap" =~ ^automation-data-postgresql-backup-[a-z0-9]+$ ]] || return 2
-      backup_configmap_name="$backup_configmap"
-      name="$ad_restore_job"; command="$(automation_data_restore_job_command)"
+      backup_configmap_name=automation-data-test-helpers-v1
+      helper_name=automation-data-test-helpers-v1
+      name="$ad_restore_job"; command='/helpers/automation-data-restore.sh'
       namespace="$ad_namespace"; role='ad-restore'; host="$ad_service"
       user='postgres'; secret_name='postgresql-credentials'; secret_key='postgres-superuser-password'
-      mounts='[{"name":"backups","mountPath":"/backups","readOnly":true},{"name":"post-recovery","mountPath":"/post-recovery"},{"name":"scripts","mountPath":"/scripts/backup.sh","subPath":"backup.sh","readOnly":true},{"name":"scripts","mountPath":"/scripts/update-backup-status.sql","subPath":"update-backup-status.sql","readOnly":true},{"name":"tmp","mountPath":"/tmp"}]'
+      mounts='[{"name":"backups","mountPath":"/backups","readOnly":true},{"name":"post-recovery","mountPath":"/post-recovery"},{"name":"scripts","mountPath":"/scripts/backup.sh","subPath":"backup.sh","readOnly":true},{"name":"scripts","mountPath":"/scripts/update-backup-status.sql","subPath":"update-backup-status.sql","readOnly":true},{"name":"tmp","mountPath":"/tmp"},{"name":"helpers","mountPath":"/helpers","readOnly":true}]'
       volumes='[{"name":"backups","persistentVolumeClaim":{"claimName":"automation-data-postgresql-backups","readOnly":true}},{"name":"post-recovery","emptyDir":{}},{"name":"scripts","configMap":{"name":"","defaultMode":365}},{"name":"tmp","emptyDir":{}}]'
       extra_env='[{"name":"BACKUP_DIR","value":"/backups"},{"name":"POST_RECOVERY_BACKUP_DIR","value":"/post-recovery"},{"name":"AUTOMATION_DATA_BACKUP_PASSWORD","valueFrom":{"secretKeyRef":{"name":"postgresql-credentials","key":"backup-password"}}}]'
       selector_name='AUTOMATION_DATA_RESTORE_BUNDLE'
       selector_value="${automation_data_restore_bundle:-}"
       ;;
     n8n)
-      name="$n8n_restore_job"; command="$(n8n_restore_job_command)"
+      helper_name=n8n-test-helpers-v1
+      name="$n8n_restore_job"; command='/helpers/n8n-restore-isolated.sh'
       namespace="$n8n_namespace"; role='n8n-restore'; host="$n8n_service"
       user='n8n'; secret_name='postgresql-credentials'; secret_key='n8n-password'
-      mounts='[{"name":"backups","mountPath":"/backups","readOnly":true},{"name":"tmp","mountPath":"/tmp"}]'
+      mounts='[{"name":"backups","mountPath":"/backups","readOnly":true},{"name":"tmp","mountPath":"/tmp"},{"name":"helpers","mountPath":"/helpers","readOnly":true}]'
       volumes='[{"name":"backups","persistentVolumeClaim":{"claimName":"n8n-postgresql-backups","readOnly":true}},{"name":"tmp","emptyDir":{}}]'
       extra_env='[{"name":"RESTORE_DATABASE","value":"n8n"}]'
       selector_name='N8N_RESTORE_DUMP'
@@ -348,6 +350,7 @@ restore_job_manifest() {
     JOB_COMMAND="$command" PGHOST_VALUE="$host" PGUSER_VALUE="$user" \
     SECRET_NAME="$secret_name" SECRET_KEY="$secret_key" \
     MOUNTS="$mounts" VOLUMES="$volumes" EXTRA_ENV="$extra_env" \
+    HELPER_CONFIGMAP_NAME="$helper_name" \
     BACKUP_CONFIGMAP_NAME="$backup_configmap_name" SELECTOR_ENV="$selector_env" \
     yq --null-input --output-format yaml '
       {
@@ -362,7 +365,7 @@ restore_job_manifest() {
             "securityContext": {"fsGroup": 70, "fsGroupChangePolicy": "OnRootMismatch", "runAsNonRoot": true, "runAsUser": 70, "runAsGroup": 70, "seccompProfile": {"type": "RuntimeDefault"}},
             "containers": [{
               "name": "restore", "image": "postgres:17.11-alpine3.24", "imagePullPolicy": "IfNotPresent",
-              "command": ["/bin/sh", "-ceu"], "args": [strenv(JOB_COMMAND)],
+              "command": ["/bin/sh", "-eu", strenv(JOB_COMMAND)],
               "env": ([
                 {"name": "PGHOST", "value": strenv(PGHOST_VALUE)}, {"name": "PGPORT", "value": "5432"},
                 {"name": "PGUSER", "value": strenv(PGUSER_VALUE)},
@@ -372,7 +375,7 @@ restore_job_manifest() {
               "securityContext": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}, "readOnlyRootFilesystem": true},
               "volumeMounts": (strenv(MOUNTS) | from_json)
             }],
-            "volumes": ((strenv(VOLUMES) | from_json) |
+            "volumes": ((strenv(VOLUMES) | from_json) + [{"name":"helpers","configMap":{"name": strenv(HELPER_CONFIGMAP_NAME)}}] |
               (.[] | select(.name == "scripts") | .configMap.name) =
                 strenv(BACKUP_CONFIGMAP_NAME))
           }

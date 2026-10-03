@@ -9,3 +9,4 @@ resources:
   - ./test-admission.yaml
   - ./restore-admission.yaml
   - ./restore-workload-admission.yaml
+  - ./restore-network-admission.yaml

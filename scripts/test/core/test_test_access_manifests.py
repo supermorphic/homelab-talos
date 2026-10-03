@@ -13,6 +13,8 @@ import celpy
 import yaml
 from celpy.adapter import json_to_cel
 
+from scripts.test.core.test_restore_fixtures import RestoreFixtureTests
+
 ROOT = Path(__file__).resolve().parents[3]
 PACKAGE = ROOT / "kubernetes/apps/kube-system/agent-access/app"
 IDENTITY = "system:serviceaccount:kube-system:homelab-test-runner"
@@ -228,6 +230,7 @@ class TestAccessPolicyTests(unittest.TestCase):
                 "homelab-test-n8n-persistence-jobs",
                 "homelab-test-n8n-request-jobs",
                 "homelab-test-qbit-manage-jobs",
+                "homelab-test-restore-jobs",
                 "homelab-test-workload-security",
             )
         )
@@ -246,15 +249,19 @@ class TestAccessPolicyTests(unittest.TestCase):
             "ad_database=$prefix-db\nad_service=$ad_database\nad_data_pvc=$prefix-ad-data\n"
             "n8n_database=$prefix-n8n-db\nn8n_service=$n8n_database\n"
             "n8n_data_pvc=$prefix-n8n-data\nn8n_app=$prefix-n8n\n"
+            "ad_policy=$prefix-ad-policy\nn8n_policy=$prefix-n8n-policy\nrequest_policy=$prefix-request-policy\n"
             + function(ad, "platform_manifests")
             + function(ad, "n8n_application_manifests")
-            + "platform_manifests\nn8n_application_manifests 192.0.2.45\n",
+            + function(ad, "policy_manifests")
+            + 'platform_manifests\nprintf "\\n---\\n"\nn8n_application_manifests 192.0.2.45\nprintf "\\n---\\n"\npolicy_manifests\n',
             "run_hash=0123456789ab\nprefix=nc-restore-$run_hash\n"
             "database=$prefix-db\ndatabase_service=$database\ndatabase_pvc=$prefix-db-data\n"
             + function(nc, "database_manifests")
             + function(library, "nocodb_restore_application_manifests")
-            + "database_manifests\n"
-            'nocodb_restore_application_manifests "$prefix-nocodb" "$prefix-nocodb" 192.0.2.45 "$run_hash"\n',
+            + function(library, "nocodb_restore_policy_manifest")
+            + 'database_manifests\nprintf "\\n---\\n"\n'
+            'nocodb_restore_application_manifests "$prefix-nocodb" "$prefix-nocodb" 192.0.2.45 "$run_hash"\n'
+            'printf "\\n---\\n"\nnocodb_restore_policy_manifest "$prefix-policy" "$database" "$prefix-nocodb" "$prefix-request" "$run_hash"\n',
         )
         documents = []
         for program in programs:
@@ -267,6 +274,29 @@ class TestAccessPolicyTests(unittest.TestCase):
             )
             documents.extend(yaml.safe_load_all(rendered.stdout))
         return documents
+
+    def test_complete_restore_backend_render_resource_inventory(self):
+        documents = self.render_restore_backends()
+        self.assertEqual(
+            {
+                kind: sum(d["kind"] == kind for d in documents)
+                for kind in (
+                    "PersistentVolumeClaim",
+                    "Service",
+                    "StatefulSet",
+                    "Deployment",
+                    "CiliumNetworkPolicy",
+                )
+            },
+            {
+                "PersistentVolumeClaim": 3,
+                "Service": 5,
+                "StatefulSet": 3,
+                "Deployment": 2,
+                "CiliumNetworkPolicy": 4,
+            },
+        )
+        self.assertEqual(len(documents), 17)
 
     def test_restore_backend_claims_and_services_match_enforced_allocation(self):
         documents = self.render_restore_backends()
@@ -286,6 +316,125 @@ class TestAccessPolicyTests(unittest.TestCase):
             with self.subTest(resource=resource, name=metadata["name"]):
                 self.assertTrue(self.admits(policy, req, obj))
                 self.assertTrue(self.admits(policy, {**req, "operation": "DELETE"}, None, obj))
+
+    def test_restore_network_rules_cannot_select_other_workloads_or_widen_peers(self):
+        policies = [
+            d for d in self.render_restore_backends() if d["kind"] == "CiliumNetworkPolicy"
+        ]
+        self.assertEqual(len(policies), 4)
+        for obj in policies:
+            req = self.request(
+                "ciliumnetworkpolicies", obj["metadata"]["namespace"], name=obj["metadata"]["name"]
+            )
+            req["resource"].update(group="cilium.io", version="v2")
+
+            def allowed(candidate, request=req):
+                return all(
+                    self.admits(policy, request, candidate)
+                    for policy in (
+                        "homelab-test-network-policies",
+                        "homelab-test-restore-network-policies",
+                    )
+                )
+
+            self.assertTrue(allowed(obj))
+            self.assertTrue(
+                self.admits(
+                    "homelab-test-restore-network-policies",
+                    {**req, "operation": "DELETE"},
+                    None,
+                    obj,
+                )
+            )
+            self.assertFalse(allowed(obj, {**req, "operation": "UPDATE"}))
+            for change in (
+                "namespace",
+                "name",
+                "run",
+                "endpoint",
+                "expression",
+                "rule",
+                "owner",
+                "annotation",
+                "peer",
+                "port",
+                "cidr",
+                "entity",
+                "fqdn",
+                "tls",
+                "l7",
+                "dns",
+                "disable-default-deny",
+            ):
+                bad, request = copy.deepcopy(obj), copy.deepcopy(req)
+                rules = bad.get("specs", [bad.get("spec")])
+                rule = next(r for r in rules if r["egress"])
+                egress = rule["egress"][-1]
+                if change == "namespace":
+                    request["namespace"] = "security"
+                elif change == "name":
+                    bad["metadata"]["name"] = "production"
+                elif change == "run":
+                    bad["metadata"]["labels"]["homelab-talos/run-id"] = "other"
+                elif change == "endpoint":
+                    rule["endpointSelector"]["matchLabels"] = {
+                        "app.kubernetes.io/name": "postgresql"
+                    }
+                elif change == "expression":
+                    rule["endpointSelector"]["matchExpressions"] = [
+                        {"key": "app", "operator": "Exists"}
+                    ]
+                elif change == "rule":
+                    if "specs" in bad:
+                        bad["specs"].append(copy.deepcopy(rule))
+                    else:
+                        bad["specs"] = [copy.deepcopy(rule)]
+                elif change == "owner":
+                    bad["metadata"]["ownerReferences"] = [{"uid": "synthetic"}]
+                elif change == "annotation":
+                    bad["metadata"]["annotations"] = {"test.example/other": "true"}
+                elif change == "peer":
+                    egress["toEndpoints"][0]["matchLabels"] = {
+                        "k8s:io.kubernetes.pod.namespace": "security"
+                    }
+                elif change == "port":
+                    egress["toPorts"][0]["ports"][0]["port"] = "8200"
+                elif change == "cidr":
+                    egress["toCIDR"] = ["192.0.2.0/24"]
+                elif change == "entity":
+                    egress["toEntities"] = ["world"]
+                elif change == "fqdn":
+                    egress["toFQDNs"] = [{"matchPattern": "*"}]
+                elif change == "tls":
+                    egress["toPorts"][0]["terminatingTLS"] = {"secret": {"name": "other"}}
+                elif change == "l7":
+                    egress["toPorts"][0]["rules"] = {"http": [{"method": "GET"}]}
+                elif change == "dns":
+                    rule["egress"][0]["toEndpoints"][0]["matchLabels"]["k8s:k8s-app"] = "other"
+                else:
+                    rule["enableDefaultDeny"] = {"egress": False}
+                with self.subTest(policy=obj["metadata"]["name"], change=change):
+                    self.assertFalse(allowed(bad, request))
+
+    def test_restore_network_grant_has_only_individual_automation_data_policies(self):
+        roles = [
+            d
+            for d in self.documents
+            if d["kind"] == "Role"
+            and d["metadata"]["namespace"] == "automation-data"
+            and d["metadata"]["name"] == "homelab-test-network-policies"
+        ]
+        self.assertEqual(len(roles), 1)
+        self.assertEqual(
+            roles[0]["rules"],
+            [
+                {
+                    "apiGroups": ["cilium.io"],
+                    "resources": ["ciliumnetworkpolicies"],
+                    "verbs": ["create", "delete"],
+                }
+            ],
+        )
 
     def test_restore_allocation_grants_are_namespaced_and_individual(self):
         for namespace in ("automation", "automation-data"):
@@ -614,6 +763,134 @@ class TestAccessPolicyTests(unittest.TestCase):
         self.assertEqual(
             roles[0]["rules"],
             [{"apiGroups": ["apps"], "resources": ["deployments"], "verbs": ["create", "delete"]}],
+        )
+
+    def test_restore_database_jobs_cannot_execute_caller_programs_or_use_other_credentials(self):
+        for obj in RestoreFixtureTests.render_restore_jobs():
+            req = self.request("jobs", obj["metadata"]["namespace"], name=obj["metadata"]["name"])
+            req["resource"]["group"] = "batch"
+
+            def allowed(candidate, request=req):
+                return self.admits_jobs(request, candidate) and self.admits(
+                    "homelab-test-restore-jobs", request, candidate
+                )
+
+            self.assertTrue(allowed(obj))
+            self.assertTrue(
+                self.admits("homelab-test-restore-jobs", {**req, "operation": "DELETE"}, None, obj)
+            )
+            self.assertFalse(allowed(obj, {**req, "operation": "UPDATE"}))
+            if obj["metadata"]["labels"]["homelab-talos/test"] == "automation-data-restore-drill":
+                selected = copy.deepcopy(obj)
+                n8n = obj["metadata"]["labels"]["homelab-talos/role"] == "n8n-restore"
+                selected["spec"]["template"]["spec"]["containers"][0]["env"].append(
+                    {
+                        "name": "N8N_RESTORE_DUMP" if n8n else "AUTOMATION_DATA_RESTORE_BUNDLE",
+                        "value": "n8n-postgresql-20260825T003000Z.dump"
+                        if n8n
+                        else "automation-data-20260825T003000Z",
+                    }
+                )
+                self.assertTrue(allowed(selected))
+            for change in (
+                "namespace",
+                "name",
+                "family",
+                "role",
+                "image",
+                "command",
+                "args",
+                "env",
+                "host",
+                "secret",
+                "backup-write",
+                "backup-claim",
+                "helper",
+                "mount",
+                "identity",
+                "token",
+                "deadline",
+                "sidecar",
+                "hook",
+                "selector-path",
+            ):
+                bad, request = copy.deepcopy(obj), copy.deepcopy(req)
+                pod = bad["spec"]["template"]["spec"]
+                app = pod["containers"][0]
+                if change == "namespace":
+                    request["namespace"] = "security"
+                elif change == "name":
+                    bad["metadata"]["name"] = "production"
+                elif change in ("family", "role"):
+                    bad["metadata"]["labels"][
+                        "homelab-talos/" + ("test" if change == "family" else "role")
+                    ] = "other"
+                elif change == "image":
+                    app["image"] = "busybox:latest"
+                elif change == "command":
+                    app["command"] = ["sh", "-c", "env"]
+                elif change == "args":
+                    app["args"] = ["other"]
+                elif change == "env":
+                    app["env"].append({"name": "PGOPTIONS", "value": "--config-file=/tmp/other"})
+                elif change == "host":
+                    host = next((e for e in app["env"] if e["name"] == "PGHOST"), None)
+                    if host is None:
+                        app["env"].append({"name": "PGHOST", "value": "production"})
+                    else:
+                        host["value"] = "automation-data-postgresql"
+                elif change == "secret":
+                    app["env"].append(
+                        {
+                            "name": "OTHER",
+                            "valueFrom": {"secretKeyRef": {"name": "other", "key": "password"}},
+                        }
+                    )
+                elif change == "backup-write":
+                    next(m for m in app["volumeMounts"] if m["name"] == "backups")["readOnly"] = (
+                        False
+                    )
+                elif change == "backup-claim":
+                    next(v for v in pod["volumes"] if v["name"] == "backups")[
+                        "persistentVolumeClaim"
+                    ]["claimName"] = "production"
+                elif change == "helper":
+                    next(v for v in pod["volumes"] if "configMap" in v)["configMap"]["name"] = (
+                        "mutable-program"
+                    )
+                elif change == "mount":
+                    next(m for m in app["volumeMounts"] if m["mountPath"] == "/helpers")[
+                        "mountPath"
+                    ] = "/other"
+                elif change == "identity":
+                    pod["serviceAccountName"] = "elevated"
+                elif change == "token":
+                    pod["automountServiceAccountToken"] = True
+                elif change == "deadline":
+                    bad["spec"]["activeDeadlineSeconds"] = 86400
+                elif change == "sidecar":
+                    pod["containers"].append(copy.deepcopy(app))
+                elif change == "hook":
+                    app["lifecycle"] = {"postStart": {"exec": {"command": ["env"]}}}
+                else:
+                    app["env"].append(
+                        {"name": "AUTOMATION_DATA_RESTORE_BUNDLE", "value": "../other"}
+                    )
+                with self.subTest(job=obj["metadata"]["name"], change=change):
+                    self.assertFalse(allowed(bad, request))
+
+    def test_restore_database_job_grant_has_no_other_automation_data_mutation(self):
+        roles = [
+            d
+            for d in self.documents
+            if d["kind"] == "Role"
+            and d["metadata"]["name"] == "homelab-test-jobs"
+            and d["metadata"]["namespace"] == "automation-data"
+        ]
+        self.assertEqual(len(roles), 1)
+        self.assertEqual(
+            roles[0]["rules"],
+            [{"apiGroups": ["batch"], "resources": ["jobs"], "verbs": ["create", "delete"]}],
         )
 
     def test_restore_database_controllers_cannot_select_other_authority(self):

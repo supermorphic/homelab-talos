@@ -387,7 +387,13 @@ spec:
           ((request.namespace == 'automation' && (variables.family == 'n8n-persistence' ||
           variables.job.metadata.labels['homelab-talos/role'] == 'database-helper')) ||
           (request.namespace == 'gatus' && variables.family == 'n8n-restore-drill' &&
-            variables.job.metadata.labels['homelab-talos/role'] == 'request')))) &&
+            variables.job.metadata.labels['homelab-talos/role'] == 'request'))) ||
+         (variables.run.matches('^[0-9a-f]{12}$') &&
+          ((variables.family == 'automation-data-restore-drill' &&
+            ((request.namespace == 'automation-data' && variables.job.metadata.labels['homelab-talos/role'] == 'ad-restore') ||
+             (request.namespace == 'automation' && variables.job.metadata.labels['homelab-talos/role'] == 'n8n-restore'))) ||
+           (variables.family == 'nocodb-restore-drill' && request.namespace == 'automation-data' &&
+            variables.job.metadata.labels['homelab-talos/role'] in ['restore', 'preflight'])))) &&
         variables.job.spec.template.metadata.labels['homelab-talos/test'] == variables.family &&
         variables.job.spec.template.metadata.labels['homelab-talos/run-id'] == variables.run &&
         !has(variables.job.metadata.ownerReferences) && !has(variables.job.metadata.annotations) &&
@@ -1049,6 +1055,9 @@ spec:
   matchConditions:
     - name: test-runner
       expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: n8n-family
+      expression: >-
+        !((request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/test'] in ['automation-data-restore-drill', 'nocodb-restore-drill'])
   variables:
     - name: policy
       expression: "request.operation == 'DELETE' ? oldObject : object"
