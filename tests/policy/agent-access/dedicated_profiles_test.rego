@@ -91,3 +91,52 @@ test_flux_restart_requires_template_patch_guard if {
 	messages := deny with input as [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ValidatingAdmissionPolicy", "homelab-test-flux-restart"]]
 	count(messages) > 0
 }
+
+dedicated_node_fixture := [
+	cluster_role("homelab-test-node-scheduling", [{"apiGroups": [""], "resources": ["nodes"], "resourceNames": ["nuc1", "nuc2", "nuc3"], "verbs": ["patch"]}]),
+	cluster_role_binding("homelab-test-node-scheduling", ["homelab-test-node-reschedule"], "homelab-test-node-scheduling"),
+	cluster_role_binding("homelab-test-node-reschedule-view", ["homelab-test-node-reschedule"], "view"),
+	cluster_role_binding("homelab-test-node-reschedule-observation", ["homelab-test-node-reschedule"], "homelab-observer-extra"),
+	role("homelab-test-node-reschedule-runtime", "media", [
+		{"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["get", "create"]},
+		{"apiGroups": [""], "resources": ["pods"], "verbs": ["delete"]},
+	]),
+	role_binding("homelab-test-node-reschedule-runtime", "media", "homelab-test-node-reschedule", "kube-system", "homelab-test-node-reschedule-runtime"),
+	node_guard("homelab-test-node-scheduling", "UPDATE", "nodes"),
+	node_guard("homelab-test-node-plex-runtime", "CONNECT", "pods/exec"),
+	node_guard("homelab-test-node-plex-disruption", "DELETE", "pods"),
+	flux_guard_binding("homelab-test-node-scheduling"),
+	flux_guard_binding("homelab-test-node-plex-runtime"),
+	flux_guard_binding("homelab-test-node-plex-disruption"),
+]
+
+node_guard(name, operation, resource) := {
+	"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingAdmissionPolicy", "metadata": {"name": name},
+	"spec": {
+		"failurePolicy": "Fail", "matchConstraints": {"resourceRules": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": [operation], "resources": [resource]}]},
+		"matchConditions": [{"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-node-reschedule'"}],
+		"validations": [{"expression": "object.metadata.name == 'fixture'"}],
+	},
+}
+
+test_node_scheduling_cannot_patch_unnamed_nodes if {
+	fixture := runner_change("ClusterRole", "homelab-test-node-scheduling", [{"op": "remove", "path": "/rules/0/resourceNames"}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_node_scheduling_cannot_receive_other_profile_subject if {
+	fixture := runner_change("ClusterRoleBinding", "homelab-test-node-scheduling", [{"op": "replace", "path": "/subjects/0/name", "value": "homelab-test-runner"}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_node_scheduling_cluster_role_cannot_be_removed if {
+	messages := deny with input as [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ClusterRole", "homelab-test-node-scheduling"]]
+	count(messages) > 0
+}
+
+test_node_scheduling_guard_cannot_be_removed if {
+	messages := deny with input as [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ValidatingAdmissionPolicy", "homelab-test-node-scheduling"]]
+	count(messages) > 0
+}

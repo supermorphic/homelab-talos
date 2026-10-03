@@ -8,6 +8,7 @@ resources:
   - ./test-rbac.yaml
   - ./dedicated-rbac.yaml
   - ./dedicated-admission.yaml
+  - ./node-reschedule-admission.yaml
   - ./test-admission.yaml
   - ./restore-admission.yaml
   - ./restore-workload-admission.yaml

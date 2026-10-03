@@ -34,17 +34,29 @@ deny contains "conformance administrator exception must bind only its dedicated 
 	not conformance_binding_exact(publisher_documents("ClusterRoleBinding", "homelab-test-conformance"))
 }
 
-dedicated_role_contracts := {"homelab-test-flux-restart": {
-	"namespace": "flux-system",
-	"rules": [
-		{"apiGroups": ["apps"], "resources": ["deployments"], "resourceNames": ["source-controller", "kustomize-controller", "helm-controller", "notification-controller"], "verbs": ["patch", "update"]},
-		{"apiGroups": ["source.toolkit.fluxcd.io"], "resources": ["gitrepositories"], "resourceNames": ["flux-system"], "verbs": ["patch", "update"]},
-		{"apiGroups": ["kustomize.toolkit.fluxcd.io"], "resources": ["kustomizations"], "resourceNames": ["flux-canary", "cluster-apps"], "verbs": ["patch", "update"]},
-	],
-	"subjects": [{"kind": "ServiceAccount", "name": "homelab-test-flux-restart", "namespace": "kube-system"}],
-}}
+dedicated_role_contracts := {
+	"homelab-test-node-reschedule-runtime": {
+		"namespace": "media",
+		"rules": [
+			{"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["get", "create"]},
+			{"apiGroups": [""], "resources": ["pods"], "verbs": ["delete"]},
+		],
+		"subjects": [{"kind": "ServiceAccount", "name": "homelab-test-node-reschedule", "namespace": "kube-system"}],
+	},
+	"homelab-test-flux-restart": {
+		"namespace": "flux-system",
+		"rules": [
+			{"apiGroups": ["apps"], "resources": ["deployments"], "resourceNames": ["source-controller", "kustomize-controller", "helm-controller", "notification-controller"], "verbs": ["patch", "update"]},
+			{"apiGroups": ["source.toolkit.fluxcd.io"], "resources": ["gitrepositories"], "resourceNames": ["flux-system"], "verbs": ["patch", "update"]},
+			{"apiGroups": ["kustomize.toolkit.fluxcd.io"], "resources": ["kustomizations"], "resourceNames": ["flux-canary", "cluster-apps"], "verbs": ["patch", "update"]},
+		],
+		"subjects": [{"kind": "ServiceAccount", "name": "homelab-test-flux-restart", "namespace": "kube-system"}],
+	},
+}
 
 dedicated_observation_contracts := {
+	"homelab-test-node-reschedule-view": {"role": "view", "account": "homelab-test-node-reschedule"},
+	"homelab-test-node-reschedule-observation": {"role": "homelab-observer-extra", "account": "homelab-test-node-reschedule"},
 	"homelab-test-flux-restart-view": {"role": "view", "account": "homelab-test-flux-restart"},
 	"homelab-test-flux-restart-observation": {"role": "homelab-observer-extra", "account": "homelab-test-flux-restart"},
 }
@@ -62,6 +74,9 @@ deny contains msg if {
 }
 
 dedicated_admission_rules := {
+	"homelab-test-node-plex-disruption": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["DELETE"], "resources": ["pods"]}],
+	"homelab-test-node-plex-runtime": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CONNECT"], "resources": ["pods/exec"]}],
+	"homelab-test-node-scheduling": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["UPDATE"], "resources": ["nodes"]}],
 	"homelab-test-flux-restart": [{"apiGroups": ["apps"], "apiVersions": ["v1"], "operations": ["UPDATE"], "resources": ["deployments"]}],
 	"homelab-test-flux-restart-reconcile": [
 		{"apiGroups": ["source.toolkit.fluxcd.io"], "apiVersions": ["v1"], "operations": ["UPDATE"], "resources": ["gitrepositories"]},
@@ -70,6 +85,36 @@ dedicated_admission_rules := {
 }
 
 dedicated_admission_conditions := {
+	"homelab-test-node-plex-disruption": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-node-reschedule'"},
+	"homelab-test-node-plex-runtime": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-node-reschedule'"},
+	"homelab-test-node-scheduling": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-node-reschedule'"},
 	"homelab-test-flux-restart": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-flux-restart'"},
 	"homelab-test-flux-restart-reconcile": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-flux-restart'"},
 }
+
+dedicated_cluster_contracts := {"homelab-test-node-scheduling": {
+	"rules": [{"apiGroups": [""], "resources": ["nodes"], "resourceNames": ["nuc1", "nuc2", "nuc3"], "verbs": ["patch"]}],
+	"account": "homelab-test-node-reschedule",
+}}
+
+dedicated_cluster_role_exact(roles, contract) if {
+	count(roles) == 1
+	metadata_namespace(roles[0]) == ""
+	object.get(roles[0], "rules", []) == contract.rules
+	object.get(roles[0], "aggregationRule", null) == null
+}
+
+deny contains msg if {
+	some name, contract in dedicated_cluster_contracts
+	not dedicated_cluster_role_exact(publisher_documents("ClusterRole", name), contract)
+	msg := sprintf("dedicated ClusterRole %s must match its named grants once", [name])
+}
+
+deny contains msg if {
+	some name, contract in dedicated_cluster_contracts
+	binding := {"role": name, "account": contract.account}
+	not dedicated_observation_exact(publisher_documents("ClusterRoleBinding", name), name, binding)
+	msg := sprintf("dedicated ClusterRoleBinding %s must bind its declared account once", [name])
+}
+
+dedicated_binding_names := object.keys(object.union(dedicated_observation_contracts, dedicated_cluster_contracts))

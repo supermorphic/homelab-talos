@@ -21,7 +21,7 @@ connection_role_names := {"homelab-automation-data-connect"}
 publisher_role_namespace(role_name) := trim_prefix(role_name, "homelab-report-publisher-")
 
 expected_document_names := {
-	"ClusterRole": agent_role_names,
+	"ClusterRole": agent_role_names | object.keys(dedicated_cluster_contracts),
 	"ClusterRoleBinding": {
 		"homelab-observer-view",
 		"homelab-diagnostic-view",
@@ -29,7 +29,7 @@ expected_document_names := {
 		"homelab-test-runner-view",
 		"homelab-test-runner-observation",
 		"homelab-test-conformance",
-	} | object.keys(dedicated_observation_contracts),
+	} | dedicated_binding_names,
 	"Lease": {"homelab-test-report-publish-lock", "homelab-test-run-lock"},
 	"Role": (((publisher_role_names | connection_role_names) | profile_role_names) | ordinary_role_names),
 	"RoleBinding": ((((publisher_role_names | diagnostic_role_names) | connection_role_names) | profile_role_names) | ordinary_role_names),

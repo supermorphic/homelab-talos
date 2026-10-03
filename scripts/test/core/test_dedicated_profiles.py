@@ -225,3 +225,153 @@ class DedicatedFluxMutationTests(unittest.TestCase):
                     "homelab-test-flux-restart-reconcile", {**req, "name": "unrelated"}, obj, old
                 )
             )
+
+
+class DedicatedNodeMutationTests(unittest.TestCase):
+    policy = DedicatedFluxMutationTests.policy
+    evaluate = DedicatedFluxMutationTests.evaluate
+    admits = DedicatedFluxMutationTests.admits
+
+    @classmethod
+    def setUpClass(cls):
+        DedicatedFluxMutationTests.setUpClass()
+        cls.documents = DedicatedFluxMutationTests.documents
+        cls.env = DedicatedFluxMutationTests.env
+        cls.programs = {}
+
+    @staticmethod
+    def request(resource, name, namespace="", operation="UPDATE"):
+        return {
+            "resource": {"group": "", "version": "v1", "resource": resource},
+            "subResource": "",
+            "namespace": namespace,
+            "operation": operation,
+            "name": name,
+            "userInfo": {
+                "username": "system:serviceaccount:kube-system:homelab-test-node-reschedule"
+            },
+        }
+
+    def test_only_named_nodes_schedulability_may_change(self):
+        import copy
+
+        for name in ("nuc1", "nuc2", "nuc3"):
+            req = self.request("nodes", name)
+            old = {
+                "apiVersion": "v1",
+                "kind": "Node",
+                "metadata": {
+                    "name": name,
+                    "uid": "node-fixture",
+                    "resourceVersion": "12",
+                    "labels": {"kubernetes.io/hostname": name},
+                    "annotations": {"fixed": "value"},
+                },
+                "spec": {
+                    "podCIDR": "192.0.2.0/24",
+                    "taints": [{"key": "fixture", "effect": "NoSchedule"}],
+                },
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            }
+            obj = copy.deepcopy(old)
+            obj["spec"]["unschedulable"] = True
+            obj["metadata"]["resourceVersion"] = "13"
+            self.assertTrue(self.admits("homelab-test-node-scheduling", req, obj, old))
+            uncordon = copy.deepcopy(obj)
+            uncordon["spec"]["unschedulable"] = False
+            self.assertTrue(self.admits("homelab-test-node-scheduling", req, uncordon, obj))
+            del uncordon["spec"]["unschedulable"]
+            self.assertTrue(self.admits("homelab-test-node-scheduling", req, uncordon, obj))
+            for field, value in (
+                ("podCIDR", "198.51.100.0/24"),
+                ("taints", []),
+                ("providerID", "other"),
+                ("unschedulable", "true"),
+            ):
+                with self.subTest(node=name, spec=field):
+                    bad = copy.deepcopy(obj)
+                    bad["spec"][field] = value
+                    self.assertFalse(self.admits("homelab-test-node-scheduling", req, bad, old))
+            for field, value in (
+                ("labels", {}),
+                ("annotations", {}),
+                ("ownerReferences", [{"uid": "other"}]),
+                ("uid", "other"),
+            ):
+                with self.subTest(node=name, metadata=field):
+                    bad = copy.deepcopy(obj)
+                    bad["metadata"][field] = value
+                    self.assertFalse(self.admits("homelab-test-node-scheduling", req, bad, old))
+            bad = copy.deepcopy(obj)
+            bad["status"]["conditions"][0]["status"] = "False"
+            self.assertFalse(self.admits("homelab-test-node-scheduling", req, bad, old))
+            for field, value in (
+                ("name", "unrelated-node"),
+                ("namespace", "media"),
+                ("subResource", "status"),
+            ):
+                self.assertFalse(
+                    self.admits("homelab-test-node-scheduling", {**req, field: value}, obj, old)
+                )
+
+    def test_runtime_is_confined_to_the_plex_application_container(self):
+        req = self.request("pods", "plex-abcde12345-abcde", "media", "CONNECT")
+        req["subResource"] = "exec"
+        obj = {
+            "container": "app",
+            "command": ["test", "-d", "/Volumes/Prometheus/media"],
+            "stdout": True,
+            "stderr": True,
+            "stdin": False,
+            "tty": False,
+        }
+        self.assertTrue(self.admits("homelab-test-node-plex-runtime", req, obj))
+        for name in (
+            "qbittorrent-abcde12345-abcde",
+            "plex-policy-control-1234567890-1",
+            "unrelated",
+        ):
+            self.assertFalse(
+                self.admits("homelab-test-node-plex-runtime", {**req, "name": name}, obj)
+            )
+        self.assertFalse(
+            self.admits("homelab-test-node-plex-runtime", {**req, "namespace": "openbao"}, obj)
+        )
+        for key, value in (("container", "sidecar"), ("stdin", True), ("tty", True)):
+            self.assertFalse(
+                self.admits("homelab-test-node-plex-runtime", req, {**obj, key: value})
+            )
+
+    def test_disruption_is_confined_to_owned_plex_pods(self):
+        import copy
+
+        req = self.request("pods", "plex-abcde12345-abcde", "media", "DELETE")
+        old = {
+            "metadata": {
+                "name": req["name"],
+                "namespace": "media",
+                "uid": "pod-fixture",
+                "labels": {"app.kubernetes.io/name": "plex"},
+                "ownerReferences": [
+                    {
+                        "apiVersion": "apps/v1",
+                        "kind": "ReplicaSet",
+                        "name": "plex-abcde12345",
+                        "uid": "replicaset-fixture",
+                        "controller": True,
+                    }
+                ],
+            }
+        }
+        self.assertTrue(self.admits("homelab-test-node-plex-disruption", req, None, old))
+        for field in ("owner", "label", "name", "namespace", "uid"):
+            bad = copy.deepcopy(old)
+            if field == "owner":
+                bad["metadata"]["ownerReferences"][0]["name"] = "other-abcde12345"
+            elif field == "label":
+                bad["metadata"]["labels"]["app.kubernetes.io/name"] = "other"
+            elif field == "uid":
+                del bad["metadata"]["uid"]
+            else:
+                bad["metadata"][field] = "other"
+            self.assertFalse(self.admits("homelab-test-node-plex-disruption", req, None, bad))
