@@ -298,6 +298,7 @@ if group_selected core; then
 		scripts/test/scenarios/qbit_manage_policy_config.py scripts/test/scenarios/qbit_manage_policy.py
 		scripts/test/scenarios/test_qbit_manage_policy.py scripts/test/scenarios/test_resilience_controllers.py
 		scripts/test/scenarios/test_tailscale_subnet_router_replica_recovery.py
+		scripts/test/scenarios/mylar3_acceptance.py scripts/test/scenarios/test_mylar3_acceptance.py
 	)
 	uv run --locked ruff check "${ruff_files[@]}"
 	uv run --locked ruff format --check "${ruff_files[@]}"
