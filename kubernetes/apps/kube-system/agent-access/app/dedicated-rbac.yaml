@@ -675,3 +675,38 @@ subjects:
   - kind: ServiceAccount
     name: homelab-test-cilium-connectivity
     namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-cilium-system-runtime
+  namespace: kube-system
+rules:
+  - apiGroups:
+      - ''
+    resources:
+      - pods/exec
+      - pods/portforward
+    verbs:
+      - get
+      - create
+  - apiGroups:
+      - ''
+    resources:
+      - pods/proxy
+    verbs:
+      - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-cilium-system-runtime
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-cilium-system-runtime
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-cilium-connectivity
+    namespace: kube-system

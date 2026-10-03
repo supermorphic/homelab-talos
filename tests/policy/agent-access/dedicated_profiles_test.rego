@@ -440,3 +440,44 @@ test_cilium_ephemeral_diagnostics_requires_complete_parent_guard if {
 	messages := deny with input as fixture
 	count(messages) > 0
 }
+
+dedicated_cilium_connect_fixture := [
+	role("homelab-test-cilium-system-runtime", "kube-system", [
+		{"apiGroups": [""], "resources": ["pods/exec", "pods/portforward"], "verbs": ["get", "create"]},
+		{"apiGroups": [""], "resources": ["pods/proxy"], "verbs": ["get"]},
+	]),
+	role_binding("homelab-test-cilium-system-runtime", "kube-system", "homelab-test-cilium-connectivity", "kube-system", "homelab-test-cilium-system-runtime"),
+	{
+		"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingAdmissionPolicy", "metadata": {"name": "homelab-test-cilium-system-connect"},
+		"spec": {
+			"failurePolicy": "Fail", "matchConstraints": {"resourceRules": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CONNECT"], "resources": ["pods/exec", "pods/portforward"]}]},
+			"matchConditions": [{"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'"}],
+			"validations": [{"expression": "request.namespace == 'kube-system'"}],
+		},
+	},
+	flux_guard_binding("homelab-test-cilium-system-connect"),
+]
+
+test_cilium_system_runtime_cannot_access_other_namespace if {
+	fixture := runner_change("Role", "homelab-test-cilium-system-runtime", [{"op": "replace", "path": "/metadata/namespace", "value": "openbao"}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_cilium_system_runtime_cannot_bind_ordinary_runner if {
+	fixture := runner_change("RoleBinding", "homelab-test-cilium-system-runtime", [{"op": "add", "path": "/subjects/-", "value": {"kind": "ServiceAccount", "name": "homelab-test-runner", "namespace": "kube-system"}}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_cilium_metric_proxy_cannot_receive_write_verbs if {
+	fixture := runner_change("Role", "homelab-test-cilium-system-runtime", [{"op": "add", "path": "/rules/1/verbs/-", "value": "create"}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_cilium_system_runtime_requires_connect_guard if {
+	fixture := [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ValidatingAdmissionPolicy", "homelab-test-cilium-system-connect"]]
+	messages := deny with input as fixture
+	count(messages) > 0
+}

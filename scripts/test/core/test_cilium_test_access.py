@@ -251,6 +251,90 @@ class CiliumAccessTests(unittest.TestCase):
             ],
         )
 
+    def test_system_runtime_grants_are_dedicated_to_cilium_and_kube_system(self):
+        roles = [
+            d
+            for d in self.documents
+            if d["kind"] == "Role"
+            and d["metadata"]["name"] == "homelab-test-cilium-system-runtime"
+        ]
+        self.assertEqual(len(roles), 1)
+        self.assertEqual(roles[0]["metadata"]["namespace"], "kube-system")
+        self.assertEqual(
+            roles[0]["rules"],
+            [
+                {
+                    "apiGroups": [""],
+                    "resources": ["pods/exec", "pods/portforward"],
+                    "verbs": ["get", "create"],
+                },
+                {"apiGroups": [""], "resources": ["pods/proxy"], "verbs": ["get"]},
+            ],
+        )
+        binding = next(
+            d
+            for d in self.documents
+            if d["kind"] == "RoleBinding" and d["metadata"] == roles[0]["metadata"]
+        )
+        self.assertEqual(
+            binding["subjects"],
+            [
+                {
+                    "kind": "ServiceAccount",
+                    "name": "homelab-test-cilium-connectivity",
+                    "namespace": "kube-system",
+                }
+            ],
+        )
+
+    def test_system_connect_targets_cover_canonical_components_and_recovery(self):
+        policy = "homelab-test-cilium-system-connect"
+        for name, container in (
+            ("cilium-abcde", "cilium-agent"),
+            ("cilium-abcde", "sysdump-1770000000"),
+            ("cilium-envoy-abcde", "cilium-envoy"),
+            ("cilium-operator-abcde12345-abcde", "cilium-operator"),
+            ("hubble-abcde", "hubble"),
+            ("hubble-relay-abcde12345-abcde", "hubble-relay"),
+            ("clustermesh-apiserver-abcde12345-abcde", "apiserver"),
+            ("clustermesh-apiserver-abcde12345-abcde", "kvstoremesh"),
+            ("clustermesh-apiserver-abcde12345-abcde", "etcd"),
+            ("tetragon-abcde", "tetragon"),
+            ("tetragon-abcde", "sysdump-1770000000"),
+            ("spire-server-0", "spire-server"),
+            ("spire-server-0", "sysdump-1770000000"),
+            ("sysdump-abcde", "cilium-agent"),
+            ("sysdump-abcde", "tetragon"),
+            ("sysdump-abcde", "spire-server"),
+        ):
+            req = {
+                "operation": "CONNECT",
+                "namespace": "kube-system",
+                "name": name,
+                "subResource": "exec",
+                "resource": {"group": "", "version": "v1", "resource": "pods"},
+                "userInfo": {"username": IDENTITY},
+            }
+            obj = {
+                "container": container,
+                "command": ["gops", "stats", "1"],
+                "stdin": False,
+                "tty": False,
+            }
+            with self.subTest(pod=name, container=container):
+                self.assertTrue(self.admits(policy, req, obj))
+                self.assertTrue(self.admits(policy, {**req, "subResource": "portforward"}, {}))
+                self.assertFalse(self.admits(policy, req, {**obj, "container": "unrelated"}))
+                self.assertFalse(self.admits(policy, req, {**obj, "stdin": True}))
+                self.assertFalse(self.admits(policy, req, {**obj, "tty": True}))
+                for key, value in (
+                    ("namespace", "openbao"),
+                    ("name", "openbao-0"),
+                    ("name", "unrelated-pod"),
+                    ("subResource", "attach"),
+                ):
+                    self.assertFalse(self.admits(policy, {**req, key: value}, obj))
+
     def test_helm_failure_diagnostics_has_only_system_secret_inventory_and_named_etcd_get(self):
         roles = [
             d

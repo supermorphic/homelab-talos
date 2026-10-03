@@ -35,6 +35,7 @@ deny contains "conformance administrator exception must bind only its dedicated 
 }
 
 dedicated_role_contracts := {
+	"homelab-test-cilium-system-runtime": {"namespace": "kube-system", "rules": [{"apiGroups": [""], "resources": ["pods/exec", "pods/portforward"], "verbs": ["get", "create"]}, {"apiGroups": [""], "resources": ["pods/proxy"], "verbs": ["get"]}], "subjects": [{"kind": "ServiceAccount", "name": "homelab-test-cilium-connectivity", "namespace": "kube-system"}]},
 	"homelab-test-cilium-ephemeral-diagnostics": {"namespace": "kube-system", "rules": [{"apiGroups": [""], "resources": ["pods/ephemeralcontainers"], "verbs": ["patch"]}], "subjects": [{"kind": "ServiceAccount", "name": "homelab-test-cilium-connectivity", "namespace": "kube-system"}]},
 	"homelab-test-cilium-helm-observation": {"namespace": "kube-system", "rules": [{"apiGroups": [""], "resources": ["secrets"], "verbs": ["list"]}, {"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["cilium-etcd-secrets"], "verbs": ["get"]}], "subjects": [{"kind": "ServiceAccount", "name": "homelab-test-cilium-connectivity", "namespace": "kube-system"}]},
 	"homelab-test-openbao-restore-runtime": {"namespace": "openbao-restore-test", "rules": [{"apiGroups": ["apps"], "resources": ["statefulsets"], "verbs": ["create"]}, {"apiGroups": ["apps"], "resources": ["statefulsets"], "resourceNames": ["scratch"], "verbs": ["delete"]}, {"apiGroups": [""], "resources": ["persistentvolumeclaims", "secrets", "configmaps"], "verbs": ["create"]}, {"apiGroups": [""], "resources": ["persistentvolumeclaims"], "resourceNames": ["scratch-data"], "verbs": ["delete"]}, {"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["scratch-seal"], "verbs": ["get", "delete"]}, {"apiGroups": [""], "resources": ["secrets"], "verbs": ["list"]}, {"apiGroups": [""], "resources": ["configmaps"], "resourceNames": ["scratch-config"], "verbs": ["delete"]}, {"apiGroups": [""], "resources": ["pods"], "resourceNames": ["scratch-0"], "verbs": ["delete"]}, {"apiGroups": [""], "resources": ["pods/exec"], "resourceNames": ["scratch-0"], "verbs": ["get", "create"]}], "subjects": [{"kind": "ServiceAccount", "name": "homelab-test-openbao-restore", "namespace": "kube-system"}]},
@@ -102,6 +103,7 @@ deny contains msg if {
 }
 
 dedicated_admission_rules := {
+	"homelab-test-cilium-system-connect": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CONNECT"], "resources": ["pods/exec", "pods/portforward"]}],
 	"homelab-test-cilium-ephemeral-diagnostics": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["UPDATE"], "resources": ["pods/ephemeralcontainers"]}],
 	"homelab-test-cilium-namespaces": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["namespaces"]}],
 	"homelab-test-openbao-restore-pod-delete": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["DELETE"], "resources": ["pods"]}],
@@ -124,6 +126,7 @@ dedicated_admission_rules := {
 }
 
 dedicated_admission_conditions := {
+	"homelab-test-cilium-system-connect": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'"},
 	"homelab-test-cilium-ephemeral-diagnostics": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'"},
 	"homelab-test-cilium-namespaces": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'"},
 	"homelab-test-openbao-restore-pod-delete": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-openbao-restore'"},

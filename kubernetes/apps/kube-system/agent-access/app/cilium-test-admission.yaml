@@ -130,3 +130,56 @@ spec:
   policyName: homelab-test-cilium-ephemeral-diagnostics
   validationActions:
     - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-cilium-system-connect
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - ''
+        apiVersions:
+          - v1
+        operations:
+          - CONNECT
+        resources:
+          - pods/exec
+          - pods/portforward
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'
+  validations:
+    - expression: request.namespace == 'kube-system' && request.subResource in ['exec','portforward']
+        && (request.name.matches('^cilium-[a-z0-9]{5}$') || request.name.matches('^cilium-envoy-[a-z0-9]{5}$')
+        || request.name.matches('^cilium-operator-[a-z0-9]{5,10}-[a-z0-9]{5}$') || request.name.matches('^hubble-[a-z0-9]{5}$')
+        || request.name.matches('^hubble-relay-[a-z0-9]{5,10}-[a-z0-9]{5}$') || request.name.matches('^clustermesh-apiserver-[a-z0-9]{5,10}-[a-z0-9]{5}$')
+        || request.name.matches('^tetragon-[a-z0-9]{5}$') || request.name.matches('^spire-server-[0-9]{1,4}$')
+        || request.name.matches('^sysdump-[a-z0-9]{5}$'))
+      message: Cilium runtime connections may reach only registered system component and sysdump recovery
+        Pod names.
+    - expression: 'request.subResource == ''exec'' ? ((!has(object.stdin) || !object.stdin) && (!has(object.tty)
+        || !object.tty) && ((request.name.matches(''^cilium-[a-z0-9]{5}$'') && (object.container in [''cilium-agent'']
+        || object.container.matches(''^sysdump-[0-9]{1,10}$''))) || (request.name.matches(''^cilium-envoy-[a-z0-9]{5}$'')
+        && (object.container in [''cilium-envoy''])) || (request.name.matches(''^cilium-operator-[a-z0-9]{5,10}-[a-z0-9]{5}$'')
+        && (object.container in [''cilium-operator''])) || (request.name.matches(''^hubble-[a-z0-9]{5}$'')
+        && (object.container in [''hubble''])) || (request.name.matches(''^hubble-relay-[a-z0-9]{5,10}-[a-z0-9]{5}$'')
+        && (object.container in [''hubble-relay''])) || (request.name.matches(''^clustermesh-apiserver-[a-z0-9]{5,10}-[a-z0-9]{5}$'')
+        && (object.container in [''apiserver'', ''kvstoremesh'', ''etcd''])) || (request.name.matches(''^tetragon-[a-z0-9]{5}$'')
+        && (object.container in [''tetragon''] || object.container.matches(''^sysdump-[0-9]{1,10}$'')))
+        || (request.name.matches(''^spire-server-[0-9]{1,4}$'') && (object.container in [''spire-server'']
+        || object.container.matches(''^sysdump-[0-9]{1,10}$''))) || (request.name.matches(''^sysdump-[a-z0-9]{5}$'')
+        && (object.container in [''cilium-agent'', ''tetragon'', ''spire-server''])))) : true'
+      message: Exec permits the canonical component or recovery container without interactive input; this
+        profile has privileged application runtime authority.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-cilium-system-connect
+spec:
+  policyName: homelab-test-cilium-system-connect
+  validationActions:
+    - Deny
