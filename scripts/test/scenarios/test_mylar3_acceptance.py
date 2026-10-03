@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mylar3_acceptance as scenario
 from mylar3_acceptance import PROBE, Acceptance, ScenarioFailure, validate_fixture
 
 
@@ -128,6 +129,100 @@ class FixtureValidation(unittest.TestCase):
         for value in ({}, None, {"apiKey": "synthetic"}):
             with self.subTest(value=value), self.assertRaises(ScenarioFailure):
                 validate_fixture(value)
+
+
+class IntegritySafety(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.run_dir = Path(self.temp.name)
+        self.acceptance = Acceptance("synthetic-config", {}, self.run_dir)
+
+    def test_read_only_verification_retains_no_digest_or_paths(self):
+        calls = []
+
+        def call(*args, **kwargs):
+            calls.append(args)
+            if args[0] == "auth":
+                return "yes"
+            raise AssertionError("unexpected operation")
+
+        with (
+            patch.object(self.acceptance, "call", side_effect=call),
+            patch.object(self.acceptance, "pod", return_value={}),
+            patch.object(
+                self.acceptance,
+                "probe",
+                return_value={"digest": "private", "bytes": 1024, "pages": 2, "links": 2},
+            ),
+        ):
+            self.acceptance.verify_integrity()
+        evidence = (self.run_dir / "diagnostics" / "mylar3-integrity.json").read_text()
+        self.assertNotIn("private", evidence)
+        self.assertEqual(json.loads(evidence)["minimumLinkCount"], 2)
+        self.assertEqual(
+            calls,
+            [("auth", "can-i", "create", "pods", "--subresource=exec", "-n", "media")],
+        )
+
+    def test_denied_exec_never_reads_fixture(self):
+        with (
+            patch.object(self.acceptance, "call", return_value="no"),
+            patch.object(self.acceptance, "probe") as probe,
+            self.assertRaises(ScenarioFailure),
+        ):
+            self.acceptance.verify_integrity()
+        probe.assert_not_called()
+
+    def test_replacement_checks_exec_subresource(self):
+        with (
+            patch.object(self.acceptance, "call", return_value="no") as call,
+            self.assertRaises(ScenarioFailure),
+        ):
+            self.acceptance.run()
+        self.assertEqual(
+            call.call_args.args,
+            ("auth", "can-i", "create", "pods", "--subresource=exec", "-n", "media"),
+        )
+
+    def test_integrity_entrypoint_never_replaces_pod(self):
+        fixture = self.run_dir / "fixture.json"
+        fixture.write_text(
+            json.dumps(
+                {
+                    "download_path": "/data/downloads/comics/fixture.cbz",
+                    "library_path": "/data/media/comics/fixture.cbz",
+                    "issue_id": "1",
+                }
+            )
+        )
+        with (
+            patch.object(sys, "argv", ["scenario", "synthetic", "--integrity-only"]),
+            patch.dict(
+                os.environ,
+                {
+                    "HOMELAB_TEST_RUN_DIR": str(self.run_dir),
+                    "MYLAR_ACCEPTANCE_FIXTURE": str(fixture),
+                },
+            ),
+            patch.object(scenario, "install_interrupt_handlers"),
+            patch.object(Acceptance, "verify_integrity") as verify,
+            patch.object(Acceptance, "run", side_effect=AssertionError("pod replacement")),
+        ):
+            self.assertEqual(scenario.main(), 0)
+        verify.assert_called_once()
+
+    def test_unknown_mode_never_runs_acceptance(self):
+        with (
+            patch.object(sys, "argv", ["scenario", "synthetic", "--unknown-mode"]),
+            patch.dict(os.environ, {"HOMELAB_TEST_RUN_DIR": str(self.run_dir)}),
+            patch.object(scenario, "install_interrupt_handlers"),
+            patch.object(Acceptance, "verify_integrity") as verify,
+            patch.object(Acceptance, "run") as replace,
+        ):
+            self.assertEqual(scenario.main(), 1)
+        verify.assert_not_called()
+        replace.assert_not_called()
 
 
 class ProbeInvariants(unittest.TestCase):

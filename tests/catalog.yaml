@@ -624,6 +624,13 @@ suites:
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube mylar3-verify", implementation: scripts/verify/mylar3.sh}
     native_results: {strategy: wrapper-junit}
+  - metadata: {id: test.mylar3-integrity, source: test, framework: python, suite: media, tier: integration, target: mylar3-integrity, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: shared}
+    description: Inspects a private imported fixture's hardlink identity, archive integrity and Downloaded record; preserves files and the Mylar pod.
+    access: {tier: diagnostic}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just test integration mylar3-integrity", implementation: scripts/test/scenarios/mylar3_acceptance.py}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: direct, runtime: uv-python, path: scripts/test/scenarios/mylar3_acceptance.py, args: [.kube/config, --integrity-only], selector: null}
   - metadata: {id: verification.komga, source: verification, framework: bash, suite: media, tier: verification, target: komga, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
     description: Observes Komga readiness, retained state, read-only comics and trusted private HTTPS; excludes library contents and native client acceptance.
     access: {tier: observer}

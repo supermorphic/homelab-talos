@@ -377,8 +377,15 @@ login/integration preservation, or backup restoration; those gates remain attend
 
 Supply `MYLAR_ACCEPTANCE_FIXTURE` as the path to a private JSON object containing
 `download_path`, `library_path` and a string `issue_id`. Both paths must identify the
-same imported comic under the comics download and library roots. Use the registered
-suite through `mise exec -- just test record test.mylar3-acceptance` with
+same imported comic under the comics download and library roots. For an independent
+integrity check without pod replacement, first select scoped diagnostic credentials
+with `mise exec -- just kube kubeconfig diagnostic`, then run
+`mise exec -- just test record test.mylar3-integrity`. It checks both files and the database read-only, retaining only
+sanitized results. The fixture is supplied explicitly and is not part of the
+general verification campaign.
+
+Use the registered replacement suite through
+`mise exec -- just test record test.mylar3-acceptance` with
 `MYLAR_ACCEPTANCE_CONFIRM=test:mylar3-acceptance` and an explicitly authorized
 `TEST_KUBECONFIG`. This attended mutation requires pod exec/delete, the test Lease,
 and deployment, storage and Node inspection; observer credentials are insufficient.

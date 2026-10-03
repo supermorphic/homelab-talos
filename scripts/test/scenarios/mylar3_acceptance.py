@@ -195,12 +195,39 @@ verify_test_lease_holder "$1" "$HOMELAB_DISRUPTION_LEASE_HOLDER"
             time.sleep(2)
         raise ScenarioFailure("replacement Mylar pod did not become Ready within six minutes")
 
+    def require_exec(self) -> None:
+        if (
+            self.call(
+                "auth", "can-i", "create", "pods", "--subresource=exec", "-n", "media"
+            ).strip()
+            != "yes"
+        ):
+            raise ScenarioFailure(
+                "selected identity lacks the required fixture inspection authority"
+            )
+
+    def verify_integrity(self) -> None:
+        self.require_exec()
+        evidence = self.probe(self.pod())
+        atomic_write_json(
+            self.run_dir / "diagnostics" / "mylar3-integrity.json",
+            {
+                "hardlinkIdentity": True,
+                "archiveValid": True,
+                "downloadedRecordValid": True,
+                "archiveBytes": evidence["bytes"],
+                "archivePages": evidence["pages"],
+                "minimumLinkCount": evidence["links"],
+            },
+        )
+        print("Mylar fixture hardlinks, archive integrity and Downloaded record verified.")
+
     def run(self) -> None:
-        for verb, resource in (("create", "pods/exec"), ("delete", "pods")):
-            if self.call("auth", "can-i", verb, resource, "-n", "media").strip() != "yes":
-                raise ScenarioFailure(
-                    "selected identity lacks the explicitly required acceptance authority"
-                )
+        self.require_exec()
+        if self.call("auth", "can-i", "delete", "pods", "-n", "media").strip() != "yes":
+            raise ScenarioFailure(
+                "selected identity lacks the explicitly required acceptance authority"
+            )
         before_pod = self.pod()
         uid = before_pod["metadata"]["uid"]
         volume = self.volume()
@@ -322,13 +349,21 @@ def main() -> int:
     install_interrupt_handlers()
     run_dir = Path(os.environ.get("HOMELAB_TEST_RUN_DIR", ""))
     try:
-        if len(sys.argv) != 2 or not os.environ.get("HOMELAB_TEST_RUN_DIR"):
+        if (
+            len(sys.argv) not in (2, 3)
+            or (len(sys.argv) == 3 and sys.argv[2] != "--integrity-only")
+            or not os.environ.get("HOMELAB_TEST_RUN_DIR")
+        ):
             raise ScenarioFailure("use the registered integration recipe")
         write_recovery(run_dir, "not-required", "preflight; no mutation attempted")
         fixture = validate_fixture(
             json.loads(Path(os.environ["MYLAR_ACCEPTANCE_FIXTURE"]).read_text())
         )
-        Acceptance(os.environ.get("TEST_KUBECONFIG", sys.argv[1]), fixture, run_dir).run()
+        acceptance = Acceptance(os.environ.get("TEST_KUBECONFIG", sys.argv[1]), fixture, run_dir)
+        if len(sys.argv) == 3:
+            acceptance.verify_integrity()
+        else:
+            acceptance.run()
         return 0
     except (ScenarioFailure, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
         print(
