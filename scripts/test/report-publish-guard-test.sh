@@ -146,6 +146,10 @@ fi
     }
   }' >"$disruption_lease"
   cp "$disruption_lease" "$fixture/disruption-lease-before.json"
+  yq --output-format json '
+    .metadata.name = "homelab-test-report-publish-lock" |
+    .spec.holderIdentity = ""
+  ' "$disruption_lease" >"$publication_lease"
 
   lease_kubectl() {
     local _kubeconfig="$1"
@@ -172,11 +176,8 @@ fi
         cat "$publication_lease"
         ;;
       create)
-        input="$(cat)"
-        [[ "$(yq -r '.metadata.name' - <<<"$input")" == \
-          homelab-test-report-publish-lock ]] || return 64
-        yq --output-format json '.metadata.resourceVersion = "1"' \
-          <<<"$input" >"$publication_lease"
+        echo 'Publisher attempted to create a Git-managed Lease.' >&2
+        return 64
         ;;
       replace)
         input="$(cat)"
@@ -192,7 +193,7 @@ fi
     esac
   }
 
-  acquire_test_lease fixture-kubeconfig publish:fixture
+  acquire_test_lease fixture-kubeconfig publish:fixture 5 existing-only
   release_test_lease fixture-kubeconfig publish:fixture
   [[ "$(yq -r '.metadata.name' "$publication_lease")" == \
     homelab-test-report-publish-lock ]]
@@ -200,67 +201,79 @@ fi
   cmp "$fixture/disruption-lease-before.json" "$disruption_lease"
 )
 
-# Publication selects only its dedicated context without changing the observer
-# default. This synthetic kubeconfig never contacts a cluster.
-cat >"$fixture/kubeconfig" <<'YAML'
-apiVersion: v1
-kind: Config
-clusters:
-  - name: homelab
-    cluster: {server: 'https://192.0.2.1:6443'}
-contexts:
-  - name: homelab-observer
-    context: {cluster: homelab, user: homelab-observer}
-  - name: homelab-report-publisher
-    context: {cluster: homelab, user: homelab-report-publisher}
-users:
-  - name: homelab-observer
-    user: {token: synthetic-observer}
-  - name: homelab-report-publisher
-    user: {token: synthetic-publisher}
-current-context: homelab-observer
-YAML
-source scripts/test/lib/report-publication.sh
-# Exercise publication wiring without reading real workstation enrollment.
-uv() {
-  [[ "$*" == "run --locked --no-dev python -m scripts.openbao.credentials validate $fixture/kubeconfig" ]] || return 64
-  touch "$fixture/validation-called"
-  [[ "${FAKE_CREDENTIAL_VALID:-true}" == true ]]
-}
-if FAKE_CREDENTIAL_VALID=false select_report_publication_context "$fixture/kubeconfig" true >"$fixture/invalid.log" 2>&1; then
-  echo 'Publication accepted a credential rejected by the canonical validator.' >&2
+# Publication validates a fresh purpose binding for this exact canonical run.
+# Synthetic issuance never reads workstation enrollment or contacts a cluster.
+mkdir -p "$fixture/bin"
+TEST_FIXTURE_REAL_UV="$(command -v uv)"
+export TEST_FIXTURE_REAL_UV
+export TEST_FIXTURE_ACCESS_ROOT="$fixture"
+export TEST_FIXTURE_ACCESS_TRACE="$fixture/access-trace"
+cp tests/fixtures/test-access/fake-uv.sh "$fixture/bin/uv"
+export PATH="$fixture/bin:$PATH"
+source scripts/test/lib/access.sh
+test_access_purpose_open report-publisher "$run_id"
+publisher_config="$TEST_ACCESS_PURPOSE_CONFIG"
+validate_report_publication_config "$publisher_config" "$run_id"
+if validate_report_publication_config "$publisher_config" wrong-run; then
+  echo 'Publisher accepted a config bound to a different run.' >&2
   exit 1
 fi
-[[ -f "$fixture/validation-called" ]]
-select_report_publication_context "$fixture/kubeconfig" true
-[[ "$report_publication_context" == homelab-report-publisher ]]
-[[ "$(publication_kubectl --kubeconfig "$fixture/kubeconfig" config view --minify \
-  --output 'jsonpath={.contexts[0].context.user}')" == homelab-report-publisher ]]
-[[ "$(kubectl --kubeconfig "$fixture/kubeconfig" config current-context)" == homelab-observer ]]
-yq -i '(.contexts[] | select(.name == "homelab-report-publisher") | .context.user) = "homelab-observer"' "$fixture/kubeconfig"
-if select_report_publication_context "$fixture/kubeconfig" true >"$fixture/mapping.log" 2>&1; then
-  echo 'Publication accepted a context mapped to a different identity.' >&2
+test_access_purpose_open campaign-coordinator "$run_id"
+if validate_report_publication_config "$TEST_ACCESS_PURPOSE_CONFIG" "$run_id"; then
+  echo 'Publisher accepted campaign coordinator authority.' >&2
   exit 1
 fi
-rg -q 'must use the homelab-report-publisher identity' "$fixture/mapping.log"
-yq -i 'del(.contexts[] | select(.name == "homelab-report-publisher"))' "$fixture/kubeconfig"
-if select_report_publication_context "$fixture/kubeconfig" true >"$fixture/access.log" 2>&1; then
-  echo 'Publication fell back to observer when the publisher context was absent.' >&2
+if validate_report_publication_config "$fixture/does-not-exist" "$run_id"; then
+  echo 'Publisher accepted an unbound credential.' >&2
   exit 1
 fi
-rg -q 'homelab-report-publisher' "$fixture/access.log"
-yq -i '
-  .contexts = [{"name": "fixture-operator", "context": {"cluster": "homelab", "user": "fixture-operator"}}] |
-  .users = [{"name": "fixture-operator", "user": {"token": "synthetic-operator"}}] |
-  ."current-context" = "fixture-operator"
-' "$fixture/kubeconfig"
-select_report_publication_context "$fixture/kubeconfig" false
-[[ "$report_publication_context" == fixture-operator ]]
-if select_report_publication_context "$fixture/kubeconfig" true >"$fixture/linked.log" 2>&1; then
-  echo 'A linked worktree accepted an operator context as a publication fallback.' >&2
-  exit 1
-fi
+test_access_purposes_close
+[[ ! -f "$publisher_config" && ! -f "$TEST_ACCESS_PURPOSE_CONFIG" ]]
 
-unset -f uv
+# Exercise the public publisher up to a missing Git-managed Lease. It must
+# acquire and remove only publisher authority, without any Talos bootstrap.
+printf 'Public fixture evidence\n' >"$run_dir/logs/evidence.log"
+PUBLICATION_FIXTURE_REAL_GIT="$(command -v git)"
+export PUBLICATION_FIXTURE_REAL_GIT
+export PUBLICATION_FIXTURE_SHA="$sha"
+export PUBLICATION_FIXTURE_ROOT="$fixture"
+cat >"$fixture/bin/git" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  'status --porcelain'|'diff --quiet '*) exit 0 ;;
+  'ls-remote --exit-code origin refs/heads/main')
+    printf '%s\trefs/heads/main\n' "$PUBLICATION_FIXTURE_SHA" ;;
+  *) exec "$PUBLICATION_FIXTURE_REAL_GIT" "$@" ;;
+esac
+SH
+cat >"$fixture/bin/kubectl" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == --kubeconfig && "$2" == *-report-publisher/config ]]
+printf '%s\n' "$*" >>"$PUBLICATION_FIXTURE_ROOT/kubectl-calls"
+exit 1
+SH
+cat >"$fixture/bin/talosctl" <<'SH'
+#!/usr/bin/env bash
+touch "$PUBLICATION_FIXTURE_ROOT/talos-called"
+exit 64
+SH
+chmod +x "$fixture/bin/git" "$fixture/bin/kubectl" "$fixture/bin/talosctl"
+if TEST_RESULTS_ROOT="$fixture/results" \
+  KUBECONFIG=/dev/null TALOSCONFIG="$fixture/does-not-exist" \
+  TEST_REPORT_PUBLISH_CONFIRM="publish:test-report:$run_id" \
+  scripts/test/publish-report.sh "$run_id" >"$fixture/missing-lease.log" 2>&1; then
+  echo 'Publisher accepted a missing Git-managed Lease.' >&2
+  exit 1
+fi
+rg -q 'publication Lease is unavailable' "$fixture/missing-lease.log" || {
+  cat "$fixture/missing-lease.log" >&2
+  exit 1
+}
+rg -Fqx "purpose report-publisher $run_id" "$fixture/access-trace"
+rg -Fqx "remove $publisher_config" "$fixture/access-trace"
+[[ ! -f "$publisher_config" && ! -e "$fixture/talos-called" ]]
+[[ "$(wc -l <"$fixture/kubectl-calls" | tr -d ' ')" == 1 ]]
 
 echo 'Test-report intent, secret scan, and publication identity guards passed.'

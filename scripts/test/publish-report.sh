@@ -32,8 +32,8 @@ reports_root="${TEST_REPORTS_ROOT:-$repo_root/.test-reports}"
 [[ "$reports_root" == /* ]] || reports_root="$repo_root/$reports_root"
 run_dir="$results_root/$run_id"
 report_dir="$reports_root/$run_id"
-kubeconfig="${KUBECONFIG:-$repo_root/.kube/config}"
-[[ "$kubeconfig" == /* ]] || kubeconfig="$repo_root/$kubeconfig"
+kubeconfig=''
+export -n kubeconfig
 report_url="https://tests.lab.supermorphic.com/reports/$run_id/awesome/"
 
 write_publish_result() {
@@ -80,16 +80,6 @@ git cat-file -e "${run_sha}^{commit}" 2>/dev/null || {
 echo 'Scanning canonical test evidence for secrets.'
 gitleaks dir --redact --no-banner --max-archive-depth 1 "$run_dir"
 
-[[ -f "$kubeconfig" ]] || {
-  echo "Missing $kubeconfig; run just kube kubeconfig." >&2
-  exit 1
-}
-
-if [[ "$linked_worktree" == true ]]; then
-  scripts/test/scoped-campaign-preflight.sh "$repo_root" "$kubeconfig" "$repo_root/.talos/config"
-fi
-select_report_publication_context "$kubeconfig" "$linked_worktree"
-
 source scripts/lib/rollout.sh
 require_deployed_source 'test report publication' \
   tests/mod.just \
@@ -99,41 +89,56 @@ require_deployed_source 'test report publication' \
   scripts/lib/lease.sh \
   scripts/test/publish-report.sh \
   scripts/test/lib/report-publication.sh \
-  scripts/test/scoped-campaign-preflight.sh \
+  scripts/test/lib/access.sh \
+  scripts/test/access.py \
+  scripts/openbao/credentials.py \
+  tests/catalog.yaml \
   scripts/test/report_publish.py \
   scripts/test/validate-run.sh \
   kubernetes/apps/kube-system/agent-access \
   kubernetes/apps/monitoring/test-reports
 
-# Git creates this exact Lease. A missing Lease must not trigger an attempt to
-# create an arbitrary coordination resource with scoped credentials.
+source scripts/test/lib/access.sh
+source scripts/lib/lease.sh
+workspace=''
+lease_acquired=false
+cleanup() {
+  local status="$1"
+  stop_test_lease_renewal 2>/dev/null || true
+  if [[ "$lease_acquired" == 'true' ]]; then
+    release_test_lease "$kubeconfig" "publish:$run_id" >/dev/null 2>&1 || {
+      echo 'Could not release the test-report publication Lease.' >&2
+      [[ "$status" != 0 ]] || status=1
+    }
+    lease_acquired=false
+  fi
+  test_access_purposes_close || {
+    echo 'Could not remove the private publication config.' >&2
+    [[ "$status" != 0 ]] || status=1
+  }
+  [[ -z "$workspace" ]] || rm -rf -- "$workspace"
+  exit "$status"
+}
+trap 'cleanup "$?"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+test_access_purpose_open report-publisher "$run_id"
+kubeconfig="$TEST_ACCESS_PURPOSE_CONFIG"
+validate_report_publication_config "$kubeconfig" "$run_id"
+
+# Git owns this exact Lease; never create a replacement with scoped authority.
 publication_kubectl --kubeconfig "$kubeconfig" --namespace flux-system \
   get lease homelab-test-report-publish-lock --output name >/dev/null || {
   echo 'The publication Lease is unavailable; wait for the Git-managed agent-access deployment.' >&2
   exit 1
 }
-
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/homelab-report-publish.XXXXXX")"
-lease_acquired=false
 lease_failure="$workspace/lease-renewal-failed"
-cleanup() {
-  stop_test_lease_renewal 2>/dev/null || true
-  if [[ "$lease_acquired" == 'true' ]]; then
-    release_test_lease "$kubeconfig" "publish:$run_id" >/dev/null 2>&1 || {
-      echo 'Warning: could not release the test-report publication Lease.' >&2
-    }
-  fi
-  rm -rf -- "$workspace"
-}
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
 export TEST_LEASE_NAMESPACE='flux-system'
 export TEST_LEASE_NAME='homelab-test-report-publish-lock'
 export TEST_LEASE_KUBECTL=publication_kubectl
-source scripts/lib/lease.sh
 acquire_test_lease "$kubeconfig" "publish:$run_id" 5 existing-only
 lease_acquired=true
 start_test_lease_renewal "$kubeconfig" "publish:$run_id" "$lease_failure"
