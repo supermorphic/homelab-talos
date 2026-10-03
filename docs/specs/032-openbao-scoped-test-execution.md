@@ -171,6 +171,13 @@ For generalized runner requests, enforce:
    their mounts. Preserve the existing scripts' assertions and cleanup behavior.
 4. Service selectors, restore host mappings, and policy selectors that address only
    the appropriate test resources; no production Service capture or broader policy.
+   Validate restored application host mappings against the allocated scratch
+   database Service through a native admission parameter. Bind the parameter
+   lookup to the family's mandatory admitted labels and namespace; deny creation
+   when the Service is absent or belongs to another run. Apply the IP check to
+   parent creation and updates. Owned-parent deletion must remain possible after
+   Service removal. Retained Services from another run of the same family block
+   new acceptance until checked cleanup removes them.
 5. Immutable ownership and protected object fields on update; designation and
    ownership checks on deletion. Cleanup uses explicit object names and recorded
    UIDs rather than granting collection deletion.

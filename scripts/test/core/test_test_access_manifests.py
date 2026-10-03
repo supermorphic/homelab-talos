@@ -53,12 +53,13 @@ class TestAccessPolicyTests(unittest.TestCase):
             self.programs[expression] = self.env.program(self.env.compile(expression))
         return self.programs[expression].evaluate(activation)
 
-    def admits(self, policy_name, request, obj, old=None):
+    def admits(self, policy_name, request, obj, old=None, params=None):
         spec = self.policy(policy_name)
         activation = {
             "request": json_to_cel(request),
             "object": json_to_cel(obj),
             "oldObject": json_to_cel(old),
+            "params": json_to_cel(params),
             "variables": json_to_cel({}),
         }
         try:
@@ -74,6 +75,138 @@ class TestAccessPolicyTests(unittest.TestCase):
             )
         except celpy.CELEvalError:
             return False
+
+    def test_restore_host_mapping_uses_the_actual_scratch_service_parameter(self):
+        for family, prefix, namespace, role, app_suffix, policy in (
+            (
+                "automation-data-restore-drill",
+                "ad",
+                "automation",
+                "ad-database",
+                "n8n",
+                "homelab-test-ad-restore-hosts",
+            ),
+            (
+                "nocodb-restore-drill",
+                "nc",
+                "automation-data",
+                "database",
+                "nocodb",
+                "homelab-test-nc-restore-hosts",
+            ),
+        ):
+            run = "abc12345def6"
+            obj = {
+                "metadata": {
+                    "name": f"{prefix}-restore-{run}-{app_suffix}",
+                    "labels": {"homelab-talos/test": family, "homelab-talos/run-id": run},
+                },
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "hostAliases": [
+                                {
+                                    "ip": "192.0.2.45",
+                                    "hostnames": [
+                                        "automation-data-postgresql",
+                                        "automation-data-postgresql.automation-data.svc.cluster.local",
+                                    ],
+                                }
+                            ]
+                        }
+                    }
+                },
+            }
+            service = {
+                "metadata": {
+                    "name": f"{prefix}-restore-{run}-db",
+                    "namespace": "automation-data",
+                    "uid": "synthetic-service",
+                    "labels": {
+                        "homelab-talos/test": family,
+                        "homelab-talos/run-id": run,
+                        "homelab-talos/role": role,
+                    },
+                },
+                "spec": {"type": "ClusterIP", "clusterIP": "192.0.2.45"},
+            }
+            req = self.request("deployments", namespace, name=obj["metadata"]["name"])
+            self.assertTrue(self.admits(policy, req, obj, params=service))
+            self.assertFalse(self.admits(policy, req, obj))
+            for change in (
+                "ip",
+                "hostname",
+                "extra-alias",
+                "run",
+                "service-run",
+                "service-role",
+                "service-namespace",
+                "service-name",
+                "headless",
+                "service-type",
+                "namespace",
+            ):
+                bad, param, request = (
+                    copy.deepcopy(obj),
+                    copy.deepcopy(service),
+                    copy.deepcopy(req),
+                )
+                if change == "ip":
+                    bad["spec"]["template"]["spec"]["hostAliases"][0]["ip"] = "192.0.2.99"
+                elif change == "hostname":
+                    bad["spec"]["template"]["spec"]["hostAliases"][0]["hostnames"][0] = (
+                        "production"
+                    )
+                elif change == "extra-alias":
+                    bad["spec"]["template"]["spec"]["hostAliases"].append(
+                        {"ip": "192.0.2.99", "hostnames": ["other"]}
+                    )
+                elif change == "run":
+                    bad["metadata"]["labels"]["homelab-talos/run-id"] = "other"
+                elif change == "service-run":
+                    param["metadata"]["labels"]["homelab-talos/run-id"] = "other"
+                elif change == "service-role":
+                    param["metadata"]["labels"]["homelab-talos/role"] = "n8n"
+                elif change == "service-namespace":
+                    param["metadata"]["namespace"] = "automation"
+                elif change == "service-name":
+                    param["metadata"]["name"] = "production"
+                elif change == "headless":
+                    param["spec"]["clusterIP"] = "None"
+                elif change == "service-type":
+                    param["spec"]["type"] = "ExternalName"
+                elif change == "namespace":
+                    request["namespace"] = "media"
+                with self.subTest(family=family, change=change):
+                    self.assertFalse(self.admits(policy, request, bad, params=param))
+            definition = self.policy(policy)
+            self.assertEqual(definition["paramKind"], {"apiVersion": "v1", "kind": "Service"})
+            self.assertEqual(
+                definition["matchConstraints"]["resourceRules"][0]["operations"],
+                ["CREATE", "UPDATE"],
+            )
+            binding = next(
+                d["spec"]
+                for d in self.documents
+                if d["kind"] == "ValidatingAdmissionPolicyBinding"
+                and d["spec"]["policyName"] == policy
+            )
+            self.assertEqual(
+                binding["paramRef"],
+                {
+                    "namespace": "automation-data",
+                    "parameterNotFoundAction": "Deny",
+                    "selector": {
+                        "matchLabels": {"homelab-talos/test": family, "homelab-talos/role": role}
+                    },
+                },
+            )
+            # Param collection precedes username matchConditions in Kubernetes 1.35.
+            # Limit lookup to mandatory family labels, keeping unrelated production writes out.
+            self.assertEqual(
+                binding["matchResources"]["objectSelector"],
+                {"matchLabels": {"homelab-talos/test": family}},
+            )
 
     @staticmethod
     def request(resource, namespace, operation="CREATE", name="fixture", user=IDENTITY):
@@ -795,7 +928,12 @@ class TestAccessPolicyTests(unittest.TestCase):
         self.assertTrue(helpers[0]["immutable"])
         self.assertEqual(
             set(helpers[0]["data"]),
-            {"n8n-restore-common.sh", "n8n-restore-load.sh", "n8n-restore-drop.sh"},
+            {
+                "n8n-restore-common.sh",
+                "n8n-restore-load.sh",
+                "n8n-restore-drop.sh",
+                "n8n-restore-isolated.sh",
+            },
         )
         for name, content in helpers[0]["data"].items():
             self.assertEqual(
