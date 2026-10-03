@@ -153,6 +153,11 @@ fixture is empty or owned by the same run before writing; clear the value and ru
 ownership during checked cleanup. Do not retain the credential in Git, logs, or
 reports. The non-extension path never inspects that Secret.
 
+The fixture is `automation-data/nocodb-restore-application-credential`. Flux
+creates it with `kustomize.toolkit.fluxcd.io/ssa: IfNotPresent`, so reconciliation
+does not reset a credential during the probe. Fill and clear requests use atomic
+UID and resourceVersion checks; cleanup refuses a replacement fixture.
+
 ### Enforce resource shape as well as RBAC
 
 Kubernetes RBAC alone does not restrict a created workload's service account,

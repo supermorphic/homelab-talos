@@ -65,7 +65,6 @@ app="$prefix-nocodb"
 app_service="$prefix-nocodb"
 request_job="$prefix-request"
 application_probe_job="$prefix-app-probe"
-application_probe_secret="$prefix-app-credential"
 policy="$prefix-policy"
 kc=(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace")
 kcluster=(kubectl --kubeconfig "$kubeconfig")
@@ -336,13 +335,17 @@ cleanup() {
 	set +e
 	verify_lease || cleanup_ok=false
 	if [[ "$cleanup_ok" == true ]]; then
-		for target in "job/$application_probe_job" "secret/$application_probe_secret" "job/$request_job" "deployment/$app" "service/$app_service" \
+		for target in "job/$application_probe_job" "job/$request_job" "deployment/$app" "service/$app_service" \
 			"job/$restore_job" "job/$preflight_job" "statefulset/$database" "service/$database_service" \
 			"pvc/$database_pvc" "ciliumnetworkpolicy/$policy"; do
 			delete_owned "$namespace" "$target" || cleanup_ok=false
 		done
+		if [[ "$extension_enabled" == true ]]; then
+			verify_lease && uv run --locked python scripts/test/lib/automation-data-application-acceptance.py \
+				clear-restore-credential "$kubeconfig" "$temp_dir" "$run_hash" || cleanup_ok=false
+		fi
 	fi
-	for target in "job/$application_probe_job" "secret/$application_probe_secret" "job/$request_job" "deployment/$app" "service/$app_service" \
+	for target in "job/$application_probe_job" "job/$request_job" "deployment/$app" "service/$app_service" \
 		"job/$restore_job" "job/$preflight_job" "statefulset/$database" "service/$database_service" \
 		"pvc/$database_pvc" "ciliumnetworkpolicy/$policy"; do
 		resource_absent "$namespace" "$target" || cleanup_ok=false
@@ -372,7 +375,7 @@ route_targets_service "$app_service" "$routes" && {
 	exit 1
 }
 
-for target in "job/$application_probe_job" "secret/$application_probe_secret" "job/$request_job" "deployment/$app" "service/$app_service" \
+for target in "job/$application_probe_job" "job/$request_job" "deployment/$app" "service/$app_service" \
 	"job/$restore_job" "job/$preflight_job" "statefulset/$database" "service/$database_service" \
 	"pvc/$database_pvc" "ciliumnetworkpolicy/$policy"; do
 	resource_absent "$namespace" "$target" || {
@@ -503,8 +506,11 @@ if [[ "$extension_enabled" == true ]]; then
 		exit 1
 	}
 	# The independent policy check above restricts role=restore to this run's database.
-	# Retained credentials are placed only in a run-owned ephemeral Secret outside reports.
+	# The named empty fixture is shared only under the checked campaign Lease.
 	uv run --locked python scripts/test/lib/automation-data-application-acceptance.py restore-manifests "$temp_dir" "$run_hash" "$run_id"
+	verify_lease
+	uv run --locked python scripts/test/lib/automation-data-application-acceptance.py \
+		fill-restore-credential "$kubeconfig" "$temp_dir" "$run_hash"
 	create_owned_manifests "$namespace" "$temp_dir/application-probe.yaml"
 	wait_for_job_terminal "$application_probe_job" 180 5 "${kc[@]}"
 	[[ "$("${kc[@]}" logs "job/$application_probe_job" --tail=1)" == application_acceptance=passed ]] || {

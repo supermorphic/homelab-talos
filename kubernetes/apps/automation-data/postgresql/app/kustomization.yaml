@@ -7,6 +7,7 @@ resources:
   - ./cronjob.yaml
   - ./persistentvolumeclaims.yaml
   - ./postgresql-credentials.sops.yaml
+  - ./scoped-test-fixtures.yaml
   - ./service.yaml
   - ./servicemonitor.yaml
   - ./statefulset.yaml
@@ -24,6 +25,7 @@ configMapGenerator:
       - nocodb-restore-preflight.sh=test-helpers/nocodb-restore-preflight.sh
       - nocodb-restore.sh=test-helpers/nocodb-restore.sh
       - nocodb-restore-assertions.sh=test-helpers/nocodb-restore-assertions.sh
+      - nocodb-application-probe.sh=test-helpers/nocodb-application-probe.sh
       - backup.sh=scripts/backup.sh
       - update-backup-status.sql=scripts/update-backup-status.sql
   - name: automation-data-postgresql-init

@@ -271,6 +271,7 @@ restore_job=nc-restore-$run_hash-load
             "nocodb-restore-preflight.sh",
             "nocodb-restore.sh",
             "nocodb-restore-assertions.sh",
+            "nocodb-application-probe.sh",
         ):
             self.assertEqual(helpers["data"][name], (POSTGRES / "test-helpers" / name).read_text())
 

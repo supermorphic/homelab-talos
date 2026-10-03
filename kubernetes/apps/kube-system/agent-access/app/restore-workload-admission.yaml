@@ -259,7 +259,8 @@ spec:
     - name: restore-database-family
       expression: >-
         (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/test'] in ['automation-data-restore-drill', 'nocodb-restore-drill'] &&
-        (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/role'] in ['ad-restore', 'n8n-restore', 'restore', 'preflight']
+        (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/role'] in ['ad-restore', 'n8n-restore', 'restore', 'preflight'] &&
+        !(request.operation == 'DELETE' ? oldObject : object).metadata.name.endsWith('-app-probe')
   variables:
     - name: job
       expression: "request.operation == 'DELETE' ? oldObject : object"

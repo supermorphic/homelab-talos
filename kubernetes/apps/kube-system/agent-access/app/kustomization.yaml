@@ -10,3 +10,4 @@ resources:
   - ./restore-admission.yaml
   - ./restore-workload-admission.yaml
   - ./restore-network-admission.yaml
+  - ./restore-extension-admission.yaml

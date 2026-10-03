@@ -52,6 +52,32 @@ key_for() { printf '%s' "$1" | tr '/.' '__'; }
 created() { [[ -e "$state/created-$(key_for "$1")" ]]; }
 deleted() { [[ -e "$state/deleted-$(key_for "$1")" ]]; }
 
+if [[ "$args" == *' get secret nocodb-restore-application-credential '* ]]; then
+	printf '%s\n' get-application-credential >>"$events"
+	cat "$state/credential-fixture.json"
+	exit 0
+fi
+
+if [[ "$args" == *' patch secret nocodb-restore-application-credential '* ]]; then
+	[[ "$args" == *' --type=json --patch-file=/dev/stdin '* ]] || exit 64
+	cat >"$state/credential-patch.json"
+	jq -e --slurpfile patch "$state/credential-patch.json" '
+      $patch[0][0] == {op:"test",path:"/metadata/uid",value:.metadata.uid} and
+      $patch[0][1] == {op:"test",path:"/metadata/resourceVersion",value:.metadata.resourceVersion}
+    ' "$state/credential-fixture.json" >/dev/null
+	jq --slurpfile patch "$state/credential-patch.json" '
+      .data = $patch[0][2].value |
+      .metadata.annotations."homelab-talos/credential-run" = $patch[0][3].value
+    ' "$state/credential-fixture.json" >"$state/credential-next.json"
+	mv "$state/credential-next.json" "$state/credential-fixture.json"
+	if jq -e '.data == {}' "$state/credential-fixture.json" >/dev/null; then
+		printf '%s\n' clear-application-credential >>"$events"
+	else
+		printf '%s\n' fill-application-credential >>"$events"
+	fi
+	exit 0
+fi
+
 if [[ "$args" == *' get lease '* ]]; then
 	printf 'verify-lease\n' >>"$events"
 	if [[ "${NOCODB_RESTORE_VOLUME_CASE:-}" == lease-loss ]] && created policy; then
@@ -278,6 +304,9 @@ module['write_restore_manifests'](Path(sys.argv[1]),sys.argv[2],sys.argv[3],
                                 'invented_password_for_fixture_only_0123456789')
 PYCODE
     ;;
+  fill-restore-credential|clear-restore-credential)
+    exec "$NOCODB_RESTORE_REAL_UV" "$@"
+    ;;
   *) exit 65 ;;
 esac
 EOF
@@ -301,6 +330,11 @@ run_case() { # <case>
 	run_hash="$(printf '%s' "$run_id" | shasum -a 256 | cut -c1-12)"
 	mkdir -p "$state/$run_id/diagnostics"
 	: >"$state/events.log"
+	jq -n '{kind:"Secret",type:"Opaque",metadata:{name:"nocodb-restore-application-credential",
+      namespace:"automation-data",uid:"synthetic-fixture",resourceVersion:"12",
+      labels:{"homelab-talos/test":"nocodb-restore-extension"},
+      annotations:{"homelab-talos/credential-run":"","kustomize.toolkit.fluxcd.io/ssa":"IfNotPresent"}},data:{}}' \
+		>"$state/credential-fixture.json"
 	source_registry_base64="$(jq -nc '{items:[
     {domain:"automation_data_acceptance",pair:"default",accessKind:"reader",state:"ready",baseId:"base-canary",sourceId:"source-reader",integrationId:"integration-reader",valid:true},
     {domain:"automation_data_acceptance",pair:"default",accessKind:"operator",state:"ready",baseId:"base-canary",sourceId:"source-operator",integrationId:"integration-operator",valid:true}
@@ -419,10 +453,15 @@ for extension_case in extension-valid extension-probe-failure; do
     jq -e '.status=="failed"' "$state/20260905T010000Z-restore-$case_name/assertion.json" >/dev/null || record_failure 'application failure omitted failed assertion'
   fi
   rg -Fxq create-application-probe "$state/events.log" || record_failure 'extension did not create isolated application Job'
-  rg -q '^delete secret/nc-restore-.*-app-credential$' "$state/events.log" || record_failure 'extension retained credential Secret after cleanup'
+  rg -Fxq fill-application-credential "$state/events.log" || record_failure 'extension did not fill its named fixture'
+  rg -Fxq clear-application-credential "$state/events.log" || record_failure 'extension did not clear its named fixture'
+  jq -e '.data == {} and .metadata.annotations."homelab-talos/credential-run" == ""' "$state/credential-fixture.json" >/dev/null || record_failure 'extension did not return credential fixture to empty'
+  ! rg -q '^delete secret/' "$state/events.log" || record_failure 'extension deleted its Git-owned credential fixture'
   rg -q '^delete job/nc-restore-.*-app-probe$' "$state/events.log" || record_failure 'extension retained application probe after cleanup'
   jq -e '.status=="passed"' "$state/20260905T010000Z-restore-$case_name/cleanup.json" >/dev/null || record_failure 'extension resource cleanup failed'
 done
+
+! rg -q 'application-credential' "$fixture/valid/events.log" || record_failure 'default restore accessed the optional credential fixture'
 
 [[ "$failures" -eq 0 ]] || exit 1
 echo 'NocoDB restore scenario tests passed.'

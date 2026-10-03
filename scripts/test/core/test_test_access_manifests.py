@@ -4,6 +4,7 @@ import copy
 import json
 import os
 import re
+import runpy
 import subprocess
 import tempfile
 import unittest
@@ -232,8 +233,193 @@ class TestAccessPolicyTests(unittest.TestCase):
                 "homelab-test-qbit-manage-jobs",
                 "homelab-test-restore-jobs",
                 "homelab-test-restore-request-jobs",
+                "homelab-test-nocodb-application-probe",
                 "homelab-test-workload-security",
             )
+        )
+
+    def test_optional_application_probe_has_fixed_executable_and_credential_target(self):
+        helper = runpy.run_path(
+            str(ROOT / "scripts/test/lib/automation-data-application-acceptance.py")
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            directory.chmod(0o700)
+            helper["write_restore_manifests"](
+                directory,
+                "012345abcdef",
+                "synthetic-run",
+                "invented_password_for_fixture_only_0123456789",
+            )
+            job = yaml.safe_load((directory / "application-probe.yaml").read_text())
+        request = self.request("jobs", "automation-data", name=job["metadata"]["name"])
+        request["resource"]["group"] = "batch"
+        self.assertTrue(self.admits_jobs(request, job))
+        self.assertTrue(self.admits_jobs({**request, "operation": "DELETE"}, None, job))
+        self.assertFalse(self.admits_jobs({**request, "operation": "UPDATE"}, job, job))
+        for field in (
+            "name",
+            "family",
+            "namespace",
+            "image",
+            "command",
+            "args",
+            "host",
+            "run",
+            "env",
+            "secret",
+            "helper",
+            "writable",
+            "subpath",
+            "volume",
+            "deadline",
+            "privilege",
+            "identity",
+            "sidecar",
+            "host-network",
+            "hook",
+            "labels",
+        ):
+            bad, req = copy.deepcopy(job), copy.deepcopy(request)
+            pod = bad["spec"]["template"]["spec"]
+            container = pod["containers"][0]
+            if field == "name":
+                bad["metadata"]["name"] = "production"
+            elif field == "family":
+                bad["metadata"]["labels"]["homelab-talos/test"] = "other"
+            elif field == "namespace":
+                req["namespace"] = "media"
+            elif field == "image":
+                container["image"] = "busybox:latest"
+            elif field == "command":
+                container["command"] = ["sh", "-c", "env"]
+            elif field == "args":
+                container["args"] = ["other"]
+            elif field == "host":
+                container["env"][0]["value"] = "automation-data-postgresql"
+            elif field == "run":
+                container["env"][1]["value"] = "run';env"
+            elif field == "env":
+                container["env"].append({"name": "PGUSER", "value": "postgres"})
+            elif field == "secret":
+                pod["volumes"][0]["secret"]["secretName"] = "production"
+            elif field == "helper":
+                pod["volumes"][2]["configMap"]["name"] = "other"
+            elif field == "writable":
+                container["volumeMounts"][0]["readOnly"] = False
+            elif field == "subpath":
+                container["volumeMounts"][0]["subPath"] = "other"
+            elif field == "volume":
+                pod["volumes"][1] = {"name": "scratch", "hostPath": {"path": "/"}}
+            elif field == "deadline":
+                bad["spec"]["activeDeadlineSeconds"] = 1800
+            elif field == "privilege":
+                container["securityContext"]["allowPrivilegeEscalation"] = True
+            elif field == "identity":
+                pod["serviceAccountName"] = "other"
+            elif field == "sidecar":
+                pod["containers"].append(copy.deepcopy(container))
+            elif field == "host-network":
+                pod["hostNetwork"] = True
+            elif field == "hook":
+                container["lifecycle"] = {"postStart": {"exec": {"command": ["env"]}}}
+            else:
+                pod_labels = bad["spec"]["template"]["metadata"]["labels"]
+                pod_labels["app.kubernetes.io/name"] = "postgresql"
+            with self.subTest(field=field):
+                self.assertFalse(self.admits_jobs(req, bad))
+
+    def test_optional_credential_updates_preserve_named_fixture_and_metadata(self):
+        rendered = subprocess.run(
+            ["kustomize", "build", str(ROOT / "kubernetes/apps/automation-data/postgresql/app")],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        fixtures = [
+            obj
+            for obj in yaml.safe_load_all(rendered.stdout)
+            if obj["kind"] == "Secret"
+            and obj["metadata"]["name"] == "nocodb-restore-application-credential"
+        ]
+        self.assertEqual(len(fixtures), 1)
+        old = fixtures[0]
+        self.assertEqual(old.get("data", {}), {})
+        self.assertEqual(
+            old["metadata"]["annotations"].get("kustomize.toolkit.fluxcd.io/ssa"), "IfNotPresent"
+        )
+        old["metadata"].update(uid="synthetic-fixture", resourceVersion="12")
+        obj = copy.deepcopy(old)
+        obj["data"] = {"pgpass": "c3ludGhldGlj"}
+        obj["metadata"]["annotations"]["homelab-talos/credential-run"] = "012345abcdef"
+        req = self.request("secrets", "automation-data", "UPDATE", name=old["metadata"]["name"])
+        policy = "homelab-test-nocodb-credential"
+        self.assertTrue(self.admits(policy, req, obj, old))
+        self.assertTrue(self.admits(policy, req, old, obj))
+        for field in (
+            "name",
+            "namespace",
+            "uid",
+            "labels",
+            "annotation",
+            "owner",
+            "finalizer",
+            "type",
+            "immutable",
+            "string-data",
+            "extra-data",
+            "oversize",
+            "empty-owner",
+            "owner-format",
+        ):
+            bad, request = copy.deepcopy(obj), copy.deepcopy(req)
+            if field == "name":
+                bad["metadata"]["name"] = request["name"] = "other"
+            elif field == "namespace":
+                request["namespace"] = "media"
+            elif field == "uid":
+                bad["metadata"]["uid"] = "other"
+            elif field == "labels":
+                bad["metadata"]["labels"]["other"] = "value"
+            elif field == "annotation":
+                bad["metadata"]["annotations"]["other"] = "value"
+            elif field == "owner":
+                bad["metadata"]["ownerReferences"] = [{"uid": "other"}]
+            elif field == "finalizer":
+                bad["metadata"]["finalizers"] = ["other"]
+            elif field == "type":
+                bad["type"] = "kubernetes.io/service-account-token"
+            elif field == "immutable":
+                bad["immutable"] = True
+            elif field == "string-data":
+                bad["stringData"] = {"other": "synthetic"}
+            elif field == "extra-data":
+                bad["data"]["other"] = "synthetic"
+            elif field == "oversize":
+                bad["data"]["pgpass"] = "a" * 4097
+            elif field == "empty-owner":
+                bad["metadata"]["annotations"]["homelab-talos/credential-run"] = ""
+            else:
+                bad["metadata"]["annotations"]["homelab-talos/credential-run"] = "other"
+            with self.subTest(field=field):
+                self.assertFalse(self.admits(policy, request, bad, old))
+        roles = [
+            d
+            for d in self.documents
+            if d["kind"] == "Role" and d["metadata"]["name"] == "homelab-test-nocodb-credential"
+        ]
+        self.assertEqual(len(roles), 1)
+        self.assertEqual(roles[0]["metadata"]["namespace"], "automation-data")
+        self.assertEqual(
+            roles[0]["rules"],
+            [
+                {
+                    "apiGroups": [""],
+                    "resources": ["secrets"],
+                    "resourceNames": ["nocodb-restore-application-credential"],
+                    "verbs": ["get", "patch", "update"],
+                }
+            ],
         )
 
     @staticmethod
