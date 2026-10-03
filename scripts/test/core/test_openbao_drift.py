@@ -14,10 +14,13 @@ MARKER = "CREDENTIAL_MARKER_9f8d"
 
 
 class DriftTest(unittest.TestCase):
-    def test_complete_pinned_responses_and_nondefault_controls(self):
+    def test_captured_and_proposed_responses_and_nondefault_controls(self):
         fixtures = json.loads(
             (Path(__file__).parent / "fixtures/openbao-2.7-read-responses.json").read_text()
         )
+        fixtures.update(json.loads(
+            (Path(__file__).parent / "fixtures/openbao-scoped-profile-responses.json").read_text()
+        )["responses"])
         for spec in load_desired(DESIRED):
             if spec.kind in {"auth-method", "secret-mount"}:
                 actual = fixtures["GET sys/auth" if spec.kind == "auth-method" else

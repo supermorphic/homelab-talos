@@ -27,13 +27,14 @@ class OpenBaoCatalogTests(unittest.TestCase):
             "scripts/validate/openbao.sh",
         )
         verifier = suites["verification.openbao"]
-        self.assertEqual(verifier["access"]["tier"], "observer")
+        self.assertEqual(verifier["access"]["profile"], "observer")
         self.assertFalse(verifier["metadata"]["mutates_cluster"])
         self.assertNotIn("verification.openbao", catalog_validator.campaign_exclusions())
         for campaign in ("verification", "scoped-verification"):
             self.assertIn("verification.openbao", catalog["campaigns"][campaign]["members"])
         for suite_id in MUTATING:
-            self.assertEqual(suites[suite_id]["metadata"]["execution_owner"], "human")
+            self.assertEqual(suites[suite_id]["metadata"]["execution_owner"],
+                             "shared" if suite_id == "test.openbao-issuance" else "human")
             self.assertTrue(suites[suite_id]["metadata"]["mutates_cluster"])
             self.assertIn(suite_id, catalog_validator.STANDALONE_SUITES)
             self.assertTrue((ROOT / suites[suite_id]["runner"]["implementation"]).is_file())
@@ -45,7 +46,7 @@ class OpenBaoCatalogTests(unittest.TestCase):
             (ROOT / "kubernetes/apps/security/openbao/ks.yaml").read_text()
         )
         units = list(source)
-        self.assertEqual(len(units), 6)
+        self.assertEqual(len(units), 7)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             path = root / "kubernetes/apps/security/openbao/ks.yaml"
@@ -112,7 +113,10 @@ class OpenBaoCatalogTests(unittest.TestCase):
                         unit["spec"]["suspend"] = False
                     active[index]["spec"]["suspend"] = True
                     path.write_text(yaml.safe_dump_all(active))
-                    self.assertIn("verification.openbao", catalog_validator.campaign_exclusions())
+                    if active[index]["metadata"]["name"] == "openbao-restore-test":
+                        self.assertNotIn("verification.openbao", catalog_validator.campaign_exclusions())
+                    else:
+                        self.assertIn("verification.openbao", catalog_validator.campaign_exclusions())
                 for unit in units:
                     unit["spec"]["suspend"] = False
                 path.write_text(yaml.safe_dump_all(units))
