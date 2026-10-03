@@ -12,6 +12,7 @@ resources:
   - ./sonarr/ks.yaml
   - ./radarr/ks.yaml
   - ./lidarr/ks.yaml
+  - ./mylar3/ks.yaml
   - ./seerr/ks.yaml
   - ./tautulli/ks.yaml
   - ./alerts/ks.yaml

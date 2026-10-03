@@ -201,6 +201,13 @@ config:
       interval: 1m
       conditions:
         - "[STATUS] == 200"
+    # Login availability only; acquisition and metadata require attended acceptance.
+    - name: mylar3
+      group: Media
+      url: "https://mylar3.lab.supermorphic.com/auth/login"
+      interval: 1m
+      conditions:
+        - "[STATUS] == 200"
     - name: seerr
       group: Media
       url: "https://seerr.lab.supermorphic.com/api/v1/status"

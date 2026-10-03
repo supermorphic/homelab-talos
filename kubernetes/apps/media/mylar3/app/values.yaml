@@ -1,0 +1,92 @@
+# Mylar3 owns comic acquisition; attended setup is in the media architecture spec.
+# LinuxServer initializes as root, then s6 runs Mylar as PUID/PGID 568. The config
+# database is /config/mylar; downloads and library share one /data filesystem.
+controllers:
+  mylar3:
+    type: deployment
+    replicas: 1
+    strategy: Recreate
+    pod:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        fsGroup: 568
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+    containers:
+      app:
+        image:
+          repository: lscr.io/linuxserver/mylar3
+          tag: v0.11.0-ls274
+        env:
+          TZ: America/Denver
+          PUID: "568"
+          PGID: "568"
+          UMASK: "002"
+        resources:
+          # Provisional baseline from the other media managers. Measure after
+          # first-run import; no CPU ceiling that could throttle post-processing.
+          requests:
+            cpu: 25m
+            memory: 256Mi
+          limits:
+            memory: 1Gi
+        securityContext:
+          runAsUser: 0
+          runAsGroup: 0
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+            add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "KILL", "SETGID", "SETUID"]
+        probes:
+          # Upstream has no /ping. The login page checks the web process without
+          # an API key; use Forms authentication as required by the media spec.
+          readiness:
+            enabled: true
+            custom: true
+            spec:
+              httpGet:
+                path: /auth/login
+                port: 8090
+              periodSeconds: 10
+              failureThreshold: 3
+          liveness:
+            enabled: true
+            custom: true
+            spec:
+              httpGet:
+                path: /auth/login
+                port: 8090
+              periodSeconds: 30
+              failureThreshold: 5
+          startup:
+            enabled: true
+            custom: true
+            spec:
+              httpGet:
+                path: /auth/login
+                port: 8090
+              periodSeconds: 5
+              failureThreshold: 60
+service:
+  app:
+    controller: mylar3
+    ports:
+      http:
+        port: 8090
+persistence:
+  config:
+    type: persistentVolumeClaim
+    accessMode: ReadWriteOnce
+    size: 5Gi
+    storageClass: longhorn
+    annotations:
+      helm.sh/resource-policy: keep
+    globalMounts:
+      - path: /config
+  data:
+    type: persistentVolumeClaim
+    existingClaim: media-data
+    globalMounts:
+      - path: /data
