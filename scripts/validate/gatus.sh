@@ -253,7 +253,7 @@ check_media_endpoint 'seerr-radarr-service-read' \
 require_equal 'Media Integration endpoint methods and bodies' \
   "$(yq -r '[.config.endpoints[] | select(.group == "Media Integration") | select(.method != "GET" or has("body"))] | length' "$values")" '0'
 
-legacy_endpoint_names='alertmanager,caddy,echo,flaresolverr,forgejo,grafana,letsencrypt-acme,lidarr,longhorn-ui,mylar3,nocodb,ntfy,openbao,plex,portainer,prometheus,prowlarr,qbittorrent-vpn,radarr,seerr,semaphore,sonarr,tautulli,test-reports'
+legacy_endpoint_names='alertmanager,caddy,echo,flaresolverr,forgejo,grafana,komga,letsencrypt-acme,lidarr,longhorn-ui,mylar3,nocodb,ntfy,openbao,plex,portainer,prometheus,prowlarr,qbittorrent-vpn,radarr,seerr,semaphore,sonarr,tautulli,test-reports'
 require_equal 'Existing Level 1 endpoint names' \
   "$(yq -r '[.config.endpoints[] | select(.group != "Media Integration" and
     .name != "n8n-readiness" and .name != "n8n-webhook-e2e" and
@@ -299,6 +299,7 @@ sonarr|Media|https://sonarr.lab.supermorphic.com/ping|1m|[STATUS] == 200
 radarr|Media|https://radarr.lab.supermorphic.com/ping|1m|[STATUS] == 200
 lidarr|Media|https://lidarr.lab.supermorphic.com/ping|1m|[STATUS] == 200
 mylar3|Media|https://mylar3.lab.supermorphic.com/auth/login|1m|[STATUS] == 200
+komga|Media|https://komga.lab.supermorphic.com/actuator/health|1m|[STATUS] == 200|[BODY].status == UP
 seerr|Media|https://seerr.lab.supermorphic.com/api/v1/status|1m|[STATUS] == 200
 tautulli|Media|https://tautulli.lab.supermorphic.com/status|1m|[STATUS] == 200
 flaresolverr|Media|http://flaresolverr.media.svc.cluster.local:8191/|1m|[STATUS] == 200

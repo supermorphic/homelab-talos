@@ -22,6 +22,7 @@ The `media` namespace and its parent Kustomization contain these active units:
 | `radarr` | Movie automation | Retained Longhorn config and shared SMB data | Internal Gateway |
 | `lidarr` | Music automation | Retained Longhorn config and shared SMB data | Internal Gateway |
 | `mylar3` | Comic acquisition (live acceptance pending) | Retained Longhorn config and shared SMB data | Internal Gateway |
+| `komga` | Comic reading (live acceptance pending) | Retained Longhorn state and read-only SMB comics | Internal Gateway |
 | `seerr` | Household request interface | Retained Longhorn config | Internal Gateway |
 | `tautulli` | Plex history and analytics | Retained Longhorn config | Internal Gateway |
 | `flaresolverr` | Optional per-indexer Cloudflare solver | Stateless | ClusterIP only |
@@ -131,7 +132,7 @@ the Gateway:
 ```text
 Prowlarr -> Sonarr / Radarr / Lidarr
 Prowlarr -> Mylar3 -> qBittorrent -> shared comic downloads
-Mylar3 -> shared comic library (reader deployment is separate)
+Mylar3 -> shared comic library -> Komga -> native private HTTPS reader
 Seerr -> Plex / Sonarr / Radarr
 Tautulli -> Plex
 Sonarr / Radarr / Lidarr -> qBittorrent
@@ -139,8 +140,8 @@ qBittorrent -> shared download tree
 Sonarr / Radarr / Lidarr -> shared library tree -> Plex
 ```
 
-Prowlarr, Sonarr, Radarr, Lidarr, Mylar3, qBittorrent, Plex, Seerr, and Tautulli each have an
-HTTPS route on the internal Gateway. FlareSolverr remains in-cluster only because it is
+Prowlarr, Sonarr, Radarr, Lidarr, Mylar3, Komga, qBittorrent, Plex, Seerr, and Tautulli
+each have an HTTPS route on the internal Gateway. FlareSolverr remains in-cluster only because it is
 an implementation detail of selected Prowlarr indexers. Plex also has a separately
 specified direct remote-access path on port `32400`; that exception does not turn the
 other media routes public.
@@ -155,7 +156,8 @@ media [cilium]
 │   ├── sonarr [media-storage, internal-gateway]
 │   ├── radarr [media-storage, internal-gateway]
 │   ├── lidarr [media-storage, internal-gateway]
-│   └── mylar3 [media-storage, internal-gateway]
+│   ├── mylar3 [media-storage, internal-gateway]
+│   └── komga [media-storage, internal-gateway]
 ├── prowlarr [media, internal-gateway]
 ├── seerr [media, internal-gateway]
 ├── tautulli [media, internal-gateway]
@@ -242,8 +244,8 @@ completed.
 ## Mylar3 comic acquisition
 
 Mylar3 extends the existing Prowlarr/qBittorrent acquisition path. It owns comic
-organization and post-processing beneath `/data/media/comics`; a separate Komga
-follow-on owns reading. The [application source](../../kubernetes/apps/media/mylar3/app/values.yaml)
+organization and post-processing beneath `/data/media/comics`; Komga owns reading.
+The [application source](../../kubernetes/apps/media/mylar3/app/values.yaml)
 owns the pinned LinuxServer image, resources, retained Longhorn config and shared
 `/data` mount. A single `Recreate` writer preserves the config database. Resource
 values start from comparable managers and require idle/import measurements after
@@ -386,6 +388,109 @@ Upstream implementation references:
 [metadata behavior](https://github.com/MylarComics/mylar3/blob/v0.11.0/mylar/config.py),
 [authentication routes](https://github.com/MylarComics/mylar3/blob/v0.11.0/mylar/webstart.py),
 and [Prowlarr integration](https://github.com/Prowlarr/Prowlarr/tree/develop/src/NzbDrone.Core/Applications/Mylar).
+
+## Komga comic reading
+
+Komga serves the Mylar library to private clients. The
+[application source](../../kubernetes/apps/media/komga/app/values.yaml) pins the
+upstream image and owns resources, probes and storage. One non-root `Recreate`
+writer keeps databases, accounts, collections, progress and thumbnails under
+`/config` on a retained Longhorn claim. Its filesystem satisfies the upstream
+[local database requirement](https://komga.org/docs/installation/configuration/).
+Only the `media/comics` subtree of `media-data` is mounted, read-only, at
+`/data/media/comics`. Mylar retains acquisition and file-organization ownership.
+Writable library access, a second storage root and a custom conversion image are
+unnecessary for indexing and reading. Temporary extraction uses disposable `/tmp`.
+
+The internal Gateway terminates trusted HTTPS at the
+[declared route](../../kubernetes/apps/media/komga/app/httproute.yaml). Clients use
+the approved LAN or Tailscale subnet path and private DNS with normal certificate
+verification. Komga has no public Gateway attachment or public DNS registration.
+Homepage discovers its link. Gatus checks the upstream unauthenticated
+`/actuator/health` response and the existing `MediaEndpointDown` rule covers
+availability. These checks do not establish indexing or reading progress.
+
+### Attended setup and native clients
+
+After the reviewed deployment reaches main, confirm Mylar's comic directory exists
+through the established NAS management path and is readable by the shared media
+UID. Do not create another share or recursively change ownership. Open private
+HTTPS and create the initial administrator using Komga's first-run interface.
+Create a separate reading account with access to the comic library and the
+stream/download permissions needed by the chosen client. Accounts and generated
+API keys stay in the durable application database. No desired-state credential
+is required for this deployment; any future Git-managed integration secret must
+use SOPS, never OpenBao or plaintext annotations.
+
+Add one library rooted at `/data/media/comics`. In
+[library options](https://komga.org/docs/guides/libraries/), enable scanning on
+startup and an hourly scan. Disable automatic extension repair and CBR-to-CBZ
+conversion; do not use imports, file deletion or other file-management actions.
+Leave automatic trash emptying disabled so a temporarily unavailable NAS does
+not immediately discard server metadata. Enable available
+[ComicInfo.xml and Mylar series.json metadata imports](https://komga.org/docs/guides/scan-analysis-refresh/).
+Native CBZ/CBR content and embedded metadata are consumed as supplied. Do not
+rewrite seeded archives to improve metadata; coordinate acquisition-side changes
+with Mylar's contract above.
+
+Prefer [Kasane's native Komga connection](https://komga.org/docs/guides/kasane/)
+for server reading-progress integration. Use the private HTTPS base URL and a
+reading-account API key or its credentials. For
+[Panels](https://komga.org/docs/guides/panels/), use its OPDS service with the same
+HTTPS host and reading-account credentials; OPDS support may require an attended
+purchase. The explicit OPDS v1 catalog is `/opds/v1.2/catalog`; Komga also offers
+`/opds/v2/catalog`. Leave a reverse-proxy port field empty rather than using the
+backend port. Generic OPDS connectivity does not prove progress synchronization:
+[Panels' guide](https://guides.panels.app/opds/connecting-a-server) distinguishes
+streaming and imports and reports a streaming continue-reading limitation.
+Record the installed client version, connection type and observed progress
+behavior during acceptance. Device installation and subscriptions stay attended.
+
+### Acceptance and recovery
+
+Run `mise exec -- just kube kubeconfig` in the assigned linked worktree, then
+`mise exec -- just kube komga-verify` for observational readiness, claims,
+read-only mount, image and private DNS/TLS checks. Retain deployment evidence
+from the clean deployed commit with
+`mise exec -- just test record verification.komga`. A passing result does not
+complete issue 527; native and integrated acceptance remain pending:
+
+1. Using operator-authorized content from Mylar's library, scan representative
+   CBZ and CBR archives. Require readable pages, expected counts and supplied
+   ComicInfo.xml or series.json metadata. A repeat scan must preserve book identity
+   and progress without modifying the archives. Inspect analysis errors privately.
+2. From the iPad's intended private network, browse, open and read a comic in
+   Kasane or Panels without manual transfer or a TLS exception. Verify streaming
+   and/or offline download according to the selected workflow, then close and
+   reopen the client. Compare progress with the Komga web reader where the client
+   supports server synchronization; distinguish local resume from server progress.
+3. Under separately authorized recovery testing, record a reading-account login,
+   collection and progress marker, replace/reschedule the pod while preserving its
+   claim, and require those states to survive. Do not infer durability from a
+   healthy empty installation. Measure idle and scanning CPU/memory and adjust
+   the provisional resource settings in Git before accepting capacity.
+4. Confirm the config volume participates in Longhorn's existing default snapshot
+   and backup group and has a successful backup. Bulk comics remain under NAS
+   protection. Pod replacement is not backup-restore evidence.
+5. Complete the Mylar-to-library-to-client flow after issue 526's acquisition
+   acceptance. Record only sanitized outcomes; no titles, comic payloads, account
+   data, tokens or private library paths beyond the shared contract belong in
+   public evidence.
+
+There is no registered automated comic/client or Komga rescheduling test yet.
+Keep attended outcomes private until a scoped fixture and execution contract can
+be registered in the existing test catalog and retained through `just test record`.
+Offline validation and this observational verifier cannot substitute for those
+gates.
+
+For recovery, retain the healthy config claim. If it is lost, use the
+[platform storage recovery procedure](010-talos-flux-platform.md) to restore a
+trusted Longhorn backup to a new claim and validate it in isolation before Git
+cutover. Restore the NAS comic directory separately at the same path. Keep the
+image pinned during recovery and verify accounts, collections, progress and
+library access before resuming client use. Do not delete/recreate the library or
+empty its trash during a NAS outage. An empty config requires the attended setup
+again and cannot recover previous user state by scanning comics alone.
 
 ## Deferred work and reconsideration
 

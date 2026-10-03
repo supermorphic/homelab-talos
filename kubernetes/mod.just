@@ -733,6 +733,14 @@ qbittorrent-verify: require-bash
 arr-validate: require-bash
     @scripts/validate/arr.sh
 
+# Render Komga and verify state retention, read-only comics and private health.
+komga-validate: require-bash
+    @scripts/validate/komga.sh
+
+# Observe Komga readiness, storage and trusted private HTTPS without app credentials.
+komga-verify: require-bash
+    @scripts/test/run-catalog-suite.sh verification.komga -- scripts/verify/komga.sh {{quote(kubeconfig)}}
+
 # Validate Mylar3 chart output and its shared-media integration invariants offline.
 mylar3-validate: require-bash
     @scripts/validate/mylar3.sh

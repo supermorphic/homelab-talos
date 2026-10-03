@@ -5,6 +5,7 @@ import rego.v1
 mutable_tags := {"latest", "main", "master", "stable", "nightly"}
 
 required_dependencies := {
+	"komga": {"internal-gateway", "media-storage"},
 	"flaresolverr": {"media"},
 	"lidarr": {"internal-gateway", "media-storage"},
 	"mylar3": {"internal-gateway", "media-storage"},
@@ -32,6 +33,7 @@ stateless_internal_apps := {"flaresolverr"}
 uiless_worker_apps := {"qbit-manage"}
 
 shared_claim_keys := {
+	"komga": "data",
 	"lidarr": "data",
 	"mylar3": "data",
 	"plex": "media",

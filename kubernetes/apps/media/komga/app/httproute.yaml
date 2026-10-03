@@ -1,0 +1,36 @@
+---
+# yaml-language-server: $schema=https://k8s-schemas.home-operations.com/gateway.networking.k8s.io/httproute_v1.json
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: komga
+  namespace: media
+  annotations:
+    external-dns.k8s.io/audience: internal
+    gethomepage.dev/enabled: "true"
+    gethomepage.dev/name: "Komga"
+    gethomepage.dev/description: "Comic reading"
+    gethomepage.dev/pod-selector: "app.kubernetes.io/name=komga"
+    gethomepage.dev/group: "Media"
+    gethomepage.dev/icon: "komga.svg"
+    gethomepage.dev/href: "https://komga.lab.supermorphic.com"
+spec:
+  hostnames:
+    - komga.lab.supermorphic.com
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: internal
+      namespace: networking
+      sectionName: https
+  rules:
+    - backendRefs:
+        - group: ""
+          kind: Service
+          name: komga
+          port: 25600
+          weight: 1
+      matches:
+        - path:
+            type: PathPrefix
+            value: /
