@@ -3,7 +3,9 @@
 import copy
 import json
 import os
+import re
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -340,7 +342,10 @@ class TestAccessPolicyTests(unittest.TestCase):
         self.assertIsNotNone(role)
         self.assertEqual(
             role["rules"],
-            [{"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["get", "create"]}],
+            [
+                {"apiGroups": [""], "resources": ["pods"], "verbs": ["create"]},
+                {"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["get", "create"]},
+            ],
         )
         for target, container, stdin in (
             ("qbit-manage-756dbd787f-abcde", "app", True),
@@ -369,6 +374,124 @@ class TestAccessPolicyTests(unittest.TestCase):
                 (bad_req if field == "name" else bad)[field] = value
                 with self.subTest(target=target, field=field, value=value):
                     self.assertFalse(self.admits("homelab-test-media-runtime", bad_req, bad))
+
+    def test_plex_probes_have_fixed_selected_and_control_shapes(self):
+        for role, label in (("control", "plex-policy-control"), ("selected", "plex")):
+            run = "1770000000-123"
+            name = f"plex-policy-{role}-{run}"
+            labels = {
+                "app.kubernetes.io/name": label,
+                "app.kubernetes.io/instance": "plex-network-policy-test",
+                "homelab-talos/test": "plex-network-policy",
+                "homelab-talos/run-id": run,
+            }
+            obj = {
+                "metadata": {"name": name, "labels": labels},
+                "spec": {
+                    "activeDeadlineSeconds": 1800,
+                    "restartPolicy": "Never",
+                    "automountServiceAccountToken": False,
+                    "securityContext": {
+                        "runAsNonRoot": True,
+                        "runAsUser": 568,
+                        "runAsGroup": 568,
+                        "fsGroup": 568,
+                        "seccompProfile": {"type": "RuntimeDefault"},
+                    },
+                    "containers": [
+                        {
+                            "name": "probe",
+                            "image": "ghcr.io/home-operations/plex:1.43.3.10828@sha256:0c0b6899339503af17cb190b25af6acf10f0030e2820985e16ee14ef428f49d7",
+                            "command": ["sleep", "infinity"],
+                            "securityContext": {
+                                "allowPrivilegeEscalation": False,
+                                "readOnlyRootFilesystem": True,
+                                "capabilities": {"drop": ["ALL"]},
+                            },
+                        }
+                    ],
+                },
+            }
+            req = self.request("pods", "media", name=name)
+            self.assertTrue(self.admits("homelab-test-probe-pods", req, obj))
+            self.assertTrue(
+                self.admits("homelab-test-probe-pods", {**req, "operation": "DELETE"}, None, obj)
+            )
+            self.assertTrue(
+                self.admits("homelab-test-disruption", {**req, "operation": "DELETE"}, None, obj)
+            )
+            self.assertFalse(
+                self.admits("homelab-test-probe-pods", {**req, "operation": "UPDATE"}, obj, obj)
+            )
+            for field in (
+                "service-label",
+                "secret",
+                "token",
+                "image",
+                "program",
+                "env",
+                "owner",
+                "init",
+                "hook",
+                "root",
+            ):
+                bad = copy.deepcopy(obj)
+                ps, app = bad["spec"], bad["spec"]["containers"][0]
+                if field == "service-label":
+                    bad["metadata"]["labels"]["app.kubernetes.io/instance"] = "plex"
+                elif field == "secret":
+                    ps["volumes"] = [{"name": "secret", "secret": {"secretName": "production"}}]
+                elif field == "token":
+                    ps["automountServiceAccountToken"] = True
+                elif field == "image":
+                    app["image"] = "busybox:latest"
+                elif field == "program":
+                    app["command"] = ["sh", "-c", "env"]
+                elif field == "env":
+                    app["envFrom"] = [{"secretRef": {"name": "production"}}]
+                elif field == "owner":
+                    bad["metadata"]["ownerReferences"] = [
+                        {"kind": "Deployment", "name": "plex", "uid": "synthetic"}
+                    ]
+                elif field == "init":
+                    ps["initContainers"] = [copy.deepcopy(app)]
+                elif field == "hook":
+                    app["readinessProbe"] = {"exec": {"command": ["env"]}}
+                elif field == "root":
+                    app["securityContext"]["runAsUser"] = 0
+                with self.subTest(role=role, field=field):
+                    self.assertFalse(self.admits("homelab-test-probe-pods", req, bad))
+
+    def test_plex_backend_renders_the_admitted_control_and_selected_probes(self):
+        source = (ROOT / "scripts/test/scenarios/plex-network-policy.sh").read_text()
+        program = source[
+            source.index("render_probe() {") : source.index('\nrender_probe "$control_pod"')
+        ]
+        image = re.search(r"^image='([^']+)'$", source, re.MULTILINE)[1]
+        with tempfile.TemporaryDirectory() as directory:
+            for role, app in (("control", "plex-policy-control"), ("selected", "plex")):
+                name = f"plex-policy-{role}-1770000000-123"
+                subprocess.run(
+                    ["bash", "-eu", "-c", program + '\nrender_probe "$pod_name" "$app_name"'],
+                    check=True,
+                    env={
+                        **os.environ,
+                        "temp_dir": directory,
+                        "namespace": "media",
+                        "run_suffix": "1770000000-123",
+                        "image": image,
+                        "pod_name": name,
+                        "app_name": app,
+                    },
+                )
+                obj = yaml.safe_load((Path(directory) / f"{name}.yaml").read_text())
+                req = self.request("pods", "media", name=name)
+                self.assertTrue(self.admits("homelab-test-probe-pods", req, obj))
+                self.assertTrue(
+                    self.admits(
+                        "homelab-test-probe-pods", {**req, "operation": "DELETE"}, None, obj
+                    )
+                )
 
     def test_generalized_runner_has_no_unrestricted_mutation_or_secret_grants(self):
         accounts = [
