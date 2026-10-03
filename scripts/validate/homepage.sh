@@ -16,6 +16,7 @@ allure_icon="$base/app/icons/allure.svg"
 allure_provenance="$base/app/icons/NOTICE.md"
 seerr_route='kubernetes/apps/media/seerr/app/httproute.yaml'
 mylar3_route='kubernetes/apps/media/mylar3/app/httproute.yaml'
+komga_route='kubernetes/apps/media/komga/app/httproute.yaml'
 n8n_route='kubernetes/apps/automation/n8n/app/httproute.yaml'
 gatus_route='kubernetes/apps/monitoring/gatus/app/httproute.yaml'
 longhorn_route='kubernetes/apps/storage/longhorn/config/httproute.yaml'
@@ -275,6 +276,39 @@ else
   [[ "$(yq -r '.spec.template.metadata.annotations."homepage-mylar3-sops-hash" // ""' \
     "$dep")" == '' ]]
 fi
+
+# The Komga widget uses the current list endpoints and a per-consumer API key.
+[[ "$(yq -r '[.metadata.annotations."gethomepage.dev/widget.type",
+  .metadata.annotations."gethomepage.dev/widget.url",
+  .metadata.annotations."gethomepage.dev/widget.version",
+  .metadata.annotations."gethomepage.dev/widget.key"] | join(",")' "$komga_route")" == \
+  'komga,http://komga.media.svc.cluster.local:25600,2,{{HOMEPAGE_VAR_KOMGA_API_KEY}}' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.fields" | from_json | join(",")' \
+  "$komga_route")" == 'libraries,series,books' ]]
+[[ "$(yq -r '[.spec.template.spec.containers[].env[] |
+  select(.name == "HOMEPAGE_VAR_KOMGA_API_KEY") | .valueFrom.secretKeyRef |
+  [.name, .key, .optional] | join(",")] | .[0]' "$dep")" == \
+  'homepage-komga,apiKey,true' ]]
+komga_secret="$base/app/homepage-komga.sops.yaml"
+if [[ -f "$komga_secret" ]]; then
+  [[ "$(sops filestatus "$komga_secret" | yq -r '.encrypted')" == 'true' ]]
+  [[ "$(yq -r '.sops.age[].recipient' "$komga_secret" | sort -u)" == \
+    "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
+  [[ "$(yq -r '[.metadata.name, .metadata.namespace] | join(",")' "$komga_secret")" == \
+    'homepage-komga,homepage' ]]
+  [[ "$(yq -r '.stringData.apiKey | test("^ENC\\[AES256_GCM,")' "$komga_secret")" == 'true' ]]
+  [[ "$(yq -r '[.resources[] | select(. == "./homepage-komga.sops.yaml")] | length' \
+    "$app_kustomization")" == '1' ]]
+  [[ "$(yq -r '.spec.template.metadata.annotations."homepage-komga-sops-hash"' "$dep")" == \
+    "$(git hash-object "$komga_secret")" ]]
+else
+  [[ "$(yq -r '[.resources[] | select(. == "./homepage-komga.sops.yaml")] | length' \
+    "$app_kustomization")" == '0' ]]
+  [[ "$(yq -r '.spec.template.metadata.annotations."homepage-komga-sops-hash" // ""' \
+    "$dep")" == '' ]]
+fi
+# Exercise the writer without loading an age private key or application credential.
+scripts/test/homepage-komga-secrets-test.sh
 
 kustomize build "$base/app" >/dev/null
 

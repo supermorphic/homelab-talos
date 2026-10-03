@@ -14,6 +14,11 @@ metadata:
     gethomepage.dev/group: "Media"
     gethomepage.dev/icon: "komga.svg"
     gethomepage.dev/href: "https://komga.lab.supermorphic.com"
+    gethomepage.dev/widget.type: "komga"
+    gethomepage.dev/widget.url: "http://komga.media.svc.cluster.local:25600"
+    gethomepage.dev/widget.version: "2"
+    gethomepage.dev/widget.key: "{{HOMEPAGE_VAR_KOMGA_API_KEY}}"
+    gethomepage.dev/widget.fields: '["libraries","series","books"]'
 spec:
   hostnames:
     - komga.lab.supermorphic.com
