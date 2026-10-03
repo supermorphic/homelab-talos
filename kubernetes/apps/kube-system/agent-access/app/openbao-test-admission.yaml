@@ -1,0 +1,35 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-openbao-member-tunnels
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - ''
+        apiVersions:
+          - v1
+        operations:
+          - CONNECT
+        resources:
+          - pods/portforward
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username in ['system:serviceaccount:kube-system:homelab-test-openbao-ha',
+        'system:serviceaccount:kube-system:homelab-test-openbao-lifecycle']
+  validations:
+    - expression: |-
+        request.namespace == 'openbao' && request.subResource == 'portforward' &&
+        request.name in ['openbao-0', 'openbao-1', 'openbao-2'] && object.ports == [8200]
+      message: HA and lifecycle tunnels may reach only the three named member API ports.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-openbao-member-tunnels
+spec:
+  policyName: homelab-test-openbao-member-tunnels
+  validationActions:
+    - Deny

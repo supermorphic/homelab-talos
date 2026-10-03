@@ -9,6 +9,7 @@ resources:
   - ./dedicated-rbac.yaml
   - ./dedicated-admission.yaml
   - ./node-reschedule-admission.yaml
+  - ./openbao-test-admission.yaml
   - ./test-admission.yaml
   - ./restore-admission.yaml
   - ./restore-workload-admission.yaml

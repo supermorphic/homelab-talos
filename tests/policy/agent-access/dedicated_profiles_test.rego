@@ -140,3 +140,51 @@ test_node_scheduling_guard_cannot_be_removed if {
 	messages := deny with input as [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ValidatingAdmissionPolicy", "homelab-test-node-scheduling"]]
 	count(messages) > 0
 }
+
+dedicated_member_fixture := [
+	cluster_role_binding("homelab-test-openbao-ha-view", ["homelab-test-openbao-ha"], "view"),
+	cluster_role_binding("homelab-test-openbao-ha-observation", ["homelab-test-openbao-ha"], "homelab-observer-extra"),
+	cluster_role_binding("homelab-test-openbao-lifecycle-view", ["homelab-test-openbao-lifecycle"], "view"),
+	cluster_role_binding("homelab-test-openbao-lifecycle-observation", ["homelab-test-openbao-lifecycle"], "homelab-observer-extra"),
+	role("homelab-test-openbao-member-tunnels", "openbao", [{"apiGroups": [""], "resources": ["pods/portforward"], "resourceNames": ["openbao-0", "openbao-1", "openbao-2"], "verbs": ["get", "create"]}]),
+	{
+		"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "RoleBinding", "metadata": {"name": "homelab-test-openbao-member-tunnels", "namespace": "openbao"},
+		"roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "homelab-test-openbao-member-tunnels"},
+		"subjects": [
+			{"kind": "ServiceAccount", "name": "homelab-test-openbao-ha", "namespace": "kube-system"},
+			{"kind": "ServiceAccount", "name": "homelab-test-openbao-lifecycle", "namespace": "kube-system"},
+		],
+	},
+	{
+		"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingAdmissionPolicy", "metadata": {"name": "homelab-test-openbao-member-tunnels"},
+		"spec": {
+			"failurePolicy": "Fail", "matchConstraints": {"resourceRules": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CONNECT"], "resources": ["pods/portforward"]}]},
+			"matchConditions": [{"name": "dedicated-profile", "expression": "request.userInfo.username in ['system:serviceaccount:kube-system:homelab-test-openbao-ha', 'system:serviceaccount:kube-system:homelab-test-openbao-lifecycle']"}],
+			"validations": [{"expression": "object.ports == [8200]"}],
+		},
+	},
+	flux_guard_binding("homelab-test-openbao-member-tunnels"),
+]
+
+test_member_tunnels_cannot_include_debugger_subject if {
+	fixture := runner_change("RoleBinding", "homelab-test-openbao-member-tunnels", [{"op": "add", "path": "/subjects/-", "value": {"kind": "ServiceAccount", "name": "homelab-diagnostic", "namespace": "kube-system"}}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_member_tunnels_cannot_forward_unnamed_pods if {
+	fixture := runner_change("Role", "homelab-test-openbao-member-tunnels", [{"op": "remove", "path": "/rules/0/resourceNames"}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_member_tunnels_cannot_add_issuer_exec if {
+	fixture := fixture_with_rule("homelab-test-openbao-member-tunnels", [""], ["pods/exec"], ["get", "create"])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_member_tunnels_cannot_remove_connect_guard if {
+	messages := deny with input as [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ValidatingAdmissionPolicy", "homelab-test-openbao-member-tunnels"]]
+	count(messages) > 0
+}

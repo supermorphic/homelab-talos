@@ -375,3 +375,74 @@ class DedicatedNodeMutationTests(unittest.TestCase):
             else:
                 bad["metadata"][field] = "other"
             self.assertFalse(self.admits("homelab-test-node-plex-disruption", req, None, bad))
+
+
+class DedicatedMemberTunnelTests(unittest.TestCase):
+    policy = DedicatedFluxMutationTests.policy
+    evaluate = DedicatedFluxMutationTests.evaluate
+    admits = DedicatedFluxMutationTests.admits
+    setUpClass = classmethod(DedicatedNodeMutationTests.setUpClass.__func__)
+
+    def test_ha_and_lifecycle_forward_only_the_three_member_api_ports(self):
+        for account in ("homelab-test-openbao-ha", "homelab-test-openbao-lifecycle"):
+            for name in ("openbao-0", "openbao-1", "openbao-2"):
+                req = {
+                    "resource": {"group": "", "version": "v1", "resource": "pods"},
+                    "subResource": "portforward",
+                    "namespace": "openbao",
+                    "operation": "CONNECT",
+                    "name": name,
+                    "userInfo": {"username": "system:serviceaccount:kube-system:" + account},
+                }
+                self.assertTrue(
+                    self.admits("homelab-test-openbao-member-tunnels", req, {"ports": [8200]})
+                )
+                for ports in ([8201], [8200, 8201], [], ["8200"]):
+                    self.assertFalse(
+                        self.admits("homelab-test-openbao-member-tunnels", req, {"ports": ports})
+                    )
+                for field, value in (
+                    ("name", "openbao-issuer-fixture"),
+                    ("namespace", "openbao-restore-test"),
+                    ("subResource", "exec"),
+                ):
+                    self.assertFalse(
+                        self.admits(
+                            "homelab-test-openbao-member-tunnels",
+                            {**req, field: value},
+                            {"ports": [8200]},
+                        )
+                    )
+
+    def test_lifecycle_has_no_eviction_or_issuer_runtime_grant(self):
+        bindings = [
+            d
+            for d in self.documents
+            if d["kind"] in {"RoleBinding", "ClusterRoleBinding"}
+            and any(
+                s.get("name") == "homelab-test-openbao-lifecycle" for s in d.get("subjects", [])
+            )
+        ]
+        self.assertEqual(
+            {b["roleRef"]["name"] for b in bindings},
+            {"view", "homelab-observer-extra", "homelab-test-openbao-member-tunnels"},
+        )
+        roles = [
+            d
+            for d in self.documents
+            if d["kind"] == "Role"
+            and d["metadata"]["name"] == "homelab-test-openbao-member-tunnels"
+        ]
+        self.assertEqual(len(roles), 1)
+        self.assertEqual(roles[0]["metadata"]["namespace"], "openbao")
+        self.assertEqual(
+            roles[0]["rules"],
+            [
+                {
+                    "apiGroups": [""],
+                    "resources": ["pods/portforward"],
+                    "resourceNames": ["openbao-0", "openbao-1", "openbao-2"],
+                    "verbs": ["get", "create"],
+                }
+            ],
+        )

@@ -35,6 +35,14 @@ deny contains "conformance administrator exception must bind only its dedicated 
 }
 
 dedicated_role_contracts := {
+	"homelab-test-openbao-member-tunnels": {
+		"namespace": "openbao",
+		"rules": [{"apiGroups": [""], "resources": ["pods/portforward"], "resourceNames": ["openbao-0", "openbao-1", "openbao-2"], "verbs": ["get", "create"]}],
+		"subjects": [
+			{"kind": "ServiceAccount", "name": "homelab-test-openbao-ha", "namespace": "kube-system"},
+			{"kind": "ServiceAccount", "name": "homelab-test-openbao-lifecycle", "namespace": "kube-system"},
+		],
+	},
 	"homelab-test-node-reschedule-runtime": {
 		"namespace": "media",
 		"rules": [
@@ -55,6 +63,10 @@ dedicated_role_contracts := {
 }
 
 dedicated_observation_contracts := {
+	"homelab-test-openbao-lifecycle-observation": {"role": "homelab-observer-extra", "account": "homelab-test-openbao-lifecycle"},
+	"homelab-test-openbao-lifecycle-view": {"role": "view", "account": "homelab-test-openbao-lifecycle"},
+	"homelab-test-openbao-ha-observation": {"role": "homelab-observer-extra", "account": "homelab-test-openbao-ha"},
+	"homelab-test-openbao-ha-view": {"role": "view", "account": "homelab-test-openbao-ha"},
 	"homelab-test-node-reschedule-view": {"role": "view", "account": "homelab-test-node-reschedule"},
 	"homelab-test-node-reschedule-observation": {"role": "homelab-observer-extra", "account": "homelab-test-node-reschedule"},
 	"homelab-test-flux-restart-view": {"role": "view", "account": "homelab-test-flux-restart"},
@@ -74,6 +86,7 @@ deny contains msg if {
 }
 
 dedicated_admission_rules := {
+	"homelab-test-openbao-member-tunnels": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CONNECT"], "resources": ["pods/portforward"]}],
 	"homelab-test-node-plex-disruption": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["DELETE"], "resources": ["pods"]}],
 	"homelab-test-node-plex-runtime": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CONNECT"], "resources": ["pods/exec"]}],
 	"homelab-test-node-scheduling": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["UPDATE"], "resources": ["nodes"]}],
@@ -85,6 +98,7 @@ dedicated_admission_rules := {
 }
 
 dedicated_admission_conditions := {
+	"homelab-test-openbao-member-tunnels": {"name": "dedicated-profile", "expression": "request.userInfo.username in ['system:serviceaccount:kube-system:homelab-test-openbao-ha', 'system:serviceaccount:kube-system:homelab-test-openbao-lifecycle']"},
 	"homelab-test-node-plex-disruption": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-node-reschedule'"},
 	"homelab-test-node-plex-runtime": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-node-reschedule'"},
 	"homelab-test-node-scheduling": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-node-reschedule'"},
