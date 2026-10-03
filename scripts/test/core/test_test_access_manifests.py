@@ -233,6 +233,363 @@ class TestAccessPolicyTests(unittest.TestCase):
         )
 
     @staticmethod
+    def render_restore_backends():
+        def function(source, name):
+            start = source.index(name + "() {")
+            return source[start : source.index("\n}\n", start) + 3]
+
+        ad = (ROOT / "scripts/test/scenarios/automation-data-restore-drill.sh").read_text()
+        nc = (ROOT / "scripts/test/scenarios/nocodb-restore-drill.sh").read_text()
+        library = (ROOT / "scripts/test/lib/nocodb-restore-command.sh").read_text()
+        programs = (
+            "run_hash=0123456789ab\nprefix=ad-restore-$run_hash\n"
+            "ad_database=$prefix-db\nad_service=$ad_database\nad_data_pvc=$prefix-ad-data\n"
+            "n8n_database=$prefix-n8n-db\nn8n_service=$n8n_database\n"
+            "n8n_data_pvc=$prefix-n8n-data\nn8n_app=$prefix-n8n\n"
+            + function(ad, "platform_manifests")
+            + function(ad, "n8n_application_manifests")
+            + "platform_manifests\nn8n_application_manifests 192.0.2.45\n",
+            "run_hash=0123456789ab\nprefix=nc-restore-$run_hash\n"
+            "database=$prefix-db\ndatabase_service=$database\ndatabase_pvc=$prefix-db-data\n"
+            + function(nc, "database_manifests")
+            + function(library, "nocodb_restore_application_manifests")
+            + "database_manifests\n"
+            'nocodb_restore_application_manifests "$prefix-nocodb" "$prefix-nocodb" 192.0.2.45 "$run_hash"\n',
+        )
+        documents = []
+        for program in programs:
+            rendered = subprocess.run(
+                ["bash", "-c", "set -euo pipefail\n" + program],
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=ROOT,
+            )
+            documents.extend(yaml.safe_load_all(rendered.stdout))
+        return documents
+
+    def test_restore_backend_claims_and_services_match_enforced_allocation(self):
+        documents = self.render_restore_backends()
+        claims = [d for d in documents if d["kind"] == "PersistentVolumeClaim"]
+        services = [d for d in documents if d["kind"] == "Service"]
+        self.assertEqual(len(claims), 3)
+        self.assertEqual(len(services), 5)
+        for obj in claims + services:
+            metadata = obj["metadata"]
+            resource = "services" if obj["kind"] == "Service" else "persistentvolumeclaims"
+            policy = "homelab-test-services" if resource == "services" else "homelab-test-storage"
+            req = self.request(resource, metadata["namespace"], name=metadata["name"])
+            if resource == "services":
+                # Kubernetes defaults an omitted ServicePort protocol before admission.
+                for port in obj["spec"]["ports"]:
+                    port.setdefault("protocol", "TCP")
+            with self.subTest(resource=resource, name=metadata["name"]):
+                self.assertTrue(self.admits(policy, req, obj))
+                self.assertTrue(self.admits(policy, {**req, "operation": "DELETE"}, None, obj))
+
+    def test_restore_allocation_grants_are_namespaced_and_individual(self):
+        for namespace in ("automation", "automation-data"):
+            roles = [
+                d
+                for d in self.documents
+                if d["kind"] == "Role"
+                and d["metadata"]["namespace"] == namespace
+                and d["metadata"]["name"] == "homelab-test-restore-storage"
+            ]
+            self.assertEqual(len(roles), 1)
+            self.assertEqual(
+                roles[0]["rules"],
+                [
+                    {
+                        "apiGroups": [""],
+                        "resources": ["persistentvolumeclaims"],
+                        "verbs": ["create", "delete"],
+                    }
+                ],
+            )
+        role = next(
+            (
+                d
+                for d in self.documents
+                if d["kind"] == "Role"
+                and d["metadata"]["namespace"] == "automation-data"
+                and d["metadata"]["name"] == "homelab-test-restore-services"
+            ),
+            None,
+        )
+        self.assertIsNotNone(role)
+        self.assertEqual(
+            role["rules"],
+            [{"apiGroups": [""], "resources": ["services"], "verbs": ["create", "delete"]}],
+        )
+
+    @staticmethod
+    def restore_database_fixture(family="automation-data-restore-drill", role="ad-database"):
+        run = "0123456789ab"
+        prefix = ("nc" if family == "nocodb-restore-drill" else "ad") + "-restore-" + run
+        n8n = role == "n8n-database"
+        name = prefix + ("-n8n-db" if n8n else "-db")
+        claim = prefix + (
+            "-n8n-data" if n8n else "-db-data" if family == "nocodb-restore-drill" else "-ad-data"
+        )
+        labels = {
+            "homelab-talos/test": family,
+            "homelab-talos/run-id": run,
+            "homelab-talos/role": role,
+        }
+        env = [
+            {"name": "PGDATA", "value": "/var/lib/postgresql/data/pgdata"},
+            {"name": "POSTGRES_DB", "value": "postgres"},
+        ]
+        if n8n:
+            env.append({"name": "POSTGRES_USER", "value": "n8n"})
+        env.append(
+            {
+                "name": "POSTGRES_PASSWORD",
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": "postgresql-credentials",
+                        "key": "n8n-password" if n8n else "postgres-superuser-password",
+                    }
+                },
+            }
+        )
+        return {
+            "apiVersion": "apps/v1",
+            "kind": "StatefulSet",
+            "metadata": {
+                "name": name,
+                "namespace": "automation" if n8n else "automation-data",
+                "labels": labels,
+            },
+            "spec": {
+                "replicas": 1,
+                "serviceName": name,
+                "selector": {"matchLabels": labels},
+                "template": {
+                    "metadata": {"labels": labels},
+                    "spec": {
+                        "automountServiceAccountToken": False,
+                        "securityContext": {
+                            "fsGroup": 70,
+                            "fsGroupChangePolicy": "OnRootMismatch",
+                            "seccompProfile": {"type": "RuntimeDefault"},
+                        },
+                        "containers": [
+                            {
+                                "name": "postgresql",
+                                "image": "postgres:17.11-alpine3.24",
+                                "imagePullPolicy": "IfNotPresent",
+                                "env": env,
+                                "ports": [{"name": "postgresql", "containerPort": 5432}],
+                                "readinessProbe": {
+                                    "exec": {
+                                        "command": [
+                                            "pg_isready",
+                                            "--username=" + ("n8n" if n8n else "postgres"),
+                                            "--dbname=postgres",
+                                        ]
+                                    },
+                                    "periodSeconds": 5,
+                                    "failureThreshold": 120
+                                    if family == "nocodb-restore-drill"
+                                    else 60,
+                                },
+                                "resources": {
+                                    "requests": {"cpu": "50m", "memory": "128Mi"},
+                                    "limits": {"memory": "1Gi"},
+                                },
+                                "securityContext": {
+                                    "allowPrivilegeEscalation": False,
+                                    "capabilities": {"drop": ["ALL"]},
+                                    "readOnlyRootFilesystem": True,
+                                    "runAsNonRoot": True,
+                                    "runAsUser": 70,
+                                    "runAsGroup": 70,
+                                },
+                                "volumeMounts": [
+                                    {"name": "data", "mountPath": "/var/lib/postgresql/data"},
+                                    {"name": "run", "mountPath": "/var/run/postgresql"},
+                                    {"name": "tmp", "mountPath": "/tmp"},
+                                ],
+                            }
+                        ],
+                        "volumes": [
+                            {"name": "data", "persistentVolumeClaim": {"claimName": claim}},
+                            {"name": "run", "emptyDir": {}},
+                            {"name": "tmp", "emptyDir": {}},
+                        ],
+                    },
+                },
+            },
+        }
+
+    def test_restore_database_controller_grants_are_namespaced(self):
+        roles = [
+            d
+            for d in self.documents
+            if d["kind"] == "Role" and d["metadata"]["name"] == "homelab-test-restore-databases"
+        ]
+        self.assertEqual(
+            {d["metadata"]["namespace"] for d in roles}, {"automation", "automation-data"}
+        )
+        for role in roles:
+            self.assertEqual(
+                role["rules"],
+                [
+                    {
+                        "apiGroups": ["apps"],
+                        "resources": ["statefulsets"],
+                        "verbs": ["create", "delete"],
+                    }
+                ],
+            )
+
+    def test_restore_database_controllers_cannot_select_other_authority(self):
+        for family, role in (
+            ("automation-data-restore-drill", "ad-database"),
+            ("automation-data-restore-drill", "n8n-database"),
+            ("nocodb-restore-drill", "database"),
+        ):
+            obj = self.restore_database_fixture(family, role)
+            req = self.request(
+                "statefulsets", obj["metadata"]["namespace"], name=obj["metadata"]["name"]
+            )
+            req["resource"]["group"] = "apps"
+            self.assertTrue(self.admits("homelab-test-restore-databases", req, obj))
+            self.assertTrue(
+                self.admits(
+                    "homelab-test-restore-databases", {**req, "operation": "DELETE"}, None, obj
+                )
+            )
+            self.assertFalse(
+                self.admits(
+                    "homelab-test-restore-databases", {**req, "operation": "UPDATE"}, obj, obj
+                )
+            )
+            for change in (
+                "namespace",
+                "name",
+                "family",
+                "role",
+                "labels",
+                "selector",
+                "sa",
+                "token",
+                "image",
+                "command",
+                "args",
+                "secret",
+                "password",
+                "envFrom",
+                "extra-env",
+                "mount",
+                "claim",
+                "hostpath",
+                "sidecar",
+                "init",
+                "exec-probe",
+                "http-probe",
+                "port",
+                "host-network",
+                "dns",
+                "privilege",
+                "root",
+                "hook",
+                "owner",
+                "annotation",
+                "claim-template",
+                "resource-limit",
+                "runtime-class",
+            ):
+                bad, request = copy.deepcopy(obj), copy.deepcopy(req)
+                pod = bad["spec"]["template"]["spec"]
+                container = pod["containers"][0]
+                if change == "namespace":
+                    request["namespace"] = "security"
+                elif change == "name":
+                    bad["metadata"]["name"] = "production"
+                elif change in ("family", "role"):
+                    bad["metadata"]["labels"][
+                        "homelab-talos/" + ("test" if change == "family" else "role")
+                    ] = "other"
+                elif change == "labels":
+                    bad["spec"]["template"]["metadata"]["labels"]["app.kubernetes.io/name"] = (
+                        "postgresql"
+                    )
+                elif change == "selector":
+                    bad["spec"]["selector"]["matchLabels"] = {
+                        "app.kubernetes.io/name": "postgresql"
+                    }
+                elif change == "sa":
+                    pod["serviceAccountName"] = "elevated"
+                elif change == "token":
+                    pod["automountServiceAccountToken"] = True
+                elif change == "image":
+                    container["image"] = "busybox:latest"
+                elif change == "command":
+                    container["command"] = ["sh", "-c", "env"]
+                elif change == "args":
+                    container["args"] = ["-c", "config_file=/tmp/other"]
+                elif change == "secret":
+                    container["env"][-1]["valueFrom"]["secretKeyRef"]["name"] = "other"
+                elif change == "password":
+                    container["env"][-1] = {"name": "POSTGRES_PASSWORD", "value": "synthetic"}
+                elif change == "envFrom":
+                    container["envFrom"] = [{"secretRef": {"name": "other"}}]
+                elif change == "extra-env":
+                    container["env"].append(
+                        {"name": "POSTGRES_INITDB_ARGS", "value": "--auth=trust"}
+                    )
+                elif change == "mount":
+                    container["volumeMounts"][0]["mountPath"] = "/other"
+                elif change == "claim":
+                    pod["volumes"][0]["persistentVolumeClaim"]["claimName"] = "production"
+                elif change == "hostpath":
+                    pod["volumes"][0] = {"name": "data", "hostPath": {"path": "/"}}
+                elif change == "sidecar":
+                    pod["containers"].append(copy.deepcopy(container))
+                elif change == "init":
+                    pod["initContainers"] = [copy.deepcopy(container)]
+                elif change == "exec-probe":
+                    container["readinessProbe"]["exec"]["command"] = ["sh", "-c", "env"]
+                elif change == "http-probe":
+                    container["readinessProbe"] = {"httpGet": {"host": "production", "port": 80}}
+                elif change == "port":
+                    container["ports"][0]["hostPort"] = 5432
+                elif change == "host-network":
+                    pod["hostNetwork"] = True
+                elif change == "resource-limit":
+                    container["resources"]["limits"]["memory"] = "20Gi"
+                elif change == "runtime-class":
+                    pod["runtimeClassName"] = "other"
+                elif change == "dns":
+                    pod["hostAliases"] = [{"ip": "192.0.2.1", "hostnames": ["production"]}]
+                elif change == "privilege":
+                    container["securityContext"]["privileged"] = True
+                elif change == "root":
+                    container["securityContext"]["runAsUser"] = 0
+                elif change == "hook":
+                    container["lifecycle"] = {"postStart": {"exec": {"command": ["env"]}}}
+                elif change == "owner":
+                    bad["metadata"]["ownerReferences"] = [{"uid": "synthetic"}]
+                elif change == "annotation":
+                    bad["spec"]["template"]["metadata"]["annotations"] = {
+                        "test.example/inject": "true"
+                    }
+                else:
+                    bad["spec"]["volumeClaimTemplates"] = [{"metadata": {"name": "other"}}]
+                with self.subTest(family=family, role=role, change=change):
+                    self.assertFalse(self.admits("homelab-test-restore-databases", request, bad))
+        for obj in self.render_restore_backends():
+            if obj["kind"] != "StatefulSet":
+                continue
+            req = self.request(
+                "statefulsets", obj["metadata"]["namespace"], name=obj["metadata"]["name"]
+            )
+            self.assertTrue(self.admits("homelab-test-restore-databases", req, obj))
+
+    @staticmethod
     def qbit_fixture(phase="limits", run="abc12345def67890"):
         labels = {
             "homelab-talos/test": "qbit-manage-policy",
@@ -719,6 +1076,165 @@ class TestAccessPolicyTests(unittest.TestCase):
         deleting = {**request, "operation": "DELETE"}
         self.assertTrue(self.admits("homelab-test-storage", deleting, None, obj))
 
+    def test_restore_claims_must_be_fresh_bounded_and_owned(self):
+        for family, namespace, role, suffix in (
+            ("automation-data-restore-drill", "automation-data", "ad-data", "ad-data"),
+            ("automation-data-restore-drill", "automation", "n8n-data", "n8n-data"),
+            ("nocodb-restore-drill", "automation-data", "database-data", "db-data"),
+        ):
+            run = "abc12345def6"
+            prefix = "ad" if family.startswith("automation") else "nc"
+            name = f"{prefix}-restore-{run}-{suffix}"
+            obj = {
+                "metadata": {
+                    "name": name,
+                    "labels": {
+                        "homelab-talos/test": family,
+                        "homelab-talos/run-id": run,
+                        "homelab-talos/role": role,
+                    },
+                },
+                "spec": {
+                    "accessModes": ["ReadWriteOnce"],
+                    "storageClassName": "longhorn",
+                    "resources": {"requests": {"storage": "20Gi"}},
+                },
+            }
+            req = self.request("persistentvolumeclaims", namespace, name=name)
+            self.assertTrue(self.admits("homelab-test-storage", req, obj))
+            self.assertFalse(
+                self.admits("homelab-test-storage", {**req, "operation": "UPDATE"}, obj, obj)
+            )
+            deleting = copy.deepcopy(obj)
+            deleting["spec"]["volumeName"] = "synthetic-controller-volume"
+            deleting["metadata"]["finalizers"] = ["kubernetes.io/pvc-protection"]
+            self.assertTrue(
+                self.admits("homelab-test-storage", {**req, "operation": "DELETE"}, None, deleting)
+            )
+            for change in (
+                "namespace",
+                "role",
+                "name",
+                "class",
+                "size",
+                "access",
+                "source",
+                "binding",
+                "annotation",
+                "owner",
+            ):
+                bad, request = copy.deepcopy(obj), copy.deepcopy(req)
+                if change == "namespace":
+                    request["namespace"] = "openbao"
+                elif change == "role":
+                    bad["metadata"]["labels"]["homelab-talos/role"] = "production"
+                elif change == "name":
+                    bad["metadata"]["name"] = "production-data"
+                elif change == "class":
+                    bad["spec"]["storageClassName"] = "other"
+                elif change == "size":
+                    bad["spec"]["resources"]["requests"]["storage"] = "1Ti"
+                elif change == "access":
+                    bad["spec"]["accessModes"] = ["ReadWriteMany"]
+                elif change == "source":
+                    bad["spec"]["dataSourceRef"] = {
+                        "kind": "PersistentVolumeClaim",
+                        "name": "production",
+                    }
+                elif change == "binding":
+                    bad["spec"]["volumeName"] = "existing-volume"
+                elif change == "annotation":
+                    bad["metadata"]["annotations"] = {"storage.example/override": "true"}
+                elif change == "owner":
+                    bad["metadata"]["ownerReferences"] = [
+                        {"kind": "Secret", "name": "production", "uid": "synthetic"}
+                    ]
+                with self.subTest(family=family, role=role, change=change):
+                    self.assertFalse(self.admits("homelab-test-storage", request, bad))
+
+    def test_restore_services_cannot_capture_production_selectors_or_ports(self):
+        cases = (
+            (
+                "automation-data-restore-drill",
+                "automation-data",
+                "ad-database",
+                "db",
+                5432,
+                "postgresql",
+            ),
+            (
+                "automation-data-restore-drill",
+                "automation",
+                "n8n-database",
+                "n8n-db",
+                5432,
+                "postgresql",
+            ),
+            ("automation-data-restore-drill", "automation", "n8n", "n8n", 5678, "http"),
+            ("nocodb-restore-drill", "automation-data", "database", "db", 5432, "postgresql"),
+            ("nocodb-restore-drill", "automation-data", "nocodb", "nocodb", 8080, "http"),
+        )
+        for family, namespace, role, suffix, port, port_name in cases:
+            run = "abc12345def6"
+            prefix = "ad" if family.startswith("automation") else "nc"
+            labels = {
+                "homelab-talos/test": family,
+                "homelab-talos/run-id": run,
+                "homelab-talos/role": role,
+            }
+            obj = {
+                "metadata": {"name": f"{prefix}-restore-{run}-{suffix}", "labels": labels},
+                "spec": {
+                    "type": "ClusterIP",
+                    "selector": labels,
+                    "ports": [
+                        {
+                            "name": port_name,
+                            "port": port,
+                            "targetPort": port_name,
+                            "protocol": "TCP",
+                        }
+                    ],
+                },
+            }
+            req = self.request("services", namespace, name=obj["metadata"]["name"])
+            self.assertTrue(self.admits("homelab-test-services", req, obj))
+            self.assertTrue(
+                self.admits("homelab-test-services", {**req, "operation": "DELETE"}, None, obj)
+            )
+            self.assertFalse(
+                self.admits("homelab-test-services", {**req, "operation": "UPDATE"}, obj, obj)
+            )
+            for change in (
+                "namespace",
+                "name",
+                "role",
+                "selector",
+                "external",
+                "port",
+                "target",
+                "type",
+            ):
+                bad, request = copy.deepcopy(obj), copy.deepcopy(req)
+                if change == "namespace":
+                    request["namespace"] = "openbao"
+                elif change == "name":
+                    bad["metadata"]["name"] = "production-service"
+                elif change == "role":
+                    bad["metadata"]["labels"]["homelab-talos/role"] = "other"
+                elif change == "selector":
+                    bad["spec"]["selector"] = {"app.kubernetes.io/name": "n8n"}
+                elif change == "external":
+                    bad["spec"]["externalIPs"] = ["192.0.2.1"]
+                elif change == "port":
+                    bad["spec"]["ports"][0]["port"] = 80
+                elif change == "target":
+                    bad["spec"]["ports"][0]["targetPort"] = 80
+                elif change == "type":
+                    bad["spec"]["type"] = "ExternalName"
+                with self.subTest(family=family, role=role, change=change):
+                    self.assertFalse(self.admits("homelab-test-services", request, bad))
+
     def test_report_exec_only_reads_canonical_paths(self):
         req = self.request("pods", "test-reports", "CONNECT", "test-reports-123abc-abc12")
         req["subResource"] = "exec"
@@ -890,6 +1406,29 @@ class TestAccessPolicyTests(unittest.TestCase):
 
     def test_n8n_backend_manifests_match_policy_and_immutable_helpers(self):
         source = (ROOT / "scripts/test/scenarios/n8n-restore-drill.sh").read_text()
+        application = source.split("application_manifests() {", 1)[1].split(
+            "\nrequest_job_manifest() {", 1
+        )[0]
+        rendered = subprocess.run(
+            [
+                "bash",
+                "-c",
+                "set -euo pipefail\nrun_hash=0123456789ab\n"
+                "database_name=n8n_restore_$run_hash\n"
+                "deployment=n8n-restore-$run_hash\n"
+                "application_manifests() {" + application + "\napplication_manifests\n",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=ROOT,
+        )
+        service = next(d for d in yaml.safe_load_all(rendered.stdout) if d["kind"] == "Service")
+        req = self.request("services", "automation", name=service["metadata"]["name"])
+        self.assertTrue(self.admits("homelab-test-services", req, service))
+        self.assertTrue(
+            self.admits("homelab-test-services", {**req, "operation": "DELETE"}, None, service)
+        )
         function = source.split("database_job_manifest() {", 1)[1].split(
             "\napplication_manifests() {", 1
         )[0]
@@ -1396,6 +1935,7 @@ class TestAccessPolicyTests(unittest.TestCase):
                 "labels": {
                     "homelab-talos/test": "n8n-restore-drill",
                     "homelab-talos/run-id": "0123456789ab",
+                    "homelab-talos/role": "n8n",
                 },
             },
             "spec": {

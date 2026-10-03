@@ -141,25 +141,41 @@ spec:
   variables:
     - name: claim
       expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: family
+      expression: variables.claim.metadata.labels['homelab-talos/test']
+    - name: run
+      expression: "'homelab-talos/run-id' in variables.claim.metadata.labels ? variables.claim.metadata.labels['homelab-talos/run-id'] : ''"
+    - name: role
+      expression: "'homelab-talos/role' in variables.claim.metadata.labels ? variables.claim.metadata.labels['homelab-talos/role'] : ''"
   validations:
     - expression: >-
-        request.namespace == 'longhorn-system' &&
+        !has(variables.claim.metadata.ownerReferences) && !has(variables.claim.metadata.annotations) &&
+        (!has(variables.claim.metadata.finalizers) || variables.claim.metadata.finalizers.all(f, f == 'kubernetes.io/pvc-protection')) && (
+        (request.namespace == 'longhorn-system' &&
         variables.claim.metadata.name.matches('^storage-provisioning-[0-9]+-[0-9]+$') &&
-        has(variables.claim.metadata.labels) &&
-        'homelab-talos/test' in variables.claim.metadata.labels &&
-        variables.claim.metadata.labels['homelab-talos/test'] == 'storage-provisioning'
-      message: Only fresh storage provisioning test claims are permitted.
+        variables.family == 'storage-provisioning') ||
+        (variables.run.matches('^[0-9a-f]{12}$') && variables.claim.metadata.labels.size() == 3 && (
+          (variables.family == 'automation-data-restore-drill' && (
+            (request.namespace == 'automation-data' && variables.role == 'ad-data' &&
+              variables.claim.metadata.name == 'ad-restore-' + variables.run + '-ad-data') ||
+            (request.namespace == 'automation' && variables.role == 'n8n-data' &&
+              variables.claim.metadata.name == 'ad-restore-' + variables.run + '-n8n-data'))) ||
+          (variables.family == 'nocodb-restore-drill' && request.namespace == 'automation-data' &&
+            variables.role == 'database-data' && variables.claim.metadata.name == 'nc-restore-' + variables.run + '-db-data')
+        )))
+      message: Only fresh storage provisioning and registered isolated restore claims are permitted.
     - expression: >-
         variables.claim.spec.accessModes == ['ReadWriteOnce'] &&
         variables.claim.spec.storageClassName == 'longhorn' &&
-        variables.claim.spec.resources.requests.storage == '1Gi' &&
+        variables.claim.spec.resources.requests.storage == (variables.family == 'storage-provisioning' ? '1Gi' : '20Gi') &&
         (!has(variables.claim.spec.volumeMode) || variables.claim.spec.volumeMode == 'Filesystem') &&
         !has(variables.claim.spec.dataSource) &&
         !has(variables.claim.spec.dataSourceRef) &&
         !has(variables.claim.spec.selector) &&
+        (!has(variables.claim.spec.volumeAttributesClassName) || variables.claim.spec.volumeAttributesClassName == '') &&
         (request.operation == 'DELETE' ||
           !has(variables.claim.spec.volumeName) || variables.claim.spec.volumeName == '')
-      message: Storage tests must provision a fresh one GiB Longhorn claim.
+      message: Claims must provision the registered bounded Longhorn capacity without importing existing data or volumes.
     - expression: request.operation != 'UPDATE'
       message: Test claims cannot be changed after creation.
 ---
@@ -945,29 +961,51 @@ spec:
       expression: "request.operation == 'DELETE' ? oldObject : object"
     - name: run
       expression: variables.service.metadata.labels['homelab-talos/run-id']
+    - name: family
+      expression: variables.service.metadata.labels['homelab-talos/test']
+    - name: role
+      expression: variables.service.metadata.labels['homelab-talos/role']
+    - name: labels
+      expression: "{'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role': variables.role}"
+    - name: prefix
+      expression: "variables.family == 'automation-data-restore-drill' ? 'ad-restore-' : 'nc-restore-'"
+    - name: suffix
+      expression: "variables.role in ['ad-database', 'database'] ? '-db' : (variables.role == 'n8n-database' ? '-n8n-db' : '-' + variables.role)"
+    - name: port
+      expression: "variables.role in ['ad-database', 'database', 'n8n-database'] ? 5432 : (variables.role == 'n8n' ? 5678 : 8080)"
+    - name: portName
+      expression: "variables.port == 5432 ? 'postgresql' : 'http'"
   validations:
     - expression: >-
-        request.namespace == 'automation' && request.operation != 'UPDATE' &&
-        variables.run.matches('^[0-9a-f]{12}$') && variables.service.metadata.name == 'n8n-restore-' + variables.run &&
-        variables.service.metadata.labels['homelab-talos/test'] == 'n8n-restore-drill' &&
+        request.operation != 'UPDATE' && variables.run.matches('^[0-9a-f]{12}$') &&
+        variables.service.metadata.labels == variables.labels && (
+          (variables.family == 'n8n-restore-drill' && request.namespace == 'automation' && variables.role == 'n8n' &&
+            variables.service.metadata.name == 'n8n-restore-' + variables.run) ||
+          (variables.service.metadata.name == variables.prefix + variables.run + variables.suffix && (
+            (variables.family == 'automation-data-restore-drill' && (
+              (request.namespace == 'automation-data' && variables.role == 'ad-database') ||
+              (request.namespace == 'automation' && variables.role in ['n8n-database', 'n8n']))) ||
+            (variables.family == 'nocodb-restore-drill' && request.namespace == 'automation-data' && variables.role in ['database', 'nocodb'])
+          ))
+        ) &&
         !has(variables.service.metadata.ownerReferences) && !has(variables.service.metadata.annotations) &&
         (!has(variables.service.metadata.finalizers) || variables.service.metadata.finalizers.size() == 0) &&
         variables.service.spec.type == 'ClusterIP' &&
-        variables.service.spec.selector == {'homelab-talos/test': 'n8n-restore-drill', 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'n8n'} &&
+        variables.service.spec.selector == variables.labels &&
         !has(variables.service.spec.externalIPs) && !has(variables.service.spec.externalName) &&
         !has(variables.service.spec.loadBalancerIP) && !has(variables.service.spec.loadBalancerClass) &&
         !has(variables.service.spec.loadBalancerSourceRanges) &&
         (!has(variables.service.spec.sessionAffinity) || variables.service.spec.sessionAffinity == 'None') &&
         (!has(variables.service.spec.publishNotReadyAddresses) || !variables.service.spec.publishNotReadyAddresses) &&
         !has(variables.service.spec.trafficDistribution)
-      message: Services may select only the isolated n8n application and expose only an internal cluster endpoint.
+      message: Services may select only their registered restore fixture and expose an internal cluster endpoint.
     - expression: >-
-        variables.service.spec.ports.size() == 1 && variables.service.spec.ports[0].name == 'http' &&
-        variables.service.spec.ports[0].port == 5678 && variables.service.spec.ports[0].targetPort == 'http' &&
+        variables.service.spec.ports.size() == 1 && variables.service.spec.ports[0].name == variables.portName &&
+        variables.service.spec.ports[0].port == variables.port && variables.service.spec.ports[0].targetPort == variables.portName &&
         variables.service.spec.ports[0].protocol == 'TCP' &&
         (!has(variables.service.spec.ports[0].nodePort) || variables.service.spec.ports[0].nodePort == 0) &&
         !has(variables.service.spec.ports[0].appProtocol)
-      message: The n8n restore Service exposes only its canonical HTTP port.
+      message: Restore Services expose only their canonical application or PostgreSQL port.
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

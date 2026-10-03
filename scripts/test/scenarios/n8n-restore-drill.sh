@@ -315,7 +315,7 @@ application_manifests() {
         "metadata": {
           "name": strenv(APP_NAME),
           "namespace": "automation",
-          "labels": {"homelab-talos/test": "n8n-restore-drill", "homelab-talos/run-id": strenv(RUN_HASH)}
+          "labels": {"homelab-talos/test": "n8n-restore-drill", "homelab-talos/run-id": strenv(RUN_HASH), "homelab-talos/role": "n8n"}
         },
         "spec": {
           "replicas": 1,
@@ -386,7 +386,7 @@ application_manifests() {
         "metadata": {
           "name": strenv(APP_NAME),
           "namespace": "automation",
-          "labels": {"homelab-talos/test": "n8n-restore-drill", "homelab-talos/run-id": strenv(RUN_HASH)}
+          "labels": {"homelab-talos/test": "n8n-restore-drill", "homelab-talos/run-id": strenv(RUN_HASH), "homelab-talos/role": "n8n"}
         },
         "spec": {
           "type": "ClusterIP",
