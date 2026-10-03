@@ -631,17 +631,16 @@ class CiliumAccessTests(unittest.TestCase):
                 self.assertFalse(self.admits(policy, {**req, field: value}, obj))
 
     def test_namespaced_fixture_roles_are_separate_from_system_runtime(self):
-        expected = {
-            "cilium-test-1": "homelab-test-cilium-fixtures-1",
-            "cilium-test-ccnp1": "homelab-test-cilium-fixtures-ccnp1",
-            "cilium-test-ccnp2": "homelab-test-cilium-fixtures-ccnp2",
-        }
-        for namespace, name in expected.items():
+        # Ephemeral namespaces do not exist at GitOps installation time.
+        self.assertFalse(any(d["metadata"].get("namespace") in NAMESPACES for d in self.documents))
+        for name in ("homelab-test-cilium-fixtures-1", "homelab-test-cilium-fixtures-ccnp"):
             roles = [
-                d for d in self.documents if d["kind"] == "Role" and d["metadata"]["name"] == name
+                d
+                for d in self.documents
+                if d["kind"] == "ClusterRole" and d["metadata"]["name"] == name
             ]
             self.assertEqual(len(roles), 1)
-            self.assertEqual(roles[0]["metadata"]["namespace"], namespace)
+            self.assertNotIn("namespace", roles[0]["metadata"])
             for rule in roles[0]["rules"]:
                 self.assertFalse(
                     set(rule["resources"])
@@ -663,20 +662,132 @@ class CiliumAccessTests(unittest.TestCase):
             bindings = [
                 d
                 for d in self.documents
-                if d["kind"] == "RoleBinding" and d["metadata"]["name"] == name
+                if d["kind"] in {"RoleBinding", "ClusterRoleBinding"}
+                and d["roleRef"]["name"] == name
             ]
-            self.assertEqual(len(bindings), 1)
-            self.assertEqual(bindings[0]["metadata"]["namespace"], namespace)
-            self.assertEqual(
-                bindings[0]["subjects"],
-                [
+            self.assertEqual(bindings, [])
+
+    def test_fixture_bootstrap_can_bind_only_two_fixed_roles(self):
+        role = next(
+            d
+            for d in self.documents
+            if d["kind"] == "ClusterRole"
+            and d["metadata"]["name"] == "homelab-test-cilium-bootstrap"
+        )
+        self.assertEqual(
+            role["rules"],
+            [
+                {
+                    "apiGroups": ["rbac.authorization.k8s.io"],
+                    "resources": ["rolebindings"],
+                    "verbs": ["create"],
+                },
+                {
+                    "apiGroups": ["rbac.authorization.k8s.io"],
+                    "resources": ["rolebindings"],
+                    "resourceNames": ["homelab-test-cilium-fixtures"],
+                    "verbs": ["get", "delete"],
+                },
+                {
+                    "apiGroups": ["rbac.authorization.k8s.io"],
+                    "resources": ["clusterroles"],
+                    "resourceNames": [
+                        "homelab-test-cilium-fixtures-1",
+                        "homelab-test-cilium-fixtures-ccnp",
+                    ],
+                    "verbs": ["bind"],
+                },
+            ],
+        )
+
+    def test_fixture_binding_rejects_other_namespace_role_subject_or_lifecycle(self):
+        for namespace in NAMESPACES:
+            role = (
+                "homelab-test-cilium-fixtures-1"
+                if namespace == "cilium-test-1"
+                else "homelab-test-cilium-fixtures-ccnp"
+            )
+            obj = {
+                "apiVersion": "rbac.authorization.k8s.io/v1",
+                "kind": "RoleBinding",
+                "metadata": {
+                    "name": "homelab-test-cilium-fixtures",
+                    "namespace": namespace,
+                    "annotations": {OWNER: "synthetic-run"},
+                    "ownerReferences": [
+                        {
+                            "apiVersion": "v1",
+                            "kind": "Namespace",
+                            "name": namespace,
+                            "uid": "namespace-fixture",
+                        }
+                    ],
+                },
+                "roleRef": {
+                    "apiGroup": "rbac.authorization.k8s.io",
+                    "kind": "ClusterRole",
+                    "name": role,
+                },
+                "subjects": [
                     {
                         "kind": "ServiceAccount",
                         "name": "homelab-test-cilium-connectivity",
                         "namespace": "kube-system",
                     }
                 ],
-            )
+            }
+            req = {
+                "operation": "CREATE",
+                "namespace": namespace,
+                "name": obj["metadata"]["name"],
+                "subResource": "",
+                "resource": {
+                    "group": "rbac.authorization.k8s.io",
+                    "version": "v1",
+                    "resource": "rolebindings",
+                },
+                "userInfo": {"username": IDENTITY},
+            }
+            policy = "homelab-test-cilium-bootstrap"
+            self.assertTrue(self.admits(policy, req, obj))
+            stored = copy.deepcopy(obj)
+            stored["metadata"].update(uid="binding-fixture", resourceVersion="1")
+            self.assertTrue(self.admits(policy, {**req, "operation": "DELETE"}, None, stored))
+            self.assertFalse(self.admits(policy, {**req, "operation": "UPDATE"}, stored, stored))
+            for path, value in (
+                (("roleRef", "name"), "cluster-admin"),
+                (
+                    ("roleRef", "name"),
+                    "homelab-test-cilium-fixtures-ccnp"
+                    if namespace == "cilium-test-1"
+                    else "homelab-test-cilium-fixtures-1",
+                ),
+                (("roleRef", "kind"), "Role"),
+                (
+                    ("subjects",),
+                    [
+                        {
+                            "kind": "ServiceAccount",
+                            "name": "homelab-test-runner",
+                            "namespace": "kube-system",
+                        }
+                    ],
+                ),
+                (("subjects",), obj["subjects"] * 2),
+                (("metadata", "annotations", OWNER), ""),
+                (("metadata", "annotations", "other"), "value"),
+                (("metadata", "ownerReferences"), []),
+                (("metadata", "namespace"), "kube-system"),
+                (("metadata", "name"), "other"),
+                (("metadata", "finalizers"), ["hold"]),
+            ):
+                bad = copy.deepcopy(obj)
+                parent = bad
+                for key in path[:-1]:
+                    parent = parent[key]
+                parent[path[-1]] = value
+                self.assertFalse(self.admits(policy, req, bad))
+            self.assertFalse(self.admits(policy, {**req, "namespace": "kube-system"}, obj))
 
     def test_namespaced_policy_inventory_excludes_unregistered_and_production_targets(self):
         families = json.loads(

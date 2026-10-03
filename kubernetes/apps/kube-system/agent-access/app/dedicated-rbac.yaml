@@ -842,10 +842,9 @@ subjects:
     namespace: kube-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
   name: homelab-test-cilium-fixtures-1
-  namespace: cilium-test-1
 rules:
   - apiGroups:
       - apps
@@ -1015,24 +1014,9 @@ rules:
       - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: ClusterRole
 metadata:
-  name: homelab-test-cilium-fixtures-1
-  namespace: cilium-test-1
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: homelab-test-cilium-fixtures-1
-subjects:
-  - kind: ServiceAccount
-    name: homelab-test-cilium-connectivity
-    namespace: kube-system
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: homelab-test-cilium-fixtures-ccnp1
-  namespace: cilium-test-ccnp1
+  name: homelab-test-cilium-fixtures-ccnp
 rules:
   - apiGroups:
       - apps
@@ -1055,62 +1039,6 @@ rules:
     verbs:
       - get
       - create
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: homelab-test-cilium-fixtures-ccnp1
-  namespace: cilium-test-ccnp1
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: homelab-test-cilium-fixtures-ccnp1
-subjects:
-  - kind: ServiceAccount
-    name: homelab-test-cilium-connectivity
-    namespace: kube-system
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: homelab-test-cilium-fixtures-ccnp2
-  namespace: cilium-test-ccnp2
-rules:
-  - apiGroups:
-      - apps
-    resources:
-      - deployments
-    verbs:
-      - create
-      - delete
-  - apiGroups:
-      - ''
-    resources:
-      - serviceaccounts
-    verbs:
-      - create
-      - delete
-  - apiGroups:
-      - ''
-    resources:
-      - pods/exec
-    verbs:
-      - get
-      - create
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: homelab-test-cilium-fixtures-ccnp2
-  namespace: cilium-test-ccnp2
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: homelab-test-cilium-fixtures-ccnp2
-subjects:
-  - kind: ServiceAccount
-    name: homelab-test-cilium-connectivity
-    namespace: kube-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -1157,6 +1085,49 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: homelab-test-cilium-global-fixtures
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-cilium-connectivity
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: homelab-test-cilium-bootstrap
+rules:
+  - apiGroups:
+      - rbac.authorization.k8s.io
+    resources:
+      - rolebindings
+    verbs:
+      - create
+  - apiGroups:
+      - rbac.authorization.k8s.io
+    resources:
+      - rolebindings
+    resourceNames:
+      - homelab-test-cilium-fixtures
+    verbs:
+      - get
+      - delete
+  - apiGroups:
+      - rbac.authorization.k8s.io
+    resources:
+      - clusterroles
+    resourceNames:
+      - homelab-test-cilium-fixtures-1
+      - homelab-test-cilium-fixtures-ccnp
+    verbs:
+      - bind
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-cilium-bootstrap
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-test-cilium-bootstrap
 subjects:
   - kind: ServiceAccount
     name: homelab-test-cilium-connectivity

@@ -559,3 +559,56 @@ spec:
   policyName: homelab-test-cilium-global-fixtures
   validationActions:
     - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-cilium-bootstrap
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - rbac.authorization.k8s.io
+        apiVersions:
+          - v1
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - rolebindings
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'
+  variables:
+    - name: item
+      expression: 'request.operation == ''DELETE'' ? oldObject : object'
+  validations:
+    - expression: request.operation in ['CREATE','DELETE'] && request.namespace in ['cilium-test-1','cilium-test-ccnp1','cilium-test-ccnp2']
+        && request.subResource == '' && request.name == 'homelab-test-cilium-fixtures' && variables.item.apiVersion
+        == 'rbac.authorization.k8s.io/v1' && variables.item.kind == 'RoleBinding' && variables.item.all(k,
+        k in ['apiVersion','kind','metadata','roleRef','subjects']) && variables.item.metadata.name ==
+        request.name && variables.item.metadata.namespace == request.namespace && (!has(variables.item.metadata.finalizers)
+        || variables.item.metadata.finalizers.size() == 0) && (request.operation == 'CREATE' || (has(variables.item.metadata.uid)
+        && variables.item.metadata.uid != ''))
+      message: Only new or checked deletion of the registered fixture binding is permitted.
+    - expression: 'variables.item.roleRef == {''apiGroup'':''rbac.authorization.k8s.io'',''kind'':''ClusterRole'',''name'':
+        request.namespace == ''cilium-test-1'' ? ''homelab-test-cilium-fixtures-1'' : ''homelab-test-cilium-fixtures-ccnp''}
+        && variables.item.subjects == [{''kind'':''ServiceAccount'',''name'':''homelab-test-cilium-connectivity'',''namespace'':''kube-system''}]'
+      message: Bind only the namespace-specific fixed fixture role to the dedicated connectivity account.
+    - expression: variables.item.metadata.annotations.size() == 1 && variables.item.metadata.annotations['homelab.supermorphic.com/test-run'].matches('^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$')
+        && (!has(variables.item.metadata.labels) || variables.item.metadata.labels.size() == 0) && variables.item.metadata.ownerReferences.size()
+        == 1 && variables.item.metadata.ownerReferences.all(o, o.apiVersion == 'v1' && o.kind == 'Namespace'
+        && o.name == request.namespace && o.uid != '' && o.all(k, k in ['apiVersion','kind','name','uid'])
+        )
+      message: Run ownership and the wrapper-checked namespace UID are mandatory.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-cilium-bootstrap
+spec:
+  policyName: homelab-test-cilium-bootstrap
+  validationActions:
+    - Deny

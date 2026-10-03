@@ -247,6 +247,17 @@ not part of connectivity proof. Preserve the canonical test selection and report
 diagnostic or cleanup failures separately. Validate enabled feature coverage at
 acceptance; a client upgrade requires renewed permission review.
 
+The three Cilium fixture namespaces are temporary and remain test-owned. Git
+defines two unbound ClusterRoles for their fixed namespaced capabilities; it does
+not install resources into namespaces that do not yet exist. The canonical wrapper
+creates the namespaces and records each UID and run annotation. It then creates a
+fixed temporary RoleBinding in each namespace. The dedicated profile can bind only
+those two ClusterRoles. Admission requires the correct role for the namespace,
+the dedicated Cilium account as the sole subject, the fixed binding name, and run
+ownership metadata. The wrapper checks the namespace UID before binding or cleanup.
+The bindings disappear with the canonical namespace cleanup. No fixture role is
+bound cluster-wide, and the profile cannot create or escalate roles.
+
 For OpenBao scratch restore, pre-create a dedicated empty fixture namespace,
 ServiceAccount, and fixed isolation policy through Git. Allocate the scratch
 instance to one run under the campaign Lease. Remove its owned workloads, scratch
