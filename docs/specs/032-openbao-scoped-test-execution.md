@@ -414,6 +414,13 @@ classified tests left for a later executor:
    Git/Flux. They must be present before new profile issuance is enabled.
 2. Add OpenBao roles and exact endpoint policies using the established guarded
    operator configuration workflow. Preserve operator-only OpenBao administration.
+   Before any configuration write, this workflow checks the deployed identities,
+   permissions, admission policies and bindings, immutable helper programs, and
+   restore fixture baseline against Git. Admission policies must have completed
+   type checking for their current generation with no expression warnings.
+   Known API defaults are allowed; extra grants and admission bypass selectors
+   are rejected. The confirmation binds the source digest and object UIDs.
+   The fixed NocoDB credential fixture is checked through metadata and type only.
 3. Upgrade the machine's protected enrollment metadata through the existing
    attended lifecycle workflow. Do not edit or copy its secret material ad hoc.
 4. Cut callers over to explicit access declarations and isolated configs. Provide

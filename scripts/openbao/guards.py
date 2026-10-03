@@ -110,6 +110,231 @@ def contains_statefulset_source(expected, actual):
     return contains_source(expected, defaulted)
 
 
+def _agent_profile_source():
+    """Render reviewed permissions and fixed programs without decrypting Secrets."""
+    import yaml
+
+    access_kinds = {
+        "ServiceAccount",
+        "Role",
+        "RoleBinding",
+        "ClusterRole",
+        "ClusterRoleBinding",
+        "ValidatingAdmissionPolicy",
+        "ValidatingAdmissionPolicyBinding",
+        "Lease",
+    }
+    packages = [
+        (ROOT / "kubernetes/apps/kube-system/agent-access/app", access_kinds),
+        (ROOT / "kubernetes/apps/monitoring/test-reports/app", {"Role", "RoleBinding"}),
+        (PACKAGE / "acceptance", {"ServiceAccount", "Role", "RoleBinding"}),
+        (PACKAGE / "restore-test", {"Namespace", "ServiceAccount", "CiliumNetworkPolicy"}),
+    ]
+    programs = {
+        "automation/n8n": "n8n-test-helpers-v1",
+        "automation-data/postgresql": "automation-data-test-helpers-v1",
+        "automation-data/nocodb": "nocodb-test-helpers-v1",
+        "monitoring/gatus": "n8n-test-request-helpers-v1",
+        "media/qbit-manage": "qbit-manage-test-helpers-v1",
+    }
+    result = []
+    for package, kinds in packages:
+        result.extend(
+            d
+            for d in yaml.safe_load_all(command(["kustomize", "build", str(package)]))
+            if d and d.get("kind") in kinds
+        )
+    for package, name in programs.items():
+        rendered = yaml.safe_load_all(
+            command(["kustomize", "build", str(ROOT / "kubernetes/apps" / package / "app")])
+        )
+        matches = [
+            d
+            for d in rendered
+            if d
+            and d.get("kind") == "ConfigMap"
+            and d["metadata"]["name"] == name
+            and d.get("immutable") is True
+        ]
+        if len(matches) != 1:
+            raise SafeError("invalid-source")
+        result.extend(matches)
+    return result
+
+
+def _controlled_body(document):
+    """Exact security fields, allowing only documented API defaults."""
+    body = copy.deepcopy({k: v for k, v in document.items() if k not in {"metadata", "status"}})
+    kind = body["kind"]
+    if kind in {"RoleBinding", "ClusterRoleBinding"}:
+        for subject in body.get("subjects", []):
+            if subject.get("kind") == "ServiceAccount" and subject.get("apiGroup") == "":
+                subject.pop("apiGroup")
+    elif kind == "ServiceAccount":
+        body.setdefault("secrets", [])
+        body.setdefault("imagePullSecrets", [])
+    elif kind == "ConfigMap":
+        body.setdefault("binaryData", {})
+    elif kind == "Namespace":
+        body.setdefault("spec", {"finalizers": ["kubernetes"]})
+    elif kind == "Lease":
+        # The fixed Lease is a prerequisite; its current holder is deliberately mutable.
+        body.pop("spec", None)
+    elif kind in {"ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding"}:
+        spec = body["spec"]
+        if kind == "ValidatingAdmissionPolicy":
+            spec.setdefault("failurePolicy", "Fail")
+            match = spec["matchConstraints"]
+        else:
+            match = spec.setdefault("matchResources", {})
+        match.setdefault("matchPolicy", "Equivalent")
+        match.setdefault("namespaceSelector", {})
+        match.setdefault("objectSelector", {})
+        for group in ("resourceRules", "excludeResourceRules"):
+            for rule in match.get(group, []):
+                rule.setdefault("scope", "*")
+    return body
+
+
+def require_agent_profiles_ready(kubeconfig):
+    """Fail before issuance changes if Git-defined safeguards are not deployed."""
+    expected = _agent_profile_source()
+    actual = []
+    # Batch non-secret inventories; fixed programs are read only by exact name.
+    for kinds in (
+        "serviceaccounts,roles,rolebindings,leases",
+        "clusterroles,clusterrolebindings,validatingadmissionpolicies,validatingadmissionpolicybindings",
+        "namespaces",
+    ):
+        actual.extend(kube(kubeconfig, "get", kinds, "--all-namespaces", "-o", "json")["items"])
+    for item in expected:
+        if item["kind"] in {"ConfigMap", "CiliumNetworkPolicy"}:
+            actual.append(
+                kube(
+                    kubeconfig,
+                    "-n",
+                    item["metadata"]["namespace"],
+                    "get",
+                    item["kind"].lower(),
+                    item["metadata"]["name"],
+                    "-o",
+                    "json",
+                )
+            )
+    uids = {}
+    try:
+        binding_kinds = {"RoleBinding", "ClusterRoleBinding"}
+        binding_ids = {
+            (d["kind"], d["metadata"].get("namespace", ""), d["metadata"]["name"])
+            for d in expected
+            if d["kind"] in binding_kinds
+        }
+        accounts = {
+            (d["metadata"].get("namespace", ""), d["metadata"]["name"])
+            for d in expected
+            if d["kind"] == "ServiceAccount"
+        } | {
+            (s["namespace"], s["name"])
+            for d in expected
+            if d["kind"] in binding_kinds
+            for s in d.get("subjects", [])
+            if s.get("kind") == "ServiceAccount"
+        }
+        for binding in actual:
+            if binding.get("kind") not in binding_kinds:
+                continue
+            meta = binding["metadata"]
+            identity = (binding["kind"], meta.get("namespace", ""), meta["name"])
+            controlled_subject = any(
+                s.get("kind") == "ServiceAccount"
+                and (s.get("namespace"), s.get("name")) in accounts
+                for s in binding.get("subjects", [])
+            )
+            fixture_role = binding.get("roleRef", {}).get("name") in {
+                "homelab-test-cilium-fixtures-1",
+                "homelab-test-cilium-fixtures-ccnp",
+            }
+            if fixture_role or (controlled_subject and identity not in binding_ids):
+                raise SafeError("source-mismatch")
+        for item in expected:
+            metadata = item["metadata"]
+            identity = (item["kind"], metadata.get("namespace", ""), metadata["name"])
+            matches = [
+                d
+                for d in actual
+                if (
+                    d.get("kind"),
+                    d.get("metadata", {}).get("namespace", ""),
+                    d.get("metadata", {}).get("name"),
+                )
+                == identity
+            ]
+            if len(matches) != 1:
+                raise SafeError("source-mismatch")
+            deployed = matches[0]
+            meta = deployed["metadata"]
+            if (
+                not isinstance(meta.get("uid"), str)
+                or not meta["uid"]
+                or not contains_source(metadata.get("labels", {}), meta.get("labels", {}))
+                or not contains_source(
+                    metadata.get("annotations", {}), meta.get("annotations", {})
+                )
+                or _controlled_body(item) != _controlled_body(deployed)
+            ):
+                raise SafeError("source-mismatch")
+            if item["kind"] == "ClusterRole" and any(
+                k.startswith("rbac.authorization.k8s.io/aggregate-to-")
+                for k in meta.get("labels", {})
+            ):
+                raise SafeError("source-mismatch")
+            if item["kind"] == "ValidatingAdmissionPolicy":
+                status = deployed.get("status", {})
+                if (
+                    not isinstance(meta.get("generation"), int)
+                    or status.get("observedGeneration") != meta["generation"]
+                    or not isinstance(status.get("typeChecking"), dict)
+                    or status["typeChecking"].get("expressionWarnings", [])
+                ):
+                    raise SafeError("source-mismatch")
+            uids["/".join(identity)] = meta["uid"]
+    except (KeyError, TypeError, AttributeError, ValueError):
+        raise SafeError("source-mismatch") from None
+    # kubectl's template emits only this fixture's metadata and type, never data.
+    template = (
+        '{"name":{{printf "%q" .metadata.name}},'
+        '"namespace":{{printf "%q" .metadata.namespace}},'
+        '"uid":{{printf "%q" .metadata.uid}},"type":{{printf "%q" .type}},'
+        '"label":{{printf "%q" (index .metadata.labels "homelab-talos/test")}}}'
+    )
+    fixture = kube(
+        kubeconfig,
+        "-n",
+        "automation-data",
+        "get",
+        "secret",
+        "nocodb-restore-application-credential",
+        "-o",
+        "go-template",
+        "--template",
+        template,
+    )
+    uid = fixture.get("uid")
+    if (
+        not isinstance(uid, str)
+        or not uid
+        or {k: v for k, v in fixture.items() if k != "uid"}
+        != {
+            "name": "nocodb-restore-application-credential",
+            "namespace": "automation-data",
+            "type": "Opaque",
+            "label": "nocodb-restore-extension",
+        }
+    ):
+        raise SafeError("source-mismatch")
+    uids["Secret/automation-data/nocodb-restore-application-credential"] = uid
+    return {"source_digest": digest(expected), "object_uids": uids}
+
 def require_deployed_revision(kubeconfig, revision):
     source = kube(
         kubeconfig, "-n", "flux-system", "get", "gitrepository", "flux-system", "-o", "json"
@@ -222,7 +447,8 @@ def freeze_target(kubeconfig, phase) -> dict:
         if (
             actual["spec"]["path"] != expected["spec"]["path"]
             or actual["spec"]["sourceRef"] != expected["spec"]["sourceRef"]
-            or (phase == "prepare" and actual["spec"].get("suspend") is not True)
+            or (phase == "prepare" and actual["spec"].get("suspend") is not
+                (expected["metadata"]["name"] != "openbao-restore-test"))
         ):
             raise SafeError("source-mismatch")
     target = {
@@ -237,6 +463,8 @@ def freeze_target(kubeconfig, phase) -> dict:
         "recipient": recipient,
         "seal_key_id": "openbao-static-seal-v1",
     }
+    if phase == "config-apply":
+        target["agent_profiles"] = require_agent_profiles_ready(kubeconfig)
     namespaces = kube(kubeconfig, "get", "namespaces", "-o", "json")["items"]
     ns = [n for n in namespaces if n["metadata"]["name"] == "openbao"]
     if not ns and phase == "prepare":
