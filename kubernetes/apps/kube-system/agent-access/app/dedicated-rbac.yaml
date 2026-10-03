@@ -434,3 +434,120 @@ subjects:
   - kind: ServiceAccount
     name: homelab-test-openbao-issuance
     namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-openbao-restore-runtime
+  namespace: openbao-restore-test
+rules:
+  - apiGroups:
+      - apps
+    resources:
+      - statefulsets
+    verbs:
+      - create
+  - apiGroups:
+      - apps
+    resources:
+      - statefulsets
+    resourceNames:
+      - scratch
+    verbs:
+      - delete
+  - apiGroups:
+      - ''
+    resources:
+      - persistentvolumeclaims
+      - secrets
+      - configmaps
+    verbs:
+      - create
+  - apiGroups:
+      - ''
+    resources:
+      - persistentvolumeclaims
+    resourceNames:
+      - scratch-data
+    verbs:
+      - delete
+  - apiGroups:
+      - ''
+    resources:
+      - secrets
+    resourceNames:
+      - scratch-seal
+    verbs:
+      - get
+      - delete
+  - apiGroups:
+      - ''
+    resources:
+      - secrets
+    verbs:
+      - list
+  - apiGroups:
+      - ''
+    resources:
+      - configmaps
+    resourceNames:
+      - scratch-config
+    verbs:
+      - delete
+  - apiGroups:
+      - ''
+    resources:
+      - pods
+    resourceNames:
+      - scratch-0
+    verbs:
+      - delete
+  - apiGroups:
+      - ''
+    resources:
+      - pods/exec
+    resourceNames:
+      - scratch-0
+    verbs:
+      - get
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-openbao-restore-runtime
+  namespace: openbao-restore-test
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-openbao-restore-runtime
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-openbao-restore
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-openbao-restore-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-openbao-restore
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-openbao-restore-observation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-observer-extra
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-openbao-restore
+    namespace: kube-system

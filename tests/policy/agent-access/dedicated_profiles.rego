@@ -35,6 +35,7 @@ deny contains "conformance administrator exception must bind only its dedicated 
 }
 
 dedicated_role_contracts := {
+	"homelab-test-openbao-restore-runtime": {"namespace": "openbao-restore-test", "rules": [{"apiGroups": ["apps"], "resources": ["statefulsets"], "verbs": ["create"]}, {"apiGroups": ["apps"], "resources": ["statefulsets"], "resourceNames": ["scratch"], "verbs": ["delete"]}, {"apiGroups": [""], "resources": ["persistentvolumeclaims", "secrets", "configmaps"], "verbs": ["create"]}, {"apiGroups": [""], "resources": ["persistentvolumeclaims"], "resourceNames": ["scratch-data"], "verbs": ["delete"]}, {"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["scratch-seal"], "verbs": ["get", "delete"]}, {"apiGroups": [""], "resources": ["secrets"], "verbs": ["list"]}, {"apiGroups": [""], "resources": ["configmaps"], "resourceNames": ["scratch-config"], "verbs": ["delete"]}, {"apiGroups": [""], "resources": ["pods"], "resourceNames": ["scratch-0"], "verbs": ["delete"]}, {"apiGroups": [""], "resources": ["pods/exec"], "resourceNames": ["scratch-0"], "verbs": ["get", "create"]}], "subjects": [{"kind": "ServiceAccount", "name": "homelab-test-openbao-restore", "namespace": "kube-system"}]},
 	"homelab-test-openbao-issuer-runtime": {"namespace": "openbao", "rules": [{"apiGroups": [""], "resources": ["pods"], "verbs": ["create", "delete"]}, {"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["get", "create"]}], "subjects": [{"kind": "ServiceAccount", "name": "homelab-test-openbao-issuance", "namespace": "kube-system"}]},
 	"homelab-test-openbao-acceptance-runtime": {"namespace": "openbao-acceptance", "rules": [{"apiGroups": [""], "resources": ["pods"], "verbs": ["create", "delete"]}, {"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["get", "create"]}], "subjects": [{"kind": "ServiceAccount", "name": "homelab-test-openbao-issuance", "namespace": "kube-system"}, {"kind": "ServiceAccount", "name": "homelab-test-openbao-ha", "namespace": "kube-system"}]},
 	"homelab-test-openbao-ha-eviction": {
@@ -70,6 +71,8 @@ dedicated_role_contracts := {
 }
 
 dedicated_observation_contracts := {
+	"homelab-test-openbao-restore-view": {"role": "view", "account": "homelab-test-openbao-restore"},
+	"homelab-test-openbao-restore-observation": {"role": "homelab-observer-extra", "account": "homelab-test-openbao-restore"},
 	"homelab-test-openbao-issuance-observation": {"role": "homelab-observer-extra", "account": "homelab-test-openbao-issuance"},
 	"homelab-test-openbao-issuance-view": {"role": "view", "account": "homelab-test-openbao-issuance"},
 	"homelab-test-openbao-lifecycle-observation": {"role": "homelab-observer-extra", "account": "homelab-test-openbao-lifecycle"},
@@ -95,6 +98,11 @@ deny contains msg if {
 }
 
 dedicated_admission_rules := {
+	"homelab-test-openbao-restore-pod-delete": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["DELETE"], "resources": ["pods"]}],
+	"homelab-test-openbao-restore-exec": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CONNECT"], "resources": ["pods/exec"]}],
+	"homelab-test-openbao-restore-private": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["secrets", "configmaps"]}],
+	"homelab-test-openbao-restore-storage": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["persistentvolumeclaims"]}],
+	"homelab-test-openbao-restore-statefulset": [{"apiGroups": ["apps"], "apiVersions": ["v1"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["statefulsets"]}],
 	"homelab-test-openbao-probe-exec": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CONNECT"], "resources": ["pods/exec"]}],
 	"homelab-test-openbao-probe-pods": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["pods"]}],
 	"homelab-test-openbao-ha-eviction": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CREATE"], "resources": ["pods/eviction"]}],
@@ -110,6 +118,11 @@ dedicated_admission_rules := {
 }
 
 dedicated_admission_conditions := {
+	"homelab-test-openbao-restore-pod-delete": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-openbao-restore'"},
+	"homelab-test-openbao-restore-exec": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-openbao-restore'"},
+	"homelab-test-openbao-restore-private": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-openbao-restore'"},
+	"homelab-test-openbao-restore-storage": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-openbao-restore'"},
+	"homelab-test-openbao-restore-statefulset": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-openbao-restore'"},
 	"homelab-test-openbao-probe-exec": {"name": "dedicated-profile", "expression": "request.userInfo.username in ['system:serviceaccount:kube-system:homelab-test-openbao-issuance', 'system:serviceaccount:kube-system:homelab-test-openbao-ha']"},
 	"homelab-test-openbao-probe-pods": {"name": "dedicated-profile", "expression": "request.userInfo.username in ['system:serviceaccount:kube-system:homelab-test-openbao-issuance', 'system:serviceaccount:kube-system:homelab-test-openbao-ha']"},
 	"homelab-test-openbao-ha-eviction": {"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-openbao-ha'"},

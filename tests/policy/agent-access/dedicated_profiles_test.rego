@@ -288,3 +288,69 @@ test_issuer_probe_cannot_remove_exec_guard if {
 	messages := deny with input as [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ValidatingAdmissionPolicy", "homelab-test-openbao-probe-exec"]]
 	count(messages) > 0
 }
+
+dedicated_restore_fixture := [
+	cluster_role_binding("homelab-test-openbao-restore-view", ["homelab-test-openbao-restore"], "view"),
+	cluster_role_binding("homelab-test-openbao-restore-observation", ["homelab-test-openbao-restore"], "homelab-observer-extra"),
+	role("homelab-test-openbao-restore-runtime", "openbao-restore-test", [
+		{"apiGroups": ["apps"], "resources": ["statefulsets"], "verbs": ["create"]},
+		{"apiGroups": ["apps"], "resources": ["statefulsets"], "resourceNames": ["scratch"], "verbs": ["delete"]},
+		{"apiGroups": [""], "resources": ["persistentvolumeclaims", "secrets", "configmaps"], "verbs": ["create"]},
+		{"apiGroups": [""], "resources": ["persistentvolumeclaims"], "resourceNames": ["scratch-data"], "verbs": ["delete"]},
+		{"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["scratch-seal"], "verbs": ["get", "delete"]},
+		{"apiGroups": [""], "resources": ["secrets"], "verbs": ["list"]},
+		{"apiGroups": [""], "resources": ["configmaps"], "resourceNames": ["scratch-config"], "verbs": ["delete"]},
+		{"apiGroups": [""], "resources": ["pods"], "resourceNames": ["scratch-0"], "verbs": ["delete"]},
+		{"apiGroups": [""], "resources": ["pods/exec"], "resourceNames": ["scratch-0"], "verbs": ["get", "create"]},
+	]),
+	role_binding("homelab-test-openbao-restore-runtime", "openbao-restore-test", "homelab-test-openbao-restore", "kube-system", "homelab-test-openbao-restore-runtime"),
+	restore_guard("homelab-test-openbao-restore-statefulset", "apps", ["statefulsets"], ["CREATE", "UPDATE", "DELETE"]),
+	restore_guard("homelab-test-openbao-restore-storage", "", ["persistentvolumeclaims"], ["CREATE", "UPDATE", "DELETE"]),
+	restore_guard("homelab-test-openbao-restore-private", "", ["secrets", "configmaps"], ["CREATE", "UPDATE", "DELETE"]),
+	restore_guard("homelab-test-openbao-restore-exec", "", ["pods/exec"], ["CONNECT"]),
+	restore_guard("homelab-test-openbao-restore-pod-delete", "", ["pods"], ["DELETE"]),
+	flux_guard_binding("homelab-test-openbao-restore-statefulset"),
+	flux_guard_binding("homelab-test-openbao-restore-storage"),
+	flux_guard_binding("homelab-test-openbao-restore-private"),
+	flux_guard_binding("homelab-test-openbao-restore-exec"),
+	flux_guard_binding("homelab-test-openbao-restore-pod-delete"),
+]
+
+restore_guard(name, group, resources, operations) := {
+	"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingAdmissionPolicy", "metadata": {"name": name},
+	"spec": {
+		"failurePolicy": "Fail", "matchConstraints": {"resourceRules": [{"apiGroups": [group], "apiVersions": ["v1"], "operations": operations, "resources": resources}]},
+		"matchConditions": [{"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-openbao-restore'"}],
+		"validations": [{"expression": "object.kind == 'StatefulSet'"}],
+	},
+}
+
+test_restore_cannot_receive_namespace_or_rbac_write if {
+	fixture := runner_change("Role", "homelab-test-openbao-restore-runtime", [{"op": "add", "path": "/rules/-", "value": {"apiGroups": ["rbac.authorization.k8s.io"], "resources": ["roles"], "verbs": ["create"]}}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_restore_cannot_access_production_secret_namespace if {
+	fixture := runner_change("Role", "homelab-test-openbao-restore-runtime", [{"op": "replace", "path": "/metadata/namespace", "value": "openbao"}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_restore_cannot_bind_lifecycle_account if {
+	fixture := runner_change("RoleBinding", "homelab-test-openbao-restore-runtime", [{"op": "replace", "path": "/subjects/0/name", "value": "homelab-test-openbao-lifecycle"}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_restore_requires_full_parent_guard if {
+	fixture := [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ValidatingAdmissionPolicy", "homelab-test-openbao-restore-statefulset"]]
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_restore_requires_fixed_exec_guard if {
+	fixture := [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ValidatingAdmissionPolicy", "homelab-test-openbao-restore-exec"]]
+	messages := deny with input as fixture
+	count(messages) > 0
+}

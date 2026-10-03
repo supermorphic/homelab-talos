@@ -193,7 +193,7 @@ diagnostic_test_bindings := [object.union(
 	name := concat("", ["homelab-diagnostic-", capability])
 ]
 
-valid_fixture := array.concat(array.concat(array.concat(array.concat(array.concat(array.concat(array.concat(array.concat(valid_fixture_base, diagnostic_test_bindings), runner_fixture), dedicated_identity_fixture), dedicated_flux_fixture), dedicated_node_fixture), dedicated_member_fixture), dedicated_ha_eviction_fixture), dedicated_probe_fixture)
+valid_fixture := array.concat(array.concat(array.concat(array.concat(array.concat(array.concat(array.concat(array.concat(array.concat(valid_fixture_base, diagnostic_test_bindings), runner_fixture), dedicated_identity_fixture), dedicated_flux_fixture), dedicated_node_fixture), dedicated_member_fixture), dedicated_ha_eviction_fixture), dedicated_probe_fixture), dedicated_restore_fixture)
 
 combined_fixture := [{
 	"path": "kubernetes/apps/kube-system/agent-access/app/rbac.yaml",

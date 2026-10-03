@@ -17,3 +17,4 @@ resources:
   - ./restore-extension-admission.yaml
   - ./provisioning-admission.yaml
   - ./network-probe-admission.yaml
+  - ./openbao-restore-admission.yaml

@@ -58,6 +58,32 @@ def validate_tokenrequest_binding(binding: dict) -> list[str]:
     return ["tokenrequest-binding"]
 
 
+def validate_restore_baseline(documents: list[dict]) -> list[str]:
+    """Require the fixed, tokenless, deny-all scratch baseline; no runtime workload."""
+    namespace = "openbao-restore-test"
+    expected = {("Namespace", namespace), ("ServiceAccount", "scratch"),
+                ("CiliumNetworkPolicy", "scratch-isolation")}
+    if (len(documents) != 3 or
+            {(d.get("kind"), _get(d, "metadata", "name")) for d in documents} != expected):
+        return ["restore-baseline"]
+    for document in documents:
+        kind = document["kind"]
+        if kind == "Namespace":
+            if _get(document, "metadata", "labels", "pod-security.kubernetes.io/enforce") != "restricted":
+                return ["restore-baseline"]
+        elif _get(document, "metadata", "namespace") != namespace:
+            return ["restore-baseline"]
+        elif kind == "ServiceAccount":
+            if (document.get("automountServiceAccountToken") is not False or
+                    document.get("secrets", []) or document.get("imagePullSecrets", [])):
+                return ["restore-baseline"]
+        elif document.get("spec") != {
+                "endpointSelector": {}, "ingressDeny": [{"fromEntities": ["all"]}],
+                "egressDeny": [{"toEntities": ["all"]}]}:
+            return ["restore-baseline"]
+    return []
+
+
 def validate_flux_units(documents: list[dict]) -> list[str]:
     expected = {
         "openbao-prerequisites": "namespace",
@@ -66,10 +92,12 @@ def validate_flux_units(documents: list[dict]) -> list[str]:
         "openbao-acceptance": "acceptance",
         "openbao-backup": "backup",
         "openbao-monitoring": "monitoring",
+        "openbao-restore-test": "restore-test",
     }
     server = {"openbao-prerequisites", "openbao"}
     assurance = server | {"openbao-acceptance", "openbao-backup"}
-    allowed = (set(), server, assurance, set(expected))
+    fixture = "openbao-restore-test"
+    allowed = (set(), server, assurance, set(expected) - {fixture})
     units = [d for d in documents if d.get("kind") == "Kustomization" and
              (str(_get(d, "metadata", "name") or "").startswith("openbao") or
               str(_get(d, "spec", "path") or "").startswith(
@@ -77,8 +105,13 @@ def validate_flux_units(documents: list[dict]) -> list[str]:
     if (len(units) == len(expected) and
             {_get(d, "metadata", "name") for d in units} == set(expected) and
             all(type(_get(d, "spec", "suspend")) is bool for d in units) and
-            { _get(d, "metadata", "name") for d in units if _get(d, "spec", "suspend") is False }
+            { _get(d, "metadata", "name") for d in units if _get(d, "spec", "suspend") is False } - {fixture}
             in allowed and
+            all(_get(d, "spec", "dependsOn") == [{"name": "cilium"}] and
+                _get(d, "spec", "prune") is True and _get(d, "spec", "wait") is True and
+                _get(d, "spec", "sourceRef") == {
+                    "kind": "GitRepository", "name": "flux-system", "namespace": "flux-system"}
+                for d in units if _get(d, "metadata", "name") == fixture) and
             all(_get(d, "metadata", "namespace") == "flux-system" and
                 _get(d, "spec", "path") ==
                 "./kubernetes/apps/security/openbao/" + expected[_get(d, "metadata", "name")]
