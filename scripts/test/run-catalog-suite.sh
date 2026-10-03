@@ -80,6 +80,25 @@ disruption_admitted=false
 finalized=false
 backend_pid=''
 
+finalize_catalog_access() {
+  if ! test_access_close; then
+    run_result='broken'
+    cleanup_status='failed'
+    local config_error="$run_dir/diagnostics/config-cleanup.xml"
+    write_result_case_junit "$config_error" "$suite_id" config-cleanup broken 0
+    cp "$run_dir/junit.xml" "$run_dir/diagnostics/pre-config-cleanup-junit.xml"
+    merge_junit_reports "$run_dir/junit.xml" "$suite_id" \
+      "$run_dir/diagnostics/pre-config-cleanup-junit.xml" "$config_error"
+    normalize_native_artifacts "$run_dir" "$run_id"
+    write_evidence_index "$run_dir" "$run_id"
+    write_summary "$run_dir" "$run_id" "$entry_json" "$execution_origin" \
+      "$started_at" "$finished_at" "$duration_seconds" "$run_result" \
+      "$primary_exit_code" "$assertion_status" "${diagnostics_status:-passed}" "$cleanup_status" \
+      "$recovery_status" "$external_dependency_status" "$cluster_name"
+    scripts/test/validate-run.sh "$run_dir"
+  fi
+}
+
 # Invoked indirectly by the EXIT trap below.
 # shellcheck disable=SC2329
 finalize_incomplete_run() {
@@ -114,7 +133,16 @@ finalize_incomplete_run() {
     "$original_exit" not-classified failed "$emergency_cleanup" \
     not-required not-applicable unavailable
   scripts/test/validate-run.sh "$run_dir" >/dev/null 2>&1
-  test_access_close || echo 'Private test config cleanup failed.' >&2
+  primary_exit_code="$original_exit"
+  finished_at="$emergency_finished"
+  duration_seconds="$emergency_duration"
+  run_result='broken'
+  assertion_status='not-classified'
+  diagnostics_status='failed'
+  recovery_status='not-required'
+  external_dependency_status='not-applicable'
+  cluster_name='unavailable'
+  finalize_catalog_access
   echo "Test coordinator finalized an interrupted run: $run_dir" >&2
 }
 trap finalize_incomplete_run EXIT
@@ -362,22 +390,7 @@ write_summary "$run_dir" "$run_id" "$entry_json" "$execution_origin" \
   "$recovery_status" "$external_dependency_status" "$cluster_name"
 scripts/test/validate-run.sh "$run_dir"
 
-if ! test_access_close; then
-  run_result='broken'
-  cleanup_status='failed'
-  config_error="$run_dir/diagnostics/config-cleanup.xml"
-  write_result_case_junit "$config_error" "$suite_id" config-cleanup broken 0
-  cp "$run_dir/junit.xml" "$run_dir/diagnostics/pre-config-cleanup-junit.xml"
-  merge_junit_reports "$run_dir/junit.xml" "$suite_id" \
-    "$run_dir/diagnostics/pre-config-cleanup-junit.xml" "$config_error"
-  normalize_native_artifacts "$run_dir" "$run_id"
-  write_evidence_index "$run_dir" "$run_id"
-  write_summary "$run_dir" "$run_id" "$entry_json" "$execution_origin" \
-    "$started_at" "$finished_at" "$duration_seconds" "$run_result" \
-    "$primary_exit_code" "$assertion_status" passed "$cleanup_status" \
-    "$recovery_status" "$external_dependency_status" "$cluster_name"
-  scripts/test/validate-run.sh "$run_dir"
-fi
+finalize_catalog_access
 
 finalized=true
 trap - EXIT INT TERM

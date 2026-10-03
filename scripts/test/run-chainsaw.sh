@@ -5,6 +5,7 @@ source scripts/lib/common.sh
 source scripts/test/lib/catalog.sh
 source scripts/lib/lease.sh
 source scripts/test/lib/results.sh
+source scripts/test/lib/access.sh
 require_bash
 
 [[ "$#" -ge 2 && "$#" -le 3 ]] || {
@@ -18,12 +19,14 @@ scenario="${3:-}"
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-kubeconfig="${TEST_KUBECONFIG:-.kube/config}"
+kubeconfig=''
 namespace='flux-system'
 catalog="${TEST_CATALOG_PATH:-tests/catalog.yaml}"
 results_root="${TEST_RESULTS_ROOT:-.test-results}"
 
 entry_json="$(catalog_dispatch_entry "$catalog" "$tier" "$target" "$scenario")" || exit "$?"
+suite_id="$(yq -r '.metadata.id' - <<<"$entry_json")"
+test_access_resolve "$suite_id" >/dev/null || exit 1
 dispatch_mode="$(yq -r '.dispatch.mode' - <<<"$entry_json")"
 test_dir="$(yq -r '.dispatch.path' - <<<"$entry_json")"
 selector="$(yq -r '.dispatch.selector // ""' - <<<"$entry_json")"
@@ -42,21 +45,16 @@ case "$confirmation_variable" in
     ;;
 esac
 
-[[ -f "$kubeconfig" ]] || {
-  echo "Missing $kubeconfig; use just kube kubeconfig for scoped suites, or supply the selected suite's explicitly authorized operator credential." >&2
-  exit 1
-}
-
 execution_origin="$(resolve_execution_origin)"
 run_dir="$(create_run_directory "$results_root" "$execution_origin")"
 run_id="$(basename "$run_dir")"
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 started_epoch="$EPOCHSECONDS"
-cluster_name="$(kubectl --kubeconfig "$kubeconfig" config view --minify \
-  --output jsonpath='{.clusters[0].name}' 2>/dev/null || true)"
-[[ -n "$cluster_name" ]] || cluster_name='unavailable'
+cluster_name='unavailable'
 lease_acquired=false
 lease_joined=false
+finalized=false
+backend_pid=''
 # Invoked indirectly by the EXIT trap below.
 # shellcheck disable=SC2329
 release_chainsaw_lease() {
@@ -65,8 +63,87 @@ release_chainsaw_lease() {
     lease_acquired=false
   fi
 }
-trap release_chainsaw_lease EXIT
+
+# Invoked indirectly by the EXIT trap.
+# shellcheck disable=SC2329
+finalize_incomplete_chainsaw_run() {
+  local original_exit="$?" emergency_finished emergency_duration
+  [[ "$finalized" == false ]] || return
+  trap - EXIT INT TERM
+  set +e
+  [[ "$original_exit" -ne 0 ]] || original_exit=1
+  release_chainsaw_lease
+  emergency_finished="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  emergency_duration=$((EPOCHSECONDS - started_epoch))
+  [[ ! -f "$run_dir/junit.xml" ]] ||
+    cp "$run_dir/junit.xml" "$run_dir/diagnostics/incomplete-chainsaw-junit.xml"
+  write_result_case_junit "$run_dir/junit.xml" "$suite_id" \
+    coordinator-finalization broken "$emergency_duration"
+  write_environment "$run_dir" "$run_id" "$entry_json" "$execution_origin" \
+    "$started_at" "$emergency_finished" "$namespace" "$kubeconfig" "$confirmation_variable"
+  normalize_native_artifacts "$run_dir" "$run_id"
+  write_evidence_index "$run_dir" "$run_id"
+  write_summary "$run_dir" "$run_id" "$entry_json" "$execution_origin" \
+    "$started_at" "$emergency_finished" "$emergency_duration" broken \
+    "$original_exit" not-classified failed not-required not-required \
+    not-applicable "$cluster_name"
+  scripts/test/validate-run.sh "$run_dir" >/dev/null 2>&1
+  primary_exit_code="$original_exit"
+  finished_at="$emergency_finished"
+  duration_seconds="$emergency_duration"
+  run_result='broken'
+  assertion_status='not-classified'
+  diagnostics_status='failed'
+  recovery_status='not-required'
+  external_dependency_status='not-applicable'
+  finalize_chainsaw_access
+}
+trap finalize_incomplete_chainsaw_run EXIT
+
+# Invoked indirectly by signal traps; wait for backend cleanup before finalization.
+# shellcheck disable=SC2329
+handle_chainsaw_signal() {
+  local signal_exit=143
+  [[ "$1" != INT ]] || signal_exit=130
+  if [[ -n "$backend_pid" ]]; then
+    kill -s "$1" "$backend_pid" 2>/dev/null || true
+    wait "$backend_pid" || true
+    backend_pid=''
+  fi
+  exit "$signal_exit"
+}
+trap 'handle_chainsaw_signal INT' INT
+trap 'handle_chainsaw_signal TERM' TERM
+
+finalize_chainsaw_access() {
+  if ! test_access_close; then
+    run_result='broken'
+    cleanup_status='failed'
+    local config_error="$run_dir/diagnostics/config-cleanup.xml"
+    write_result_case_junit "$config_error" "$suite_id" config-cleanup broken 0
+    cp "$run_dir/junit.xml" "$run_dir/diagnostics/pre-config-cleanup-junit.xml"
+    merge_junit_reports "$run_dir/junit.xml" "$suite_id" \
+      "$run_dir/diagnostics/pre-config-cleanup-junit.xml" "$config_error"
+    normalize_native_artifacts "$run_dir" "$run_id"
+    write_evidence_index "$run_dir" "$run_id"
+    write_summary "$run_dir" "$run_id" "$entry_json" "$execution_origin" \
+      "$started_at" "$finished_at" "$duration_seconds" "$run_result" \
+      "$primary_exit_code" "$assertion_status" "$diagnostics_status" "$cleanup_status" \
+      "$recovery_status" "$external_dependency_status" "$cluster_name"
+    scripts/test/validate-run.sh "$run_dir"
+  fi
+  finalized=true
+  trap - EXIT INT TERM
+}
+
 write_run_id_output "$run_id"
+unset TEST_RUN_ID_FILE
+test_access_open "$suite_id" "$run_id" || exit 1
+kubeconfig="$TEST_KUBECONFIG"
+cluster_name="$(kubectl --kubeconfig "$kubeconfig" config view --minify \
+  --output jsonpath='{.clusters[0].name}' 2>/dev/null || true)"
+[[ -n "$cluster_name" ]] || cluster_name='unavailable'
+test_access_check "$suite_id" || exit 1
 if [[ "$mutates_cluster" == 'true' ]]; then
   lease_ready=false
   if [[ -n "${TEST_CAMPAIGN_LEASE_HOLDER:-}" ]]; then
@@ -93,6 +170,13 @@ if [[ "$mutates_cluster" == 'true' ]]; then
       "$started_at" "$finished_at" "$duration_seconds" broken 1 \
       not-classified passed failed not-required not-applicable "$cluster_name"
     scripts/test/validate-run.sh "$run_dir"
+    primary_exit_code=1
+    run_result='broken'
+    assertion_status='not-classified'
+    diagnostics_status='passed'
+    recovery_status='not-required'
+    external_dependency_status='not-applicable'
+    finalize_chainsaw_access
     echo "Chainsaw results: $run_dir"
     exit 1
   fi
@@ -119,6 +203,10 @@ if [[ "$diagnostics_only" == true ]]; then
     "$primary_exit_code" not-applicable "$diagnostics_status" not-required \
     not-required not-applicable "$cluster_name"
   scripts/test/validate-run.sh "$run_dir"
+  assertion_status='not-applicable'
+  recovery_status='not-required'
+  external_dependency_status='not-applicable'
+  finalize_chainsaw_access
   overall_exit_code="$(result_exit_code "$primary_exit_code" "$run_result")"
   echo "Diagnostics results: $run_dir"
   exit "$overall_exit_code"
@@ -133,8 +221,10 @@ export KUBECONFIG="$kubeconfig"
 run_dir_abs="$(cd "$run_dir" && pwd)"
 export HOMELAB_TEST_RUN_DIR="$run_dir_abs"
 export HOMELAB_REPO_ROOT="$repo_root"
+test_access_check "$suite_id" || exit 1
 set +e
-chainsaw test "$test_dir" \
+python -m scripts.test.run_bound_backend "$run_dir/logs/chainsaw.log" -- \
+  chainsaw test "$test_dir" \
   --config tests/config/chainsaw.yaml \
   --namespace "$namespace" \
   --parallel 1 \
@@ -149,9 +239,26 @@ chainsaw test "$test_dir" \
   --report-format JUNIT-STEP \
   --report-name junit \
   --report-path "$run_dir" \
-  --no-color 2>&1 | tee "$run_dir/logs/chainsaw.log"
-primary_exit_code="${PIPESTATUS[0]}"
+  --no-color <&0 &
+backend_pid="$!"
+wait "$backend_pid"
+primary_exit_code="$?"
+backend_pid=''
 set -e
+
+case "$primary_exit_code" in
+  130|143)
+    signal_error="$run_dir/diagnostics/signal.xml"
+    write_result_case_junit "$signal_error" "$suite_id" signal broken 0
+    if [[ -f "$run_dir/junit.xml" ]]; then
+      cp "$run_dir/junit.xml" "$run_dir/diagnostics/interrupted-chainsaw-junit.xml"
+      merge_junit_reports "$run_dir/junit.xml" "$suite_id" \
+        "$run_dir/diagnostics/interrupted-chainsaw-junit.xml" "$signal_error"
+    else
+      cp "$signal_error" "$run_dir/junit.xml"
+    fi
+    ;;
+esac
 
 assertion_status='passed'
 [[ "$primary_exit_code" -eq 0 ]] || {
@@ -240,8 +347,8 @@ write_summary "$run_dir" "$run_id" "$entry_json" "$execution_origin" \
   "$primary_exit_code" "$assertion_status" "$diagnostics_status" "$cleanup_status" \
   "$recovery_status" "$external_dependency_status" "$cluster_name"
 scripts/test/validate-run.sh "$run_dir"
+finalize_chainsaw_access
 
 overall_exit_code="$(result_exit_code "$primary_exit_code" "$run_result")"
 echo "Chainsaw results: $run_dir"
-trap - EXIT
 exit "$overall_exit_code"
