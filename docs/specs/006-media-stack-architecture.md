@@ -389,7 +389,8 @@ general verification campaign.
 Use the registered replacement suite through
 `mise exec -- just test record test.mylar3-acceptance` with
 `MYLAR_ACCEPTANCE_CONFIRM=test:mylar3-acceptance` and an explicitly authorized
-`TEST_KUBECONFIG`. This attended mutation requires pod exec/delete, the test Lease,
+`KUBECONFIG`. Recording passes that credential to the suite as `TEST_KUBECONFIG`.
+This attended mutation requires pod exec/delete, the test Lease,
 and deployment, storage and Node inspection; observer credentials are insufficient.
 Run it from an execution context permitted by the recording workflow. The suite
 preserves the fixture and claims and retains only sanitized integrity outcomes.
