@@ -623,29 +623,136 @@ test_runner_fixture_accepted if {
 	count(messages) == 0
 }
 
-test_runner_cannot_receive_broader_resource_or_verb if {
-	every grant in [
-		{"apiGroups": ["*"], "resources": ["*"], "verbs": ["*"]},
-		{"apiGroups": ["rbac.authorization.k8s.io"], "resources": ["roles"], "verbs": ["create"]},
-		{"apiGroups": [""], "resources": ["serviceaccounts/token"], "verbs": ["create"]},
-		{"apiGroups": [""], "resources": ["namespaces"], "verbs": ["create"]},
-		{"apiGroups": [""], "resources": ["nodes"], "verbs": ["patch"]},
-		{"apiGroups": [""], "resources": ["secrets"], "verbs": ["get"]},
-		{"apiGroups": [""], "resources": ["pods"], "verbs": ["deletecollection"]},
-		{"apiGroups": [""], "resources": ["users"], "verbs": ["impersonate"]},
-	] {
-		fixture := runner_change("Role", "homelab-test-media-runtime", [{"op": "add", "path": "/rules/-", "value": grant}])
-		messages := deny with input as fixture
-		count(messages) > 0
-	}
+test_runner_cannot_receive_broader_resource_or_verb_1 if {
+	fixture := runner_change("Role", "homelab-test-media-runtime", [{"op": "add", "path": "/rules/-", "value": {"apiGroups": ["*"], "resources": ["*"], "verbs": ["*"]}}])
+	messages := deny with input as fixture
+	count(messages) > 0
 }
 
-test_runner_requires_every_role_and_guard if {
-	every document in [item | some item in runner_fixture; item.metadata.name in {"homelab-test-runner", "homelab-test-media-runtime", "homelab-test-runner-view", "homelab-test-jobs"}] {
-		fixture := [other | some other in valid_fixture; other != document]
-		messages := deny with input as fixture
-		count(messages) > 0
-	}
+test_runner_cannot_receive_broader_resource_or_verb_2 if {
+	fixture := runner_change("Role", "homelab-test-media-runtime", [{"op": "add", "path": "/rules/-", "value": {"apiGroups": ["rbac.authorization.k8s.io"], "resources": ["roles"], "verbs": ["create"]}}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_cannot_receive_broader_resource_or_verb_3 if {
+	fixture := runner_change("Role", "homelab-test-media-runtime", [{"op": "add", "path": "/rules/-", "value": {"apiGroups": [""], "resources": ["serviceaccounts/token"], "verbs": ["create"]}}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_cannot_receive_broader_resource_or_verb_4 if {
+	fixture := runner_change("Role", "homelab-test-media-runtime", [{"op": "add", "path": "/rules/-", "value": {"apiGroups": [""], "resources": ["namespaces"], "verbs": ["create"]}}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_cannot_receive_broader_resource_or_verb_5 if {
+	fixture := runner_change("Role", "homelab-test-media-runtime", [{"op": "add", "path": "/rules/-", "value": {"apiGroups": [""], "resources": ["nodes"], "verbs": ["patch"]}}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_cannot_receive_broader_resource_or_verb_6 if {
+	fixture := runner_change("Role", "homelab-test-media-runtime", [{"op": "add", "path": "/rules/-", "value": {"apiGroups": [""], "resources": ["secrets"], "verbs": ["get"]}}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_cannot_receive_broader_resource_or_verb_7 if {
+	fixture := runner_change("Role", "homelab-test-media-runtime", [{"op": "add", "path": "/rules/-", "value": {"apiGroups": [""], "resources": ["pods"], "verbs": ["deletecollection"]}}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_cannot_receive_broader_resource_or_verb_8 if {
+	fixture := runner_change("Role", "homelab-test-media-runtime", [{"op": "add", "path": "/rules/-", "value": {"apiGroups": [""], "resources": ["users"], "verbs": ["impersonate"]}}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_requires_role_or_guard_1 if {
+	fixture := [document | some document in valid_fixture; [document.kind, metadata_name(document), metadata_namespace(document)] != ["ServiceAccount", "homelab-test-runner", "kube-system"]]
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_requires_role_or_guard_2 if {
+	fixture := [document | some document in valid_fixture; [document.kind, metadata_name(document), metadata_namespace(document)] != ["ClusterRoleBinding", "homelab-test-runner-view", ""]]
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_requires_role_or_guard_3 if {
+	fixture := [document | some document in valid_fixture; [document.kind, metadata_name(document), metadata_namespace(document)] != ["Role", "homelab-test-media-runtime", "media"]]
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_requires_role_or_guard_4 if {
+	fixture := [document | some document in valid_fixture; [document.kind, metadata_name(document), metadata_namespace(document)] != ["RoleBinding", "homelab-test-media-runtime", "media"]]
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_requires_role_or_guard_5 if {
+	fixture := [document | some document in valid_fixture; [document.kind, metadata_name(document), metadata_namespace(document)] != ["Role", "homelab-test-jobs", "media"]]
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_requires_role_or_guard_6 if {
+	fixture := [document | some document in valid_fixture; [document.kind, metadata_name(document), metadata_namespace(document)] != ["RoleBinding", "homelab-test-jobs", "media"]]
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_requires_role_or_guard_7 if {
+	fixture := [document | some document in valid_fixture; [document.kind, metadata_name(document), metadata_namespace(document)] != ["Role", "homelab-test-jobs", "automation"]]
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_requires_role_or_guard_8 if {
+	fixture := [document | some document in valid_fixture; [document.kind, metadata_name(document), metadata_namespace(document)] != ["RoleBinding", "homelab-test-jobs", "automation"]]
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_requires_role_or_guard_9 if {
+	fixture := [document | some document in valid_fixture; [document.kind, metadata_name(document), metadata_namespace(document)] != ["Role", "homelab-test-jobs", "automation-data"]]
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_requires_role_or_guard_10 if {
+	fixture := [document | some document in valid_fixture; [document.kind, metadata_name(document), metadata_namespace(document)] != ["RoleBinding", "homelab-test-jobs", "automation-data"]]
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_requires_role_or_guard_11 if {
+	fixture := [document | some document in valid_fixture; [document.kind, metadata_name(document), metadata_namespace(document)] != ["Role", "homelab-test-jobs", "gatus"]]
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_requires_role_or_guard_12 if {
+	fixture := [document | some document in valid_fixture; [document.kind, metadata_name(document), metadata_namespace(document)] != ["RoleBinding", "homelab-test-jobs", "gatus"]]
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_requires_role_or_guard_13 if {
+	fixture := [document | some document in valid_fixture; [document.kind, metadata_name(document), metadata_namespace(document)] != ["ValidatingAdmissionPolicy", "homelab-test-jobs", ""]]
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_requires_role_or_guard_14 if {
+	fixture := [document | some document in valid_fixture; [document.kind, metadata_name(document), metadata_namespace(document)] != ["ValidatingAdmissionPolicyBinding", "homelab-test-jobs", ""]]
+	messages := deny with input as fixture
+	count(messages) > 0
 }
 
 test_runner_rejects_wrong_binding_subject if {
@@ -660,29 +767,46 @@ test_runner_rejects_extra_namespace if {
 	count(messages) > 0
 }
 
-test_runner_guards_fail_closed if {
-	every patch in [
-		{"op": "replace", "path": "/spec/failurePolicy", "value": "Ignore"},
-		{"op": "replace", "path": "/spec/matchConditions/0/expression", "value": "false"},
-		{"op": "add", "path": "/spec/matchConstraints/namespaceSelector", "value": {"matchLabels": {"skip": "true"}}},
-		{"op": "replace", "path": "/spec/matchConstraints/resourceRules/0/operations", "value": ["CREATE"]},
-		{"op": "replace", "path": "/spec/validations", "value": []},
-	] {
-		fixture := runner_change("ValidatingAdmissionPolicy", "homelab-test-jobs", [patch])
-		messages := deny with input as fixture
-		count(messages) > 0
-	}
+test_runner_guards_fail_closed_1 if {
+	fixture := runner_change("ValidatingAdmissionPolicy", "homelab-test-jobs", [{"op": "replace", "path": "/spec/failurePolicy", "value": "Ignore"}])
+	messages := deny with input as fixture
+	count(messages) > 0
 }
 
-test_runner_binding_cannot_warn_or_skip if {
-	every patch in [
-		{"op": "replace", "path": "/spec/validationActions", "value": ["Warn"]},
-		{"op": "add", "path": "/spec/matchResources", "value": {"namespaceSelector": {"matchLabels": {"skip": "true"}}}},
-	] {
-		fixture := runner_change("ValidatingAdmissionPolicyBinding", "homelab-test-jobs", [patch])
-		messages := deny with input as fixture
-		count(messages) > 0
-	}
+test_runner_guards_fail_closed_2 if {
+	fixture := runner_change("ValidatingAdmissionPolicy", "homelab-test-jobs", [{"op": "replace", "path": "/spec/matchConditions/0/expression", "value": "false"}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_guards_fail_closed_3 if {
+	fixture := runner_change("ValidatingAdmissionPolicy", "homelab-test-jobs", [{"op": "add", "path": "/spec/matchConstraints/namespaceSelector", "value": {"matchLabels": {"skip": "true"}}}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_guards_fail_closed_4 if {
+	fixture := runner_change("ValidatingAdmissionPolicy", "homelab-test-jobs", [{"op": "replace", "path": "/spec/matchConstraints/resourceRules/0/operations", "value": ["CREATE"]}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_guards_fail_closed_5 if {
+	fixture := runner_change("ValidatingAdmissionPolicy", "homelab-test-jobs", [{"op": "replace", "path": "/spec/validations", "value": []}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_binding_cannot_warn_or_skip_1 if {
+	fixture := runner_change("ValidatingAdmissionPolicyBinding", "homelab-test-jobs", [{"op": "replace", "path": "/spec/validationActions", "value": ["Warn"]}])
+	messages := deny with input as fixture
+	count(messages) > 0
+}
+
+test_runner_binding_cannot_warn_or_skip_2 if {
+	fixture := runner_change("ValidatingAdmissionPolicyBinding", "homelab-test-jobs", [{"op": "add", "path": "/spec/matchResources", "value": {"namespaceSelector": {"matchLabels": {"skip": "true"}}}}])
+	messages := deny with input as fixture
+	count(messages) > 0
 }
 
 test_runner_parameter_lookup_must_deny_missing if {
