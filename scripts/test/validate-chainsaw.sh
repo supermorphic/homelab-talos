@@ -220,6 +220,7 @@ register_group_shell_case ci-framework report-publish-guard scripts/test/report-
 register_group_shell_case core qbit-manage-policy-validator scripts/test/qbit-manage-policy-validator-test.sh
 register_group_shell_case core qbit-manage-containment scripts/test/qbit-manage-contain-test.sh
 register_group_shell_case core arr-validator scripts/test/arr-validator-test.sh
+register_group_shell_case core homepage-mylar3-secrets scripts/test/homepage-mylar3-secrets-test.sh
 register_group_shell_case observability gatus-validator scripts/test/gatus-validator-test.sh
 register_group_shell_case observability gatus-verifier scripts/test/gatus-verifier-test.sh
 register_group_shell_case observability monitoring-alerts-validator scripts/test/monitoring-alerts-validator-test.sh

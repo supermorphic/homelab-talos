@@ -14,6 +14,10 @@ metadata:
     gethomepage.dev/group: "Media"
     gethomepage.dev/icon: "mylar-3.svg"
     gethomepage.dev/href: "https://mylar3.lab.supermorphic.com"
+    gethomepage.dev/widget.type: "mylar"
+    gethomepage.dev/widget.url: "http://mylar3.media.svc.cluster.local:8090"
+    gethomepage.dev/widget.key: "{{HOMEPAGE_VAR_MYLAR3_API_KEY}}"
+    gethomepage.dev/widget.fields: '["series","issues","wanted"]'
 spec:
   hostnames:
     - mylar3.lab.supermorphic.com
