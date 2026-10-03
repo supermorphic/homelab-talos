@@ -28,6 +28,21 @@ spec:
       namespace: networking
       sectionName: https
   rules:
+    # Manual release searches wait between provider queries and can take minutes.
+    - matches:
+        - method: GET
+          path:
+            type: Exact
+            value: /choose_specific_download
+      timeouts:
+        request: 600s
+        backendRequest: 600s
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: mylar3
+          port: 8090
+          weight: 1
     - backendRefs:
         - group: ""
           kind: Service
