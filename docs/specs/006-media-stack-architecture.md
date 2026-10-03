@@ -21,6 +21,7 @@ The `media` namespace and its parent Kustomization contain these active units:
 | `sonarr` | Television automation | Retained Longhorn config and shared SMB data | Internal Gateway |
 | `radarr` | Movie automation | Retained Longhorn config and shared SMB data | Internal Gateway |
 | `lidarr` | Music automation | Retained Longhorn config and shared SMB data | Internal Gateway |
+| `mylar3` | Comic acquisition (live acceptance pending) | Retained Longhorn config and shared SMB data | Internal Gateway |
 | `seerr` | Household request interface | Retained Longhorn config | Internal Gateway |
 | `tautulli` | Plex history and analytics | Retained Longhorn config | Internal Gateway |
 | `flaresolverr` | Optional per-indexer Cloudflare solver | Stateless | ClusterIP only |
@@ -129,6 +130,8 @@ the Gateway:
 
 ```text
 Prowlarr -> Sonarr / Radarr / Lidarr
+Prowlarr -> Mylar3 -> qBittorrent -> shared comic downloads
+Mylar3 -> shared comic library (reader deployment is separate)
 Seerr -> Plex / Sonarr / Radarr
 Tautulli -> Plex
 Sonarr / Radarr / Lidarr -> qBittorrent
@@ -136,7 +139,7 @@ qBittorrent -> shared download tree
 Sonarr / Radarr / Lidarr -> shared library tree -> Plex
 ```
 
-Prowlarr, Sonarr, Radarr, Lidarr, qBittorrent, Plex, Seerr, and Tautulli each have an
+Prowlarr, Sonarr, Radarr, Lidarr, Mylar3, qBittorrent, Plex, Seerr, and Tautulli each have an
 HTTPS route on the internal Gateway. FlareSolverr remains in-cluster only because it is
 an implementation detail of selected Prowlarr indexers. Plex also has a separately
 specified direct remote-access path on port `32400`; that exception does not turn the
@@ -151,7 +154,8 @@ media [cilium]
 │   ├── qbittorrent [media-storage, internal-gateway]
 │   ├── sonarr [media-storage, internal-gateway]
 │   ├── radarr [media-storage, internal-gateway]
-│   └── lidarr [media-storage, internal-gateway]
+│   ├── lidarr [media-storage, internal-gateway]
+│   └── mylar3 [media-storage, internal-gateway]
 ├── prowlarr [media, internal-gateway]
 ├── seerr [media, internal-gateway]
 ├── tautulli [media, internal-gateway]
@@ -234,6 +238,140 @@ acceptance gate remains one authorized TV request and one movie request through 
 their expected Sonarr or Radarr service and qBittorrent category, import into Plex, and
 accepted media naming. No durable record yet proves that both request-to-library paths
 completed.
+
+## Mylar3 comic acquisition
+
+Mylar3 extends the existing Prowlarr/qBittorrent acquisition path. It owns comic
+organization and post-processing beneath `/data/media/comics`; a separate Komga
+follow-on owns reading. The [application source](../../kubernetes/apps/media/mylar3/app/values.yaml)
+owns the pinned LinuxServer image, resources, retained Longhorn config and shared
+`/data` mount. A single `Recreate` writer preserves the config database. Resource
+values start from comparable managers and require idle/import measurements after
+rollout. Longhorn config backup and NAS library backup remain separate.
+
+The upstream image initializes as root, then runs Mylar as the shared media UID.
+Its ownership and UID/GID capabilities support initialization; `KILL` lets the root
+supervisor stop its unprivileged child. The pod has no Kubernetes API token or
+VPN/network-administration capability. Using the upstream entrypoint avoids a
+custom image or replacement startup script. Container startup under these reduced
+capabilities remains a live acceptance gate.
+
+### Attended setup and completion handoff
+
+Flux deploys Mylar through Git after storage and the internal Gateway are ready.
+This service uses direct Git activation; the existing `arr` bootstrap recipe does
+not support Mylar. Before enabling acquisition, open its private route from the
+[HTTPRoute source](../../kubernetes/apps/media/mylar3/app/httproute.yaml), set unique
+credentials and select **Forms** authentication. Keep the base URL empty and
+in-application updates disabled. The login endpoint must return HTTP 200 without
+credentials. Basic authentication blocks the declared probes. Homepage discovers
+an application link without a credentialed widget; Gatus and `MediaEndpointDown`
+measure login availability, not acquisition health.
+
+Enter the operator's ComicVine API key privately and verify a series lookup.
+Enable Mylar's API and use its generated key in Prowlarr's native **Mylar**
+application. These supported runtime settings persist beneath `/config/mylar`,
+including qBittorrent credentials. No Kubernetes consumer needs a Mylar credential
+in this change. A later desired-state credential must use an operator-created SOPS
+Secret, never plaintext or OpenBao. Do not reconcile the live config/database from
+an init script or ConfigMap.
+
+Create the comic download and library directories through the existing NAS
+management path if absent; require write access as UID/GID 568 without recursive
+ownership changes to the existing library. Set the following cross-system values:
+
+| Setting | Value |
+| --- | --- |
+| Mylar Comic Location | `/data/media/comics` |
+| qBittorrent category and Mylar label | `comics` |
+| Category save path and Mylar qBittorrent folder | `/data/downloads/comics` |
+| Mylar qBittorrent host | `http://qbittorrent.media.svc.cluster.local:8080` |
+| Mylar download client credential | Existing qBittorrent application credential |
+| When Post-Processing | `hardlink` |
+| Enforce Permissions | Disabled for SMB |
+| Embedded metadata tagging/archive conversion | Disabled for seeded files |
+| Enable Folder Monitoring | Enabled |
+| Folder location to monitor | `/data/downloads/comics` |
+| Folder Monitor Scan Interval | Five minutes |
+| Prowlarr Server in the Mylar application | `http://prowlarr.media.svc.cluster.local:9696` |
+| Application Server in Prowlarr | `http://mylar3.media.svc.cluster.local:8090` |
+| Prowlarr sync | Full Sync, approved torrent indexers and their comic categories |
+
+Enable torrents, torrent searching, post-processing and the qBittorrent client.
+Test the client, then test/save/synchronize Prowlarr's Mylar application. Restrict
+indexers using existing Prowlarr tags when needed and confirm enabled Torznab
+providers appear in Mylar. Use supported comic categories (normally 7030). No remote
+path mappings or duplicate provider registry are needed.
+
+The reviewed Mylar client submits torrents to qBittorrent but does not poll its
+completion API. [Upstream supports scheduled folder monitoring](https://github.com/mylar3/mylar3/wiki/Torrents%2C-Newsgroups-and-DDL)
+for completed torrents. Before enabling it, require qBittorrent's **Keep incomplete
+torrents in** setting at `/data/downloads/incomplete`, outside the monitored tree.
+Both directories are on the same filesystem; qBittorrent must move completed files
+into the comics directory. No incomplete archive may appear there. Stop if this
+precondition fails; a longer scan delay is not a substitute. Monitor only the
+completed-comics directory, never the download root, incomplete tree or library.
+
+Enable renaming and inspect its preview for series/year/issue organization.
+Preserve native CBZ/CBR files and optionally Mylar's `series.json` metadata for
+reader interoperability. Upstream disables embedded tagging in hardlink mode;
+conversion or metadata rewriting of a seeded inode would invalidate torrent
+hashes. Mylar can fall back to copying on `EXDEV`, so matching mount paths alone
+do not prove hardlinks. The `comics` category remains outside qbit_manage's public
+cleanup groups; generic tracker tagging and existing private-tracker rules still
+apply. Automatic comic cleanup needs separate import-survival acceptance.
+
+### Acceptance and recovery
+
+After deployment, run `mise exec -- just kube mylar3-verify` with task-scoped observer
+credentials obtained through `mise exec -- just kube kubeconfig`. It checks resource
+readiness, claims, the source image, private route/DNS and login availability.
+Retain this deployment evidence with `mise exec -- just test record verification.mylar3`
+from the clean deployed commit. Neither that result nor the generic media-hardlink
+test proves the acquisition gates below.
+
+Live acceptance remains pending and separately authorized. Privately identify a
+public-domain or otherwise operator-authorized fixture available through an
+approved indexer and agree its cleanup scope before downloading:
+
+1. Record existing Sonarr/Radarr/Lidarr/qBittorrent health. Find the fixture through
+   the synchronized provider, put the matching issue on Mylar's wanted list and
+   request the approved release in Mylar.
+2. Observe category `comics` and the existing VPN path. While incomplete, require
+   its data to remain in the separate incomplete tree with no Mylar import.
+3. Wait for completion, the move into the comics directory, and scheduled import
+   without a manual post-processing trigger. Require downloaded status and accepted
+   library naming. A second scan must not duplicate/corrupt the issue or its source.
+4. Through separately authorized inspection, require equal download/library inode
+   identity and link count at least two. Force Recheck only the fixture torrent and
+   require 100% success after import; open the archive in a comic reader.
+5. Under authorized recovery testing, replace/reschedule the Mylar pod and require
+   preserved database, login, integrations and paths. Confirm config/NAS backup
+   coverage; pod replacement is not evidence of backup restoration.
+6. Measure idle/import resource use and adjust Git requests/limit if warranted.
+   Recheck other media health, categories and seeding behavior. Clean up only
+   authorized fixture resources; verify library survival before removing its
+   download-side name when that removal is authorized.
+
+No registered automated Mylar acquisition/reschedule test exists yet. Keep attended
+outcomes private until an authorized fixture and scoped execution contract can be
+registered through the existing catalog and retained with `just test record`.
+Do not publish comic payloads, titles, hashes, tracker URLs, credentials or runtime
+config exports. Issue 526 remains open until its live gates and canonical evidence
+requirements pass.
+
+Preserve the retained config claim during replacement. For lost state, restore a
+trusted Longhorn backup through the operator-run storage recovery procedure in
+[the platform spec](010-talos-flux-platform.md), and restore comics through NAS
+recovery. An empty config needs the attended setup above again. Keep the source
+image pinned during recovery and verify login/resources before retrying acquisition.
+
+Upstream implementation references:
+[container startup](https://github.com/linuxserver/docker-mylar3/tree/v0.11.0-ls274/root/etc/s6-overlay/s6-rc.d),
+[hardlink operations](https://github.com/MylarComics/mylar3/blob/v0.11.0/mylar/helpers.py),
+[metadata behavior](https://github.com/MylarComics/mylar3/blob/v0.11.0/mylar/config.py),
+[authentication routes](https://github.com/MylarComics/mylar3/blob/v0.11.0/mylar/webstart.py),
+and [Prowlarr integration](https://github.com/Prowlarr/Prowlarr/tree/develop/src/NzbDrone.Core/Applications/Mylar).
 
 ## Deferred work and reconsideration
 

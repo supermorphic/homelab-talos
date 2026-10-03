@@ -7,6 +7,7 @@ mutable_tags := {"latest", "main", "master", "stable", "nightly"}
 required_dependencies := {
 	"flaresolverr": {"media"},
 	"lidarr": {"internal-gateway", "media-storage"},
+	"mylar3": {"internal-gateway", "media-storage"},
 	"plex": {"internal-gateway", "media-storage"},
 	"prowlarr": {"internal-gateway", "media"},
 	"qbit-manage": {"media-storage", "qbittorrent"},
@@ -32,6 +33,7 @@ uiless_worker_apps := {"qbit-manage"}
 
 shared_claim_keys := {
 	"lidarr": "data",
+	"mylar3": "data",
 	"plex": "media",
 	"qbittorrent": "data",
 	"radarr": "data",
@@ -43,7 +45,7 @@ config_only_apps := {"prowlarr", "seerr", "tautulli"}
 # Narrower than the media-mounting entries in shared_claim_keys: qbittorrent reaches the
 # shared claim through advancedMounts (per-container) rather than globalMounts, so the
 # /data mount-path rule below cannot read it. Keep these lists in sync by hand.
-arr_apps := {"lidarr", "radarr", "sonarr"}
+arr_apps := {"lidarr", "mylar3", "radarr", "sonarr"}
 
 media_app(document) := app if {
 	endswith(document.path, "/app/values.yaml")

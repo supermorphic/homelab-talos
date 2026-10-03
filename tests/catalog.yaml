@@ -22,6 +22,7 @@ executions:
     - validation.intel-gpu-plugin
     - validation.qbittorrent
     - validation.arr
+    - validation.mylar3
     - validation.qbit-manage
     - validation.seerr
     - validation.tautulli
@@ -69,6 +70,7 @@ executions:
     - validation.intel-gpu-plugin
     - validation.qbittorrent
     - validation.arr
+    - validation.mylar3
     - validation.qbit-manage
     - validation.seerr
     - validation.tautulli
@@ -132,6 +134,7 @@ campaigns:
       - verification.sonarr
       - verification.radarr
       - verification.lidarr
+      - verification.mylar3
       - verification.seerr
       - verification.tautulli
       - verification.flaresolverr
@@ -196,6 +199,7 @@ campaigns:
       - verification.sonarr
       - verification.radarr
       - verification.lidarr
+      - verification.mylar3
       - verification.seerr
       - verification.tautulli
       - verification.flaresolverr
@@ -426,6 +430,10 @@ suites:
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube arr-validate", implementation: scripts/validate/arr.sh}
     native_results: {strategy: wrapper-junit}
+  - metadata: {id: validation.mylar3, source: validation, framework: bash, suite: ci, tier: offline, target: mylar3, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube mylar3-validate", implementation: scripts/validate/mylar3.sh}
+    native_results: {strategy: wrapper-junit}
   - metadata: {id: validation.qbit-manage, source: validation, framework: bash, suite: ci, tier: offline, target: qbit-manage, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube qbit-manage-validate", implementation: scripts/validate/qbit-manage.sh}
@@ -601,6 +609,12 @@ suites:
     access: {tier: observer}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube arr-verify lidarr", implementation: scripts/verify/arr.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.mylar3, source: verification, framework: bash, suite: media, tier: verification, target: mylar3, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    description: Observes Mylar3 resources, storage and private login without reading credentials or submitting downloads.
+    access: {tier: observer}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube mylar3-verify", implementation: scripts/verify/mylar3.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.seerr, source: verification, framework: bash, suite: media, tier: verification, target: seerr, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
     access: {tier: observer}

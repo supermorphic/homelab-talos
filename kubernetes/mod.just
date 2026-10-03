@@ -732,6 +732,14 @@ qbittorrent-verify: require-bash
 arr-validate: require-bash
     @scripts/validate/arr.sh
 
+# Validate Mylar3 chart output and its shared-media integration invariants offline.
+mylar3-validate: require-bash
+    @scripts/validate/mylar3.sh
+
+# Observe Mylar3 deployment and private login availability with scoped credentials.
+mylar3-verify: require-bash
+    @scripts/test/run-catalog-suite.sh verification.mylar3 -- scripts/verify/mylar3.sh {{quote(kubeconfig)}}
+
 # Verify a current live *arr app: `just kube arr-verify <prowlarr|sonarr|radarr|lidarr>`.
 # Kustomization + HelmRelease Ready, rollout, HTTPRoute Accepted, DNS, and /ping over the
 # internal gateway. Operator-only (needs the cluster); not in `just ci`.

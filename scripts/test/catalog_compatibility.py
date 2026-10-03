@@ -86,7 +86,9 @@ def expect_acceptance(
         f"{name}: expected acceptance, got exit {completed.returncode}\n"
         f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
     )
-    assert completed.stdout == "Test catalog passed validation: suites=134.\n"
+    assert completed.stdout == (
+        f"Test catalog passed validation: suites={len(candidate['suites'])}.\n"
+    )
     assert completed.stderr == ""
 
 
@@ -767,7 +769,9 @@ def execution_contract(root: Path, canonical: dict[str, Any]) -> None:
         canonical,
         "validation-count",
         add_unregistered_validation,
-        "Validation catalog/executions.ci count differs: catalog=47 ci=46.\n",
+        "Validation catalog/executions.ci count differs: "
+        f"catalog={len(canonical['executions']['ci']) + 1} "
+        f"ci={len(canonical['executions']['ci'])}.\n",
     )
     expect_rejection(
         root,
@@ -1123,11 +1127,13 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
 
 
 def main() -> int:
+    canonical = yaml.safe_load(CATALOG.read_text(encoding="utf-8"))
     completed = run_validator(CATALOG)
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout == "Test catalog passed validation: suites=134.\n"
+    assert completed.stdout == (
+        f"Test catalog passed validation: suites={len(canonical['suites'])}.\n"
+    )
     assert completed.stderr == ""
-    canonical = yaml.safe_load(CATALOG.read_text(encoding="utf-8"))
     groups = {
         "existing": existing_negative_contract,
         "top-level": top_level_contract,

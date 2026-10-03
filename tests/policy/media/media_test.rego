@@ -2,6 +2,32 @@ package homelab.media
 
 import rego.v1
 
+# Reuse the media-manager fixture so the new app is held to the same storage and
+# private routing invariants, independent of its chosen image or chart values.
+mylar3_fixture := json.unmarshal(replace(
+	json.marshal(lidarr_fixture({"media-storage", "internal-gateway"}, "media-data")),
+	"lidarr", "mylar3",
+))
+
+test_mylar3_uses_existing_media_contract if {
+	messages := deny with input as mylar3_fixture
+	count(messages) == 0
+}
+
+test_mylar3_rejects_separate_media_claim if {
+	bad := json.unmarshal(replace(json.marshal(mylar3_fixture), "media-data", "comic-data"))
+	messages := deny with input as bad
+	some message in messages
+	contains(message, "existingClaim must be media-data")
+}
+
+test_mylar3_requires_common_data_mount if {
+	bad := json.unmarshal(replace(json.marshal(mylar3_fixture), "/data", "/comics"))
+	messages := deny with input as bad
+	some message in messages
+	contains(message, "globalMounts must include /data")
+}
+
 fixture(tag, strategy, app_capabilities, dependencies, gateway, audience, claim) := [
 	{
 		"path": "kubernetes/apps/media/qbittorrent/app/values.yaml",
