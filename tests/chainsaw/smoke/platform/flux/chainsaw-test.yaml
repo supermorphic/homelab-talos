@@ -69,6 +69,12 @@ spec:
               metadata:
                 name: flux-system
                 namespace: flux-system
+              spec:
+                url: https://forgejo.infra.supermorphic.com/supermorphic/homelab-talos.git
+                ref:
+                  branch: main
+                secretRef:
+                  name: flux-system-forgejo
               status:
                 (conditions[?type == 'Ready']):
                   - status: "True"

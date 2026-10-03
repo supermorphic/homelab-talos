@@ -7,8 +7,7 @@ cilium_values := "kubernetes/apps/kube-system/cilium/app/values.yaml"
 cilium_app := "kubernetes/apps/kube-system/cilium/app"
 talosconfig := ".talos/config"
 kubeconfig := ".kube/config"
-github_owner := "supermorphic"
-github_repository := "homelab-talos"
+git_url := "https://forgejo.infra.supermorphic.com/supermorphic/homelab-talos.git"
 
 # Render the pinned Cilium chart to standard output without writing generated YAML.
 cilium-render:
@@ -450,18 +449,16 @@ cilium-connectivity-test: require-bash
 flux-validate: require-bash
     @scripts/validate/flux.sh
 
-# Check the live cluster and Git publication boundary before GitHub bootstrap.
+# Check the live cluster and Git publication boundary before Forgejo bootstrap.
 flux-preflight: flux-validate
     #!/usr/bin/env bash
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    owner='{{github_owner}}'
-    repository='{{github_repository}}'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin='{{git_url}}'
 
     [[ -f "$kubeconfig" ]] || {
-      echo "Missing $kubeconfig; run just talos kubeconfig." >&2
+      echo "Missing $kubeconfig; run just kube kubeconfig." >&2
       exit 1
     }
     [[ "$(git remote get-url origin)" == "$expected_origin" ]] || {
@@ -481,8 +478,11 @@ flux-preflight: flux-validate
     just kube cilium-postflight
     flux check --pre --kubeconfig "$kubeconfig"
 
-    if ! kubectl --kubeconfig "$kubeconfig" --namespace flux-system get deployment source-controller >/dev/null 2>&1; then
-      [[ "$(yq -r '.spec.suspend' kubernetes/apps/kube-system/cilium/ks.yaml)" == 'true' ]] || {
+    # A retained Cilium HelmRelease proves adoption already occurred even if Flux
+    # controllers are missing. Preserve that ownership during controller recovery.
+    if ! kubectl --kubeconfig "$kubeconfig" --namespace flux-system get deployment source-controller >/dev/null 2>&1 && \
+      ! kubectl --kubeconfig "$kubeconfig" --namespace kube-system get helmrelease cilium >/dev/null 2>&1; then
+      [[ "$(yq -r 'select(.metadata.name == "cilium") | .spec.suspend' kubernetes/apps/kube-system/cilium/ks.yaml)" == 'true' ]] || {
         echo 'Refusing first bootstrap: Cilium must begin suspended for staged adoption.' >&2
         exit 1
       }
@@ -517,8 +517,8 @@ flux-status:
     exit "$status"
 
 # Verify final Flux ownership, source, SOPS, canary, and Cilium health.
-flux-verify: flux-validate require-bash
-    @scripts/test/run-catalog-suite.sh verification.flux -- scripts/verify/flux.sh {{quote(kubeconfig)}} {{quote(github_owner)}} {{quote(github_repository)}}
+flux-verify revision="": flux-validate require-bash
+    @scripts/test/run-catalog-suite.sh verification.flux -- scripts/verify/flux.sh {{quote(kubeconfig)}} {{quote(revision)}}
 
 # Validate the complete local internal foundation graph, encrypted providers, and pinned chart renders.
 foundation-validate: require-bash
@@ -1138,7 +1138,7 @@ ntfy-consumer-sync consumer: require-bash
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    expected_origin='https://github.com/{{github_owner}}/{{github_repository}}.git'
+    expected_origin='{{git_url}}'
     [[ -f "$kubeconfig" ]] || {
       echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
       exit 1

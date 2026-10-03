@@ -130,7 +130,7 @@ own those platform roles.
 ## Flux ownership and dependency graph
 
 Flux is the sole reconciler for Kubernetes desired state. It follows the protected
-`main` branch using a read-only deploy identity and decrypts Kubernetes Secret values
+Forgejo `main` branch over HTTPS using a repository-specific read-only identity and decrypts Kubernetes Secret values
 with the in-cluster SOPS identity. No parallel Argo CD ownership or committed rendered
 chart output exists.
 
@@ -396,6 +396,175 @@ add and accept the new resolver or VIP route, grant, and DNS path before retirin
 path. Guarded suspended-source bootstraps preserve resources and re-suspend on failure;
 they are exceptional operator actions, not routine rotation or restart.
 
+## Forgejo source cutover and recovery
+
+Flux reads Forgejo through authenticated, trusted HTTPS. Its credential is the
+operator-managed `flux-system/flux-system-forgejo` Secret, with `username` and `password`
+fields. The password is an access token restricted to this repository with only
+`read:repository` scope. Confirm that restriction in Forgejo when creating or rotating
+the token; successful fetching alone cannot prove read-only permission. See the
+[Forgejo token contract](https://forgejo.org/docs/v15.0/user/authentication/token-scope/)
+and [Flux HTTPS authentication](https://fluxcd.io/flux/components/source/gitrepositories/#basic-access-authentication).
+SSH was rejected for normal operation because the existing trusted HTTPS endpoint serves
+Git and avoids another listener and SSH host-key lifecycle. Preserve TLS verification;
+certificate or DNS failures require repair of that prerequisite.
+
+The source credential remains outside Git and SOPS application configuration. An agent
+can prepare and validate desired state with its scoped observer credentials. Credential
+creation, source probes that change cluster state, the first live cutover, bootstrap,
+and recovery below are attended operator actions using operator-controlled credentials.
+The separate SOPS decryption Secret and application dependency graph retain their roles.
+Keep the previous SSH Secret until acceptance and rollback retention are complete.
+
+### Prepare and prove source access
+
+Review and merge the source migration through the repository's required validation and
+merge-authorization gates. Freeze merges to Forgejo main during cutover. A Forgejo-only
+merge cannot reach Flux while Flux still watches GitHub; do not wait for it to do so.
+From a clean checkout containing the reviewed Forgejo main revision, fetch `origin` and
+confirm its URL matches the committed source. Run `mise exec -- just kube flux-preflight`.
+This checks publication and platform prerequisites; it does not prove the Flux credential.
+
+The operator creates a repository-specific read-only token and stores the username and
+token in owner-readable files outside every checkout, without trailing newlines. Set
+`FLUX_USERNAME_FILE` and `FLUX_TOKEN_FILE` to their absolute paths. Disable shell tracing.
+After confirming the namespace and target name, create the credential without putting
+its values in arguments or terminal output:
+
+```bash
+mise exec -- kubectl --kubeconfig .kube/config -n flux-system create secret generic flux-system-forgejo \
+  --from-file=username="$FLUX_USERNAME_FILE" --from-file=password="$FLUX_TOKEN_FILE" \
+  --dry-run=client -o yaml |
+  mise exec -- kubectl --kubeconfig .kube/config apply -f -
+unset FLUX_USERNAME_FILE FLUX_TOKEN_FILE
+```
+
+Retain the credential through the operator's independent recovery store; remove temporary
+plaintext files after use. Replacing an existing credential requires an attended rotation.
+Do not use the workstation's Git write credential for Flux.
+
+Create a temporary GitRepository with no application consumers to prove access from
+source-controller itself, including cluster DNS, routing, TLS, and authentication:
+
+```bash
+git fetch origin main
+revision="$(git rev-parse origin/main)"
+test "$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')" = "$revision"
+mise exec -- flux create source git flux-forgejo-preflight \
+  --namespace flux-system --url=https://forgejo.infra.supermorphic.com/supermorphic/homelab-talos.git \
+  --branch=main --commit="$revision" --secret-ref=flux-system-forgejo --export |
+  mise exec -- kubectl --kubeconfig .kube/config apply -f -
+mise exec -- flux reconcile source git flux-forgejo-preflight \
+  --namespace flux-system --kubeconfig .kube/config --timeout 5m
+mise exec -- kubectl --kubeconfig .kube/config -n flux-system get gitrepository flux-forgejo-preflight \
+  -o 'custom-columns=GENERATION:.metadata.generation,OBSERVED:.status.observedGeneration,READY:.status.conditions,REVISION:.status.artifact.revision'
+```
+
+First prove that the temporary resource name is absent; if it exists, establish ownership
+before reusing or removing it. Require Ready for the current generation and the exact
+intended commit in its artifact revision. Stop on failure; do not switch production or
+weaken authentication/TLS to bypass it. This probe fetches Git only and applies no apps.
+
+### Attended cutover and acceptance
+
+Before any production mutation, save the live GitRepository's API version, kind, name,
+namespace and complete spec to an owner-readable off-checkout rollback file. Save the
+previous artifact revision and root Kustomization's suspension state. Prove that the
+previous source and its credential still work, retain an independent clone containing
+that commit, and check that the previous host can serve it. Record the current application
+Kustomization inventory and workload/pod UIDs and generations. Review the entire Kubernetes
+diff from the deployed commit to `$revision`; approve any intended workload change and
+stop on unintended deletions, template changes or dependency changes. Source migration
+alone must not prune workloads or roll pods.
+
+Set `ROLLBACK_DIR` to an absolute directory in independent operator storage. Require the
+root and production source to be Ready and unsuspended; investigate a different state
+before beginning this cutover. Save non-secret source and workload baselines:
+
+```bash
+umask 077
+mise exec -- kubectl --kubeconfig .kube/config -n flux-system get gitrepository flux-system -o json |
+  mise exec -- yq '{"apiVersion": .apiVersion, "kind": .kind, "metadata": {"name": .metadata.name, "namespace": .metadata.namespace}, "spec": .spec}' \
+  > "$ROLLBACK_DIR/source.yaml"
+mise exec -- kubectl --kubeconfig .kube/config -n flux-system get gitrepository flux-system \
+  -o jsonpath='{.status.artifact.revision}' > "$ROLLBACK_DIR/revision"
+mise exec -- kubectl --kubeconfig .kube/config -n flux-system get kustomizations -o json \
+  > "$ROLLBACK_DIR/kustomizations.json"
+mise exec -- kubectl --kubeconfig .kube/config get deployments,statefulsets,daemonsets,pods -A -o json |
+  mise exec -- yq '[.items[] | {"kind": .kind, "namespace": .metadata.namespace, "name": .metadata.name, "uid": .metadata.uid, "generation": .metadata.generation}]' \
+  > "$ROLLBACK_DIR/workloads.yaml"
+```
+
+Immediately before cutover, repeat the Forgejo main SHA check, source probe reconciliation,
+current-generation readiness check, rollback prerequisite checks and workload-diff review.
+If main advanced, restart preparation for that revision. The operator then suspends only
+the root to prevent its previous source manifest from undoing the switch:
+
+```bash
+mise exec -- flux suspend kustomization flux-system --namespace flux-system --kubeconfig .kube/config
+mise exec -- yq 'select(.kind == "GitRepository")' kubernetes/flux/clusters/prod/flux-system/gotk-sync.yaml |
+  mise exec -- kubectl --kubeconfig .kube/config apply -f -
+mise exec -- flux reconcile source git flux-system --namespace flux-system --kubeconfig .kube/config --timeout 5m
+mise exec -- kubectl --kubeconfig .kube/config -n flux-system get gitrepository flux-system \
+  -o 'custom-columns=GENERATION:.metadata.generation,OBSERVED:.status.observedGeneration,READY:.status.conditions,REVISION:.status.artifact.revision'
+```
+
+Other application Kustomizations remain active and can consume the new artifact as soon
+as it is fetched; the frozen revision and reviewed workload diff are therefore required
+before the source switch. Require the Forgejo URL, new Secret reference, unpinned `main`
+branch, current-generation Ready and artifact revision `main@sha1:$revision`. On success,
+resume the root and allow normal polling to converge:
+
+```bash
+mise exec -- flux resume kustomization flux-system --namespace flux-system --kubeconfig .kube/config
+mise exec -- just kube flux-verify "$revision"
+mise exec -- just test record verification.flux
+mise exec -- kubectl --kubeconfig .kube/config -n flux-system delete gitrepository flux-forgejo-preflight
+```
+
+Compare the saved inventories, workload generations and pod UIDs. Account for every change;
+unexpected pruning or rollout fails acceptance even when Ready. The verifier checks the
+source and all active application Kustomizations against the exact intended revision.
+Retained acceptance must run from clean deployed main, and its evidence must describe
+that revision. Confirm it remains main before recording. Candidate evidence is not live
+acceptance. After lifting the merge freeze, use a separately reviewed harmless main change
+(for example a non-secret annotation on the existing canary Kustomization) to prove normal
+polling fetches and applies a new Forgejo revision without manual reconciliation. Record
+verification again after that revision converges. Keep issue acceptance pending until
+these live checks pass.
+
+### Recovery without a working source
+
+If cutover fails, leave the old Secret intact. Suspend `flux-system`, restore the saved
+GitRepository spec with the operator kubeconfig, and reconcile that source. Require the
+saved old revision and current-generation Ready before restoring the root's prior
+suspension state. If the previous branch moved, temporarily pin the saved commit for
+recovery and keep the root suspended so old Git cannot undo the pin. Restore the normal
+branch reference only after reviewing the recovery revision. Do not delete application
+Kustomizations, uninstall Flux or remove workloads to recover source access.
+
+For the unchanged previous branch, use the saved source independently of Forgejo:
+
+```bash
+mise exec -- flux suspend kustomization flux-system --namespace flux-system --kubeconfig .kube/config
+mise exec -- kubectl --kubeconfig .kube/config apply -f "$ROLLBACK_DIR/source.yaml"
+mise exec -- flux reconcile source git flux-system --namespace flux-system --kubeconfig .kube/config --timeout 5m
+mise exec -- kubectl --kubeconfig .kube/config -n flux-system get gitrepository flux-system \
+  -o 'custom-columns=GENERATION:.metadata.generation,OBSERVED:.status.observedGeneration,READY:.status.conditions,REVISION:.status.artifact.revision'
+# Only after the saved old revision is Ready, restore the previously active root.
+mise exec -- flux resume kustomization flux-system --namespace flux-system --kubeconfig .kube/config
+```
+
+If the previous source is unavailable, keep the root suspended and recover trusted
+Forgejo HTTPS and its read-only Secret from independent operator storage, then repeat
+the temporary-source proof and attended cutover from a reviewed clone. Cluster source
+recovery requires the Kubernetes API and Cilium; restore those lower layers first.
+For missing Flux controllers on an otherwise healthy cluster, provision the namespace
+and source credential, then run `mise exec -- just bootstrap flux` with its printed
+confirmation after preflight. It applies the committed controller and source manifests
+from published main without a Git write token. For a new cluster, continue the existing
+SOPS setup and staged Cilium adoption before final Flux verification.
+
 ## Independent platform recovery
 
 Recover the lowest unhealthy layer first: Talos/etcd, Cilium, Flux source access, Flux
@@ -452,11 +621,11 @@ target-bound guard after reviewing the current preflight:
   workaround. Failed adoption restores the source edit and re-suspends resumed live
   reconciliation. If broken networking prevents Flux-owned repair, stop for a separately
   reviewed recovery plan; the repository has no parallel-owner shortcut.
-- Flux SSH host trust only: `mise exec -- just bootstrap flux-ssh-known-hosts` repairs
-  `known_hosts` for `knownhosts: key is unknown`, preserving the working deploy identity.
-  Missing deploy identity/bootstrap state instead uses `kube flux-preflight` followed by
-  `bootstrap flux` with a temporary repository-scoped GitHub credential. Remove that
-  credential and confirmation after recovery; Flux retains only its read-only deploy key.
+- Flux source access: restore the operator-managed Forgejo credential and trusted HTTPS
+  access using [the source procedure](#forgejo-source-cutover-and-recovery). Missing
+  controller/bootstrap state uses `kube flux-preflight` followed by `bootstrap flux`.
+  Bootstrap applies reviewed manifests from published Git; it does not write to Git or
+  generate deploy keys. Remove the confirmation after recovery.
 - Missing Flux decryption identity: `mise exec -- just bootstrap flux-sops` validates the
   workstation recipient, leaves a matching Secret unchanged, and requires its exact guard
   to create an absent Secret. A different live recipient is refused: preserve identities

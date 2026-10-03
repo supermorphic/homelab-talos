@@ -553,138 +553,35 @@ cilium:
     just kube cilium-verify
     CILIUM_CONNECTIVITY_CONFIRM='test:cilium-connectivity' just kube cilium-connectivity-test
 
-# Bootstrap Flux 2.9.2 with a unique read-only GitHub SSH deploy key.
+# Operator-only bootstrap/recovery from reviewed Forgejo manifests and an existing
+# repository-specific read-only HTTPS Secret. Initial source cutover uses the platform spec.
 flux:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    owner='supermorphic'
-    repository='homelab-talos'
     kubeconfig='{{kubeconfig}}'
-    expected_confirmation="bootstrap:flux:prod:${owner}/${repository}:read-only"
-
+    expected_confirmation='bootstrap:flux:prod:forgejo:read-only'
     just kube flux-preflight
-    [[ -n "${GITHUB_TOKEN:-}" ]] || {
-      echo 'Set GITHUB_TOKEN to the temporary repository-scoped Flux bootstrap PAT.' >&2
+    source_secret="$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get secret flux-system-forgejo --output json)"
+    [[ "$(yq -r '.data | keys | sort | join(",")' - <<<"$source_secret")" == 'password,username' ]] || {
+      echo 'Refusing Flux bootstrap: flux-system-forgejo must contain only username and password.' >&2
       exit 1
     }
+    [[ "$(yq -r '.data | [.username, .password] | map(. // "" | length > 0) | all' - <<<"$source_secret")" == 'true' ]]
+    unset source_secret
     [[ "${FLUX_BOOTSTRAP_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo 'Refusing to bootstrap Flux or create a GitHub deploy key.' >&2
-      echo "Set FLUX_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing the preflight." >&2
+      echo 'Refusing to apply Flux bootstrap manifests.' >&2
+      echo "Set FLUX_BOOTSTRAP_CONFIRM='$expected_confirmation' after reviewing the preflight and read-only credential scope." >&2
       exit 1
     }
 
-    authenticated_user="$(GH_TOKEN="$GITHUB_TOKEN" gh api user --jq '.login')"
-    [[ "$authenticated_user" == "$owner" ]] || {
-      echo "The GitHub token belongs to $authenticated_user, not $owner." >&2
-      exit 1
-    }
-    repository_state="$(GH_TOKEN="$GITHUB_TOKEN" gh api "repos/${owner}/${repository}")"
-    [[ "$(yq -r '.full_name' - <<<"$repository_state")" == "${owner}/${repository}" ]]
-    [[ "$(yq -r '.private' - <<<"$repository_state")" == 'true' ]] || {
-      echo 'Refusing Flux bootstrap: the GitHub repository is not private.' >&2
-      exit 1
-    }
-    [[ "$(yq -r '.permissions.admin and .permissions.push' - <<<"$repository_state")" == 'true' ]] || {
-      echo 'The bootstrap PAT needs repository Administration and Contents write access.' >&2
-      exit 1
-    }
-
-    flux bootstrap github \
-      --kubeconfig "$kubeconfig" \
-      --owner "$owner" \
-      --repository "$repository" \
-      --personal \
-      --private=true \
-      --reconcile \
-      --branch main \
-      --path kubernetes/flux/clusters/prod \
-      --read-write-key=false \
-      --ssh-hostname ssh.github.com:443 \
-      --ssh-key-algorithm ed25519 \
-      --interval 1m \
-      --network-policy=true \
-      --version v2.9.2 \
-      --timeout 10m
-
-    git pull --ff-only origin main
+    # Repeat publication and live Cilium checks immediately before applying.
+    just kube flux-preflight
+    kubectl --kubeconfig "$kubeconfig" apply --kustomize kubernetes/flux/clusters/prod/flux-system
+    flux reconcile source git flux-system --namespace flux-system --kubeconfig "$kubeconfig" --timeout 10m
+    flux reconcile kustomization flux-system --namespace flux-system --kubeconfig "$kubeconfig" --timeout 10m
     flux check --kubeconfig "$kubeconfig" --timeout 10m
-
-    source_secret="$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get secret flux-system --output json)"
-    source_secret_keys="$(yq -r '.data | keys | .[]' - <<<"$source_secret" | sort)"
-    [[ "$source_secret_keys" == $'identity\nidentity.pub\nknown_hosts' ]] || {
-      echo "Unexpected Flux source credential fields: $source_secret_keys" >&2
-      exit 1
-    }
-    cluster_public_key="$(yq -r '.data."identity.pub"' - <<<"$source_secret" | base64 --decode | awk '{print $1 " " $2}')"
-    matching_key="$(GH_TOKEN="$GITHUB_TOKEN" gh api "repos/${owner}/${repository}/keys" \
-      --jq '.[] | select(.read_only == true) | .key' | awk '{print $1 " " $2}' | rg -Fx "$cluster_public_key" || true)"
-    [[ "$matching_key" == "$cluster_public_key" ]] || {
-      echo 'Flux SSH public key does not match a read-only GitHub deploy key.' >&2
-      exit 1
-    }
-
-    echo 'Flux 2.9.2 bootstrap passed: four controllers are healthy and Git uses the matching read-only SSH deploy key.'
-    echo 'The GitHub PAT was not stored in the cluster; unset GITHUB_TOKEN after the bootstrap session.'
-
-# Preserve the Flux deploy key while replacing a stale SSH known_hosts entry for GitHub port 443.
-flux-ssh-known-hosts:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    kubeconfig='{{kubeconfig}}'
-    expected_url='ssh://git@ssh.github.com:443/supermorphic/homelab-talos'
-    expected_fingerprint='SHA256:p2QAMXNIC1TJYWeIOttrVc98/R1BUFWu3/LiyKgUfQM'
-    expected_confirmation='repair:flux-system:known-hosts:ssh.github.com:443'
-    key_file="$(mktemp /tmp/homelab-talos-flux-identity.XXXXXX)"
-    secret_file="$(mktemp /tmp/homelab-talos-flux-secret.XXXXXX)"
-    known_hosts_file="$(mktemp /tmp/homelab-talos-flux-known-hosts.XXXXXX)"
-    trap 'rm -f -- "$key_file" "$secret_file" "$known_hosts_file"' EXIT
-    chmod 600 "$key_file" "$secret_file" "$known_hosts_file"
-
-    source_json="$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get gitrepository flux-system --output json)"
-    [[ "$(yq -r '.spec.url' - <<<"$source_json")" == "$expected_url" ]] || {
-      echo 'Refusing known_hosts repair: the GitRepository does not use the expected port-443 URL.' >&2
-      exit 1
-    }
-    source_secret="$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get secret flux-system --output json)"
-    source_secret_keys="$(yq -r '.data | keys | .[]' - <<<"$source_secret" | sort)"
-    [[ "$source_secret_keys" == $'identity\nidentity.pub\nknown_hosts' ]]
-    existing_public_key="$(yq -r '.data."identity.pub"' - <<<"$source_secret" | base64 --decode | awk 'NF >= 2 {print $1 " " $2; exit}')"
-    yq -r '.data.identity' - <<<"$source_secret" | base64 --decode >"$key_file"
-
-    flux create secret git flux-system \
-      --namespace flux-system \
-      --url "$expected_url" \
-      --private-key-file "$key_file" \
-      --export >"$secret_file"
-    generated_public_key="$(yq -r '.stringData."identity.pub"' "$secret_file" | awk 'NF >= 2 {print $1 " " $2; exit}')"
-    [[ "$generated_public_key" == "$existing_public_key" ]] || {
-      echo 'Refusing known_hosts repair: generated credentials do not preserve the deploy key.' >&2
-      exit 1
-    }
-    yq -r '.stringData.known_hosts' "$secret_file" >"$known_hosts_file"
-    rg -q '^\[ssh\.github\.com\]:443 ' "$known_hosts_file"
-    ssh-keygen -lf "$known_hosts_file" -E sha256 | rg -Fq "$expected_fingerprint" || {
-      echo 'Refusing known_hosts repair: GitHub ECDSA fingerprint did not match the published value.' >&2
-      exit 1
-    }
-
-    [[ "${FLUX_SSH_KNOWN_HOSTS_CONFIRM:-}" == "$expected_confirmation" ]] || {
-      echo 'Refusing to replace flux-system/flux-system known_hosts.' >&2
-      echo "Set FLUX_SSH_KNOWN_HOSTS_CONFIRM='$expected_confirmation' after reviewing the target." >&2
-      exit 1
-    }
-
-    kubectl --kubeconfig "$kubeconfig" apply --filename "$secret_file"
-    flux reconcile source git flux-system \
-      --namespace flux-system \
-      --kubeconfig "$kubeconfig" \
-      --timeout 5m
-    source_json="$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get gitrepository flux-system --output json)"
-    [[ "$(yq -r '[.status.conditions[] | select(.type == "Ready") | .status][0]' - <<<"$source_json")" == 'True' ]]
-    [[ "$(yq -r '.spec.url' - <<<"$source_json")" == "$expected_url" ]]
-    echo 'Flux known_hosts repair passed: the deploy key is unchanged and GitHub SSH port 443 is Ready.'
+    echo 'Flux bootstrap manifests applied; complete staged adoption or run kube flux-verify for recovery.'
 
 # Create the Flux SOPS decryption Secret from the validated workstation identity.
 flux-sops:
@@ -871,7 +768,7 @@ foundation:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_network_confirmation='reserve:192.168.90.30-39:gateway:192.168.90.30'
     expected_bootstrap_confirmation='bootstrap:foundation:internal-gateway:192.168.90.30'
     foundation_names=(cert-manager cert-manager-config wildcard-certificate metallb metallb-config envoy-gateway internal-gateway external-dns-internal echo)
@@ -1035,7 +932,7 @@ storage:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:phase9:storage:longhorn'
     names=(longhorn longhorn-config)
     ks='kubernetes/apps/storage/longhorn/ks.yaml'
@@ -1121,7 +1018,7 @@ csi-driver-smb:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:phase11:csi-driver-smb'
     ks='kubernetes/apps/storage/csi-driver-smb/ks.yaml'
     resumed=false
@@ -1182,7 +1079,7 @@ media-storage:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:phase11:media-storage'
     names=(media media-storage)
     ns_ks='kubernetes/apps/media/namespace/ks.yaml'
@@ -1253,7 +1150,7 @@ plex:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:media:plex'
     ks='kubernetes/apps/media/plex/ks.yaml'
     resumed=false
@@ -1315,7 +1212,7 @@ qbittorrent:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:media:qbittorrent'
     ks='kubernetes/apps/media/qbittorrent/ks.yaml'
     resumed=false
@@ -1383,7 +1280,7 @@ arr app:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation="bootstrap:arr:$app"
     ks="kubernetes/apps/media/$app/ks.yaml"
     resumed=false
@@ -1449,7 +1346,7 @@ media-app app:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation="bootstrap:media-app:$app"
     ks="kubernetes/apps/media/$app/ks.yaml"
     resumed=false
@@ -1514,7 +1411,7 @@ seerr:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:media:seerr'
     ks='kubernetes/apps/media/seerr/ks.yaml'
     resumed=false
@@ -1576,7 +1473,7 @@ flaresolverr:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:media:flaresolverr'
     ks='kubernetes/apps/media/flaresolverr/ks.yaml'
     resumed=false
@@ -1640,7 +1537,7 @@ qbit-manage:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:media:qbit-manage'
     ks='kubernetes/apps/media/qbit-manage/ks.yaml'
     resumed=false
@@ -1707,7 +1604,7 @@ intel-gpu-plugin:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:phase11:intel-gpu-plugin'
     ks='kubernetes/apps/kube-system/intel-gpu-plugin/ks.yaml'
     resumed=false
@@ -1767,7 +1664,7 @@ monitoring:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:phase10:monitoring:kube-prometheus-stack'
     names=(kube-prometheus-stack kube-prometheus-stack-config)
     ks='kubernetes/apps/monitoring/kube-prometheus-stack/ks.yaml'
@@ -1851,7 +1748,7 @@ gatus:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:phase10:gatus'
     ks='kubernetes/apps/monitoring/gatus/ks.yaml'
     resumed=false
@@ -1915,7 +1812,7 @@ portainer:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:portainer'
     ks='kubernetes/apps/monitoring/portainer/ks.yaml'
     resumed=false
@@ -1979,7 +1876,7 @@ test-reports:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:test-reports'
     ks='kubernetes/apps/monitoring/test-reports/ks.yaml'
     resumed=false
@@ -2043,7 +1940,7 @@ homepage:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:phase10:homepage'
     ks='kubernetes/apps/monitoring/homepage/ks.yaml'
     resumed=false
@@ -2107,7 +2004,7 @@ trivy:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:phase10:trivy-operator'
     ks='kubernetes/apps/security/trivy-operator/ks.yaml'
     resumed=false
@@ -2173,7 +2070,7 @@ tailscale-operator:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:networking:tailscale-operator'
     ks='kubernetes/apps/networking/tailscale-operator/ks.yaml'
     resumed=false
@@ -2249,7 +2146,7 @@ tailscale-subnet-router:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:networking:tailscale-subnet-router'
     ks='kubernetes/apps/networking/tailscale-operator/ks.yaml'
     resumed=false
@@ -2316,7 +2213,7 @@ ntfy:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:monitoring:ntfy'
     ks='kubernetes/apps/monitoring/ntfy/ks.yaml'
     resumed=false
@@ -2381,7 +2278,7 @@ alertmanager-ntfy:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:monitoring:alertmanager-ntfy'
     ks='kubernetes/apps/monitoring/alertmanager-ntfy/ks.yaml'
     resumed=false
@@ -2444,7 +2341,7 @@ metrics-server:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:metrics-server'
     ks='kubernetes/apps/kube-system/metrics-server/ks.yaml'
     resumed=false
@@ -2507,7 +2404,7 @@ agent-access:
     kubeconfig='{{kubeconfig}}'
     owner='supermorphic'
     repository='homelab-talos'
-    expected_origin="https://github.com/${owner}/${repository}.git"
+    expected_origin="https://forgejo.infra.supermorphic.com/${owner}/${repository}.git"
     expected_confirmation='bootstrap:agent-access'
     ks='kubernetes/apps/kube-system/agent-access/ks.yaml'
     app='kubernetes/apps/kube-system/agent-access/app'
@@ -2724,7 +2621,7 @@ n8n:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    expected_origin='https://github.com/supermorphic/homelab-talos.git'
+    expected_origin='https://forgejo.infra.supermorphic.com/supermorphic/homelab-talos.git'
     expected_confirmation='bootstrap:n8n'
     postgresql_ks='kubernetes/apps/automation/n8n-postgresql/ks.yaml'
     n8n_ks='kubernetes/apps/automation/n8n/ks.yaml'
@@ -2982,7 +2879,7 @@ automation-data:
     set -euo pipefail
 
     kubeconfig='{{kubeconfig}}'
-    expected_origin='https://github.com/supermorphic/homelab-talos.git'
+    expected_origin='https://forgejo.infra.supermorphic.com/supermorphic/homelab-talos.git'
     expected_confirmation='bootstrap:automation-data'
     postgresql_ks='kubernetes/apps/automation-data/postgresql/ks.yaml'
     database_secret='kubernetes/apps/automation-data/postgresql/app/postgresql-credentials.sops.yaml'
