@@ -416,13 +416,9 @@ def _invocation_config(repo_root, cluster, binding, config_path):
 
 
 def install_invocation_kubeconfig(repo_root: Path, directory: Path, binding: dict) -> Path:
-    from scripts.test.access import resolve_suite_access
+    from scripts.test.access import expected_invocation_binding
 
-    if binding != {
-        "schema_version": 1,
-        "run_id": binding.get("run_id"),
-        **resolve_suite_access(repo_root, binding.get("suite_id")),
-    } or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", str(binding.get("run_id", ""))):
+    if binding != expected_invocation_binding(repo_root, binding):
         raise SafeError("invalid-source")
     local = load_workstation(directory)
     if local["cluster"]["schema_version"] != 2 or binding["profile"] not in PROFILES:

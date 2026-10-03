@@ -23,6 +23,11 @@ PREREQUISITES = {
 AUDIT_SUITES = {"verification.agent-access", "test.agent-credentials"}
 HOST_LOCAL_SUITES = {"test.nocodb-local-integration", "test.web-research-local-integration"}
 PHYSICAL_SUITE = "test.resilience.node-abrupt-loss"
+PURPOSE_PROFILES = {
+    "campaign-observer": "observer",
+    "campaign-coordinator": "campaign-coordinator",
+    "report-publisher": "report-publisher",
+}
 
 
 def validate_access(entry: dict) -> None:
@@ -96,11 +101,23 @@ def validate_access(entry: dict) -> None:
         raise SafeError("invalid-source")
 
 
-def _canonical_entry(repo_root: Path, suite_id: str) -> tuple[dict, str]:
+def _canonical_catalog(repo_root: Path) -> tuple[dict, str]:
     catalog_path = repo_root / "tests/catalog.yaml"
     override = os.environ.get("TEST_CATALOG_PATH")
     if override and Path(override).absolute() != catalog_path.absolute():
         raise SafeError("invalid-source")
+    try:
+        raw = catalog_path.read_bytes()
+        catalog = yaml.safe_load(raw)
+        if catalog.get("schema_version") != 3 or not isinstance(catalog.get("suites"), list):
+            raise SafeError("invalid-source")
+    except (OSError, TypeError, AttributeError, yaml.YAMLError):
+        raise SafeError("invalid-source") from None
+    return catalog, hashlib.sha256(raw).hexdigest()
+
+
+def _canonical_entry(repo_root: Path, suite_id: str) -> tuple[dict, str]:
+    catalog, digest = _canonical_catalog(repo_root)
     for variable, default in (
         ("NOCODB_ACCESS_EXTENSION_CONFIRM", "test.nocodb-access"),
         ("NOCODB_RESTORE_EXTENSION_CONFIRM", "test.nocodb-restore-drill"),
@@ -108,10 +125,6 @@ def _canonical_entry(repo_root: Path, suite_id: str) -> tuple[dict, str]:
         if suite_id == default and os.environ.get(variable):
             raise SafeError("invalid-source")
     try:
-        raw = catalog_path.read_bytes()
-        catalog = yaml.safe_load(raw)
-        if catalog.get("schema_version") != 3:
-            raise SafeError("invalid-source")
         entries = [entry for entry in catalog["suites"] if entry["metadata"]["id"] == suite_id]
         if len(entries) != 1:
             raise SafeError("invalid-source")
@@ -119,7 +132,7 @@ def _canonical_entry(repo_root: Path, suite_id: str) -> tuple[dict, str]:
         validate_access(entry)
     except (OSError, KeyError, TypeError, AttributeError, yaml.YAMLError):
         raise SafeError("invalid-source") from None
-    return entry, hashlib.sha256(raw).hexdigest()
+    return entry, digest
 
 
 def resolve_suite_access(repo_root: Path, suite_id: str) -> dict:
@@ -143,17 +156,39 @@ def prepare_invocation(repo_root: Path, suite_id: str, run_id: str) -> Path | No
     return credentials.install_invocation_kubeconfig(repo_root, workstation.DIRECTORY, binding)
 
 
+def expected_invocation_binding(repo_root: Path, binding: dict) -> dict:
+    """Resolve a suite or one of three fixed orchestration purposes, never both."""
+    if not isinstance(binding, dict) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", str(binding.get("run_id", ""))
+    ):
+        raise SafeError("invalid-source")
+    expected = {"schema_version": 1, "run_id": binding["run_id"]}
+    if "purpose" in binding:
+        purpose = binding["purpose"]
+        if not isinstance(purpose, str) or purpose not in PURPOSE_PROFILES:
+            raise SafeError("invalid-source")
+        _, digest = _canonical_catalog(repo_root)
+        return {
+            **expected,
+            "purpose": purpose,
+            "profile": PURPOSE_PROFILES[purpose],
+            "catalog_digest": digest,
+        }
+    return {**expected, **resolve_suite_access(repo_root, binding.get("suite_id"))}
+
+
+def prepare_purpose_invocation(repo_root: Path, purpose: str, run_id: str) -> Path:
+    from scripts.openbao import credentials, workstation
+
+    binding = expected_invocation_binding(repo_root, {"purpose": purpose, "run_id": run_id})
+    return credentials.install_invocation_kubeconfig(repo_root, workstation.DIRECTORY, binding)
+
+
 def validate_invocation(repo_root: Path, config_path: Path) -> dict:
     from scripts.openbao import credentials, workstation
 
     binding, config = credentials.read_invocation(repo_root, config_path)
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", str(binding.get("run_id", ""))):
-        raise SafeError("invalid-source")
-    expected = {
-        "schema_version": 1,
-        "run_id": binding["run_id"],
-        **resolve_suite_access(repo_root, binding.get("suite_id")),
-    }
+    expected = expected_invocation_binding(repo_root, binding)
     if binding != expected or binding["profile"] is None:
         raise SafeError("invalid-source")
     local = credentials.load_workstation(workstation.DIRECTORY)
@@ -171,9 +206,21 @@ def remove_invocation(repo_root: Path, config_path: Path) -> None:
     credentials.remove_invocation_files(repo_root, config_path)
 
 
+def validate_purpose_invocation(
+    repo_root: Path, purpose: str, run_id: str, config_path: Path
+) -> dict:
+    expected = expected_invocation_binding(repo_root, {"purpose": purpose, "run_id": run_id})
+    binding = validate_invocation(repo_root, config_path)
+    if binding != expected:
+        raise SafeError("invalid-source")
+    return binding
+
+
 def validate_inherited_invocation(repo_root: Path, suite_id: str, config_path: Path) -> dict:
     """Retain a checked parent for the same suite or an observational child."""
     parent = validate_invocation(repo_root, config_path)
+    if "purpose" in parent:
+        raise SafeError("invalid-source")
     if parent["suite_id"] == suite_id:
         return parent
     entry, catalog_digest = _canonical_entry(repo_root, suite_id)
@@ -209,6 +256,10 @@ def main(argv: list[str]) -> int:
             path = prepare_invocation(root, argv[2], argv[3])
             if path is not None:
                 print(path)
+        elif len(argv) == 4 and argv[1] == "purpose":
+            print(prepare_purpose_invocation(root, argv[2], argv[3]))
+        elif len(argv) == 5 and argv[1] == "purpose-check":
+            validate_purpose_invocation(root, argv[2], argv[3], Path(argv[4]))
         elif len(argv) == 3 and argv[1] == "validate":
             import json
 
