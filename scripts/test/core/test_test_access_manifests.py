@@ -445,6 +445,177 @@ class TestAccessPolicyTests(unittest.TestCase):
                 ],
             )
 
+    def test_restored_applications_use_fixed_credentials_and_service_bound_hosts(self):
+        for obj in self.render_restore_backends():
+            if obj["kind"] != "Deployment":
+                continue
+            family = obj["metadata"]["labels"]["homelab-talos/test"]
+            nc = family == "nocodb-restore-drill"
+            namespace = "automation-data" if nc else "automation"
+            req = self.request("deployments", namespace, name=obj["metadata"]["name"])
+            req["resource"]["group"] = "apps"
+            service = {
+                "metadata": {
+                    "name": ("nc" if nc else "ad") + "-restore-0123456789ab-db",
+                    "namespace": "automation-data",
+                    "uid": "synthetic-service",
+                    "labels": {
+                        "homelab-talos/test": family,
+                        "homelab-talos/run-id": "0123456789ab",
+                        "homelab-talos/role": "database" if nc else "ad-database",
+                    },
+                },
+                "spec": {"type": "ClusterIP", "clusterIP": "192.0.2.45"},
+            }
+
+            def allowed(candidate, request=req, nc=nc, service=service):
+                parent = all(
+                    self.admits(policy, request, candidate)
+                    for policy in (
+                        "homelab-test-workload-security",
+                        "homelab-test-n8n-applications",
+                        "homelab-test-nocodb-applications",
+                    )
+                )
+                return parent and self.admits(
+                    "homelab-test-nc-restore-hosts" if nc else "homelab-test-ad-restore-hosts",
+                    request,
+                    candidate,
+                    params=service,
+                )
+
+            self.assertTrue(allowed(obj))
+            for change in (
+                "namespace",
+                "family",
+                "role",
+                "run",
+                "name",
+                "labels",
+                "selector",
+                "image",
+                "command",
+                "args",
+                "env",
+                "secret",
+                "database",
+                "host-ip",
+                "hostnames",
+                "hostalias",
+                "identity",
+                "token",
+                "volume",
+                "sidecar",
+                "init",
+                "probe",
+                "hook",
+                "owner",
+                "annotation",
+                "runtime-class",
+                "resource-limit",
+            ):
+                bad, request = copy.deepcopy(obj), copy.deepcopy(req)
+                pod = bad["spec"]["template"]["spec"]
+                app = pod["containers"][0]
+                if change == "namespace":
+                    request["namespace"] = "security"
+                elif change in ("family", "role", "run"):
+                    bad["metadata"]["labels"][
+                        "homelab-talos/"
+                        + {"family": "test", "role": "role", "run": "run-id"}[change]
+                    ] = "other"
+                elif change == "name":
+                    bad["metadata"]["name"] = "production"
+                elif change == "labels":
+                    bad["spec"]["template"]["metadata"]["labels"]["app.kubernetes.io/name"] = "n8n"
+                elif change == "selector":
+                    bad["spec"]["selector"]["matchLabels"] = {"app.kubernetes.io/name": "n8n"}
+                elif change == "image":
+                    app["image"] = "busybox:latest"
+                elif change == "command":
+                    app["command"] = ["sh", "-c", "env"]
+                elif change == "args":
+                    app["args"] = ["other"]
+                elif change == "env":
+                    app["env"].append({"name": "NODE_OPTIONS", "value": "--require=/tmp/other.js"})
+                elif change == "secret":
+                    next(e for e in app["env"] if "valueFrom" in e)["valueFrom"]["secretKeyRef"][
+                        "name"
+                    ] = "other"
+                elif change == "database":
+                    if nc:
+                        next(e for e in app["env"] if e["name"] == "DATABASE_URL").update(
+                            value="synthetic"
+                        )
+                    else:
+                        next(e for e in app["env"] if e["name"] == "DB_POSTGRESDB_HOST")[
+                            "value"
+                        ] = "n8n-postgresql"
+                elif change == "host-ip":
+                    pod["hostAliases"][0]["ip"] = "192.0.2.99"
+                elif change == "hostnames":
+                    pod["hostAliases"][0]["hostnames"] = ["production"]
+                elif change == "hostalias":
+                    pod["hostAliases"].append({"ip": "192.0.2.99", "hostnames": ["other"]})
+                elif change == "identity":
+                    pod["serviceAccountName"] = "elevated"
+                elif change == "runtime-class":
+                    pod["runtimeClassName"] = "other"
+                elif change == "resource-limit":
+                    app["resources"]["limits"]["memory"] = "20Gi"
+                elif change == "token":
+                    pod["automountServiceAccountToken"] = True
+                elif change == "volume":
+                    pod["volumes"][0] = {
+                        "name": "data",
+                        "persistentVolumeClaim": {"claimName": "production"},
+                    }
+                elif change == "sidecar":
+                    pod["containers"].append(copy.deepcopy(app))
+                elif change == "init":
+                    pod["initContainers"] = [copy.deepcopy(app)]
+                elif change == "probe":
+                    app["readinessProbe"] = {"exec": {"command": ["env"]}}
+                elif change == "hook":
+                    app["lifecycle"] = {"postStart": {"exec": {"command": ["env"]}}}
+                elif change == "owner":
+                    bad["metadata"]["ownerReferences"] = [{"uid": "synthetic"}]
+                else:
+                    bad["spec"]["template"]["metadata"]["annotations"] = {
+                        "test.example/inject": "true"
+                    }
+                with self.subTest(family=family, change=change):
+                    self.assertFalse(allowed(bad, request))
+            for policy in (
+                "homelab-test-workload-security",
+                "homelab-test-n8n-applications",
+                "homelab-test-nocodb-applications",
+            ):
+                self.assertTrue(self.admits(policy, {**req, "operation": "DELETE"}, None, obj))
+                self.assertFalse(
+                    self.admits(
+                        "homelab-test-nocodb-applications"
+                        if nc
+                        else "homelab-test-n8n-applications",
+                        {**req, "operation": "UPDATE"},
+                        obj,
+                        obj,
+                    )
+                )
+
+    def test_nocodb_application_grant_has_only_individual_fixture_actions(self):
+        roles = [
+            d
+            for d in self.documents
+            if d["kind"] == "Role" and d["metadata"]["name"] == "homelab-test-restore-applications"
+        ]
+        self.assertEqual(len(roles), 1)
+        self.assertEqual(roles[0]["metadata"]["namespace"], "automation-data")
+        self.assertEqual(
+            roles[0]["rules"],
+            [{"apiGroups": ["apps"], "resources": ["deployments"], "verbs": ["create", "delete"]}],
+        )
+
     def test_restore_database_controllers_cannot_select_other_authority(self):
         for family, role in (
             ("automation-data-restore-drill", "ad-database"),

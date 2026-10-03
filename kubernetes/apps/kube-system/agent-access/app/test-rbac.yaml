@@ -571,3 +571,27 @@ subjects:
   - kind: ServiceAccount
     name: homelab-test-runner
     namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-restore-applications
+  namespace: automation-data
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-restore-applications
+  namespace: automation-data
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-restore-applications
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-runner
+    namespace: kube-system

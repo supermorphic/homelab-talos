@@ -145,3 +145,98 @@ metadata:
 spec:
   policyName: homelab-test-restore-databases
   validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-nocodb-applications
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [deployments]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: nocodb-family
+      expression: >-
+        (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/test'] == 'nocodb-restore-drill'
+  variables:
+    - name: workload
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: run
+      expression: variables.workload.metadata.labels['homelab-talos/run-id']
+    - name: name
+      expression: "'nc-restore-' + variables.run + '-nocodb'"
+    - name: labels
+      expression: "{'homelab-talos/test': 'nocodb-restore-drill', 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'nocodb'}"
+    - name: pod
+      expression: variables.workload.spec.template.spec
+    - name: container
+      expression: variables.pod.containers[0]
+    - name: expectedValues
+      expression: >-
+        {'NC_SITE_URL': 'http://' + variables.name + '.automation-data.svc.cluster.local:8080',
+         'NC_ALLOW_LOCAL_EXTERNAL_DBS': 'true', 'NC_DISABLE_TELE': 'true', 'NC_DISABLE_SUPPORT_CHAT': 'true'}
+    - name: expectedSecrets
+      expression: "['DATABASE_URL', 'NC_AUTH_JWT_SECRET', 'NC_CONNECTION_ENCRYPT_KEY']"
+  validations:
+    - expression: >-
+        request.namespace == 'automation-data' && request.operation != 'UPDATE' &&
+        variables.run.matches('^[0-9a-f]{12}$') && variables.workload.metadata.name == variables.name &&
+        variables.workload.metadata.labels == variables.labels &&
+        variables.workload.spec.replicas == 1 && variables.workload.spec.strategy.type == 'Recreate' &&
+        !has(variables.workload.spec.strategy.rollingUpdate) &&
+        variables.workload.spec.selector.matchLabels == variables.labels &&
+        !has(variables.workload.spec.selector.matchExpressions) &&
+        variables.workload.spec.template.metadata.labels == variables.labels &&
+        (!has(variables.pod.restartPolicy) || variables.pod.restartPolicy == 'Always') &&
+        variables.pod.securityContext.fsGroup == 1000 && variables.pod.securityContext.fsGroupChangePolicy == 'OnRootMismatch' &&
+        variables.container.name == 'nocodb' &&
+        variables.container.image == 'docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9' &&
+        variables.container.imagePullPolicy == 'IfNotPresent' &&
+        !has(variables.container.command) && !has(variables.container.args) &&
+        variables.container.securityContext.runAsUser == 1000 && variables.container.securityContext.runAsGroup == 1000 &&
+        variables.container.securityContext.runAsNonRoot && variables.container.securityContext.readOnlyRootFilesystem
+      message: Only the pinned isolated NocoDB application template is permitted.
+    - expression: >-
+        variables.container.env.size() == 7 &&
+        variables.expectedValues.all(k, variables.container.env.exists(e, e.name == k && !has(e.valueFrom) && e.value == variables.expectedValues[k])) &&
+        variables.expectedSecrets.all(k, variables.container.env.exists(e, e.name == k && (!has(e.value) || e.value == '') &&
+          e.valueFrom.secretKeyRef.name == 'nocodb-credentials' && e.valueFrom.secretKeyRef.key == k &&
+          !has(e.valueFrom.configMapKeyRef) && !has(e.valueFrom.fieldRef) && !has(e.valueFrom.resourceFieldRef))) &&
+        variables.pod.volumes.size() == 2 && variables.pod.volumes.all(v, has(v.emptyDir)) &&
+        variables.pod.volumes.exists(v, v.name == 'data') && variables.pod.volumes.exists(v, v.name == 'tmp') &&
+        variables.container.volumeMounts.size() == 2 &&
+        variables.container.volumeMounts.exists(v, v.name == 'data' && v.mountPath == '/usr/app/data') &&
+        variables.container.volumeMounts.exists(v, v.name == 'tmp' && v.mountPath == '/tmp') &&
+        variables.container.volumeMounts.all(v, !has(v.subPath) && !has(v.subPathExpr) &&
+          (!has(v.mountPropagation) || v.mountPropagation == 'None'))
+      message: NocoDB must retain its fixed credential references and empty application storage.
+    - expression: >-
+        variables.container.ports.size() == 1 && variables.container.ports[0].name == 'http' &&
+        variables.container.ports[0].containerPort == 8080 &&
+        (!has(variables.container.ports[0].hostPort) || variables.container.ports[0].hostPort == 0) &&
+        (!has(variables.container.ports[0].hostIP) || variables.container.ports[0].hostIP == '') &&
+        (!has(variables.container.ports[0].protocol) || variables.container.ports[0].protocol == 'TCP') &&
+        variables.container.readinessProbe.httpGet.path == '/api/v1/health' && variables.container.readinessProbe.httpGet.port == 'http' &&
+        (!has(variables.container.readinessProbe.httpGet.host) || variables.container.readinessProbe.httpGet.host == '') &&
+        (!has(variables.container.readinessProbe.httpGet.scheme) || variables.container.readinessProbe.httpGet.scheme == 'HTTP') &&
+        !has(variables.container.readinessProbe.httpGet.httpHeaders) &&
+        !has(variables.container.readinessProbe.exec) && !has(variables.container.readinessProbe.tcpSocket) &&
+        !has(variables.container.readinessProbe.grpc) &&
+        !has(variables.container.livenessProbe) && !has(variables.container.startupProbe) &&
+        variables.container.resources.requests == {'cpu': '50m', 'memory': '256Mi'} &&
+        variables.container.resources.limits == {'memory': '1Gi'} && !has(variables.container.resources.claims)
+      message: NocoDB exposes only its fixed readiness endpoint and bounded resource requests.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-nocodb-applications
+spec:
+  policyName: homelab-test-nocodb-applications
+  validationActions: [Deny]

@@ -813,15 +813,20 @@ spec:
         !has(variables.workload.metadata.annotations) &&
         !has(variables.workload.spec.template.metadata.annotations) &&
         !has(variables.workload.spec.template.metadata.ownerReferences) &&
+        !has(variables.workload.spec.template.metadata.finalizers) &&
         variables.pod.automountServiceAccountToken == false &&
         (!has(variables.pod.serviceAccountName) || variables.pod.serviceAccountName == '' || variables.pod.serviceAccountName == 'default') &&
         variables.pod.containers.size() == 1 && !has(variables.pod.initContainers) && !has(variables.pod.ephemeralContainers) &&
         (!has(variables.pod.hostNetwork) || !variables.pod.hostNetwork) &&
         (!has(variables.pod.hostPID) || !variables.pod.hostPID) &&
         (!has(variables.pod.hostIPC) || !variables.pod.hostIPC) &&
-        !has(variables.pod.hostAliases) && !has(variables.pod.dnsConfig) &&
+        (!has(variables.pod.hostAliases) ||
+          (request.resource.resource == 'deployments' &&
+           variables.workload.metadata.labels['homelab-talos/test'] in ['automation-data-restore-drill', 'nocodb-restore-drill'])) &&
+        !has(variables.pod.dnsConfig) &&
         (!has(variables.pod.dnsPolicy) || variables.pod.dnsPolicy == 'ClusterFirst') &&
         !has(variables.pod.imagePullSecrets) && !has(variables.pod.priorityClassName) &&
+        !has(variables.pod.runtimeClassName) && !has(variables.pod.resourceClaims) &&
         (!has(variables.pod.schedulerName) || variables.pod.schedulerName == 'default-scheduler') &&
         variables.pod.securityContext.seccompProfile.type == 'RuntimeDefault' &&
         !has(variables.pod.securityContext.sysctls) && !has(variables.pod.securityContext.supplementalGroups) &&
@@ -871,6 +876,9 @@ spec:
   matchConditions:
     - name: test-runner
       expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: n8n-families
+      expression: >-
+        (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/test'] != 'nocodb-restore-drill'
   variables:
     - name: workload
       expression: "request.operation == 'DELETE' ? oldObject : object"
@@ -880,35 +888,46 @@ spec:
       expression: variables.pod.containers[0]
     - name: run
       expression: variables.workload.metadata.labels['homelab-talos/run-id']
+    - name: family
+      expression: variables.workload.metadata.labels['homelab-talos/test']
+    - name: fullChain
+      expression: variables.family == 'automation-data-restore-drill'
+    - name: name
+      expression: "variables.fullChain ? 'ad-restore-' + variables.run + '-n8n' : 'n8n-restore-' + variables.run"
     - name: labels
       expression: >-
-        {'homelab-talos/test': 'n8n-restore-drill', 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'n8n'}
+        {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'n8n'}
     - name: expectedValues
       expression: >-
-        {'DB_TYPE': 'postgresdb', 'DB_POSTGRESDB_HOST': 'n8n-postgresql.automation.svc.cluster.local',
-          'DB_POSTGRESDB_PORT': '5432', 'DB_POSTGRESDB_DATABASE': 'n8n_restore_' + variables.run,
+        {'DB_TYPE': 'postgresdb', 'DB_POSTGRESDB_HOST': (variables.fullChain ? 'ad-restore-' + variables.run + '-n8n-db' : 'n8n-postgresql.automation.svc.cluster.local'),
+          'DB_POSTGRESDB_PORT': '5432', 'DB_POSTGRESDB_DATABASE': (variables.fullChain ? 'n8n' : 'n8n_restore_' + variables.run),
           'DB_POSTGRESDB_USER': 'n8n', 'DB_POSTGRESDB_SCHEMA': 'public', 'N8N_PORT': '5678', 'N8N_PROTOCOL': 'http',
-          'N8N_HOST': 'n8n-restore-' + variables.run + '.automation.svc.cluster.local',
-          'N8N_WEBHOOK_URL': 'http://n8n-restore-' + variables.run + '.automation.svc.cluster.local:5678/',
-          'N8N_EDITOR_BASE_URL': 'http://n8n-restore-' + variables.run + '.automation.svc.cluster.local:5678/',
+          'N8N_HOST': variables.name + '.automation.svc.cluster.local',
+          'N8N_WEBHOOK_URL': 'http://' + variables.name + '.automation.svc.cluster.local:5678/',
+          'N8N_EDITOR_BASE_URL': 'http://' + variables.name + '.automation.svc.cluster.local:5678/',
           'N8N_DIAGNOSTICS_ENABLED': 'false', 'N8N_VERSION_NOTIFICATIONS_ENABLED': 'false', 'N8N_PERSONALIZATION_ENABLED': 'false'}
   validations:
     - expression: >-
         request.namespace == 'automation' && request.operation != 'UPDATE' &&
-        variables.run.matches('^[0-9a-f]{12}$') && variables.workload.metadata.name == 'n8n-restore-' + variables.run &&
-        variables.workload.metadata.labels['homelab-talos/test'] == 'n8n-restore-drill' &&
+        variables.run.matches('^[0-9a-f]{12}$') && variables.workload.metadata.name == variables.name &&
+        variables.family in ['n8n-restore-drill', 'automation-data-restore-drill'] &&
+        variables.workload.metadata.labels == variables.labels &&
         variables.workload.spec.replicas == 1 && variables.workload.spec.strategy.type == 'Recreate' &&
+        !has(variables.workload.spec.strategy.rollingUpdate) &&
         variables.workload.spec.selector.matchLabels == variables.labels &&
         !has(variables.workload.spec.selector.matchExpressions) &&
         variables.workload.spec.template.metadata.labels == variables.labels &&
         (!has(variables.pod.restartPolicy) || variables.pod.restartPolicy == 'Always') &&
         variables.pod.securityContext.fsGroup == 1000 &&
         variables.container.name == 'n8n' && variables.container.image == 'docker.n8n.io/n8nio/n8n:2.36.7' &&
+        variables.container.imagePullPolicy == 'IfNotPresent' &&
         !has(variables.container.command) && !has(variables.container.args) &&
         variables.container.securityContext.runAsUser == 1000 &&
         variables.container.securityContext.runAsGroup == 1000 && variables.container.securityContext.runAsNonRoot
       message: Only the isolated n8n restore application template is permitted.
     - expression: >-
+        variables.container.resources.requests == {'cpu': '100m', 'memory': '256Mi'} &&
+        variables.container.resources.limits == {'memory': '1Gi'} && !has(variables.container.resources.claims) &&
         variables.container.env.size() == 16 &&
         variables.expectedValues.all(k, variables.container.env.exists(e, e.name == k && !has(e.valueFrom) && e.value == variables.expectedValues[k])) &&
         variables.container.env.exists(e, e.name == 'DB_POSTGRESDB_PASSWORD' && (!has(e.value) || e.value == '') &&
