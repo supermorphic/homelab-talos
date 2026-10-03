@@ -741,6 +741,18 @@ komga-validate: require-bash
 komga-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.komga -- scripts/verify/komga.sh {{quote(kubeconfig)}}
 
+# Generate synthetic CBZ/Mylar data and a private attended-outcome template.
+komga-acceptance-fixture directory=".tmp/komga-acceptance":
+    @uv run --locked python -m scripts.test.scenarios.komga_acceptance generate {{quote(directory)}}
+
+# Operator-run: capture existing account/collection/progress with the reading key.
+komga-acceptance-baseline:
+    @uv run --locked python -m scripts.test.scenarios.komga_acceptance capture {{quote(kubeconfig)}}
+
+# Read-only final acceptance after a normal Git-managed pod replacement.
+komga-acceptance:
+    @scripts/test/run-catalog-suite.sh test.komga-acceptance -- uv run --locked python -m scripts.test.scenarios.komga_acceptance verify {{quote(kubeconfig)}}
+
 # Validate Mylar3 chart output and its shared-media integration invariants offline.
 mylar3-validate: require-bash
     @scripts/validate/mylar3.sh
