@@ -27,7 +27,8 @@ web-research-validate: require-bash
 
 # Run disposable native web research containers and automatic credential cutover.
 web-research-local-integration-test: require-bash
-    @scripts/test/scenarios/web-research-local-integration.sh
+    @scripts/test/run-catalog-suite.sh test.web-research-local-integration -- \
+      scripts/test/scenarios/web-research-local-integration.sh
 
 # Run the registered live consumer contract from the current ready n8n main Pod.
 # Kubernetes reads use homelab-observer; only the fixed Node stdin process uses

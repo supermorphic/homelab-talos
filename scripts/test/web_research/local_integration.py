@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
+import urllib.parse
 from copy import deepcopy
 from pathlib import Path
 
@@ -269,12 +270,14 @@ def write_gatus_config(root: Path, destination: Path) -> None:
         "searxng": "http://searxng:8080/healthz",
         "crawl4ai-readiness": "http://native:9001/readyz",
         "crawl4ai-e2e": "http://native:8080/crawl",
-        "searxng-search-e2e": "http://searxng:8080/search?q=example%20domain&format=json",
+        "searxng-search-e2e": "http://searxng:8080/search",
     }
     if {endpoint["name"] for endpoint in endpoints} != set(urls):
         raise AcceptanceFailure("gatus-endpoint-set")
     for endpoint in endpoints:
-        endpoint["url"] = urls[endpoint["name"]]
+        # Keep production search parameters when replacing only its destination.
+        query = urllib.parse.urlsplit(endpoint["url"]).query
+        endpoint["url"] = urls[endpoint["name"]] + (f"?{query}" if query else "")
         endpoint["interval"] = "1h"
     destination.write_text(
         yaml.safe_dump(
@@ -301,6 +304,17 @@ def write_gatus_negative_config(root: Path, destination: Path) -> None:
         endpoint["name"] = name
         endpoint["url"] = f"http://gatus-fixture:8080/{name}"
         endpoint["interval"] = "1h"
+        endpoints.append(endpoint)
+    search = next(
+        endpoint for endpoint in source["config"]["endpoints"]
+        if endpoint["name"] == "searxng-search-e2e"
+    )
+    query = urllib.parse.urlsplit(search["url"]).query
+    for name in ("search-partial", "search-empty", "search-invalid-scheme", "search-missing-host"):
+        endpoint = deepcopy(search)
+        endpoint["name"] = name
+        endpoint["url"] = f"http://gatus-fixture:8080/{name}?{query}"
+        endpoint["interval"] = "1s"
         endpoints.append(endpoint)
     destination.write_text(
         yaml.safe_dump(
