@@ -2,6 +2,7 @@
 set -euo pipefail
 
 source scripts/lib/common.sh
+source scripts/test/lib/owned-resources.sh
 require_bash
 
 [[ "$#" -eq 1 ]] || {
@@ -14,18 +15,46 @@ expected_confirmation='test:storage-provisioning'
 namespace='longhorn-system'
 pvc="storage-provisioning-${EPOCHSECONDS}-$$"
 temp_dir="$(mktemp -d /tmp/homelab-talos-storage-provisioning.XXXXXX)"
+ledger="$temp_dir/owned.jsonl"
+run_dir="${HOMELAB_TEST_RUN_DIR:-}"
 created=false
+creation_attempted=false
+kc=(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace")
+
+write_phase() {
+  [[ -n "$run_dir" && -d "$run_dir" ]] || return 0
+  jq -n --arg status "$2" --arg reason "$3" '{status:$status,reason:$reason}' \
+    >"$run_dir/$1.json"
+}
+
 cleanup() {
+  local original_exit="$?" cleanup_ok=true cleanup_status=passed
+  trap - EXIT INT TERM
+  set +e
   if [[ "$created" == 'true' ]]; then
-    kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete pvc "$pvc" \
-      --ignore-not-found --wait=true --timeout=2m >/dev/null 2>&1 || true
+    test_delete_owned "$ledger" PersistentVolumeClaim "$namespace" "$pvc" \
+      "${kc[@]}" || cleanup_ok=false
+  elif [[ "$creation_attempted" == true && ! -s "$ledger" ]]; then
+    cleanup_ok=false
   fi
-  rm -rf -- "$temp_dir"
+  if [[ -s "$ledger" && -n "$run_dir" && -d "$run_dir/diagnostics" ]]; then
+    cp "$ledger" "$run_dir/diagnostics/storage-owned.jsonl" || cleanup_ok=false
+  fi
+  rm -rf -- "$temp_dir" || cleanup_ok=false
+  [[ "$cleanup_ok" == true ]] || cleanup_status=failed
+  write_phase cleanup "$cleanup_status" 'creation-owned temporary Longhorn claim cleanup' || cleanup_ok=false
+  if [[ "$cleanup_ok" != true ]]; then
+    echo 'Storage provisioning cleanup failed; no unowned claim was adopted.' >&2
+    [[ "$original_exit" != 0 ]] || original_exit=1
+  fi
+  exit "$original_exit"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 [[ -f "$kubeconfig" ]] || {
-  echo "Missing $kubeconfig; run just talos kubeconfig." >&2
+  echo 'Storage provisioning requires the selected invocation config.' >&2
   exit 1
 }
 [[ "${STORAGE_PROVISIONING_CONFIRM:-}" == "$expected_confirmation" ]] || {
@@ -44,7 +73,8 @@ yq -n \
    .spec.storageClassName = "longhorn" |
    .spec.resources.requests.storage = "1Gi"' >"$temp_dir/pvc.yaml"
 
-kubectl --kubeconfig "$kubeconfig" create --filename "$temp_dir/pvc.yaml" >/dev/null
+creation_attempted=true
+test_create_owned "$ledger" "$temp_dir/pvc.yaml" "${kc[@]}"
 created=true
 kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" wait \
   --for=jsonpath='{.status.phase}'=Bound "pvc/$pvc" --timeout=3m
@@ -63,6 +93,7 @@ done
   exit 1
 }
 
-kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete pvc "$pvc" --wait=true >/dev/null
+write_phase assertion passed 'fresh claim bound with replicas on two distinct nodes'
+test_delete_owned "$ledger" PersistentVolumeClaim "$namespace" "$pvc" "${kc[@]}"
 created=false
 echo 'Storage provisioning test passed: a temporary Longhorn PVC bound and its replicas landed on two distinct nodes.'

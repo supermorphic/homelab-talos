@@ -151,7 +151,16 @@ spec:
       expression: "'homelab-talos/role' in variables.claim.metadata.labels ? variables.claim.metadata.labels['homelab-talos/role'] : ''"
   validations:
     - expression: >-
-        !has(variables.claim.metadata.ownerReferences) && !has(variables.claim.metadata.annotations) &&
+        !has(variables.claim.metadata.ownerReferences) &&
+        (!has(variables.claim.metadata.annotations) || (request.operation == 'DELETE' &&
+          variables.claim.metadata.annotations.all(a,
+            (a in ['pv.kubernetes.io/bind-completed', 'pv.kubernetes.io/bound-by-controller'] &&
+              variables.claim.metadata.annotations[a] == 'yes') ||
+            (a in ['volume.kubernetes.io/storage-provisioner', 'volume.beta.kubernetes.io/storage-provisioner'] &&
+              variables.claim.metadata.annotations[a] == 'driver.longhorn.io') ||
+            (a == 'volume.kubernetes.io/selected-node' &&
+              variables.claim.metadata.annotations[a].size() <= 253 &&
+              variables.claim.metadata.annotations[a].matches('^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$'))))) &&
         (!has(variables.claim.metadata.finalizers) || variables.claim.metadata.finalizers.all(f, f == 'kubernetes.io/pvc-protection')) && (
         (request.namespace == 'longhorn-system' &&
         variables.claim.metadata.name.matches('^storage-provisioning-[0-9]+-[0-9]+$') &&

@@ -2094,6 +2094,47 @@ class TestAccessPolicyTests(unittest.TestCase):
         deleting = {**request, "operation": "DELETE"}
         self.assertTrue(self.admits("homelab-test-storage", deleting, None, obj))
 
+    def test_bound_storage_claim_cleanup_accepts_only_controller_binding_annotations(self):
+        request = self.request(
+            "persistentvolumeclaims", "longhorn-system", name="storage-provisioning-123-456"
+        )
+        fresh = {
+            "metadata": {
+                "name": request["name"],
+                "namespace": request["namespace"],
+                "labels": {"homelab-talos/test": "storage-provisioning"},
+            },
+            "spec": {
+                "accessModes": ["ReadWriteOnce"],
+                "storageClassName": "longhorn",
+                "resources": {"requests": {"storage": "1Gi"}},
+            },
+        }
+        bound = copy.deepcopy(fresh)
+        bound["spec"]["volumeName"] = "synthetic-controller-volume"
+        bound["metadata"]["finalizers"] = ["kubernetes.io/pvc-protection"]
+        bound["metadata"]["annotations"] = {
+            "pv.kubernetes.io/bind-completed": "yes",
+            "pv.kubernetes.io/bound-by-controller": "yes",
+            "volume.kubernetes.io/storage-provisioner": "driver.longhorn.io",
+            "volume.beta.kubernetes.io/storage-provisioner": "driver.longhorn.io",
+            "volume.kubernetes.io/selected-node": "synthetic-node-a",
+        }
+        deleting = {**request, "operation": "DELETE"}
+        self.assertTrue(self.admits("homelab-test-storage", deleting, None, bound))
+        annotated_create = copy.deepcopy(fresh)
+        annotated_create["metadata"]["annotations"] = bound["metadata"]["annotations"]
+        self.assertFalse(self.admits("homelab-test-storage", request, annotated_create))
+        for key, value in (
+            ("unregistered.example/annotation", "synthetic"),
+            ("volume.kubernetes.io/storage-provisioner", "other.example"),
+            ("pv.kubernetes.io/bind-completed", "unexpected"),
+        ):
+            bad = copy.deepcopy(bound)
+            bad["metadata"]["annotations"][key] = value
+            with self.subTest(annotation=key):
+                self.assertFalse(self.admits("homelab-test-storage", deleting, None, bad))
+
     def test_restore_claims_must_be_fresh_bounded_and_owned(self):
         for family, namespace, role, suffix in (
             ("automation-data-restore-drill", "automation-data", "ad-data", "ad-data"),
