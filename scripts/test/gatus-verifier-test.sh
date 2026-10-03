@@ -23,23 +23,28 @@ EOF
 cat >"$work/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 if [[ " $* " == *'/health'* ]]; then exit 0; fi
-if [[ " $* " == *'gatus_results_total'* ]]; then
-  printf '{"status":"success","data":{"result":[{"metric":{},"value":[%s,"%s"]}]}}\n' \
-    "$GATUS_TEST_SAMPLE_TIME" "$GATUS_TEST_ACTIVITY"
-  exit 0
+name=''
+for probe in echo openbao caddy semaphore forgejo; do
+  if [[ " $* " == *"name=\"$probe\""* ]]; then name="$probe"; break; fi
+done
+[[ -n "$name" ]] || exit 2
+value=1
+sample_time="$GATUS_TEST_SAMPLE_TIME"
+if [[ "$name" == "${GATUS_TEST_PROBE:-}" ]]; then
+  value="$GATUS_TEST_VALUE"
+  sample_time="$((sample_time + ${GATUS_TEST_TIME_OFFSET:-0}))"
 fi
-if [[ " $* " == *'name="echo"'* ]]; then
-  name=echo
-  value=1
-else
-  name=openbao
-  value="$GATUS_TEST_OPENBAO_VALUE"
+if [[ " $* " == *'gatus_results_total'* ]]; then
+  if [[ "$name" == "${GATUS_TEST_PROBE:-}" ]]; then value="$GATUS_TEST_ACTIVITY"; fi
+  printf '{"status":"success","data":{"result":[{"metric":{},"value":[%s,"%s"]}]}}\n' \
+    "$sample_time" "$value"
+  exit 0
 fi
 if [[ "$value" == missing ]]; then
   printf '%s\n' '{"status":"success","data":{"result":[]}}'
 else
   printf '{"status":"success","data":{"result":[{"metric":{"group":"Platform","name":"%s"},"value":[%s,"%s"]}]}}\n' \
-    "$name" "$GATUS_TEST_SAMPLE_TIME" "$value"
+    "$name" "$sample_time" "$value"
 fi
 EOF
 cat >"$work/bin/just" <<'EOF'
@@ -53,18 +58,28 @@ export GATUS_TEST_VIP="$HOMELAB_GATEWAY_VIP"
 GATUS_TEST_SAMPLE_TIME="$(date -u +%s)"
 export GATUS_TEST_SAMPLE_TIME
 export GATUS_TEST_ACTIVITY=1
+export GATUS_TEST_VALUE=1
 
-GATUS_TEST_OPENBAO_VALUE=1 bash scripts/verify/gatus.sh "$work/kubeconfig" >"$work/output"
-for value in 0 missing; do
-  if GATUS_TEST_OPENBAO_VALUE="$value" bash scripts/verify/gatus.sh "$work/kubeconfig" >"$work/output" 2>&1; then
-    echo "Gatus verification accepted OpenBao probe state: $value" >&2
+bash scripts/verify/gatus.sh "$work/kubeconfig" >"$work/output"
+for probe in echo openbao caddy semaphore forgejo; do
+  export GATUS_TEST_PROBE="$probe"
+  for value in 0 missing; do
+    if GATUS_TEST_VALUE="$value" bash scripts/verify/gatus.sh "$work/kubeconfig" >"$work/output" 2>&1; then
+      echo "Gatus verification accepted $probe probe state: $value" >&2
+      exit 1
+    fi
+  done
+  for offset in -300 300; do
+    if GATUS_TEST_TIME_OFFSET="$offset" bash scripts/verify/gatus.sh "$work/kubeconfig" >"$work/output" 2>&1; then
+      echo "Gatus verification accepted $probe probe timestamp offset: $offset" >&2
+      exit 1
+    fi
+  done
+  if [[ "$probe" != echo ]] && GATUS_TEST_ACTIVITY=0 \
+    bash scripts/verify/gatus.sh "$work/kubeconfig" >"$work/output" 2>&1; then
+    echo "Gatus verification accepted $probe without recent execution." >&2
     exit 1
   fi
 done
-GATUS_TEST_ACTIVITY=0 GATUS_TEST_OPENBAO_VALUE=1 \
-  bash scripts/verify/gatus.sh "$work/kubeconfig" >"$work/output" 2>&1 && {
-    echo 'Gatus verification accepted an OpenBao probe without recent execution.' >&2
-    exit 1
-  }
 
-echo 'Gatus verification accepts only a fresh successful OpenBao probe.'
+echo 'Gatus verification requires fresh successful echo, OpenBao, Caddy, Semaphore, and Forgejo probes, with recent application and off-cluster executions.'

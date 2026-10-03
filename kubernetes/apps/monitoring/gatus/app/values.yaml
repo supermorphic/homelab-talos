@@ -111,8 +111,7 @@ config:
       conditions:
         - "[STATUS] == 200"
     # Off-cluster edge managed by separate host automation. Caddy serves this
-    # directly, independently of Semaphore. Confirm the deployed endpoint
-    # before activation.
+    # directly, independently of Semaphore and Forgejo.
     - name: caddy
       group: Platform
       url: "https://caddy.infra.supermorphic.com/healthz"
@@ -125,6 +124,15 @@ config:
     - name: semaphore
       group: Platform
       url: "https://semaphore.infra.supermorphic.com/api/ping"
+      method: GET
+      interval: 1m
+      conditions:
+        - "[STATUS] == 200"
+    # Forgejo's unauthenticated health endpoint through DNS, trusted TLS, and
+    # Caddy. Host automation owns the application and its exposed HTTPS route.
+    - name: forgejo
+      group: Platform
+      url: "https://forgejo.infra.supermorphic.com/api/healthz"
       method: GET
       interval: 1m
       conditions:
