@@ -38,6 +38,18 @@ KUBECONFIG=/synthetic/ambient-admin TEST_KUBECONFIG=/synthetic/explicit-admin \
   bash -e -c 'source scripts/test/lib/access.sh; test_access_open validation.openbao offline-run; [[ -z "$TEST_KUBECONFIG" && "$KUBECONFIG" == /dev/null ]]; test_access_close'
 [[ "$(<"$fixture_root/trace")" == 'resolve validation.openbao' ]]
 
+# The declared physical/Talos boundary remains an explicit operator workflow.
+set +e
+NODE_OPERATOR_KUBECONFIG='' TEST_KUBECONFIG='' \
+  bash -e -c 'source scripts/test/lib/access.sh; test_access_open test.resilience.node-abrupt-loss physical-run' >/dev/null 2>&1
+physical_exit="$?"
+set -e
+[[ "$physical_exit" -ne 0 ]]
+touch "$fixture_root/operator-config"
+NODE_OPERATOR_KUBECONFIG="$fixture_root/operator-config" TEST_KUBECONFIG='' \
+  bash -e -c 'source scripts/test/lib/access.sh; test_access_open test.resilience.node-abrupt-loss physical-run; [[ "$TEST_KUBECONFIG" == "$NODE_OPERATOR_KUBECONFIG" && -z "$TEST_ACCESS_CONFIG" ]]; test_access_check test.resilience.node-abrupt-loss; test_access_close'
+[[ -f "$fixture_root/operator-config" ]]
+
 # A direct invocation ignores ambient KUBECONFIG and exports only its own config.
 : >"$fixture_root/trace"
 KUBECONFIG=/synthetic/ambient-admin TEST_KUBECONFIG='' TEST_ACCESS_CONFIG='' \

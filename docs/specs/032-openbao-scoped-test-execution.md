@@ -71,6 +71,12 @@ use null with no operator boundary. The physical-loss suite uses null plus
 `operator_boundary: physical-power-and-talos`. Attended OpenBao suites still name
 their Kubernetes profile and declare their non-Kubernetes prerequisites.
 
+The physical-loss exception does not issue a Kubernetes test credential. Its
+existing node containment and recovery operations remain operator-run and require
+an explicitly supplied `NODE_OPERATOR_KUBECONFIG`. The dispatcher does not discover
+that credential, inherit it from another test, or remove it. Other null-profile
+suites run without Kubernetes credentials.
+
 Use a small validated prerequisite vocabulary: `talos-reader`, `talos-operator`,
 `physical-power`, `application-credential`, `openbao-operator`, and
 `openbao-recovery`. Only declare prerequisites reached by the selected scenario,

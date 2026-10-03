@@ -15,6 +15,16 @@ test_access_open() {
   _TEST_ACCESS_CATALOG_DIGEST="$(yq -r '.catalog_digest' - <<<"$declaration")" || return 1
   profile="$(yq -r '.profile // "null"' - <<<"$declaration")" || return 1
   if [[ "$profile" == 'null' ]]; then
+    if [[ "$(yq -r '.operator_boundary // "none"' - <<<"$declaration")" == physical-power-and-talos ]]; then
+      config="${NODE_OPERATOR_KUBECONFIG:-}"
+      [[ -z "${TEST_ACCESS_CONFIG:-}" && "$config" == /* && -f "$config" &&
+         ( -z "${TEST_KUBECONFIG:-}" || "$TEST_KUBECONFIG" == "$config" ) ]] || {
+        echo 'Physical node testing remains operator-run and requires an explicit NODE_OPERATOR_KUBECONFIG.' >&2
+        return 1
+      }
+      export TEST_KUBECONFIG="$config" KUBECONFIG="$config" TEST_ACCESS_CONFIG=''
+      return 0
+    fi
     export TEST_KUBECONFIG='' TEST_ACCESS_CONFIG='' KUBECONFIG=/dev/null
     return 0
   fi
