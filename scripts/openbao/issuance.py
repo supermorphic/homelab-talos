@@ -4,7 +4,7 @@ import base64
 import json
 from datetime import datetime
 
-from .credentials import PROFILES
+from . import credentials
 
 NAMESPACE = "openbao-acceptance"
 ACCOUNT = "openbao-issued-reader"
@@ -155,7 +155,7 @@ def issuer_boundary(issuer, clock, suffix, *, owner=None):
         "spec": {"audiences": [AUDIENCE], "expirationSeconds": 600},
     }
     expires = _prove_tokenrequest(issuer, clock, payload, NAMESPACE, ACCOUNT)
-    accounts = list(dict.fromkeys(PROFILES.values()))
+    accounts = list(dict.fromkeys(credentials.PROFILES.values()))
     for account in accounts:
         _prove_tokenrequest(issuer, clock, payload, "kube-system", account)
     for namespace, account in [
