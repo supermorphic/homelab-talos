@@ -28,25 +28,6 @@ spec:
       namespace: networking
       sectionName: https
   rules:
-    # Catalog lookups and manual release searches can take minutes to finish.
-    - matches:
-        - method: GET
-          path:
-            type: Exact
-            value: /choose_specific_download
-        - method: GET
-          path:
-            type: Exact
-            value: /searchit
-      timeouts:
-        request: 600s
-        backendRequest: 600s
-      backendRefs:
-        - group: ""
-          kind: Service
-          name: mylar3
-          port: 8090
-          weight: 1
     - backendRefs:
         - group: ""
           kind: Service
@@ -57,3 +38,8 @@ spec:
         - path:
             type: PathPrefix
             value: /
+      # Mylar waits for remote services and filesystem work before responding.
+      # Use one finite deadline for every endpoint instead of a search allowlist.
+      timeouts:
+        request: 600s
+        backendRequest: 600s
