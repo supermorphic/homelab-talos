@@ -28,12 +28,16 @@ spec:
       namespace: networking
       sectionName: https
   rules:
-    # Manual release searches wait between provider queries and can take minutes.
+    # Catalog lookups and manual release searches can take minutes to finish.
     - matches:
         - method: GET
           path:
             type: Exact
             value: /choose_specific_download
+        - method: GET
+          path:
+            type: Exact
+            value: /searchit
       timeouts:
         request: 600s
         backendRequest: 600s
