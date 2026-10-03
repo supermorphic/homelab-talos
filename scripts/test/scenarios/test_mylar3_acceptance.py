@@ -1,6 +1,7 @@
 """Independent filesystem and SQLite invariants for the attended fixture probe."""
 
 import base64
+import hashlib
 import json
 import os
 import sqlite3
@@ -137,6 +138,25 @@ class IntegritySafety(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.run_dir = Path(self.temp.name)
         self.acceptance = Acceptance("synthetic-config", {}, self.run_dir)
+
+    def test_operation_failure_classifies_without_retaining_runtime_values(self):
+        for stderr, expected in (
+            ("Error from server (Forbidden): private-runtime-value", "API authorization denied"),
+            (
+                "Fixture check failed: hardlink identity.",
+                "fixture inspection failed",
+            ),
+            ("private-runtime-value", "runtime operation failed"),
+        ):
+            with (
+                self.subTest(stderr=stderr),
+                patch.object(
+                    subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", stderr)
+                ),
+                self.assertRaisesRegex(ScenarioFailure, expected) as caught,
+            ):
+                self.acceptance.call("-n", "media", "exec")
+            self.assertNotIn("private-runtime-value", str(caught.exception))
 
     def test_read_only_verification_retains_no_digest_or_paths(self):
         calls = []
@@ -293,6 +313,18 @@ class ProbeInvariants(unittest.TestCase):
         evidence = json.loads(result.stdout)
         self.assertEqual(evidence["pages"], 1)
         self.assertGreaterEqual(evidence["links"], 2)
+
+    def test_probe_does_not_require_python_311_file_digest(self):
+        self.probe = self.probe.replace(
+            "phase = 'fixture paths'",
+            "if hasattr(hashlib, 'file_digest'): del hashlib.file_digest\nphase = 'fixture paths'",
+        )
+        result = self.run_probe()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout)["digest"],
+            hashlib.sha256(self.source.read_bytes()).hexdigest(),
+        )
 
     def test_identical_copy_is_not_a_hardlink(self):
         self.target.unlink()

@@ -53,15 +53,18 @@ def validate_fixture(value: object) -> dict:
 # returned. The content digest is compared in memory and never retained.
 PROBE = r"""
 import hashlib, json, pathlib, sqlite3, subprocess, sys, zipfile
+phase = 'fixture paths'
 try:
     f = json.loads(sys.stdin.read())
     paths = [pathlib.Path(f[k]) for k in ('download_path', 'library_path')]
     for p, root in zip(paths, ('/data/downloads/comics', '/data/media/comics')):
         if not p.is_file() or p.resolve(strict=True) != p or not p.is_relative_to(root):
             raise ValueError()
+    phase = 'hardlink identity'
     a, b = [p.stat() for p in paths]
     if a.st_size <= 0 or (a.st_dev, a.st_ino) != (b.st_dev, b.st_ino) or min(a.st_nlink, b.st_nlink) < 2:
         raise ValueError()
+    phase = 'Downloaded record'
     with sqlite3.connect('file:/config/mylar/mylar.db?mode=ro', uri=True) as db:
         row = db.execute('SELECT Status, Location, ComicID FROM issues WHERE IssueID = ?', (f['issue_id'],)).fetchone()
         if not row or row[0] != 'Downloaded' or not row[1]:
@@ -69,6 +72,7 @@ try:
         comic = db.execute('SELECT ComicLocation FROM comics WHERE ComicID = ?', (row[2],)).fetchone()
         if not comic or pathlib.Path(comic[0]).resolve() != paths[1].parent or pathlib.Path(row[1]).name != paths[1].name:
             raise ValueError()
+    phase = 'archive integrity'
     image_extensions = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
     if zipfile.is_zipfile(paths[1]):
         with zipfile.ZipFile(paths[1]) as archive:
@@ -83,11 +87,14 @@ try:
         pages = sum(pathlib.PurePosixPath(n).suffix.lower() in image_extensions for n in names.stdout.splitlines())
     if pages == 0:
         raise ValueError()
+    phase = 'content digest'
+    digest = hashlib.sha256()
     with paths[1].open('rb') as stream:
-        digest = hashlib.file_digest(stream, 'sha256').hexdigest()
-    print(json.dumps({'bytes': b.st_size, 'pages': pages, 'links': min(a.st_nlink, b.st_nlink), 'digest': digest}))
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(chunk)
+    print(json.dumps({'bytes': b.st_size, 'pages': pages, 'links': min(a.st_nlink, b.st_nlink), 'digest': digest.hexdigest()}))
 except Exception:
-    print('Fixture integrity, archive, or Downloaded-record check failed.', file=sys.stderr)
+    print('Fixture check failed: ' + phase + '.', file=sys.stderr)
     sys.exit(1)
 """
 
@@ -109,9 +116,21 @@ class Acceptance:
             check=False,
         )
         if result.returncode:
-            raise ScenarioFailure(
-                "scoped Kubernetes operation failed; no raw runtime output retained"
-            )
+            reason = "runtime operation failed"
+            if "Forbidden" in result.stderr or "forbidden" in result.stderr:
+                reason = "API authorization denied"
+            else:
+                for phase in (
+                    "fixture paths",
+                    "hardlink identity",
+                    "Downloaded record",
+                    "archive integrity",
+                    "content digest",
+                ):
+                    if f"Fixture check failed: {phase}." in result.stderr:
+                        reason = f"fixture inspection failed ({phase})"
+                        break
+            raise ScenarioFailure(f"scoped Kubernetes {reason}; no raw runtime output retained")
         return result.stdout
 
     def resource(self, namespace: str, *args: str) -> dict:
