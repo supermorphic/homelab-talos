@@ -892,6 +892,109 @@ class CiliumAccessTests(unittest.TestCase):
                 bad["spec"]["selector"] = {"name": "production"}
                 self.assertFalse(self.admits(policy, req, bad))
 
+    def test_global_fixtures_have_only_named_apply_grants(self):
+        roles = [
+            d
+            for d in self.documents
+            if d["kind"] == "ClusterRole"
+            and d["metadata"]["name"] == "homelab-test-cilium-global-fixtures"
+        ]
+        self.assertEqual(len(roles), 1)
+        self.assertEqual(
+            roles[0]["rules"],
+            [
+                {
+                    "apiGroups": ["cilium.io"],
+                    "resources": ["ciliumcidrgroups"],
+                    "resourceNames": [
+                        "cilium-test-external-cidr",
+                        "cilium-test-external-cidr-label",
+                    ],
+                    "verbs": ["get", "patch", "delete"],
+                },
+                {
+                    "apiGroups": ["cilium.io"],
+                    "resources": ["ciliumclusterwideenvoyconfigs"],
+                    "resourceNames": ["client-egress-to-fqdns-proxy-one.one.one.one"],
+                    "verbs": ["get", "patch", "delete"],
+                },
+                {
+                    "apiGroups": ["policy.networking.k8s.io"],
+                    "resources": ["clusternetworkpolicies"],
+                    "resourceNames": ["echo-ingress-from-client-tiered-wildcard-pass-l7"],
+                    "verbs": ["get", "patch", "delete"],
+                },
+            ],
+        )
+
+    def test_global_specs_and_cidr_shapes_preserve_the_pinned_fixture_boundary(self):
+        policy = "homelab-test-cilium-global-fixtures"
+        inputs = [
+            (
+                yaml.safe_load((helpers.ROOT / "tests/fixtures/cilium" / name).read_text()),
+                group,
+                version,
+                resource,
+            )
+            for name, group, version, resource in (
+                ("cluster-envoy.yaml", "cilium.io", "v2", "ciliumclusterwideenvoyconfigs"),
+                (
+                    "cluster-network-policy.yaml",
+                    "policy.networking.k8s.io",
+                    "v1alpha2",
+                    "clusternetworkpolicies",
+                ),
+            )
+        ]
+        for version in ("v2", "v2alpha1"):
+            for name in ("cilium-test-external-cidr", "cilium-test-external-cidr-label"):
+                obj = {
+                    "apiVersion": f"cilium.io/{version}",
+                    "kind": "CiliumCIDRGroup",
+                    "metadata": {"name": name},
+                    "spec": {"externalCIDRs": ["192.0.2.0/24", "2001:db8::/120"]},
+                }
+                if name.endswith("-label"):
+                    obj["metadata"]["labels"] = {"destination": "external"}
+                inputs.append((obj, "cilium.io", version, "ciliumcidrgroups"))
+        for obj, group, version, resource in inputs:
+            name = obj["metadata"]["name"]
+            req = {
+                "operation": "CREATE",
+                "namespace": "",
+                "name": name,
+                "subResource": "",
+                "resource": {"group": group, "version": version, "resource": resource},
+                "userInfo": {"username": IDENTITY},
+            }
+            self.assertTrue(self.admits(policy, req, obj), name)
+            old = copy.deepcopy(obj)
+            old["metadata"].update(uid="global-fixture", resourceVersion="1")
+            self.assertTrue(self.admits(policy, {**req, "operation": "DELETE"}, None, old))
+            self.assertTrue(self.admits(policy, {**req, "operation": "UPDATE"}, old, old))
+            bad = copy.deepcopy(obj)
+            bad["metadata"]["name"] = "production-fixture"
+            self.assertFalse(self.admits(policy, {**req, "name": "production-fixture"}, bad))
+            bad = copy.deepcopy(obj)
+            bad["spec"]["unregistered"] = True
+            self.assertFalse(self.admits(policy, req, bad))
+            for key in ("namespace", "subResource"):
+                self.assertFalse(self.admits(policy, {**req, key: "other"}, obj))
+            replacement = copy.deepcopy(old)
+            replacement["metadata"]["uid"] = "replacement"
+            self.assertFalse(self.admits(policy, {**req, "operation": "UPDATE"}, replacement, old))
+            if obj["kind"] == "ClusterNetworkPolicy":
+                bad = copy.deepcopy(obj)
+                bad["spec"]["subject"]["pods"]["namespaceSelector"] = {}
+                self.assertFalse(self.admits(policy, req, bad))
+            if obj["kind"] == "CiliumCIDRGroup":
+                bad = copy.deepcopy(obj)
+                bad["spec"]["externalCIDRs"] = ["invalid-address"]
+                self.assertFalse(self.admits(policy, req, bad))
+                bad = copy.deepcopy(obj)
+                bad["metadata"]["labels"] = {"destination": "production"}
+                self.assertFalse(self.admits(policy, req, bad))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -474,3 +474,88 @@ spec:
   policyName: homelab-test-cilium-fixtures
   validationActions:
     - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-cilium-global-fixtures
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - cilium.io
+        apiVersions:
+          - v2
+          - v2alpha1
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - ciliumcidrgroups
+          - ciliumclusterwideenvoyconfigs
+      - apiGroups:
+          - policy.networking.k8s.io
+        apiVersions:
+          - v1alpha2
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - clusternetworkpolicies
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'
+  variables:
+    - name: item
+      expression: 'request.operation == ''DELETE'' ? oldObject : object'
+    - name: expected
+      expression: '{"client-egress-to-fqdns-proxy-one.one.one.one": {"kind": "CiliumClusterwideEnvoyConfig",
+        "spec": {"resources": [{"@type": "type.googleapis.com/envoy.config.listener.v3.Listener", "name":
+        "proxy-one.one.one.one-listener", "filter_chains": [{"filter_chain_match": {"destination_port":
+        80}, "filters": [{"name": "envoy.filters.network.tcp_proxy", "typed_config": {"@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
+        "stat_prefix": "test-listener", "cluster": "proxy-one.one.one.one-cluster"}}]}]}, {"@type": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
+        "connectTimeout": "55s", "name": "proxy-one.one.one.one-cluster", "type": "ORIGINAL_DST", "lb_policy":
+        "CLUSTER_PROVIDED"}]}}, "echo-ingress-from-client-tiered-wildcard-pass-l7": {"kind": "ClusterNetworkPolicy",
+        "spec": {"tier": "Admin", "priority": 0, "subject": {"pods": {"namespaceSelector": {"matchLabels":
+        {"kubernetes.io/metadata.name": "cilium-test-1"}}, "podSelector": {"matchLabels": {"kind": "echo"}}}},
+        "ingress": [{"action": "Accept", "from": [{"pods": {"podSelector": {"matchExpressions": [{"key":
+        "reserved:host", "operator": "Exists"}]}}}]}, {"action": "Accept", "from": [{"pods": {"podSelector":
+        {}}}], "protocols": [{"udp": {"destinationPort": {"number": 53}}}, {"tcp": {"destinationPort":
+        {"number": 53}}}]}, {"action": "Pass", "from": [{"pods": {"namespaceSelector": {"matchLabels":
+        {"kubernetes.io/metadata.name": "cilium-test-1"}}, "podSelector": {"matchLabels": {"name": "client"},
+        "matchExpressions": [{"key": "io.cilium.k8s.policy.cluster", "operator": "Exists"}]}}}]}, {"action":
+        "Deny", "from": [{"namespaces": {}}]}]}}}'
+  validations:
+    - expression: request.namespace == '' && request.subResource == '' && variables.item.metadata.name
+        == request.name && (!has(variables.item.metadata.namespace) || variables.item.metadata.namespace
+        == '') && variables.item.all(k, k in ['apiVersion','kind','metadata','spec','status']) && (!has(variables.item.metadata.annotations)
+        || variables.item.metadata.annotations.size() == 0) && (!has(variables.item.metadata.ownerReferences)
+        || variables.item.metadata.ownerReferences.size() == 0) && (!has(variables.item.metadata.finalizers)
+        || variables.item.metadata.finalizers.size() == 0) && (request.operation == 'CREATE' || (has(variables.item.metadata.uid)
+        && variables.item.metadata.uid != ''))
+      message: Only registered global connectivity fixtures without unrelated metadata or authority fields
+        may be applied or deleted.
+    - expression: 'variables.item.kind == ''CiliumCIDRGroup'' ? (request.name in [''cilium-test-external-cidr'',''cilium-test-external-cidr-label'']
+        && variables.item.spec.size() == 1 && has(variables.item.spec.externalCIDRs) && variables.item.spec.externalCIDRs.size()
+        in [1,2] && variables.item.spec.externalCIDRs.all(c, c.size() <= 64 && c.matches(''^[0-9a-fA-F:.]+/[0-9]{1,3}$''))
+        && (request.name == ''cilium-test-external-cidr-label'' ? (has(variables.item.metadata.labels)
+        && variables.item.metadata.labels == {''destination'':''external''}) : (!has(variables.item.metadata.labels)
+        || variables.item.metadata.labels.size() == 0))) : (request.name in variables.expected && variables.item.kind
+        == variables.expected[request.name].kind && variables.item.spec == variables.expected[request.name].spec
+        && (!has(variables.item.metadata.labels) || variables.item.metadata.labels.size() == 0))'
+      message: Keep the complete pinned Envoy/tiered policy specifications and finite native external-CIDR
+        fixture shape; the CRD validates CIDR syntax.
+    - expression: 'request.operation == ''UPDATE'' ? object.metadata.uid == oldObject.metadata.uid : true'
+      message: Preserve the stored global fixture identity on native apply.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-cilium-global-fixtures
+spec:
+  policyName: homelab-test-cilium-global-fixtures
+  validationActions:
+    - Deny

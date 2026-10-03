@@ -1,0 +1,22 @@
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideEnvoyConfig
+metadata:
+  name: client-egress-to-fqdns-proxy-one.one.one.one
+spec:
+  resources:
+    - '@type': type.googleapis.com/envoy.config.listener.v3.Listener
+      name: proxy-one.one.one.one-listener
+      filter_chains:
+        - filter_chain_match:
+            destination_port: 80
+          filters:
+            - name: envoy.filters.network.tcp_proxy
+              typed_config:
+                '@type': type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+                stat_prefix: test-listener
+                cluster: proxy-one.one.one.one-cluster
+    - '@type': type.googleapis.com/envoy.config.cluster.v3.Cluster
+      connectTimeout: 55s
+      name: proxy-one.one.one.one-cluster
+      type: ORIGINAL_DST
+      lb_policy: CLUSTER_PROVIDED

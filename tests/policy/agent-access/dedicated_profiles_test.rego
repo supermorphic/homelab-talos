@@ -615,3 +615,44 @@ test_cilium_fixtures_require_parent_admission if {
 	messages := deny with input as [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ValidatingAdmissionPolicy", "homelab-test-cilium-fixtures"]]
 	count(messages) > 0
 }
+
+dedicated_cilium_global_fixture := [
+	cluster_role("homelab-test-cilium-global-fixtures", [
+		{"apiGroups": ["cilium.io"], "resources": ["ciliumcidrgroups"], "resourceNames": ["cilium-test-external-cidr", "cilium-test-external-cidr-label"], "verbs": ["get", "patch", "delete"]},
+		{"apiGroups": ["cilium.io"], "resources": ["ciliumclusterwideenvoyconfigs"], "resourceNames": ["client-egress-to-fqdns-proxy-one.one.one.one"], "verbs": ["get", "patch", "delete"]},
+		{"apiGroups": ["policy.networking.k8s.io"], "resources": ["clusternetworkpolicies"], "resourceNames": ["echo-ingress-from-client-tiered-wildcard-pass-l7"], "verbs": ["get", "patch", "delete"]},
+	]),
+	cluster_role_binding("homelab-test-cilium-global-fixtures", ["homelab-test-cilium-connectivity"], "homelab-test-cilium-global-fixtures"),
+	{
+		"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingAdmissionPolicy", "metadata": {"name": "homelab-test-cilium-global-fixtures"},
+		"spec": {
+			"failurePolicy": "Fail", "matchConstraints": {"resourceRules": [
+				{"apiGroups": ["cilium.io"], "apiVersions": ["v2", "v2alpha1"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["ciliumcidrgroups", "ciliumclusterwideenvoyconfigs"]},
+				{"apiGroups": ["policy.networking.k8s.io"], "apiVersions": ["v1alpha2"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["clusternetworkpolicies"]},
+			]},
+			"matchConditions": [{"name": "dedicated-profile", "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'"}],
+			"validations": [{"expression": "request.namespace == ''"}],
+		},
+	},
+	flux_guard_binding("homelab-test-cilium-global-fixtures"),
+]
+
+test_cilium_global_fixture_names_cannot_be_unbounded if {
+	messages := deny with input as runner_change("ClusterRole", "homelab-test-cilium-global-fixtures", [{"op": "remove", "path": "/rules/0/resourceNames"}])
+	count(messages) > 0
+}
+
+test_cilium_global_fixture_cannot_bind_ordinary_runner if {
+	messages := deny with input as runner_change("ClusterRoleBinding", "homelab-test-cilium-global-fixtures", [{"op": "replace", "path": "/subjects/0/name", "value": "homelab-test-runner"}])
+	count(messages) > 0
+}
+
+test_cilium_global_fixture_requires_complete_admission_coverage if {
+	messages := deny with input as runner_change("ValidatingAdmissionPolicy", "homelab-test-cilium-global-fixtures", [{"op": "remove", "path": "/spec/matchConstraints/resourceRules/1"}])
+	count(messages) > 0
+}
+
+test_cilium_global_fixture_requires_binding if {
+	messages := deny with input as [d | some d in valid_fixture; [d.kind, metadata_name(d)] != ["ValidatingAdmissionPolicyBinding", "homelab-test-cilium-global-fixtures"]]
+	count(messages) > 0
+}
