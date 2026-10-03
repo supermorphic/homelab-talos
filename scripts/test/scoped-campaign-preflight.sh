@@ -27,10 +27,12 @@ common_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-
 [[ "$git_dir" != "$common_dir" && "$git_dir" == "$common_dir"/worktrees/* ]] ||
   fail 'scoped campaigns require a linked Git worktree, not the main clone.'
 
-[[ "$kubeconfig" == "$repo_root/.kube/config" ]] ||
-  fail 'Kubernetes credential must use the worktree .kube/config path.'
-[[ "$talosconfig" == "$repo_root/.talos/config" ]] ||
-  fail 'Talos credential must use the worktree .talos/config path.'
+[[ "$kubeconfig" == "$repo_root/.kube/invocations/"*/config ]] ||
+  fail 'Kubernetes credential must be a private worktree invocation.'
+if [[ -n "$talosconfig" ]]; then
+  [[ "$talosconfig" == "$repo_root/.talos/config" ]] ||
+    fail 'Talos credential must use the worktree .talos/config path.'
+fi
 
 credential_mode() {
   local path="$1"
@@ -41,14 +43,19 @@ credential_mode() {
   printf '%s\n' "${mode#0}"
 }
 
-for credential in "$kubeconfig" "$talosconfig"; do
+credentials=("$kubeconfig")
+[[ -z "$talosconfig" ]] || credentials+=("$talosconfig")
+for credential in "${credentials[@]}"; do
   [[ -f "$credential" ]] || fail "missing scoped credential: $credential."
   [[ "$(credential_mode "$credential")" == '600' ]] ||
     fail "scoped credential must have mode 0600: $credential."
 done
 
-uv run --locked --no-dev python -m scripts.openbao.credentials validate "$kubeconfig" ||
-  fail 'expected a canonical scoped Kubernetes credential; run just kube kubeconfig.'
+binding="$(uv run --locked --no-dev python -m scripts.test.access validate "$kubeconfig")" ||
+  fail 'expected a canonical observer invocation.'
+[[ "$(yq -r '.profile' - <<<"$binding")" == observer &&
+   "$(yq -r '.purpose' - <<<"$binding")" == campaign-observer ]] ||
+  fail 'expected a canonical observer invocation for campaign reads.'
 
 kube_view="$(
   kubectl --kubeconfig "$kubeconfig" config view --raw --output json
@@ -56,11 +63,13 @@ kube_view="$(
 [[ "$(yq -r '."current-context" // ""' - <<<"$kube_view")" == \
   'homelab-observer' ]] ||
   fail 'Kubernetes current context must be homelab-observer.'
-talos_info="$(
-  talosctl config info --talosconfig "$talosconfig" --output json
-)" || fail 'cannot inspect the scoped Talos credential.'
-[[ "$(yq -r '[(.roles // .Roles // .certificate.roles // .identity.roles // [])[]] |
-  sort | join(",")' - <<<"$talos_info")" == 'os:reader' ]] ||
-  fail 'Talos credential must have exactly the os:reader role.'
+if [[ -n "$talosconfig" ]]; then
+  talos_info="$(
+    talosctl config info --talosconfig "$talosconfig" --output json
+  )" || fail 'cannot inspect the scoped Talos credential.'
+  [[ "$(yq -r '[(.roles // .Roles // .certificate.roles // .identity.roles // [])[]] |
+    sort | join(",")' - <<<"$talos_info")" == 'os:reader' ]] ||
+    fail 'Talos credential must have exactly the os:reader role.'
+fi
 
 echo 'Scoped campaign credential and worktree preflight passed.'

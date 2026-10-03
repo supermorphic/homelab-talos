@@ -8,9 +8,9 @@ trap 'rm -rf -- "$fixture"' EXIT
 real_stat="$(command -v stat)"
 worktree="$fixture/worktree"
 mkdir -p "$fixture/bin" "$fixture/common/worktrees/scoped" \
-  "$worktree/.kube" "$worktree/.talos"
-touch "$worktree/.kube/config" "$worktree/.talos/config"
-chmod 600 "$worktree/.kube/config" "$worktree/.talos/config"
+  "$worktree/.kube/invocations/fixture" "$worktree/.talos"
+touch "$worktree/.kube/invocations/fixture/config" "$worktree/.talos/config"
+chmod 600 "$worktree/.kube/invocations/fixture/config" "$worktree/.talos/config"
 
 cat >"$fixture/bin/git" <<'EOF'
 #!/usr/bin/env bash
@@ -44,7 +44,7 @@ EOF
 cat >"$fixture/bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "$*" == "--kubeconfig $FAKE_WORKTREE/.kube/config config view --raw --output json" ]] || {
+[[ "$*" == "--kubeconfig $FAKE_WORKTREE/.kube/invocations/fixture/config config view --raw --output json" ]] || {
   echo "Unexpected fake kubectl invocation: $*" >&2
   exit 64
 }
@@ -58,6 +58,7 @@ set -euo pipefail
   echo "Unexpected fake talosctl invocation: $*" >&2
   exit 64
 }
+touch "$FAKE_WORKTREE/talos-called"
 printf '{"Context":"homelab","Roles":["%s"]}\n' "${FAKE_TALOS_ROLE:-os:reader}"
 EOF
 
@@ -88,9 +89,10 @@ chmod +x "$fixture/bin/git" "$fixture/bin/kubectl" "$fixture/bin/talosctl" \
 cat >"$fixture/bin/uv" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "$*" == "run --locked --no-dev python -m scripts.openbao.credentials validate $FAKE_WORKTREE/.kube/config" ]] || exit 64
+[[ "$*" == "run --locked --no-dev python -m scripts.test.access validate $FAKE_WORKTREE/.kube/invocations/fixture/config" ]] || exit 64
 printf 'validated\n' >"$FAKE_WORKTREE/validation-called"
 [[ "${FAKE_CREDENTIAL_VALID:-true}" == true ]]
+printf '{"profile":"%s","purpose":"%s"}\n' "${FAKE_SCOPE_PROFILE:-observer}" "${FAKE_SCOPE_PURPOSE:-campaign-observer}"
 EOF
 chmod +x "$fixture/bin/uv"
 write_kubeconfig_view() {
@@ -103,7 +105,7 @@ run_preflight() {
   FAKE_WORKTREE="$worktree" \
   FAKE_COMMON_DIR="$fixture/common" \
   FAKE_KUBECONFIG_VIEW="$fixture/kubeconfig-view.json" \
-    "$preflight" "$worktree" "$worktree/.kube/config" "$worktree/.talos/config"
+    "$preflight" "$worktree" "$worktree/.kube/invocations/fixture/config" "$worktree/.talos/config"
 }
 
 expect_failure() {
@@ -123,14 +125,14 @@ run_preflight
 expect_failure main-clone 'linked Git worktree' env FAKE_GIT_LAYOUT=main \
   PATH="$fixture/bin:$PATH" REAL_STAT="$real_stat" FAKE_WORKTREE="$worktree" \
   FAKE_COMMON_DIR="$fixture/common" FAKE_KUBECONFIG_VIEW="$fixture/kubeconfig-view.json" \
-  "$preflight" "$worktree" "$worktree/.kube/config" "$worktree/.talos/config"
+  "$preflight" "$worktree" "$worktree/.kube/invocations/fixture/config" "$worktree/.talos/config"
 
 [[ -f "$worktree/validation-called" ]]
-expect_failure invalid-credential 'canonical scoped Kubernetes credential' env \
+expect_failure invalid-credential 'canonical observer invocation' env \
   FAKE_CREDENTIAL_VALID=false PATH="$fixture/bin:$PATH" REAL_STAT="$real_stat" \
   FAKE_WORKTREE="$worktree" FAKE_COMMON_DIR="$fixture/common" \
   FAKE_KUBECONFIG_VIEW="$fixture/kubeconfig-view.json" \
-  "$preflight" "$worktree" "$worktree/.kube/config" "$worktree/.talos/config"
+  "$preflight" "$worktree" "$worktree/.kube/invocations/fixture/config" "$worktree/.talos/config"
 write_kubeconfig_view homelab-diagnostic
 expect_failure wrong-current 'current context must be homelab-observer' run_preflight
 write_kubeconfig_view homelab-observer
@@ -138,12 +140,19 @@ expect_failure wrong-reader 'Talos credential must have exactly the os:reader ro
   FAKE_TALOS_ROLE=os:admin PATH="$fixture/bin:$PATH" REAL_STAT="$real_stat" \
   FAKE_WORKTREE="$worktree" \
   FAKE_COMMON_DIR="$fixture/common" FAKE_KUBECONFIG_VIEW="$fixture/kubeconfig-view.json" \
-  "$preflight" "$worktree" "$worktree/.kube/config" "$worktree/.talos/config"
+  "$preflight" "$worktree" "$worktree/.kube/invocations/fixture/config" "$worktree/.talos/config"
 
-chmod 644 "$worktree/.kube/config"
+chmod 644 "$worktree/.kube/invocations/fixture/config"
 expect_failure kube-mode 'mode 0600' run_preflight
-chmod 600 "$worktree/.kube/config"
+chmod 600 "$worktree/.kube/invocations/fixture/config"
 chmod 644 "$worktree/.talos/config"
 expect_failure talos-mode 'mode 0600' run_preflight
+
+# A Kubernetes-only selection must not inspect or require Talos credentials.
+rm -f "$worktree/.talos/config" "$worktree/talos-called"
+PATH="$fixture/bin:$PATH" REAL_STAT="$real_stat" FAKE_WORKTREE="$worktree" \
+FAKE_COMMON_DIR="$fixture/common" FAKE_KUBECONFIG_VIEW="$fixture/kubeconfig-view.json" \
+  "$preflight" "$worktree" "$worktree/.kube/invocations/fixture/config" ''
+[[ ! -f "$worktree/talos-called" ]]
 
 echo 'Scoped campaign credential and worktree preflight tests passed.'
