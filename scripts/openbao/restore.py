@@ -57,7 +57,7 @@ def namespace(run_id):
         r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}", run_id
     ):
         raise RestoreError()
-    return "openbao-restore-" + hashlib.sha256(run_id.encode()).hexdigest()[:16]
+    return "openbao-restore-test"
 
 
 def private_file(path, limit):
@@ -129,7 +129,7 @@ def documents(run_id, version):
     if version not in IMAGES:
         raise RestoreError()
     result = []
-    for name in ("namespace", "ciliumnetworkpolicy", "serviceaccount", "pvc", "statefulset"):
+    for name in ("pvc", "statefulset"):
         document = yaml.safe_load((FIXTURES / f"{name}.yaml").read_bytes())
         document["metadata"]["annotations"] = {OWNER: run_id}
         if name == "namespace":
@@ -199,6 +199,8 @@ def run(snapshot_path, metadata, run_id, client, kube):
             result["status"] = "refused"
             return result
         result["phases"].append("snapshot-validated")
+        stage = "fixture-baseline"
+        kube.verify_baseline(empty=True)
         stage = "create-scratch"
         for document in documents(run_id, metadata["openbao_version"]):
             if document["kind"] == "StatefulSet":

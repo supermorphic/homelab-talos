@@ -715,7 +715,8 @@ class DiagnosticBoundaryTest(unittest.TestCase):
                         self.assertTrue(all('--as' not in command for command in calls))
                         validate.assert_called_once_with(path, adapter.ROOT)
                         self.assertIn('create', calls[2]); self.assertIn('get', calls[3])
-                        self.assertTrue(all('homelab-diagnostic' in command for command in calls))
+                        self.assertTrue(all('--context' not in command for command in calls))
+                        self.assertTrue(all(str(path) in command for command in calls))
                     else:
                         with self.assertRaises(adapter.issuance.AcceptanceError):
                             adapter.diagnostic_boundary(path, 'expected-cluster')

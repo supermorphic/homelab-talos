@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
 from scripts.openbao import apply, guards, restore
 from scripts.openbao.configuration import strict_json
 from scripts.openbao.operator import private_prompt
+from scripts.test import access
 from scripts.test.scenarios.resilience_support import atomic_write_json, install_interrupt_handlers
 
 # Only loopback is addressable by the credential-bearing bridge. No redirects,
@@ -89,6 +90,7 @@ class ScratchKube:
         self.pod_uid = None
         self.extra = []
         self.created = []
+        self.baseline = []
         self.pv_uid = None
         self.volume_uid = None
         self.cleanup_stage = "inspect-owned-resources"
@@ -105,8 +107,10 @@ class ScratchKube:
         return strict_json(self.command(*args))
 
     def create(self, document):
-        if document["kind"] != "Namespace":
-            self.assert_namespace()
+        if document["kind"] not in {"PersistentVolumeClaim", "StatefulSet", "Secret", "ConfigMap"}:
+            raise restore.RestoreError()
+        self.assert_namespace()
+        self.check()
         actual = strict_json(
             self.command(
                 "create", "-f", "-", "-o", "json", input_bytes=json.dumps(document).encode()
@@ -126,10 +130,57 @@ class ScratchKube:
             *args, "get", document["kind"], document["metadata"]["name"], "-o", "json"
         )
 
-    def assert_namespace(self):
-        if not self.created or self.created[0]["kind"] != "Namespace":
+    def check(self):
+        from scripts.test.scenarios.openbao_issuance import Scope
+
+        Scope(self.kubeconfig, self.run_id).check()
+
+    def verify_baseline(self, *, empty=False):
+        import yaml
+
+        documents = [yaml.safe_load((guards.PACKAGE / "restore-test" / filename).read_bytes())
+                     for filename in ("namespace.yaml", "serviceaccount.yaml", "ciliumnetworkpolicy.yaml")]
+        # This binding authorizes the test driver, never the tokenless scratch
+        # account. It is installed through Git alongside the dedicated profile.
+        documents.extend(document for document in yaml.safe_load_all(
+            (ROOT / "kubernetes/apps/kube-system/agent-access/app/dedicated-rbac.yaml").read_bytes())
+            if document and document["kind"] == "RoleBinding"
+            and document["metadata"].get("namespace") == self.namespace)
+        observed = []
+        for expected in documents:
+            actual = self.read(expected)
+            meta = actual.get("metadata", {})
+            if (not guards.contains_source(expected, actual) or not meta.get("uid")
+                    or meta.get("deletionTimestamp") or restore.OWNER in meta.get("annotations", {})):
+                raise restore.RestoreError()
+            if expected["kind"] == "CiliumNetworkPolicy" and actual.get("spec") != expected["spec"]:
+                raise restore.RestoreError()
+            if expected["kind"] == "RoleBinding" and (
+                    actual.get("subjects") != expected["subjects"] or actual.get("roleRef") != expected["roleRef"]):
+                raise restore.RestoreError()
+            if expected["kind"] == "ServiceAccount" and (actual.get("secrets") or actual.get("imagePullSecrets")):
+                raise restore.RestoreError()
+            expected["metadata"]["uid"] = meta["uid"]
+            observed.append(expected)
+        if self.baseline and self.baseline != observed:
             raise restore.RestoreError()
-        restore.owned(self.created[0], self.read(self.created[0]), self.run_id)
+        self.baseline = observed
+        if empty:
+            self.cleanup_inventory()
+            if not self.runtime_empty():
+                raise restore.RestoreError()
+
+    def assert_namespace(self):
+        self.verify_baseline()
+
+    def runtime_empty(self):
+        for kind in ("statefulsets", "persistentvolumeclaims", "pods", "secrets", "configmaps"):
+            items = self.json("-n", self.namespace, "get", kind, "-o", "json")["items"]
+            if kind == "configmaps":
+                items = [item for item in items if item["metadata"]["name"] != "kube-root-ca.crt"]
+            if items:
+                return False
+        return True
 
     def provision_private(self, namespace, run_id):
         self.assert_namespace()
@@ -319,9 +370,13 @@ seal "static" {
             raise restore.RestoreError()
         self.assert_namespace()
         # Forbid authority and alternate paths regardless of ownership labels.
-        for kind in ("rolebindings", "roles", "services", "httproutes", "networkpolicies"):
+        for kind in ("roles", "services", "httproutes", "networkpolicies"):
             if self.json("-n", namespace, "get", kind, "-o", "json")["items"]:
                 raise restore.RestoreError()
+        bindings = self.json("-n", namespace, "get", "rolebindings", "-o", "json")["items"]
+        if {b["metadata"]["uid"] for b in bindings} != {
+                b["metadata"]["uid"] for b in self.baseline if b["kind"] == "RoleBinding"}:
+            raise restore.RestoreError()
         bindings = self.json("get", "clusterrolebindings", "-o", "json")["items"]
         if any(
             s.get("namespace") == namespace
@@ -336,7 +391,7 @@ seal "static" {
             if actual.get("immutable") is not True:
                 raise restore.RestoreError()
         for kind in ("StatefulSet", "PersistentVolumeClaim", "CiliumNetworkPolicy", "Secret"):
-            expected = {d["metadata"]["name"] for d in self.created if d["kind"] == kind}
+            expected = {d["metadata"]["name"] for d in self.created + self.baseline if d["kind"] == kind}
             actual = self.json("-n", namespace, "get", kind, "-o", "json")["items"]
             if {d["metadata"]["name"] for d in actual} != expected:
                 raise restore.RestoreError()
@@ -398,13 +453,19 @@ seal "static" {
         actual = self.read(expected)
         restore.owned(expected, actual, self.run_id)
         kind = expected["kind"]
-        plural = {"Namespace": "namespaces", "Pod": "pods"}[kind]
-        prefix = "/api/v1/" + (f"namespaces/{self.namespace}/" if kind == "Pod" else "")
+        plural = {"Pod": "pods", "PersistentVolumeClaim": "persistentvolumeclaims",
+                  "Secret": "secrets", "ConfigMap": "configmaps", "StatefulSet": "statefulsets"}.get(kind)
+        if not plural:
+            raise restore.RestoreError()
+        self.assert_namespace()
+        self.check()
+        prefix = ("/apis/apps/v1/" if kind == "StatefulSet" else "/api/v1/") + f"namespaces/{self.namespace}/"
         # UID and resourceVersion are atomic deletion preconditions, closing the
         # gap between the ownership read and the apiserver's DELETE operation.
         body = {
             "apiVersion": "v1",
             "kind": "DeleteOptions",
+            "propagationPolicy": "Foreground",
             "preconditions": {
                 "uid": actual["metadata"]["uid"],
                 "resourceVersion": actual["metadata"]["resourceVersion"],
@@ -433,14 +494,15 @@ seal "static" {
         raise restore.RestoreError()
 
     def cleanup_inventory(self):
-        # Namespace deletion is recursive. Inspect every discoverable API kind,
-        # so an unrelated Job or custom resource is never silently removed.
+        # An unrelated resource prevents reusing the fixed scratch fixture.
+        # Inspect every discoverable kind, including custom resources.
         self.cleanup_stage = "inventory"
         kinds = (
             self.command("api-resources", "--verbs=list", "--namespaced=true", "-o", "name")
             .decode()
             .splitlines()
         )
+        baseline_uids = {d["metadata"]["uid"] for d in self.baseline}
         known = {d["metadata"]["uid"] for d in self.created}
         if self.pod_uid:
             known.add(self.pod_uid)
@@ -455,6 +517,8 @@ seal "static" {
                 annotations = meta.get("annotations", {})
                 if restore.OWNER in annotations and annotations[restore.OWNER] != self.run_id:
                     raise restore.RestoreError()
+                if meta.get("uid") in baseline_uids:
+                    continue
                 if meta.get("uid") in known:
                     if meta.get("annotations", {}).get(restore.OWNER) != self.run_id:
                         raise restore.RestoreError()
@@ -518,15 +582,20 @@ seal "static" {
             if not guards.contains_source(expected, actual):
                 raise restore.RestoreError()
         self.cleanup_resource = None
-        self.cleanup_stage = "delete-namespace"
-        self.delete(documents[0])
+        self.cleanup_stage = "delete-run-resources"
+        # Remove the controller first so it cannot recreate scratch-0. Foreground
+        # collection removes its children before the remaining private fixtures.
+        ordered = sorted(self.created, key=lambda d: d["kind"] != "StatefulSet")
+        for expected in ordered:
+            self.cleanup_resource = expected["kind"]
+            self.delete(expected)
+        self.cleanup_resource = None
         self.cleanup_stage = "wait-for-storage-removal"
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
-            value = self.command(
-                "get", "namespace", self.namespace, "--ignore-not-found", "-o", "name"
-            )
-            if not value.strip() and self.storage_removed():
+            self.assert_namespace()
+            if self.runtime_empty() and self.storage_removed():
+                self.cleanup_inventory()
                 return
             time.sleep(2)
         raise restore.RestoreError()
@@ -674,6 +743,7 @@ class ScratchClient:
 def cleanup_target(kube):
     """Recover ownership metadata only; never reconstruct or retain secret values."""
     kube.created, kube.extra = [], []
+    kube.verify_baseline()
     documents = restore.documents(kube.run_id, "2.7.0")
     for expected in documents:
         kube.cleanup_resource = expected["kind"]
@@ -721,7 +791,7 @@ def cleanup_main(run_id):
         target = {"objects": [d["metadata"] for d in kube.created], "pod_uid": kube.pod_uid,
                   "pv_uid": kube.pv_uid, "volume_uid": kube.volume_uid}
         required = f"cleanup:openbao-restore:{run_id}:{guards.digest(target)}"
-        print("Deletes only the selected run's retained scratch namespace and storage.", flush=True)
+        print("Deletes only the selected run's scratch workloads, private fixtures and storage.", flush=True)
         print("Exact confirmation: " + required, flush=True)
         if input("Enter exact confirmation: ") != required:
             raise restore.RestoreError()
@@ -749,15 +819,7 @@ def main():
     result = {"status": "fail", "phases": [], "cleanup": "not-required"}
     run_dir = None
     try:
-        selected = os.environ.get("OPENBAO_OPERATOR_KUBECONFIG", "")
-        if not selected or not Path(selected).is_absolute() or not Path(selected).is_file():
-            raise restore.RestoreError()
-        # The catalog coordinator must use the explicitly selected identity too.
-        if os.environ.get("TEST_KUBECONFIG") != selected:
-            raise restore.RestoreError()
-        run_dir = Path(os.environ["HOMELAB_TEST_RUN_DIR"])
-        if not run_dir.is_dir():
-            raise restore.RestoreError()
+        config, run_dir = access.suite_inputs(ROOT, "test.openbao-restore-drill")
         run_id = run_dir.name
         snapshot = Path(os.environ["OPENBAO_RESTORE_SNAPSHOT"])
         metadata = restore.load_metadata(snapshot.parent / "metadata.json", snapshot)
@@ -773,13 +835,15 @@ def main():
         if supplied != required:
             raise restore.RestoreError()
         os.environ["OPENBAO_RESTORE_CONFIRM"] = required
+        kube = ScratchKube(config, run_id, recovery, None)
+        kube.verify_baseline(empty=True)
         seal = base64.b64decode(
             private_prompt("Matching static seal key (base64): "), validate=True
         )
         password = private_prompt("Retained OpenBao operator password: ")
         if len(seal) != 32 or not password:
             raise restore.RestoreError()
-        kube = ScratchKube(Path(selected), run_id, recovery, seal)
+        kube.seal = seal
         install_interrupt_handlers()
         result = restore.run(snapshot, metadata, run_id, ScratchClient(kube, password), kube)
     except Exception:  # noqa: BLE001 -- Never render private input failures.

@@ -18,6 +18,7 @@ from scripts.openbao import issuer as issuer_identity
 from scripts.openbao.configuration import SafeError, strict_json
 from scripts.openbao.credentials import validate_scoped_kubeconfig
 from scripts.openbao.operator import private_prompt
+from scripts.test import access
 from scripts.test.scenarios.resilience_support import atomic_write_json, install_interrupt_handlers
 
 OWNER = "homelab.supermorphic.com/test-run"
@@ -434,19 +435,12 @@ def provision(scope):
     return [PodAPI(scope, pod) for pod in pods]
 
 
-def run_scope():
-    selected = os.environ.get("OPENBAO_OPERATOR_KUBECONFIG", "")
-    if (
-        not selected
-        or not Path(selected).is_absolute()
-        or not Path(selected).is_file()
-        or os.environ.get("TEST_KUBECONFIG") != selected
-    ):
-        raise issuance.AcceptanceError()
-    run_dir = Path(os.environ["HOMELAB_TEST_RUN_DIR"])
-    if not run_dir.is_dir():
-        raise issuance.AcceptanceError()
-    return Scope(Path(selected), run_dir.name), run_dir
+def run_scope(suite_id="test.openbao-issuance"):
+    try:
+        config, run_dir = access.suite_inputs(ROOT, suite_id)
+    except SafeError:
+        raise issuance.AcceptanceError() from None
+    return Scope(config, run_dir.name), run_dir
 
 
 def diagnostic_boundary(kubeconfig, namespace_uid):
@@ -463,7 +457,7 @@ def diagnostic_boundary(kubeconfig, namespace_uid):
     except SafeError:
         raise issuance.AcceptanceError() from None
     identity = 'system:serviceaccount:kube-system:homelab-diagnostic'
-    base = ['kubectl', '--kubeconfig', str(kubeconfig), '--context', 'homelab-diagnostic',
+    base = ['kubectl', '--kubeconfig', str(kubeconfig),
             '--request-timeout=10s']
     observed = subprocess.run([*base, 'auth', 'whoami', '-o', 'json'],
                               capture_output=True, text=True, timeout=15, check=False)

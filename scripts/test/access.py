@@ -163,6 +163,34 @@ def expected_invocation_binding(repo_root: Path, binding: dict) -> dict:
     ):
         raise SafeError("invalid-source")
     expected = {"schema_version": 1, "run_id": binding["run_id"]}
+    if "profile_check" in binding:
+        from scripts.openbao import credentials
+
+        if "purpose" in binding:
+            raise SafeError("invalid-source")
+        parent_path = binding.get("audit_parent")
+        if not isinstance(parent_path, str):
+            raise SafeError("invalid-source")
+        # Check the parent record before recursive validation. Auxiliary and
+        # purpose configs can never form a parent chain or a cycle.
+        parent_record, _ = credentials.read_invocation(repo_root, Path(parent_path))
+        if "profile_check" in parent_record or "purpose" in parent_record:
+            raise SafeError("invalid-source")
+        parent = validate_invocation(repo_root, Path(parent_path))
+        profile = binding["profile_check"]
+        if (
+            parent["suite_id"] not in AUDIT_SUITES
+            or not isinstance(profile, str)
+            or profile not in BASE_PROFILES
+            or profile not in parent.get("profile_checks", [])
+        ):
+            raise SafeError("invalid-source")
+        return {
+            **parent,
+            "profile": profile,
+            "profile_check": profile,
+            "audit_parent": parent_path,
+        }
     if "purpose" in binding:
         purpose = binding["purpose"]
         if not isinstance(purpose, str) or purpose not in PURPOSE_PROFILES:
@@ -184,6 +212,21 @@ def prepare_purpose_invocation(repo_root: Path, purpose: str, run_id: str) -> Pa
     return credentials.install_invocation_kubeconfig(repo_root, workstation.DIRECTORY, binding)
 
 
+def prepare_profile_check(repo_root: Path, parent_config: Path, profile: str) -> Path:
+    from scripts.openbao import credentials, workstation
+
+    parent = validate_invocation(repo_root, parent_config)
+    binding = expected_invocation_binding(
+        repo_root,
+        {
+            **parent,
+            "profile_check": profile,
+            "audit_parent": str(parent_config),
+        },
+    )
+    return credentials.install_invocation_kubeconfig(repo_root, workstation.DIRECTORY, binding)
+
+
 def validate_invocation(repo_root: Path, config_path: Path) -> dict:
     from scripts.openbao import credentials, workstation
 
@@ -197,6 +240,26 @@ def validate_invocation(repo_root: Path, config_path: Path) -> dict:
     ):
         raise SafeError("invalid-source")
     return binding
+
+
+def suite_inputs(repo_root: Path, suite_id: str) -> tuple[Path, Path]:
+    """Read only the selected, suite/run-bound config for an attended scenario."""
+    selected = os.environ.get("TEST_KUBECONFIG", "")
+    run = os.environ.get("HOMELAB_TEST_RUN_DIR", "")
+    config, directory = Path(selected), Path(run)
+    if not selected or not config.is_absolute() or not config.is_file():
+        raise SafeError("invalid-source")
+    if not run or not directory.is_absolute() or not directory.is_dir():
+        raise SafeError("invalid-source")
+    binding = validate_invocation(repo_root, config)
+    if (
+        binding.get("suite_id") != suite_id
+        or binding.get("run_id") != directory.name
+        or "purpose" in binding
+        or "profile_check" in binding
+    ):
+        raise SafeError("invalid-source")
+    return config, directory
 
 
 def remove_invocation(repo_root: Path, config_path: Path) -> None:
@@ -219,7 +282,7 @@ def validate_purpose_invocation(
 def validate_inherited_invocation(repo_root: Path, suite_id: str, config_path: Path) -> dict:
     """Retain a checked parent for the same suite or an observational child."""
     parent = validate_invocation(repo_root, config_path)
-    if "purpose" in parent:
+    if "purpose" in parent or "profile_check" in parent:
         raise SafeError("invalid-source")
     if parent["suite_id"] == suite_id:
         return parent
@@ -256,6 +319,8 @@ def main(argv: list[str]) -> int:
             path = prepare_invocation(root, argv[2], argv[3])
             if path is not None:
                 print(path)
+        elif len(argv) == 4 and argv[1] == "profile-check":
+            print(prepare_profile_check(root, Path(argv[2]), argv[3]))
         elif len(argv) == 4 and argv[1] == "purpose":
             print(prepare_purpose_invocation(root, argv[2], argv[3]))
         elif len(argv) == 5 and argv[1] == "purpose-check":

@@ -35,32 +35,27 @@ from scripts.openbao.operator import (
     operator_password_session,
     private_prompt,
 )
+from scripts.test import access
 from scripts.test.scenarios.resilience_support import atomic_write_json, install_interrupt_handlers
 
 ACCEPTANCE_DIRECTORY = Path.home() / ".config/homelab-talos/acceptance"
 
 
 def operator_kubeconfig():
+    """Explicit operator config for the separate, attended recovery command."""
     selected = os.environ.get("OPENBAO_OPERATOR_KUBECONFIG", "")
     config = Path(selected)
-    if (
-        not selected
-        or not config.is_absolute()
-        or not config.is_file()
-        or os.environ.get("TEST_KUBECONFIG") != selected
-        or os.environ.get("TEST_CAMPAIGN_LEASE_HOLDER")
-    ):
+    if (not selected or not config.is_absolute() or not config.is_file()
+            or os.environ.get("TEST_KUBECONFIG") != selected
+            or os.environ.get("TEST_CAMPAIGN_LEASE_HOLDER")):
         raise SafeError("invalid-source")
     return config
 
 
 def run_inputs():
-    config = operator_kubeconfig()
-    run = os.environ.get("HOMELAB_TEST_RUN_DIR", "")
-    directory = Path(run)
-    if not run or not directory.is_dir():
+    if os.environ.get("TEST_CAMPAIGN_LEASE_HOLDER"):
         raise SafeError("invalid-source")
-    return config, directory
+    return access.suite_inputs(ROOT, "test.agent-credentials")
 
 
 class BrokerScope:

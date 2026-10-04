@@ -43,12 +43,18 @@ class Cluster:
             "seal_key_id": "openbao-static-seal-v1",
             "recovery_generation": "1",
         }
-        self.objects = {}
+        self.objects = {"CiliumNetworkPolicy": {"spec": {"endpointSelector": {}, "egressDeny": [{"toEntities": ["all"]}], "ingressDeny": [{"fromEntities": ["all"]}]}}}
         self.events = []
         self.blocked = True
         self.fail_cleanup = False
         self.guard_count = 0
         self.race = None
+
+    def verify_baseline(self, *, empty=False):
+        assert self.objects["CiliumNetworkPolicy"]["spec"] == {"endpointSelector": {}, "egressDeny": [{"toEntities": ["all"]}], "ingressDeny": [{"fromEntities": ["all"]}]}
+        if empty:
+            assert set(self.objects) == {"CiliumNetworkPolicy"}
+        self.events.append("policy-read")
 
     def create(self, document):
         name = document["kind"]
@@ -90,7 +96,7 @@ class Cluster:
         self.events.append("cleanup")
         if self.fail_cleanup:
             raise RuntimeError(MARKER)
-        self.objects.clear()
+        self.objects = {"CiliumNetworkPolicy": self.objects["CiliumNetworkPolicy"]}
 
 
 class Client:
@@ -337,7 +343,7 @@ class RestoreTests(unittest.TestCase):
         result = self.run_drill()
         self.assertEqual(result["status"], "pass")
         events = self.kube.events
-        self.assertLess(events.index("CiliumNetworkPolicy"), events.index("StatefulSet"))
+        self.assertLess(events.index("policy-read"), events.index("StatefulSet"))
         self.assertLess(events.index("network-probe"), events.index("init"))
         self.assertLess(events.index("retained-login"), events.index("configuration"))
         self.assertEqual(events.count("init"), 1)
@@ -462,7 +468,7 @@ class RestoreTests(unittest.TestCase):
                 "method": "POST", "status": status, "sealed": MARKER,
                 "initialized": True, "body": MARKER, "token": MARKER, "path": MARKER,
             }
-            self.kube.objects.clear()
+            self.kube.objects = {"CiliumNetworkPolicy": {"spec": {"endpointSelector": {}, "egressDeny": [{"toEntities": ["all"]}], "ingressDeny": [{"fromEntities": ["all"]}]}}}
             result = self.run_drill()
             self.assertEqual(result.get("last_http_probe"), {
                 "method": "POST", "initialized": True, **expected})
@@ -480,14 +486,12 @@ class RestoreTests(unittest.TestCase):
         self.assertEqual(
             {d["kind"] for d in docs},
             {
-                "Namespace",
-                "CiliumNetworkPolicy",
-                "ServiceAccount",
                 "PersistentVolumeClaim",
                 "StatefulSet",
             },
         )
-        policy = next(d for d in docs if d["kind"] == "CiliumNetworkPolicy")
+        import yaml
+        policy = yaml.safe_load((restore.ROOT / "kubernetes/apps/security/openbao/restore-test/ciliumnetworkpolicy.yaml").read_bytes())
         self.assertEqual(policy["spec"]["egressDeny"], [{"toEntities": ["all"]}])
         self.assertEqual(policy["spec"]["ingressDeny"], [{"fromEntities": ["all"]}])
         pod = next(d for d in docs if d["kind"] == "StatefulSet")["spec"]["template"]["spec"]
@@ -554,15 +558,16 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(fixture.kube.events.count("init"), 1)
         self.assertEqual(fixture.kube.events.count("force-restore"), 1)
 
-    def test_namespace_delete_checks_uid_and_resource_version_atomically(self):
+    def test_private_fixture_delete_checks_uid_and_resource_version_atomically(self):
         from scripts.test.scenarios import openbao_restore as scenario
 
         cluster = scenario.ScratchKube(Path("/synthetic/operator-config"), RUN, {}, b"x" * 32)
         document = {
-            "kind": "Namespace",
+            "kind": "Secret",
             "metadata": {
-                "name": restore.namespace(RUN),
-                "uid": "namespace-fixture",
+                "name": "scratch-seal",
+                "namespace": "openbao-restore-test",
+                "uid": "seal-fixture",
                 "resourceVersion": "99",
                 "annotations": {restore.OWNER: RUN},
             },
@@ -570,12 +575,16 @@ class AdapterTests(unittest.TestCase):
         cluster.read = lambda expected: document
         calls = []
         cluster.command = lambda *args, **kw: calls.append((args, kw))
+        cluster.assert_namespace = lambda: None
+        cluster.check = lambda: None
         cluster.delete(document)
         body = json.loads(calls[0][1]["input_bytes"])
         self.assertEqual(
-            body["preconditions"], {"uid": "namespace-fixture", "resourceVersion": "99"}
+            body["preconditions"], {"uid": "seal-fixture", "resourceVersion": "99"}
         )
-        self.assertIn("/api/v1/namespaces/" + restore.namespace(RUN), calls[0][0])
+        self.assertIn("/api/v1/namespaces/openbao-restore-test/secrets/scratch-seal", calls[0][0])
+        with self.assertRaises(restore.RestoreError):
+            cluster.delete({**document, "kind": "Namespace"})
 
     def test_cleanup_refuses_an_unowned_object_of_another_api_kind(self):
         from scripts.test.scenarios import openbao_restore as scenario
@@ -617,7 +626,7 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(restore.RestoreError):
             cluster.assert_storage()
 
-    def test_ambiguous_namespace_creation_reports_cleanup_failure(self):
+    def test_ambiguous_pvc_creation_reports_cleanup_failure(self):
         fixture = RestoreTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -777,6 +786,15 @@ class AdapterTests(unittest.TestCase):
 
         cluster = scenario.ScratchKube(Path("/synthetic/operator-config"), RUN, {}, None)
         actual = {}
+        import yaml
+        for filename in ("namespace", "serviceaccount", "ciliumnetworkpolicy"):
+            document = yaml.safe_load((scenario.guards.PACKAGE / "restore-test" / (filename + ".yaml")).read_bytes())
+            document["metadata"]["uid"] = "baseline-" + filename
+            actual[(document["kind"], document["metadata"]["name"])] = document
+        for document in yaml.safe_load_all((scenario.ROOT / "kubernetes/apps/kube-system/agent-access/app/dedicated-rbac.yaml").read_bytes()):
+            if document and document["kind"] == "RoleBinding" and document["metadata"].get("namespace") == cluster.namespace:
+                document["metadata"]["uid"] = "baseline-driver-binding"
+                actual[(document["kind"], document["metadata"]["name"])] = document
         for document in restore.documents(RUN, "2.7.0"):
             value = copy.deepcopy(document)
             value["metadata"]["uid"] = document["kind"] + "-fixture"
@@ -792,11 +810,11 @@ class AdapterTests(unittest.TestCase):
         cluster.assert_storage = lambda: checks.append(("storage", None))
         cluster.cleanup_inventory = lambda: checks.append(("inventory", None))
         documents = scenario.cleanup_target(cluster)
-        self.assertEqual(len(documents), 5)
+        self.assertEqual(len(documents), 2)
         self.assertEqual(cluster.pod_uid, "current-scratch-pod")
         self.assertEqual(checks, [("pod", "current-scratch-pod"), ("storage", None), ("inventory", None)])
         self.assertNotIn(MARKER, json.dumps(cluster.created))
-        actual[("Namespace", cluster.namespace)]["metadata"]["annotations"][restore.OWNER] = "other-run"
+        actual[("Namespace", cluster.namespace)]["metadata"]["uid"] = "replacement-namespace"
         with self.assertRaises(restore.RestoreError):
             scenario.cleanup_target(cluster)
 
@@ -847,7 +865,7 @@ class AdapterTests(unittest.TestCase):
             with self.subTest(changed=changed):
                 cluster = scenario.ScratchKube(Path("/synthetic/operator-config"), RUN, {}, None)
                 documents = restore.documents(RUN, "2.7.0")
-                documents = [d for d in documents if d["kind"] in {"Namespace", "StatefulSet"}]
+                documents = [d for d in documents if d["kind"] in {"PersistentVolumeClaim", "StatefulSet"}]
                 for d in documents:
                     d["metadata"]["uid"] = "original-" + d["kind"]
                 cluster.created = copy.deepcopy(documents)
@@ -867,16 +885,10 @@ class AdapterTests(unittest.TestCase):
         from scripts.test.scenarios import openbao_restore as scenario
 
         cluster = scenario.ScratchKube(Path("/synthetic/operator-config"), RUN, {}, b"x" * 32)
-        documents = [
-            {
-                "kind": "Namespace",
-                "metadata": {"name": restore.namespace(RUN), "uid": "namespace-uid"},
-            },
-            {
-                "kind": "PersistentVolumeClaim",
-                "metadata": {"name": "scratch-data", "uid": "claim-uid"},
-            },
-        ]
+        documents = [{"kind": "PersistentVolumeClaim", "metadata": {
+            "name": "scratch-data", "namespace": "openbao-restore-test", "uid": "claim-uid"}}]
+        cluster.assert_namespace = lambda: None
+        cluster.runtime_empty = lambda: True
         cluster.created = documents
         for document in documents:
             document["metadata"]["annotations"] = {restore.OWNER: RUN}
@@ -915,7 +927,7 @@ class AdapterTests(unittest.TestCase):
                     self.assertRaises(restore.RestoreError),
                 ):
                     cluster.cleanup(docs, RUN)
-                self.assertEqual(deletes, ["Namespace"])
+                self.assertEqual(deletes, ["PersistentVolumeClaim"])
 
     def test_cleanup_refuses_reused_pv_or_longhorn_volume_identity(self):
         for pv, volume in [
@@ -930,7 +942,7 @@ class AdapterTests(unittest.TestCase):
                     self.assertRaises(restore.RestoreError),
                 ):
                     cluster.cleanup(docs, RUN)
-                self.assertEqual(deletes, ["Namespace"])
+                self.assertEqual(deletes, ["PersistentVolumeClaim"])
 
     def test_cleanup_succeeds_only_after_both_storage_objects_are_gone(self):
         scenario, cluster, docs, deletes, reads = self.cleanup_storage_fixture(None, None)
@@ -939,7 +951,7 @@ class AdapterTests(unittest.TestCase):
             patch.object(scenario.time, "monotonic", side_effect=[0, 0]),
         ):
             cluster.cleanup(docs, RUN)
-        self.assertEqual(deletes, ["Namespace"])
+        self.assertEqual(deletes, ["PersistentVolumeClaim"])
         self.assertTrue(any("pv" in args and "pvc-claim-uid" in args for args in reads))
         self.assertTrue(
             any("volumes.longhorn.io" in args and "pvc-claim-uid" in args for args in reads)
