@@ -162,6 +162,27 @@ if [[ "$args" == *' get service '* && "$args" == *' --output json '* ]]; then
 	exit 0
 fi
 
+if [[ "$args" == *' get '* && "$args" == *' --ignore-not-found --output json '* ]]; then
+  resource=''; name=''; previous=''
+  for argument in "$@"; do
+    if [[ "$previous" == get ]]; then resource="$argument"; fi
+    if [[ "$previous" == "$resource" && -n "$resource" ]]; then name="$argument"; break; fi
+    previous="$argument"
+  done
+  case "$resource" in
+    jobs) kind=job ;; deployments) kind=deployment ;; services) kind=service ;;
+    statefulsets) kind=statefulset ;; persistentvolumeclaims) kind=pvc ;;
+    ciliumnetworkpolicies) kind=ciliumnetworkpolicy ;; *) kind='' ;;
+  esac
+  if [[ -n "$kind" ]]; then
+    target="$kind/$name"
+    if created "$target" && ! deleted "$target"; then
+      cat "$state/object-$(key_for "$target").json"
+    fi
+    exit 0
+  fi
+fi
+
 if [[ "$args" == *' get job '* && "$args" == *' --output json '* ]]; then
 	if [[ "${NOCODB_RESTORE_VOLUME_CASE:-}" == request-failure && "$args" == *-request* ]]; then
 		printf '%s\n' '{"status":{"conditions":[{"type":"Failed","status":"True","reason":"CanaryMismatch"}]}}'
@@ -256,12 +277,39 @@ if [[ "$args" == *' create --filename '* ]]; then
 			*) continue ;;
 		esac
 		: >"$state/created-$(key_for "$target")"
+        KIND="$kind" NAME="$name" yq ea -o=json 'select(.kind == strenv(KIND) and .metadata.name == strenv(NAME))' "$manifest" |
+          jq --arg uid "api-$name" '.metadata.uid = $uid | .metadata.resourceVersion = "12"' \
+          >"$state/object-$(key_for "$target").json"
 	done < <(yq ea -r 'select(.kind != null) | [.kind,.metadata.name] | @tsv' "$manifest")
+    if [[ "$args" == *' --output json '* ]]; then
+      cat "$state/object-$(key_for "$target").json"
+    fi
 	exit 0
 fi
 
 if [[ "$args" == *' delete '* ]]; then
-	target="$(printf '%s\n' "$@" | awk '/^(job|secret|deployment|service|statefulset|pvc|ciliumnetworkpolicy|persistentvolume|volumes\.longhorn\.io)\// {print; exit}')"
+	[[ "$args" == *' --raw '* && "$args" == *' --filename - '* ]] || {
+      echo 'Restore cleanup must enforce API creation UID and current resourceVersion.' >&2
+      exit 66
+    }
+    raw=''
+    previous=''
+    for argument in "$@"; do
+      if [[ "$previous" == --raw ]]; then raw="$argument"; fi
+      previous="$argument"
+    done
+    name="${raw##*/}"; resource="${raw%/*}"; resource="${resource##*/}"
+    case "$resource" in
+      jobs) kind=job ;; deployments) kind=deployment ;; services) kind=service ;;
+      statefulsets) kind=statefulset ;; persistentvolumeclaims) kind=pvc ;;
+      ciliumnetworkpolicies) kind=ciliumnetworkpolicy ;; *) exit 67 ;;
+    esac
+    target="$kind/$name"
+    options="$(cat)"
+    jq -e --argjson options "$options" '
+      $options.preconditions == {uid:.metadata.uid,resourceVersion:.metadata.resourceVersion} and
+      $options.propagationPolicy == "Foreground"
+    ' "$state/object-$(key_for "$target").json" >/dev/null || exit 68
 	if [[ "${NOCODB_RESTORE_VOLUME_CASE:-}" == cleanup-failure && "$target" == deployment/* ]]; then
 		printf 'cleanup-delete-failed %s\n' "$target" >>"$events"
 		exit 1
@@ -292,6 +340,12 @@ export NOCODB_RESTORE_REAL_UV
 cat >"$fixture/bin/uv" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "$1 $2 $3 ${4:-} ${5:-} ${6:-}" == 'run --locked python -m scripts.test.access validate' ]]; then
+  suite='test.nocodb-restore-drill'
+  [[ -z "${NOCODB_RESTORE_EXTENSION_CONFIRM:-}" ]] || suite='test.nocodb-restore-drill-extension'
+  jq -n --arg suite "$suite" '{suite_id:$suite}'
+  exit 0
+fi
 [[ "$1 $2 $3 $4" == 'run --locked python scripts/test/lib/automation-data-application-acceptance.py' ]] || exit 64
 case "$5" in
   check-profile) exit 0 ;;

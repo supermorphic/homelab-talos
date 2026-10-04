@@ -33,9 +33,24 @@ fi
 kubeconfig="$1"
 run_dir="${HOMELAB_TEST_RUN_DIR:-}"
 [[ -f "$kubeconfig" ]] || {
-  echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
+  echo 'NocoDB access requires the selected invocation config.' >&2
   exit 1
 }
+# Variant authority comes from the checked invocation, not an environment flag.
+variant_binding="$(uv run --locked python -m scripts.test.access validate "$kubeconfig")" || {
+  echo 'NocoDB requires its bound canonical suite.' >&2
+  exit 1
+}
+variant_suite="$(jq -er '.suite_id // empty' <<<"$variant_binding")" || {
+  echo 'NocoDB requires its bound canonical suite.' >&2
+  exit 1
+}
+case "$variant_suite:$extension_enabled" in
+  test.nocodb-access:false|test.nocodb-access-source-pair:true) ;;
+  *) echo 'NocoDB variant requires its canonical suite and exact confirmation.' >&2; exit 1 ;;
+esac
+unset variant_binding
+
 [[ -n "$run_dir" && -d "$run_dir" ]] || {
   echo 'Refusing NocoDB access acceptance outside the catalog run coordinator.' >&2
   exit 1

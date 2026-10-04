@@ -274,7 +274,7 @@ jq -e '
   .native_results.strategy == "wrapper-junit" and
   .dispatch.mode == "direct" and .dispatch.runtime == "bash" and
   .dispatch.path == "scripts/test/scenarios/nocodb-restore-drill.sh" and
-  .dispatch.args == [".kube/config"] and .dispatch.selector == null
+  .dispatch.args == ["@test-kubeconfig@"] and .dispatch.selector == null
 ' <<<"$entry_json" >/dev/null || fail 'catalog metadata does not preserve the scoped resilience contract'
 
 echo 'NocoDB restore command tests passed.'

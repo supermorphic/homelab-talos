@@ -24,6 +24,19 @@ token_provision='fixture_automation_data_provisioning_0123456789'
 token_source='fixture_nocodb_source_provisioning_0123456789'
 token_acceptance="fixture_nocodb_acceptance_${run_id:0:16}"
 
+cat >"$fixture/bin/uv" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1 $2 $3 ${4:-} ${5:-} ${6:-}" == 'run --locked python -m scripts.test.access validate' ]]; then
+  suite='test.nocodb-access'
+  [[ -z "${NOCODB_ACCESS_EXTENSION_CONFIRM:-}" ]] || suite='test.nocodb-access-source-pair'
+  jq -n --arg suite "$suite" '{suite_id:$suite}'
+  exit 0
+fi
+exit 64
+EOF
+chmod 700 "$fixture/bin/uv"
+
 cat >"$fixture/bin/git" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -656,7 +669,7 @@ jq -e '
   .native_results.strategy == "wrapper-junit" and
   .dispatch.mode == "direct" and .dispatch.runtime == "bash" and
   .dispatch.path == "scripts/test/scenarios/nocodb-access.sh" and
-  .dispatch.args == [".kube/config"] and .dispatch.selector == null
+  .dispatch.args == ["@test-kubeconfig@"] and .dispatch.selector == null
 ' <<<"$entry_json" >/dev/null || fail 'catalog metadata does not preserve the attended mutation contract'
 
 echo 'NocoDB access command tests passed.'
@@ -666,6 +679,12 @@ echo 'NocoDB access command tests passed.'
 cat >"$fixture/bin/uv" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "$1 $2 $3 ${4:-} ${5:-} ${6:-}" == 'run --locked python -m scripts.test.access validate' ]]; then
+  suite='test.nocodb-access'
+  [[ -z "${NOCODB_ACCESS_EXTENSION_CONFIRM:-}" ]] || suite='test.nocodb-access-source-pair'
+  jq -n --arg suite "$suite" '{suite_id:$suite}'
+  exit 0
+fi
 [[ "$1 $2 $3" == 'run --locked python' ]] || exit 64
 case "$4:$5" in
   scripts/test/lib/automation-data-application-acceptance.py:check-root) event=app-profile-check ;;

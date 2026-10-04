@@ -9,6 +9,7 @@ source scripts/lib/common.sh
 source scripts/lib/lease.sh
 # shellcheck source=scripts/test/lib/job.sh
 source scripts/test/lib/job.sh
+source scripts/test/lib/owned-resources.sh
 # shellcheck source=scripts/test/lib/automation-data-restore-command.sh
 source scripts/test/lib/automation-data-restore-command.sh
 # shellcheck source=scripts/test/lib/nocodb-restore-command.sh
@@ -39,9 +40,24 @@ fi
 kubeconfig="$1"
 run_dir="${HOMELAB_TEST_RUN_DIR:-}"
 [[ -f "$kubeconfig" ]] || {
-	echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
+	echo 'The restore drill requires the selected invocation config.' >&2
 	exit 1
 }
+# Variant authority comes from the checked invocation, not an environment flag.
+variant_binding="$(uv run --locked python -m scripts.test.access validate "$kubeconfig")" || {
+  echo 'NocoDB requires its bound canonical suite.' >&2
+  exit 1
+}
+variant_suite="$(jq -er '.suite_id // empty' <<<"$variant_binding")" || {
+  echo 'NocoDB requires its bound canonical suite.' >&2
+  exit 1
+}
+case "$variant_suite:$extension_enabled" in
+  test.nocodb-restore-drill:false|test.nocodb-restore-drill-extension:true) ;;
+  *) echo 'NocoDB variant requires its canonical suite and exact confirmation.' >&2; exit 1 ;;
+esac
+unset variant_binding
+
 [[ -n "$run_dir" && -d "$run_dir" ]] || {
 	echo 'Refusing NocoDB restore drill outside the catalog run coordinator.' >&2
 	exit 1
@@ -76,6 +92,12 @@ fi
 umask 077
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-nocodb-restore.XXXXXX")"
 chmod 700 "$temp_dir"
+ledger="$run_dir/diagnostics/nocodb-restore-owned.jsonl"
+[[ ! -e "$ledger" ]] || {
+  echo 'Refusing to overwrite prior restore ownership evidence.' >&2
+  exit 1
+}
+: >"$ledger"
 
 write_phase() {
 	local phase="$1" status="$2" reason="$3"
@@ -106,10 +128,10 @@ create_owned_manifests() { # <namespace-or-dash> <manifest>
 		nocodb_restore_resource_is_owned "$run_hash" "$temp_dir/create-object.json" || return 1
 		verify_lease || return 1
 		if [[ "$target_namespace" == - ]]; then
-			"${kcluster[@]}" create --filename "$temp_dir/create-object.json" >/dev/null || return 1
+			test_create_owned "$ledger" "$temp_dir/create-object.json" "${kcluster[@]}" || return 1
 		else
-			kubectl --kubeconfig "$kubeconfig" --namespace "$target_namespace" \
-				create --filename "$temp_dir/create-object.json" >/dev/null || return 1
+			test_create_owned "$ledger" "$temp_dir/create-object.json" \
+        kubectl --kubeconfig "$kubeconfig" --namespace "$target_namespace" || return 1
 		fi
 	done <"$temp_dir/create-objects.jsonl"
 }
@@ -131,22 +153,21 @@ resource_absent() { # <namespace-or-dash> <target>
 	[[ ! -s "$output" || "$(jq -r '.kind // ""' "$output")" == '' ]]
 }
 
-delete_owned() { # <namespace-or-dash> <target>
-	local target_namespace="$1" target="$2" object
-	object="$temp_dir/delete-${target//\//-}.json"
-	resource_json "$target_namespace" "$target" "$object" || return 1
-	[[ -s "$object" && "$(jq -r '.kind // ""' "$object")" != '' ]] || return 0
-	nocodb_restore_resource_is_owned "$run_hash" "$object" || {
-		echo "Refusing cleanup of $target_namespace/$target because both run ownership labels do not match." >&2
-		return 1
-	}
-	verify_lease || return 1
-	if [[ "$target_namespace" == - ]]; then
-		"${kcluster[@]}" delete "$target" --wait=true --timeout=5m >/dev/null
-	else
-		kubectl --kubeconfig "$kubeconfig" --namespace "$target_namespace" \
-			delete "$target" --wait=true --timeout=5m >/dev/null
-	fi
+delete_owned() { # <namespace> <target>
+  local target_namespace="$1" target="$2" kind
+  [[ "$target_namespace" == "$namespace" ]] || return 2
+  case "${target%%/*}" in
+    job) kind=Job ;;
+    deployment) kind=Deployment ;;
+    service) kind=Service ;;
+    statefulset) kind=StatefulSet ;;
+    pvc) kind=PersistentVolumeClaim ;;
+    ciliumnetworkpolicy) kind=CiliumNetworkPolicy ;;
+    *) return 2 ;;
+  esac
+  verify_lease || return 1
+  test_delete_owned "$ledger" "$kind" "$target_namespace" "${target#*/}" \
+    kubectl --kubeconfig "$kubeconfig" --namespace "$target_namespace"
 }
 
 route_targets_service() {
