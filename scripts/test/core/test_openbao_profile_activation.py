@@ -209,11 +209,31 @@ class AgentProfileActivationTests(unittest.TestCase):
                 with self.assertRaises(SafeError):
                     self.run_guard()
 
-    def test_current_generation_and_completed_typechecking_are_required(self):
+    def test_completed_warning_free_typechecking_allows_omitted_empty_result(self):
+        # The status controller advances observedGeneration after checking; the
+        # API can omit the empty result when earlier warnings have been cleared.
+        for result in ({}, {"typeChecking": {}}, {"typeChecking": {"expressionWarnings": []}}):
+            with self.subTest(result=result):
+                self.actual[3]["status"] = {"observedGeneration": 2, **result}
+                self.assertIn("object_uids", self.run_guard())
+
+    def test_omitted_empty_variables_preserve_exact_policy_comparison(self):
+        self.expected[3]["spec"]["variables"] = []
+        self.assertIn("object_uids", self.run_guard())
+        self.actual[3]["spec"]["variables"] = [{"name": "unexpected", "expression": "true"}]
+        with self.assertRaises(SafeError):
+            self.run_guard()
+
+    def test_current_generation_and_warning_free_typechecking_are_required(self):
         for status in (
             {},
+            {"observedGeneration": 1},
             {"observedGeneration": 1, "typeChecking": {}},
-            {"observedGeneration": 2},
+            {"observedGeneration": "2", "typeChecking": {}},
+            {"observedGeneration": 2, "typeChecking": None},
+            {"observedGeneration": 2, "typeChecking": []},
+            {"observedGeneration": 2, "typeChecking": {"expressionWarnings": {}}},
+            {"observedGeneration": 2, "typeChecking": {"expressionWarnings": None}},
             {
                 "observedGeneration": 2,
                 "typeChecking": {
@@ -225,6 +245,14 @@ class AgentProfileActivationTests(unittest.TestCase):
         ):
             with self.subTest(status=status):
                 self.actual[3]["status"] = status
+                with self.assertRaises(SafeError):
+                    self.run_guard()
+
+    def test_invalid_policy_generations_do_not_prove_completed_checks(self):
+        for generation in (None, True, 0, -1, "2"):
+            with self.subTest(generation=generation):
+                self.actual[3]["metadata"]["generation"] = generation
+                self.actual[3]["status"] = {"observedGeneration": generation, "typeChecking": {}}
                 with self.assertRaises(SafeError):
                     self.run_guard()
 

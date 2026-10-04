@@ -184,6 +184,8 @@ def _controlled_body(document):
         spec = body["spec"]
         if kind == "ValidatingAdmissionPolicy":
             spec.setdefault("failurePolicy", "Fail")
+            # The API omits an empty optional variables list when serializing.
+            spec.setdefault("variables", [])
             match = spec["matchConstraints"]
         else:
             match = spec.setdefault("matchResources", {})
@@ -290,11 +292,18 @@ def require_agent_profiles_ready(kubeconfig):
                 raise SafeError("source-mismatch")
             if item["kind"] == "ValidatingAdmissionPolicy":
                 status = deployed.get("status", {})
+                # The Kubernetes status controller records observedGeneration
+                # only after type checking. Applying an empty result can omit
+                # typeChecking when clearing previous warnings.
+                checking = status.get("typeChecking", {})
                 if (
-                    not isinstance(meta.get("generation"), int)
+                    type(meta.get("generation")) is not int
+                    or meta["generation"] < 1
+                    or type(status.get("observedGeneration")) is not int
                     or status.get("observedGeneration") != meta["generation"]
-                    or not isinstance(status.get("typeChecking"), dict)
-                    or status["typeChecking"].get("expressionWarnings", [])
+                    or not isinstance(checking, dict)
+                    or not isinstance(checking.get("expressionWarnings", []), list)
+                    or checking.get("expressionWarnings", [])
                 ):
                     raise SafeError("source-mismatch")
             uids["/".join(identity)] = meta["uid"]
