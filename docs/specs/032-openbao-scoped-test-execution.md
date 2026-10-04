@@ -434,28 +434,51 @@ Lease continuously around that test.
 
 ## Deployment and compatibility
 
-Implement this as a single initiative with staged deployment, not as partially
-classified tests left for a later executor:
+Use one attended maintenance transition for the existing workstation. Updating a
+checkout to this revision immediately changes its catalog callers to isolated
+invocation configs. Those callers, including observer verification and recorded
+campaigns, cannot run with the earlier enrollment metadata. There is no separate
+caller activation switch. Legacy issuance endpoints preserve only the explicit
+legacy base routes; they do not keep the new catalog callers working during the
+transition.
 
-1. Add identities, narrowly scoped RBAC, admission rules and fixed fixtures through
-   Git/Flux. They must be present before new profile issuance is enabled.
-2. Add OpenBao roles and exact endpoint policies using the established guarded
-   operator configuration workflow. Preserve operator-only OpenBao administration.
-   Before any configuration write, this workflow checks the deployed identities,
-   permissions, admission policies and bindings, immutable helper programs, and
-   restore fixture baseline against Git. Admission policies must have completed
-   type checking for their current generation with no expression warnings.
-   Known API defaults are allowed; extra grants and admission bypass selectors
-   are rejected. The confirmation binds the source digest and object UIDs.
-   The fixed NocoDB credential fixture is checked through metadata and type only.
-3. Upgrade the machine's protected enrollment metadata through the existing
-   attended lifecycle workflow. Do not edit or copy its secret material ad hoc.
-4. Cut callers over to explicit access declarations and isolated configs. Provide
-   explicit old-name compatibility only during this migration; it cannot grant
-   new test profiles to an old metadata layout or act as a permission fallback.
-5. Reinstall base connection configs, perform acceptance, then retire the old
-   public `diagnostic`/`publisher` endpoints and multi-context execution paths.
-   Prove final new-name operation before declaring the initiative complete.
+1. Finish active tests and campaigns, including their cleanup and publication,
+   before updating their checkouts. Pause scheduled use of the affected callers.
+   The operator must have independent Kubernetes access and the retained OpenBao
+   operator password available for the maintenance interval.
+2. Merge the reviewed Git changes and let Flux deploy the identities, RBAC,
+   admission rules, immutable helpers and fixed fixtures. Update the operator's
+   checkout to clean deployed `main`. Catalog verification remains unavailable
+   until the enrollment upgrade; use the guarded operator workflow for setup.
+3. Apply the OpenBao roles and exact endpoint policies using the guarded operator
+   configuration workflow. Before any configuration write it compares deployed
+   identities, permissions, admission policies and bindings, helper programs, and
+   the restore fixture baseline against Git. Admission policies must have current
+   type-checking status with no expression warnings. Known API defaults are
+   allowed; extra grants and admission bypass selectors are rejected. Confirmation
+   binds the source digest and object UIDs. The NocoDB credential fixture is checked
+   through metadata and type only.
+4. Upgrade an active workstation enrollment with the attended `rotate` action.
+   It validates a replacement, writes the current cluster metadata, then destroys
+   the old SecretID. Use `enroll` only for a new workstation or after the guarded
+   revocation/re-enrollment procedure; it rejects an already active enrollment.
+   Never edit or copy private enrollment material by hand.
+5. Install the separate base configs and run the recorded lifecycle acceptance.
+   Resume ordinary callers only after that acceptance passes. Keep the initiative
+   open while the full catalog and native-client acceptance below run. Retire the
+   old public `diagnostic`/`publisher` endpoints and multi-context paths only after
+   new-name acceptance, then repeat the affected checks.
+
+If prerequisite deployment or configuration validation fails, leave the affected
+callers paused and correct the Git/deployment mismatch before retrying. If
+workstation rotation is interrupted, use the
+[guarded lifecycle recovery](031-openbao-agent-credential-profiles.md#operator-lifecycle-and-independent-recovery)
+with independent operator access; do not restore old private metadata or switch a
+failed catalog test to operator credentials. Broker unavailability uses the
+[independent OpenBao recovery procedure](030-openbao-kubernetes-credential-broker.md#seal-and-recovery-ownership).
+Keep the maintenance interval open until configuration, enrollment, and lifecycle
+acceptance succeed. Publication-only failure resumes the retained record without
+repeating a successful test.
 
 The public base-profile installer remains `mise exec -- just kube kubeconfig`,
 defaulting to observer. Explicit base-profile requests produce their own config
@@ -467,14 +490,25 @@ The dispatcher prepares the assigned `.talos/config` with
 It clears undeclared ambient Talos input. The physical-loss workflow retains its
 explicit operator boundary.
 
-The guarded configuration command is `mise exec -- just kube openbao-config-apply`.
-Attended enrollment uses `mise exec -- just kube openbao-workstation enroll` with
-an explicitly supplied `OPENBAO_OPERATOR_KUBECONFIG`. Both keep their existing
-source, target, hidden-password and exact-confirmation checks. The combined
-`just bootstrap openbao-agent <absolute-operator-config>` workflow can sequence
-configuration, enrollment and lifecycle acceptance when each action is authorized.
-It ends operator credential inputs before invoking the canonical recorded test.
-Do not use a failed test's operator recovery command as an automatic retry.
+For an existing active enrollment, the operator runs these commands from clean
+deployed `main`, supplying the existing absolute operator kubeconfig path. Each
+command prompts privately for the OpenBao password and requires its exact
+source/target confirmation:
+
+```sh
+OPENBAO_OPERATOR_KUBECONFIG=/absolute/path/to/operator-kubeconfig \
+  OPENBAO_CONFIG_AUTH=userpass mise exec -- just kube openbao-config-apply
+OPENBAO_OPERATOR_KUBECONFIG=/absolute/path/to/operator-kubeconfig \
+  mise exec -- just kube openbao-workstation rotate
+```
+
+The combined `just bootstrap openbao-agent <absolute-operator-config>` command
+applies configuration and uses `enroll`, so reserve that path for new enrollment.
+After an existing enrollment has been rotated, its `test` starting step can run
+recorded lifecycle acceptance without repeating enrollment. The wrapper ends
+operator kubeconfig inputs before canonical dispatch; the test still prompts for
+its attended OpenBao password. Do not use a failed test's operator recovery command
+as an automatic retry.
 
 After enrollment, install separate base configs with
 `mise exec -- just kube kubeconfig <profile>` for `observer`, `debugger`,
@@ -484,10 +518,10 @@ An invocation remains separate under `.kube/invocations/`. Enrollment schema 1
 supports only finite legacy base routes; current invocation and dedicated issuance
 require the attended schema 2 enrollment. No metadata file is edited by hand.
 
-Changes to the cluster still require the repository's feature-branch, hosted
-validation and explicit merge authorization. Design approval is not merge approval,
-authorization for privileged live acceptance, or permission to supply operator
-secrets to an agent.
+Changes to the cluster still require the repository's feature-branch workflow,
+the applicable CI validation gate, and explicit merge authorization. Design
+approval is not merge approval, authorization for privileged live acceptance, or
+permission to supply operator secrets to an agent.
 
 ## Validation and completion
 
@@ -551,7 +585,8 @@ After deployment and separate authorization, retain canonical live evidence for:
   dedicated Kubernetes profiles; the agent does not handle retained secret values.
 
 Run relevant repository checks, commit-time secret/staged-blob checks, independent
-final review, and fresh hosted merge-gate validation for the exact candidate/base.
+final review, and fresh validation for the exact candidate/base under the applicable
+repository CI gate.
 The optional full local CI run is not automatic. Reconcile this specification with
 the implemented and validated result before merge of completed work. Keep the
 issue open until the full runnable catalog and required live acceptance are proven.
