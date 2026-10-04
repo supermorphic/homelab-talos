@@ -2,6 +2,8 @@
 set -euo pipefail
 
 source scripts/lib/network.sh
+source scripts/lib/lease.sh
+source scripts/test/lib/owned-resources.sh
 
 [[ "$#" -eq 1 ]] || {
   echo 'Usage: portainer-persistence.sh <kubeconfig>' >&2
@@ -27,7 +29,12 @@ old_pod="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get pod -
 old_pod_uid="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get pod "$old_pod" --output jsonpath='{.metadata.uid}')"
 [[ -n "$pvc_uid" && -n "$old_pod" && -n "$old_pod_uid" ]]
 
-kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" delete pod "$old_pod" --wait=false
+verify_test_lease_holder "$kubeconfig" "${TEST_CAMPAIGN_LEASE_HOLDER:-${HOMELAB_DISRUPTION_LEASE_HOLDER:-}}" || {
+  echo 'Portainer persistence requires the current test Lease holder.' >&2
+  exit 1
+}
+test_delete_pod_instance "$old_pod_uid" "$namespace" "$old_pod" \
+  kubectl --kubeconfig "$kubeconfig" --namespace "$namespace"
 kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" rollout status deployment/portainer --timeout=10m
 
 new_pod="$(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" get pod -l app.kubernetes.io/name=portainer --field-selector=status.phase=Running --output jsonpath='{.items[0].metadata.name}')"

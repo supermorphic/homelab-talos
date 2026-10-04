@@ -95,6 +95,38 @@ esac
             (self.directory / "commands").read_text(),
         )
 
+    def test_registered_disruption_deletes_only_the_observed_pod_uid(self):
+        result = self.run_shell(
+            'source "$1"; test_delete_pod_instance synthetic-owned media synthetic-probe "$4"'
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.ledger.exists())
+        options = json.loads(self.log.read_text())
+        self.assertEqual(
+            options["preconditions"], {"uid": "synthetic-owned", "resourceVersion": "12"}
+        )
+
+    def test_registered_disruption_refuses_a_replaced_pod_without_deleting_it(self):
+        result = self.run_shell(
+            'source "$1"; test_delete_pod_instance earlier-observed-uid media synthetic-probe "$4"'
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(self.state.exists())
+        self.assertFalse(self.log.exists())
+
+    def test_registered_disruption_cannot_prove_deletion_from_invalid_pod_identity(self):
+        self.fake.write_text("""#!/bin/sh
+case "$1" in
+  get) cat "$FIXTURE_DIR/state.json" ;;
+  delete) printf '%s\\n' '{"kind":"Pod","metadata":{}}' >"$FIXTURE_DIR/state.json" ;;
+  *) exit 2 ;;
+esac
+""")
+        result = self.run_shell(
+            'source "$1"; test_delete_pod_instance synthetic-owned media synthetic-probe "$4"'
+        )
+        self.assertNotEqual(result.returncode, 0)
+
     def test_manifest_stream_creates_individually_and_records_each_api_uid(self):
         objects = [json.loads(self.manifest.read_text()), json.loads(self.manifest.read_text())]
         objects[1]["metadata"]["name"] = "synthetic-other"

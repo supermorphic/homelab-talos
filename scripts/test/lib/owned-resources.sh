@@ -108,3 +108,34 @@ test_delete_owned() { # <ledger> <kind> <namespace> <name> <kubectl-command...>
     sleep 1
   done
 }
+
+# Registered persistence tests intentionally disrupt an existing controller Pod.
+# Bind that action to the observed UID; never enter it in the creation ledger.
+test_delete_pod_instance() { # <observed-uid> <namespace> <name> <kubectl-command...>
+  local uid="$1" namespace="$2" name="$3" current options deadline observed_uid
+  shift 3
+  [[ -n "$uid" && "$namespace" =~ ^[a-z0-9][a-z0-9-]*$ && "$name" =~ ^[a-z0-9][a-z0-9.-]*$ ]] || return 2
+  current="$("$@" get pod "$name" --ignore-not-found --output json)" || return 1
+  [[ -n "$current" ]] || return 0
+  jq -e --arg uid "$uid" --arg ns "$namespace" --arg name "$name" '
+    .kind == "Pod" and .metadata.uid == $uid and .metadata.namespace == $ns and
+    .metadata.name == $name and (.metadata.resourceVersion | type == "string" and length > 0)
+  ' <<<"$current" >/dev/null || {
+    echo 'Observed disruption Pod identity changed; refusing deletion.' >&2
+    return 1
+  }
+  options="$(jq -ce '{apiVersion:"v1",kind:"DeleteOptions",propagationPolicy:"Foreground",
+    preconditions:{uid:.metadata.uid,resourceVersion:.metadata.resourceVersion}}' <<<"$current")" || return 1
+  "$@" delete --raw "/api/v1/namespaces/$namespace/pods/$name" --filename - \
+    <<<"$options" >/dev/null || return 1
+  deadline=$((SECONDS + 300))
+  while true; do
+    current="$("$@" get pod "$name" --ignore-not-found --output json)" || return 1
+    [[ -n "$current" ]] || return 0
+    # A new controller-created UID proves the original instance is gone.
+    observed_uid="$(jq -er '.metadata.uid | select(type == "string" and length > 0)' <<<"$current")" || return 1
+    [[ "$observed_uid" == "$uid" ]] || return 0
+    ((SECONDS < deadline)) || return 124
+    sleep 1
+  done
+}
