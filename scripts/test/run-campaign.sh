@@ -859,7 +859,8 @@ retry_pending_publications() {
 execute_remaining_members() {
   local suite_id entry mutates member_status
 
-  while IFS= read -r suite_id; do
+  # Keep stdin attached to the caller for attended password/recovery prompts.
+  while IFS= read -r -u 3 suite_id; do
     [[ -n "$suite_id" ]] || continue
     if SUITE_ID="$suite_id" yq -e \
       '.runs[] | select(.suite_id == strenv(SUITE_ID))' \
@@ -922,7 +923,7 @@ execute_remaining_members() {
         return 2
         ;;
     esac
-  done < <(selected_member_ids)
+  done 3< <(selected_member_ids)
 
   if [[ "$overall_failed" == 'true' ]]; then
     finish_manifest completed failed

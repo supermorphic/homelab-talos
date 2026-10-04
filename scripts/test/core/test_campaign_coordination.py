@@ -1,8 +1,13 @@
 """Campaign failures retain child evidence and close purpose-specific authority."""
 
 import json
+import os
+import pty
+import select
 import shutil
+import signal
 import subprocess
+import sys
 import time
 import unittest
 
@@ -70,6 +75,70 @@ class CampaignCoordinationTests(unittest.TestCase):
         paths = list((self.root / "campaigns").glob("*/campaign.json"))
         self.assertEqual(len(paths), 1)
         return json.loads(paths[0].read_text())
+
+    def test_recorded_attended_backend_keeps_terminal_input_and_hides_password(self):
+        catalog_path = self.root / "catalog.yaml"
+        catalog = yaml.safe_load(catalog_path.read_text())
+        for entry in catalog["suites"]:
+            if entry["metadata"]["id"] == "verification.metrics-server":
+                entry["runner"]["command"] = "mise exec -- just fixture attended"
+        catalog_path.write_text(yaml.safe_dump(catalog))
+        backend = self.root / "attended.py"
+        backend.write_text("""import sys
+from scripts.openbao.operator import private_prompt
+assert sys.stdin.isatty(), 'CAMPAIGN_INPUT_NOT_TERMINAL'
+assert private_prompt('Operator password: ') == 'synthetic-private-value'
+assert input('Recovery confirmation: ') == 'confirm'
+print('ATTENDED_SUCCESS', flush=True)
+""")
+        environment = {**self.environment, "CAMPAIGN_TEST_ATTENDED_BACKEND": str(backend),
+                       "PYTHONPATH": str(ROOT)}
+        harness = """import os,subprocess
+original = os.tcgetpgrp(0)
+code = subprocess.call(['scripts/test/run-campaign.sh', 'record', 'verification.metrics-server'])
+assert os.tcgetpgrp(0) == original, 'Terminal foreground group was not restored'
+print('TERMINAL_RESTORED', flush=True)
+raise SystemExit(code)
+"""
+        pid, terminal = pty.fork()
+        if pid == 0:
+            os.chdir(ROOT)
+            os.execve(sys.executable, [sys.executable, "-c", harness], environment)
+        output = bytearray()
+        reaped = False
+        try:
+            def receive(marker):
+                deadline = time.monotonic() + 20
+                while marker not in output:
+                    remaining = deadline - time.monotonic()
+                    self.assertGreater(remaining, 0, repr(bytes(output)))
+                    if select.select([terminal], [], [], remaining)[0]:
+                        try:
+                            chunk = os.read(terminal, 4096)
+                        except OSError:
+                            self.fail(repr(bytes(output)))
+                        self.assertTrue(chunk, repr(bytes(output)))
+                        output.extend(chunk)
+
+            receive(b"Operator password: ")
+            os.write(terminal, b"synthetic-private-value\n")
+            receive(b"Recovery confirmation: ")
+            os.write(terminal, b"confirm\n")
+            receive(b"TERMINAL_RESTORED")
+            _, status = os.waitpid(pid, 0)
+            reaped = True
+            self.assertEqual(os.waitstatus_to_exitcode(status), 0, repr(bytes(output)))
+            self.assertIn(b"ATTENDED_SUCCESS", output)
+            self.assertNotIn(b"synthetic-private-value", output)
+            self.assertEqual(self.manifest()["runs"][0]["result"], "passed")
+            self.assertEqual(self.manifest()["runs"][0]["publish_status"], "published")
+            for log in (self.root / "results").glob("*/logs/console.log"):
+                self.assertNotIn(b"synthetic-private-value", log.read_bytes())
+        finally:
+            if not reaped:
+                os.kill(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
+            os.close(terminal)
 
     def test_missing_lease_records_broken_without_running_or_publishing(self):
         self.lease.unlink()

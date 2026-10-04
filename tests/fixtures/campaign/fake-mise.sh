@@ -29,6 +29,10 @@ case "$target" in
     suite_id='verification.metrics-server'
     command=(true)
     ;;
+  attended)
+    suite_id='verification.metrics-server'
+    command=(python "${CAMPAIGN_TEST_ATTENDED_BACKEND:?}")
+    ;;
   fail)
     suite_id='verification.cilium'
     command=(bash -c 'exit 7')
