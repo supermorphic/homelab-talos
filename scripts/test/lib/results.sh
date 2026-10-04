@@ -205,7 +205,7 @@ recorded_phase_status() {
   local phase="$2"
   local file="$run_dir/${phase}.json"
   local status
-  [[ "$phase" =~ ^(assertion|external-dependency|cleanup|recovery)$ ]] || {
+  [[ "$phase" =~ ^(assertion|external-dependency|cleanup|recovery|diagnostics)$ ]] || {
     echo 'not-classified'
     return
   }
@@ -471,7 +471,7 @@ normalize_native_artifacts() {
     mv "$run_dir/evidence.json" "$run_dir/diagnostics/scenario-evidence.json"
   fi
 
-  for phase_file in recovery assertion external-dependency cleanup; do
+  for phase_file in recovery assertion external-dependency cleanup diagnostics; do
     if [[ -f "$run_dir/${phase_file}.json" ]]; then
       mv "$run_dir/${phase_file}.json" "$run_dir/diagnostics/phases/${phase_file}.json"
     fi

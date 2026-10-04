@@ -376,8 +376,11 @@ duration_seconds=$((EPOCHSECONDS - started_epoch))
 cleanup_status="$lease_release_status"
 recovery_status='not-required'
 external_dependency_status='not-applicable'
+diagnostics_status='passed'
 if [[ "$mutates_cluster" == 'true' && -f "$run_dir/recovery.json" ]]; then
   recovery_status="$(recorded_recovery_status "$run_dir")"
+fi
+if [[ -f "$run_dir/cleanup.json" || ( "$mutates_cluster" == 'true' && -f "$run_dir/recovery.json" ) ]]; then
   scenario_cleanup_status="$recovery_status"
   if [[ -f "$run_dir/cleanup.json" ]]; then
     scenario_cleanup_status="$(recorded_phase_status "$run_dir" cleanup)"
@@ -403,6 +406,12 @@ if [[ "$mutates_cluster" == 'true' && -f "$run_dir/recovery.json" ]]; then
       ;;
   esac
 fi
+if [[ -f "$run_dir/diagnostics.json" ]]; then
+  diagnostics_status="$(recorded_phase_status "$run_dir" diagnostics)"
+  if [[ "$diagnostics_status" == 'failed' || "$diagnostics_status" == 'not-classified' ]]; then
+    run_result='broken'
+  fi
+fi
 if [[ -f "$run_dir/external-dependency.json" ]]; then
   external_dependency_status="$(recorded_phase_status "$run_dir" external-dependency)"
   if [[ "$external_dependency_status" == 'failed' ||
@@ -416,7 +425,7 @@ if [[ -f "$run_dir/assertion.json" ]]; then
 fi
 append_lifecycle_junit "$run_dir/junit.xml" "$suite_id" \
   "$external_dependency_status" "$cleanup_status" "$recovery_status" \
-  passed "$run_result"
+  "$diagnostics_status" "$run_result"
 cluster_name=''
 if [[ -n "$kubeconfig" ]]; then
   cluster_name="$(lease_kubectl "$kubeconfig" config view --minify \
@@ -430,7 +439,7 @@ normalize_native_artifacts "$run_dir" "$run_id"
 write_evidence_index "$run_dir" "$run_id"
 write_summary "$run_dir" "$run_id" "$entry_json" "$execution_origin" \
   "$started_at" "$finished_at" "$duration_seconds" "$run_result" \
-  "$primary_exit_code" "$assertion_status" passed "$cleanup_status" \
+  "$primary_exit_code" "$assertion_status" "$diagnostics_status" "$cleanup_status" \
   "$recovery_status" "$external_dependency_status" "$cluster_name"
 scripts/test/validate-run.sh "$run_dir"
 

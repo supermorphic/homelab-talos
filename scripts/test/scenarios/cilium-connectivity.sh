@@ -111,7 +111,7 @@ else
   if ! cilium sysdump --kubeconfig "$kubeconfig" --namespace kube-system \
     --output-filename "$diagnostic_dir/cilium-sysdump-<ts>"; then
     echo 'Connectivity diagnostics failed; original test status retained.' >&2
-    printf '%s\n' '{"status":"failed","reason":"connectivity diagnostics"}' >"$HOMELAB_TEST_RUN_DIR/diagnostics/cilium-diagnostics.json"
+    printf '%s\n' '{"status":"failed","reason":"connectivity diagnostics"}' >"$HOMELAB_TEST_RUN_DIR/diagnostics.json"
   fi
   exit "$primary"
 fi

@@ -3,6 +3,7 @@
 import json
 import subprocess
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from scripts.test.core import test_chainsaw_routing as routing_fixtures
@@ -107,6 +108,43 @@ class CoordinationRoutingTests(unittest.TestCase):
             self.assertNotIn(suite_path, line)
         self.assertFalse(json.loads(self.lease.read_text())["spec"].get("holderIdentity"))
         self.assertEqual(list((self.root / "private").glob("*/config")), [])
+
+    def test_backend_failure_keeps_independent_cleanup_and_diagnostic_status(self):
+        for phase in ("cleanup", "diagnostics"):
+            with self.subTest(phase=phase):
+                result = subprocess.run(
+                    [
+                        "scripts/test/run-catalog-suite.sh",
+                        "test.cilium-connectivity",
+                        "--",
+                        "bash",
+                        "-c",
+                        'printf \'{"status":"failed"}\\n\' > "$HOMELAB_TEST_RUN_DIR/$1.json"; exit 7',
+                        "fixture",
+                        phase,
+                    ],
+                    cwd=ROOT,
+                    env={
+                        **self.environment,
+                        "TEST_RESULTS_ROOT": str(self.root / phase),
+                        "TEST_FIXTURE_ACCESS_FINALIZATION_ROOT": str(self.root / phase),
+                    },
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+                run_dir = next((self.root / phase).iterdir())
+                summary = json.loads((run_dir / "summary.json").read_text())
+                self.assertEqual(summary["phases"]["assertion"]["status"], "failed")
+                self.assertEqual(summary["phases"][phase]["status"], "failed")
+                self.assertEqual(summary["result"], "broken")
+                junit = ET.parse(run_dir / "junit.xml").getroot()
+                case = junit.find(f".//testcase[@name='{phase}']")
+                self.assertIsNotNone(case)
+                self.assertIsNotNone(case.find("error"))
+                self.assertNotIn("recovery.json", [p.name for p in run_dir.iterdir()])
 
     def test_missing_git_lease_is_never_created_and_backend_does_not_run(self):
         self.lease.unlink()
