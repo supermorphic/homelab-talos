@@ -311,7 +311,7 @@ class OperatorClient:
 
 
 @contextmanager
-def lease(kubeconfig):
+def lease(kubeconfig, *, coordination_config=None):
     with tempfile.TemporaryDirectory(prefix="openbao-lock-") as directory:
         marker = str(Path(directory) / "renewal-failed")
         holder = "openbao-" + random.token_hex(16)
@@ -320,9 +320,10 @@ def lease(kubeconfig):
                 "bash",
                 str(guards.ROOT / "scripts/openbao/lock.sh"),
                 "hold",
-                str(kubeconfig),
+                str(coordination_config or kubeconfig),
                 holder,
                 marker,
+                *([str(kubeconfig)] if coordination_config is not None else []),
             ],
             cwd=guards.ROOT,
             stdin=subprocess.PIPE,

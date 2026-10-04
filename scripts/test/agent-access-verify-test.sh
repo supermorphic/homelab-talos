@@ -12,32 +12,24 @@ cat >"$fixture/bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ " $* " == *' config get-contexts '* ]]; then
-  context=''
-  for argument in "$@"; do
-    [[ "$argument" != homelab-* ]] || context="$argument"
-  done
-  case "${FAKE_LAYOUT}:${context}" in
-    named:homelab-observer|named:homelab-diagnostic|named:homelab-report-publisher|named:homelab-campaign-coordinator|partial:homelab-observer) exit 0 ;;
-    *) exit 1 ;;
-  esac
-fi
-
 positional=()
 groups=()
 context=''
 impersonation=''
+config=''
 subresource=''
 namespace=''
 all_namespaces=false
 diagnostic=false
 publisher=false
 coordinator=false
+runner=false
 resource_name=''
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
-    --kubeconfig) shift ;;
-    --kubeconfig=*) ;;
+    -o) shift ;;
+    --kubeconfig) config="$2"; shift ;;
+    --kubeconfig=*) config="${1#*=}" ;;
     --context) context="$2"; shift ;;
     --context=*) context="${1#*=}" ;;
     --as) impersonation="$2"; shift ;;
@@ -56,23 +48,22 @@ while [[ "$#" -gt 0 ]]; do
   esac
   shift
 done
+[[ -z "$context" && -z "$impersonation" && "${#groups[@]}" -eq 0 ]] || exit 65
+[[ -f "$config" ]] || exit 65
+identity="$(cat "$config")"
+if [[ "${positional[0]:-} ${positional[1]:-}" == 'auth whoami' ]]; then
+  printf '{"status":{"userInfo":{"username":"system:serviceaccount:kube-system:%s"}}}\n' "$identity"
+  exit
+fi
 [[ "${#positional[@]}" -eq 4 && "${positional[0]} ${positional[1]}" == 'auth can-i' ]] || exit 64
 verb="${positional[2]}"
 resource="${positional[3]}"
-if [[ "$FAKE_LAYOUT" == named ]]; then
-  [[ -n "$context" && -z "$impersonation" && "${#groups[@]}" -eq 0 ]] || exit 65
-  identity="$context"
-else
-  [[ -z "$context" && "$impersonation" == system:serviceaccount:kube-system:* ]] || exit 65
-  [[ "$(printf '%s\n' "${groups[@]}" | LC_ALL=C sort)" == \
-    $'system:authenticated\nsystem:serviceaccounts\nsystem:serviceaccounts:kube-system' ]] || exit 65
-  identity="${impersonation#system:serviceaccount:kube-system:}"
-fi
 case "$identity" in
   homelab-observer) ;;
   homelab-diagnostic) diagnostic=true ;;
   homelab-report-publisher) publisher=true ;;
   homelab-campaign-coordinator) coordinator=true ;;
+  homelab-test-runner) runner=true ;;
   *) exit 65 ;;
 esac
 request="$identity|$verb|$resource|${namespace:--}|${subresource:--}"
@@ -83,7 +74,7 @@ if [[ "$resource" == */* ]]; then
 fi
 
 case "$resource" in
-  nodes|persistentvolumes|customresourcedefinitions.apiextensions.k8s.io|apiservices.apiregistration.k8s.io|\
+  namespaces|nodes|persistentvolumes|customresourcedefinitions.apiextensions.k8s.io|apiservices.apiregistration.k8s.io|\
   clusterissuers.cert-manager.io|ciliumclusterwidenetworkpolicies.cilium.io|\
   ciliumidentities.cilium.io|ciliumnodes.cilium.io|gatewayclasses.gateway.networking.k8s.io|\
   nodes.metrics.k8s.io|clusterrolebindings.rbac.authorization.k8s.io|\
@@ -129,6 +120,11 @@ if [[ "$coordinator" == true ]]; then
   answer=no
   case "$verb:$resource:$namespace:$resource_name" in
     get:leases.coordination.k8s.io:flux-system:homelab-test-run-lock|update:leases.coordination.k8s.io:flux-system:homelab-test-run-lock) answer=yes ;;
+  esac
+elif [[ "$runner" == true ]]; then
+  answer=no
+  case "$verb:$resource:$namespace:$subresource" in
+    create:jobs.batch:automation:|get:pods:automation:|delete:pods:automation:) answer=yes ;;
   esac
 elif [[ "$publisher" == true ]]; then
   answer=no
@@ -180,6 +176,39 @@ case "${FAKE_TALOS_FAILURE:-}:$1" in
 esac
 EOF
 chmod +x "$fixture/bin/talosctl"
+
+cat >"$fixture/bin/uv" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+while [[ "$#" -gt 0 && "$1" != scripts.test.access ]]; do shift; done
+[[ "$#" -gt 0 ]] || exit 64
+shift
+case "$1" in
+  validate)
+    [[ "${FAKE_LAYOUT:-}" != unbound ]] || exit 1
+    printf '%s\n' '{"suite_id":"verification.agent-access","profile":"observer","run_id":"synthetic-audit"}'
+    ;;
+  profile-check)
+    [[ "$2" == "${FAKE_PARENT:?}" ]] || exit 65
+    [[ "${FAKE_LAYOUT:-}" != partial || "$3" != debugger ]] || exit 1
+    case "$3" in
+      observer) identity=homelab-observer ;;
+      debugger) identity=homelab-diagnostic ;;
+      test-runner) identity=homelab-test-runner ;;
+      report-publisher) identity=homelab-report-publisher ;;
+      campaign-coordinator) identity=homelab-campaign-coordinator ;;
+      *) exit 65 ;;
+    esac
+    path="${FAKE_PARENT%/*}/audit-$3.config"
+    printf '%s\n' "$identity" >"$path"
+    printf '%s\n' "$path"
+    ;;
+  remove) rm -- "$2" ;;
+  *) exit 64 ;;
+esac
+EOF
+chmod +x "$fixture/bin/uv"
+export FAKE_PARENT="$fixture/kubeconfig"
 
 run_layout() {
   local layout="$1"
@@ -302,17 +331,17 @@ for context in homelab-observer homelab-diagnostic; do
   expect_request "$context" patch replicas.longhorn.io longhorn-system -
   expect_request "$context" patch settings.longhorn.io longhorn-system -
 done
+expect_request homelab-test-runner create jobs.batch automation -
+expect_request homelab-test-runner delete pods automation -
+expect_request homelab-test-runner create namespaces - -
+expect_request homelab-test-runner get secrets openbao -
+expect_request homelab-test-runner update leases.coordination.k8s.io/homelab-test-run-lock flux-system -
 for verb in get update create patch delete; do
   expect_request homelab-campaign-coordinator "$verb" leases.coordination.k8s.io/homelab-test-run-lock flux-system -
 done
 expect_request homelab-campaign-coordinator update leases.coordination.k8s.io/another-lock flux-system -
 expect_request homelab-campaign-coordinator get secrets kube-system -
 expect_request homelab-campaign-coordinator create pods kube-system exec
-admin_log="$(run_layout admin)"
-# The fake validates the identity selection and groups before writing normalized
-# fields. Both credential layouts must cover the same authorization requests.
-diff -u <(LC_ALL=C sort -u "$named_log") <(LC_ALL=C sort -u "$admin_log")
-
 # Unexpected grants, denials, malformed output and client errors must stop the
 # verifier before another request or Talos inspection. A marker proves the
 # injected response was consumed, independent of diagnostic wording.
@@ -340,16 +369,21 @@ named malformed-output yes maybe 0
 named allowed-client-error yes yes 70
 named denied-client-error no no 70
 named denial-with-success-status no no 0
-admin unexpected-grant no yes 0
-admin unexpected-denial yes no 1
 AUTH_FAILURES
 
 if PATH="$fixture/bin:$PATH" FAKE_LAYOUT=partial FAKE_CALL_LOG="$fixture/partial.log" \
   "$verifier" "$fixture/kubeconfig" "$fixture/talosconfig" >"$fixture/partial.out" 2>&1; then
-  echo 'Partial scoped context layout unexpectedly passed.' >&2
+  echo 'Incomplete audit profile preparation unexpectedly passed.' >&2
   exit 1
 fi
 [[ ! -s "$fixture/partial.log" ]]
+
+if PATH="$fixture/bin:$PATH" FAKE_LAYOUT=unbound FAKE_CALL_LOG="$fixture/unbound.log"   "$verifier" "$fixture/kubeconfig" "$fixture/talosconfig" >"$fixture/unbound.out" 2>&1; then
+  echo 'Unbound audit parent unexpectedly passed.' >&2
+  exit 1
+fi
+[[ ! -s "$fixture/unbound.log" ]]
+[[ ! -f "$fixture/audit-observer.config" && ! -f "$fixture/audit-campaign-coordinator.config" ]]
 
 for talos_failure in version services; do
   talos_failure_output="$fixture/talos-$talos_failure.out"
@@ -366,4 +400,4 @@ done
 
 mise exec -- python "$repo_root/scripts/test/agent-access-kubectl-contract.py"
 
-echo 'Agent access verifier credential-layout tests passed.'
+echo 'Agent access verifier bound-profile tests passed.'

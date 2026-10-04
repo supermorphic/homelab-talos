@@ -14,31 +14,40 @@ publisher='homelab-report-publisher'
 coordinator='homelab-campaign-coordinator'
 talos_node='192.168.90.10'
 talos_endpoints='192.168.90.10,192.168.90.11,192.168.90.12'
-kc=(kubectl --kubeconfig "$kubeconfig")
-service_account_groups=(
-  --as-group=system:authenticated
-  --as-group=system:serviceaccounts
-  --as-group=system:serviceaccounts:kube-system
-)
-
-observer_context=false
-diagnostic_context=false
-publisher_context=false
-coordinator_context=false
-"${kc[@]}" config get-contexts "$observer" --no-headers >/dev/null 2>&1 && observer_context=true
-"${kc[@]}" config get-contexts "$diagnostic" --no-headers >/dev/null 2>&1 && diagnostic_context=true
-"${kc[@]}" config get-contexts "$publisher" --no-headers >/dev/null 2>&1 && publisher_context=true
-"${kc[@]}" config get-contexts "$coordinator" --no-headers >/dev/null 2>&1 && coordinator_context=true
-if [[ "$observer_context" == true && "$diagnostic_context" == true &&
-  "$publisher_context" == true && "$coordinator_context" == true ]]; then
-  credential_layout='named-contexts'
-elif [[ "$observer_context" == false && "$diagnostic_context" == false &&
-  "$publisher_context" == false && "$coordinator_context" == false ]]; then
-  credential_layout='admin-impersonation'
-else
-  echo 'Agent access verification requires all four scoped contexts or none.' >&2
-  exit 1
-fi
+runner='homelab-test-runner'
+audit_configs=()
+declare -A profile_configs
+kc=(kubectl)
+cleanup_profiles() {
+  local status="$?" config
+  trap - EXIT
+  for config in "${audit_configs[@]}"; do
+    uv run --locked python -m scripts.test.access remove "$config" || status=1
+  done
+  exit "$status"
+}
+trap cleanup_profiles EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+binding="$(uv run --locked python -m scripts.test.access validate "$kubeconfig")"
+jq -e '.suite_id == "verification.agent-access" and (.profile_check | not) and (.purpose | not)'   <<<"$binding" >/dev/null
+for profile in observer debugger test-runner report-publisher campaign-coordinator; do
+  config="$(uv run --locked python -m scripts.test.access profile-check "$kubeconfig" "$profile")"
+  audit_configs=("${audit_configs[@]}" "$config")
+  case "$profile" in
+    observer) account="$observer" ;;
+    debugger) account="$diagnostic" ;;
+    test-runner) account="$runner" ;;
+    report-publisher) account="$publisher" ;;
+    campaign-coordinator) account="$coordinator" ;;
+  esac
+  profile_configs["$account"]="$config"
+  actual="$(kubectl --kubeconfig "$config" auth whoami -o json | jq -er '.status.userInfo.username')"
+  [[ "$actual" == "system:serviceaccount:kube-system:$account" ]] || {
+    echo "Agent access verification failed the $profile identity check." >&2
+    exit 1
+  }
+done
 
 assert_can_i() {
   local context="$1"
@@ -50,14 +59,7 @@ assert_can_i() {
   local resource_name="${7:-}"
   local -a identity_args namespace_args
   local action actual scope status resource_arg
-  if [[ "$credential_layout" == 'named-contexts' ]]; then
-    identity_args=(--context "$context")
-  else
-    identity_args=(
-      --as="system:serviceaccount:kube-system:$context"
-      "${service_account_groups[@]}"
-    )
-  fi
+  identity_args=(--kubeconfig "${profile_configs[$context]}")
   resource_arg="$resource"
   if [[ -n "$resource_name" ]]; then
     resource_arg="$resource/$resource_name"
@@ -272,6 +274,17 @@ for context in "$observer" "$diagnostic"; do
   assert_can_i "$context" no patch settings.longhorn.io longhorn-system
 done
 
+# The generalized runner can allocate its declared fixtures and disrupt Pods,
+# but cannot change coordination authority, RBAC, namespaces or read secrets.
+assert_can_i "$runner" yes create jobs.batch automation
+assert_can_i "$runner" yes get pods automation
+assert_can_i "$runner" yes delete pods automation
+assert_can_i "$runner" no create namespaces ''
+assert_can_i "$runner" no get secrets openbao
+assert_can_i "$runner" no update leases.coordination.k8s.io flux-system '' homelab-test-run-lock
+assert_can_i "$runner" no create rolebindings.rbac.authorization.k8s.io automation
+assert_can_i "$runner" no impersonate users ''
+
 [[ -f "$talosconfig" ]] || {
   echo "Agent access verification requires Talos reader config $talosconfig." >&2
   exit 1
@@ -287,4 +300,4 @@ talosctl services --nodes "$talos_node" --endpoints "$talos_endpoints" \
   exit 1
 }
 
-echo "Agent access verification passed using $credential_layout: observer, diagnostic, publisher, and coordinator Kubernetes boundaries match, and Talos reader inspection succeeds."
+echo "Agent access verification passed: observer, debugger, test-runner, report-publisher and coordinator boundaries match, and Talos reader inspection succeeds."

@@ -12,7 +12,7 @@ import yaml
 
 from scripts.openbao import credentials, workstation
 from scripts.openbao.configuration import SafeError
-from scripts.test import access
+from scripts.test import access, catalog_validator
 from scripts.test.core import test_openbao_invocations as fixtures
 
 
@@ -22,6 +22,13 @@ class AuditProfileAccessTests(unittest.TestCase):
 
     def parent(self, suite="verification.agent-access"):
         return access.prepare_invocation(self.repo, suite, "synthetic-audit")
+
+    def test_verifier_analysis_allows_actual_identity_but_rejects_authority_changes(self):
+        analyze = catalog_validator.forbidden_kubernetes_operations
+        self.assertEqual(analyze("kubectl --kubeconfig selected auth whoami -o json"), [])
+        self.assertTrue(analyze("kubectl auth reconcile -f unreviewed.yaml"))
+        self.assertTrue(analyze("kubectl auth frobnicate"))
+        self.assertTrue(analyze("kubectl get secrets"))
 
     def test_all_five_profiles_separately_bound_to_each_declared_audit(self):
         for suite in ("verification.agent-access", "test.agent-credentials"):

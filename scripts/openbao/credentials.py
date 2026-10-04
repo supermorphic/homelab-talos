@@ -418,7 +418,7 @@ def _invocation_config(repo_root, cluster, binding, config_path):
 def install_invocation_kubeconfig(repo_root: Path, directory: Path, binding: dict) -> Path:
     from scripts.test.access import expected_invocation_binding
 
-    if binding != expected_invocation_binding(repo_root, binding):
+    if binding != expected_invocation_binding(repo_root, binding, directory=directory):
         raise SafeError("invalid-source")
     local = load_workstation(directory)
     if local["cluster"]["schema_version"] != 2 or binding["profile"] not in PROFILES:

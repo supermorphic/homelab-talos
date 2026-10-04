@@ -825,7 +825,7 @@ def forbidden_kubernetes_operations(source: str, *, allow_interactive: bool = Fa
                 continue
         if command in safe_commands:
             continue
-        if command == "auth" and next_non_option(remaining, 0) == "can-i":
+        if command == "auth" and next_non_option(remaining, 0) in {"can-i", "whoami"}:
             continue
         if command == "config" and next_non_option(remaining, 0) in {
             "current-context",

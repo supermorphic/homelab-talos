@@ -156,8 +156,10 @@ def prepare_invocation(repo_root: Path, suite_id: str, run_id: str) -> Path | No
     return credentials.install_invocation_kubeconfig(repo_root, workstation.DIRECTORY, binding)
 
 
-def expected_invocation_binding(repo_root: Path, binding: dict) -> dict:
-    """Resolve a suite or one of three fixed orchestration purposes, never both."""
+def expected_invocation_binding(
+    repo_root: Path, binding: dict, *, directory: Path | None = None
+) -> dict:
+    """Resolve a canonical suite, its declared audit child, or a fixed orchestration purpose."""
     if not isinstance(binding, dict) or not re.fullmatch(
         r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", str(binding.get("run_id", ""))
     ):
@@ -176,7 +178,7 @@ def expected_invocation_binding(repo_root: Path, binding: dict) -> dict:
         parent_record, _ = credentials.read_invocation(repo_root, Path(parent_path))
         if "profile_check" in parent_record or "purpose" in parent_record:
             raise SafeError("invalid-source")
-        parent = validate_invocation(repo_root, Path(parent_path))
+        parent = validate_invocation(repo_root, Path(parent_path), directory=directory)
         profile = binding["profile_check"]
         if (
             parent["suite_id"] not in AUDIT_SUITES
@@ -212,10 +214,13 @@ def prepare_purpose_invocation(repo_root: Path, purpose: str, run_id: str) -> Pa
     return credentials.install_invocation_kubeconfig(repo_root, workstation.DIRECTORY, binding)
 
 
-def prepare_profile_check(repo_root: Path, parent_config: Path, profile: str) -> Path:
+def prepare_profile_check(
+    repo_root: Path, parent_config: Path, profile: str, *, directory: Path | None = None
+) -> Path:
     from scripts.openbao import credentials, workstation
 
-    parent = validate_invocation(repo_root, parent_config)
+    directory = workstation.DIRECTORY if directory is None else directory
+    parent = validate_invocation(repo_root, parent_config, directory=directory)
     binding = expected_invocation_binding(
         repo_root,
         {
@@ -223,18 +228,21 @@ def prepare_profile_check(repo_root: Path, parent_config: Path, profile: str) ->
             "profile_check": profile,
             "audit_parent": str(parent_config),
         },
+        directory=directory,
     )
-    return credentials.install_invocation_kubeconfig(repo_root, workstation.DIRECTORY, binding)
+    return credentials.install_invocation_kubeconfig(repo_root, directory, binding)
 
 
-def validate_invocation(repo_root: Path, config_path: Path) -> dict:
+def validate_invocation(
+    repo_root: Path, config_path: Path, *, directory: Path | None = None
+) -> dict:
     from scripts.openbao import credentials, workstation
 
     binding, config = credentials.read_invocation(repo_root, config_path)
-    expected = expected_invocation_binding(repo_root, binding)
+    expected = expected_invocation_binding(repo_root, binding, directory=directory)
     if binding != expected or binding["profile"] is None:
         raise SafeError("invalid-source")
-    local = credentials.load_workstation(workstation.DIRECTORY)
+    local = credentials.load_workstation(workstation.DIRECTORY if directory is None else directory)
     if local["cluster"]["schema_version"] != 2 or config != credentials._invocation_config(
         repo_root, local["cluster"], binding, config_path
     ):
