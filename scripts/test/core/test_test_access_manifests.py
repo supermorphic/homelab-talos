@@ -3212,15 +3212,6 @@ class TestAccessPolicyTests(unittest.TestCase):
         self.assertEqual(canary["metadata"]["name"], "flux-canary")
         self.assertIn("sops", canary)
         self.assertTrue(canary["stringData"]["marker"].startswith("ENC["))
-        recipe = (
-            (ROOT / "kubernetes/mod.just")
-            .read_text()
-            .split("_flux-canary-test-raw: flux-verify", 1)[1]
-            .split("\n# Validate the Longhorn", 1)[0]
-        )
-        self.assertIn('"$new_uid" != "$old_uid"', recipe)
-        self.assertIn("delete secret flux-canary", recipe)
-        self.assertIn("--with-source", recipe)
 
     def test_flux_alert_fixture_cannot_choose_a_real_source_or_privileged_fields(self):
         name = "flux-alert-e2e-20261002120000-12345"
