@@ -542,9 +542,12 @@ The private baseline remains under `.tmp`; capture does not claim acceptance and
 does not overwrite an existing baseline. Pause reading with the seeded account
 until the comparison finishes. After the reviewed Git change has reconciled,
 repeat the library scan and complete the attended template. Confirm repeat scanning
-preserves the seeded identity/progress, then run from clean deployed main:
+preserves the seeded identity/progress, then run from clean deployed main. Select
+the existing campaign-coordinator profile for recording's named Lease; application
+checks still explicitly use the observer and publication uses the report publisher:
 
 ```sh
+mise exec -- just kube kubeconfig campaign-coordinator
 KOMGA_ACCEPTANCE_CONFIRM=verify:media:komga:library-and-state \
   mise exec -- just test record test.komga-acceptance
 unset KOMGA_API_KEY
