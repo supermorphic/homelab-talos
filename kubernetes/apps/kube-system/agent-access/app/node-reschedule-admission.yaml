@@ -20,7 +20,7 @@ spec:
       expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-node-reschedule'
   validations:
     - expression: |-
-        request.namespace == '' && request.subResource == '' &&
+        (!has(request.namespace) || request.namespace == '') && (!has(request.subResource) || request.subResource == '') &&
         request.name in ['nuc1', 'nuc2', 'nuc3'] && dyn(object).metadata.name == request.name &&
         dyn(object).all(k, k in ['metadata', 'spec'] || (k in dyn(oldObject) && dyn(object)[k] == dyn(oldObject)[k])) &&
         dyn(oldObject).all(k, k in ['metadata', 'spec'] || k in dyn(object)) &&
@@ -97,7 +97,7 @@ spec:
       expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-node-reschedule'
   validations:
     - expression: |-
-        request.namespace == 'media' && request.subResource == '' &&
+        request.namespace == 'media' && (!has(request.subResource) || request.subResource == '') &&
         request.name.matches('^plex-[a-z0-9]{5,10}-[a-z0-9]{5}$') &&
         oldObject.metadata.name == request.name && oldObject.metadata.namespace == request.namespace &&
         oldObject.metadata.uid != '' && oldObject.metadata.labels['app.kubernetes.io/name'] == 'plex' &&

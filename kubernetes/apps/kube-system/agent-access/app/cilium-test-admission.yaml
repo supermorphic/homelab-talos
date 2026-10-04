@@ -23,7 +23,7 @@ spec:
     - name: item
       expression: 'request.operation == ''DELETE'' ? oldObject : object'
   validations:
-    - expression: request.namespace == '' && request.subResource == '' && request.name in ['cilium-test-1','cilium-test-ccnp1','cilium-test-ccnp2']
+    - expression: (!has(request.namespace) || request.namespace == '') && (!has(request.subResource) || request.subResource == '') && request.name in ['cilium-test-1','cilium-test-ccnp1','cilium-test-ccnp2']
         && variables.item.apiVersion == 'v1' && variables.item.kind == 'Namespace' && variables.item.metadata.name
         == request.name && (!has(variables.item.metadata.namespace) || variables.item.metadata.namespace
         == '') && variables.item.all(k, k in ['apiVersion','kind','metadata','spec','status']) && !has(variables.item.metadata.ownerReferences)
@@ -215,7 +215,7 @@ spec:
     - name: item
       expression: 'request.operation == ''DELETE'' ? oldObject : object'
   validations:
-    - expression: request.namespace == '' && request.subResource == '' && variables.item.apiVersion ==
+    - expression: (!has(request.namespace) || request.namespace == '') && (!has(request.subResource) || request.subResource == '') && variables.item.apiVersion ==
         'cilium.io/v2' && variables.item.kind == 'CiliumClusterwideNetworkPolicy' && variables.item.metadata.name
         == request.name && (!has(variables.item.metadata.namespace) || variables.item.metadata.namespace
         == '') && variables.item.all(k, k in ['apiVersion','kind','metadata','spec','status']) && (!has(variables.item.metadata.labels)
@@ -283,8 +283,8 @@ spec:
     - name: container
       expression: variables.pod.containers[0]
   validations:
-    - expression: request.operation in ['CREATE','DELETE'] && request.namespace == 'kube-system' && request.subResource
-        == '' && request.name.matches('^sysdump-[a-z0-9]{5}$') && variables.item.apiVersion == 'v1' &&
+    - expression: request.operation in ['CREATE','DELETE'] && request.namespace == 'kube-system' && (!has(request.subResource)
+        || request.subResource == '') && request.name.matches('^sysdump-[a-z0-9]{5}$') && variables.item.apiVersion == 'v1' &&
         variables.item.kind == 'Pod' && variables.item.metadata.name == request.name && variables.item.metadata.generateName
         == 'sysdump-' && variables.item.metadata.namespace == request.namespace && (request.operation
         == 'CREATE' || (has(variables.item.metadata.uid) && variables.item.metadata.uid != '')) && (!has(variables.item.metadata.ownerReferences)
@@ -419,7 +419,7 @@ spec:
       expression: 'variables.item.kind in [''Deployment'',''DaemonSet''] ? variables.item.spec.template.spec
         : {}'
   validations:
-    - expression: request.subResource == '' && variables.item.metadata.namespace == request.namespace
+    - expression: (!has(request.subResource) || request.subResource == '') && variables.item.metadata.namespace == request.namespace
         && variables.item.metadata.name == request.name && ((request.namespace == 'cilium-test-1' && variables.item.kind
         in variables.families && request.name in variables.families[variables.item.kind]) || (request.namespace
         in ['cilium-test-ccnp1','cilium-test-ccnp2'] && variables.item.kind in ['Deployment','ServiceAccount']
@@ -530,7 +530,7 @@ spec:
         "client"}), "matchExpressions": dyn([{"key": "io.cilium.k8s.policy.cluster", "operator": "Exists"}])})}}])},
         {"action": dyn("Deny"), "from": dyn([{"namespaces": {}}])}])})}}'
   validations:
-    - expression: request.namespace == '' && request.subResource == '' && variables.item.metadata.name
+    - expression: (!has(request.namespace) || request.namespace == '') && (!has(request.subResource) || request.subResource == '') && variables.item.metadata.name
         == request.name && (!has(variables.item.metadata.namespace) || variables.item.metadata.namespace
         == '') && variables.item.all(k, k in ['apiVersion','kind','metadata','spec','status']) && (!has(variables.item.metadata.annotations)
         || variables.item.metadata.annotations.size() == 0) && (!has(variables.item.metadata.ownerReferences)
@@ -587,7 +587,7 @@ spec:
       expression: 'request.operation == ''DELETE'' ? oldObject : object'
   validations:
     - expression: request.operation in ['CREATE','DELETE'] && request.namespace in ['cilium-test-1','cilium-test-ccnp1','cilium-test-ccnp2']
-        && request.subResource == '' && request.name == 'homelab-test-cilium-fixtures' && variables.item.apiVersion
+        && (!has(request.subResource) || request.subResource == '') && request.name == 'homelab-test-cilium-fixtures' && variables.item.apiVersion
         == 'rbac.authorization.k8s.io/v1' && variables.item.kind == 'RoleBinding' && variables.item.all(k,
         k in ['apiVersion','kind','metadata','roleRef','subjects']) && variables.item.metadata.name ==
         request.name && variables.item.metadata.namespace == request.namespace && (!has(variables.item.metadata.finalizers)
