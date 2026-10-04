@@ -132,7 +132,7 @@ spec:
         (!has(variables.container.ports[0].hostPort) || variables.container.ports[0].hostPort == 0) &&
         (!has(variables.container.ports[0].hostIP) || variables.container.ports[0].hostIP == '') &&
         (!has(variables.container.ports[0].protocol) || variables.container.ports[0].protocol == 'TCP') &&
-        variables.container.readinessProbe.exec.command == ['pg_isready', '--username=' + (variables.n8n ? 'n8n' : 'postgres'), '--dbname=postgres'] &&
+        variables.container.readinessProbe.exec.command == [dyn('pg_isready'), dyn('--username=' + (variables.n8n ? 'n8n' : 'postgres')), dyn('--dbname=postgres')] &&
         !has(variables.container.readinessProbe.httpGet) && !has(variables.container.readinessProbe.tcpSocket) &&
         !has(variables.container.readinessProbe.grpc) && variables.container.readinessProbe.periodSeconds == 5 &&
         variables.container.readinessProbe.failureThreshold == (variables.family == 'nocodb-restore-drill' ? 120 : 60)
@@ -172,15 +172,16 @@ spec:
     - name: name
       expression: "'nc-restore-' + variables.run + '-nocodb'"
     - name: labels
-      expression: "{'homelab-talos/test': 'nocodb-restore-drill', 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'nocodb'}"
+      expression: '{''homelab-talos/test'': dyn(''nocodb-restore-drill''), ''homelab-talos/run-id'': dyn(variables.run),
+        ''homelab-talos/role'': dyn(''nocodb'')}'
     - name: pod
       expression: variables.workload.spec.template.spec
     - name: container
       expression: variables.pod.containers[0]
     - name: expectedValues
       expression: >-
-        {'NC_SITE_URL': 'http://' + variables.name + '.automation-data.svc.cluster.local:8080',
-         'NC_ALLOW_LOCAL_EXTERNAL_DBS': 'true', 'NC_DISABLE_TELE': 'true', 'NC_DISABLE_SUPPORT_CHAT': 'true'}
+        {'NC_SITE_URL': dyn('http://' + variables.name + '.automation-data.svc.cluster.local:8080'),
+         'NC_ALLOW_LOCAL_EXTERNAL_DBS': dyn('true'), 'NC_DISABLE_TELE': dyn('true'), 'NC_DISABLE_SUPPORT_CHAT': dyn('true')}
     - name: expectedSecrets
       expression: "['DATABASE_URL', 'NC_AUTH_JWT_SECRET', 'NC_CONNECTION_ENCRYPT_KEY']"
   validations:
@@ -283,9 +284,9 @@ spec:
     - name: expectedValues
       expression: >-
         variables.preflight ? {'BACKUP_DIR': '/backups'} : variables.n8n ?
-          {'PGHOST': variables.prefix + '-n8n-db', 'PGPORT': '5432', 'PGUSER': 'n8n', 'RESTORE_DATABASE': 'n8n'} :
-          {'PGHOST': variables.prefix + '-db', 'PGPORT': '5432', 'PGUSER': 'postgres',
-           'BACKUP_DIR': '/backups', 'POST_RECOVERY_BACKUP_DIR': '/post-recovery'}
+          {'PGHOST': dyn(variables.prefix + '-n8n-db'), 'PGPORT': dyn('5432'), 'PGUSER': dyn('n8n'), 'RESTORE_DATABASE': dyn('n8n')} :
+          {'PGHOST': dyn(variables.prefix + '-db'), 'PGPORT': dyn('5432'), 'PGUSER': dyn('postgres'),
+           'BACKUP_DIR': dyn('/backups'), 'POST_RECOVERY_BACKUP_DIR': dyn('/post-recovery')}
     - name: expectedSecrets
       expression: >-
         variables.preflight ? {} : variables.n8n ? {'PGPASSWORD': 'n8n-password'} :
@@ -313,12 +314,12 @@ spec:
         variables.pod.securityContext.fsGroupChangePolicy == 'OnRootMismatch' &&
         variables.container.name == (variables.preflight ? 'preflight' : 'restore') &&
         variables.container.image == 'postgres:17.11-alpine3.24' && variables.container.imagePullPolicy == 'IfNotPresent' &&
-        variables.container.command == ['/bin/sh', '-eu', '/helpers/' + (variables.preflight ? 'nocodb-restore-preflight.sh' :
-          variables.n8n ? 'n8n-restore-isolated.sh' : variables.nc ? 'nocodb-restore.sh' : 'automation-data-restore.sh')] &&
+        variables.container.command == [dyn('/bin/sh'), dyn('-eu'), dyn('/helpers/' + (variables.preflight ? 'nocodb-restore-preflight.sh' :
+          variables.n8n ? 'n8n-restore-isolated.sh' : variables.nc ? 'nocodb-restore.sh' : 'automation-data-restore.sh'))] &&
         !has(variables.container.args) &&
         (!has(variables.container.securityContext.runAsUser) || variables.container.securityContext.runAsUser == 70) &&
         (!has(variables.container.securityContext.runAsGroup) || variables.container.securityContext.runAsGroup == 70) &&
-        variables.container.resources.requests == {'cpu': (variables.preflight ? '10m' : '50m'), 'memory': '64Mi'} &&
+        variables.container.resources.requests == {'cpu': dyn((variables.preflight ? '10m' : '50m')), 'memory': dyn('64Mi')} &&
         variables.container.resources.limits == {'memory': (variables.preflight ? '256Mi' : '512Mi')} &&
         !has(variables.container.resources.claims)
       message: Restore jobs must execute their immutable canonical program against a run-owned scratch database.
@@ -402,8 +403,8 @@ spec:
       expression: variables.pod.containers[0]
     - name: expectedValues
       expression: >-
-        variables.nc ? {'APP_SERVICE': variables.prefix + '-nocodb', 'RUN_HASH': variables.run, 'HOME': '/tmp'} :
-          {'APP_NAME': variables.prefix + '-n8n', 'HOME': '/tmp'}
+        variables.nc ? {'APP_SERVICE': dyn(variables.prefix + '-nocodb'), 'RUN_HASH': dyn(variables.run), 'HOME': dyn('/tmp')} :
+          {'APP_NAME': dyn(variables.prefix + '-n8n'), 'HOME': dyn('/tmp')}
     - name: expectedSecrets
       expression: "variables.nc ? {'ADMIN_EMAIL': 'NC_ADMIN_EMAIL', 'ADMIN_PASSWORD': 'NC_ADMIN_PASSWORD'} : {'CANARY_TOKEN': 'token'}"
   validations:
@@ -411,18 +412,18 @@ spec:
         request.operation != 'UPDATE' && variables.run.matches('^[0-9a-f]{12}$') &&
         request.namespace == (variables.nc ? 'automation-data' : 'gatus') &&
         variables.job.metadata.name == variables.prefix + '-request' &&
-        variables.job.metadata.labels == {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'request'} &&
+        variables.job.metadata.labels == {'homelab-talos/test': dyn(variables.family), 'homelab-talos/run-id': dyn(variables.run), 'homelab-talos/role': dyn('request')} &&
         variables.job.spec.template.metadata.labels['homelab-talos/role'] == 'request' &&
         variables.job.spec.activeDeadlineSeconds == (variables.nc ? 600 : 300) &&
         variables.pod.securityContext.runAsNonRoot && !has(variables.pod.securityContext.runAsUser) &&
         !has(variables.pod.securityContext.runAsGroup) && !has(variables.pod.securityContext.fsGroup) &&
         variables.container.name == 'request' && variables.container.image == (variables.nc ?
           'docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9' : 'docker.n8n.io/n8nio/n8n:2.36.7') &&
-        variables.container.command == ['node', '/helpers/' + (variables.nc ? 'nocodb' : 'automation-data') + '-restore-request.mjs'] &&
+        variables.container.command == [dyn('node'), dyn('/helpers/' + (variables.nc ? 'nocodb' : 'automation-data') + '-restore-request.mjs')] &&
         !has(variables.container.args) && variables.container.imagePullPolicy == 'IfNotPresent' &&
         variables.container.securityContext.runAsUser == 1000 && variables.container.securityContext.runAsGroup == 1000 &&
         variables.container.securityContext.runAsNonRoot &&
-        variables.container.resources.requests == {'cpu': '10m', 'memory': (variables.nc ? '64Mi' : '32Mi')} &&
+        variables.container.resources.requests == {'cpu': dyn('10m'), 'memory': dyn((variables.nc ? '64Mi' : '32Mi'))} &&
         variables.container.resources.limits == {'memory': (variables.nc ? '256Mi' : '128Mi')} && !has(variables.container.resources.claims)
       message: Restore requests must execute the fixed application proof against their run-owned endpoint.
     - expression: >-

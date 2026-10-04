@@ -45,33 +45,33 @@ spec:
         'ad-restore']
     - name: localPeers
       expression: >-
-        {'ad-database': {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run,
-        'homelab-talos/role': 'ad-database'}, 'ad-restore': {'homelab-talos/test': variables.family, 'homelab-talos/run-id':
-        variables.run, 'homelab-talos/role': 'ad-restore'}, 'n8n-database': {'homelab-talos/test': variables.family,
-        'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'n8n-database'}, 'n8n-restore': {'homelab-talos/test':
-        variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'n8n-restore'},
-        'n8n': {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role':
-        'n8n'}, 'database': {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run,
-        'homelab-talos/role': 'database'}, 'restore': {'homelab-talos/test': variables.family, 'homelab-talos/run-id':
-        variables.run, 'homelab-talos/role': 'restore'}, 'nocodb': {'homelab-talos/test': variables.family,
-        'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'nocodb'}, 'request': {'homelab-talos/test':
-        variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'request'}}
+        {'ad-database': {'homelab-talos/test': dyn(variables.family), 'homelab-talos/run-id': dyn(variables.run),
+        'homelab-talos/role': dyn('ad-database')}, 'ad-restore': {'homelab-talos/test': dyn(variables.family), 'homelab-talos/run-id':
+        dyn(variables.run), 'homelab-talos/role': dyn('ad-restore')}, 'n8n-database': {'homelab-talos/test': dyn(variables.family),
+        'homelab-talos/run-id': dyn(variables.run), 'homelab-talos/role': dyn('n8n-database')}, 'n8n-restore': {'homelab-talos/test':
+        dyn(variables.family), 'homelab-talos/run-id': dyn(variables.run), 'homelab-talos/role': dyn('n8n-restore')},
+        'n8n': {'homelab-talos/test': dyn(variables.family), 'homelab-talos/run-id': dyn(variables.run), 'homelab-talos/role':
+        dyn('n8n')}, 'database': {'homelab-talos/test': dyn(variables.family), 'homelab-talos/run-id': dyn(variables.run),
+        'homelab-talos/role': dyn('database')}, 'restore': {'homelab-talos/test': dyn(variables.family), 'homelab-talos/run-id':
+        dyn(variables.run), 'homelab-talos/role': dyn('restore')}, 'nocodb': {'homelab-talos/test': dyn(variables.family),
+        'homelab-talos/run-id': dyn(variables.run), 'homelab-talos/role': dyn('nocodb')}, 'request': {'homelab-talos/test':
+        dyn(variables.family), 'homelab-talos/run-id': dyn(variables.run), 'homelab-talos/role': dyn('request')}}
     - name: remoteN8n
       expression: >-
-        {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role':
-        'n8n', 'k8s:io.kubernetes.pod.namespace': 'automation'}
+        {'homelab-talos/test': dyn(variables.family), 'homelab-talos/run-id': dyn(variables.run), 'homelab-talos/role':
+        dyn('n8n'), 'k8s:io.kubernetes.pod.namespace': dyn('automation')}
     - name: remoteDatabase
       expression: >-
-        {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role':
-        'ad-database', 'k8s:io.kubernetes.pod.namespace': 'automation-data'}
+        {'homelab-talos/test': dyn(variables.family), 'homelab-talos/run-id': dyn(variables.run), 'homelab-talos/role':
+        dyn('ad-database'), 'k8s:io.kubernetes.pod.namespace': dyn('automation-data')}
     - name: remoteRestore
       expression: >-
-        {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role':
-        'ad-restore', 'k8s:io.kubernetes.pod.namespace': 'automation-data'}
+        {'homelab-talos/test': dyn(variables.family), 'homelab-talos/run-id': dyn(variables.run), 'homelab-talos/role':
+        dyn('ad-restore'), 'k8s:io.kubernetes.pod.namespace': dyn('automation-data')}
     - name: remoteRequest
       expression: >-
-        {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role':
-        'request', 'k8s:io.kubernetes.pod.namespace': 'gatus'}
+        {'homelab-talos/test': dyn(variables.family), 'homelab-talos/run-id': dyn(variables.run), 'homelab-talos/role':
+        dyn('request'), 'k8s:io.kubernetes.pod.namespace': dyn('gatus')}
     - name: dns
       expression: '{''k8s:io.kubernetes.pod.namespace'': ''kube-system'', ''k8s:k8s-app'': ''kube-dns''}'
   validations:
@@ -80,8 +80,8 @@ spec:
         == 'automation-data' : request.namespace in ['automation-data', 'automation', 'gatus']) && variables.policy.metadata.name
         == variables.prefix + (variables.nc ? '-policy' : request.namespace == 'automation-data' ? '-ad-policy'
         : request.namespace == 'automation' ? '-n8n-policy' : '-request-policy') && variables.policy.metadata.labels
-        == {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role':
-        'policy'} && !has(variables.policy.metadata.ownerReferences) && !has(variables.policy.metadata.annotations)
+        == {'homelab-talos/test': dyn(variables.family), 'homelab-talos/run-id': dyn(variables.run), 'homelab-talos/role':
+        dyn('policy')} && !has(variables.policy.metadata.ownerReferences) && !has(variables.policy.metadata.annotations)
         && (request.namespace == 'gatus' ? !has(variables.policy.specs) : !has(variables.policy.spec))
         && variables.rules.size() == variables.roles.size() && variables.roles.all(role, variables.rules.exists(r,
         r.endpointSelector.matchLabels == variables.localPeers[role])) && variables.rules.all(r, !has(r.endpointSelector.matchExpressions)

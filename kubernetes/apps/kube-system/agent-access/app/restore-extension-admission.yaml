@@ -40,7 +40,7 @@ spec:
       message: The optional application credential must preserve its named fixture and metadata.
     - expression: >-
         ((!has(object.data) || object.data.size() == 0) && variables.owner == '') ||
-        (variables.owner.matches('^[0-9a-f]{12}$') && variables.oldOwner in ['', variables.owner] &&
+        (variables.owner.matches('^[0-9a-f]{12}$') && variables.oldOwner in [dyn(''), dyn(variables.owner)] &&
          object.data.size() == 1 && 'pgpass' in object.data && object.data['pgpass'].size() > 0 &&
          object.data['pgpass'].size() <= 4096)
       message: The credential fixture may hold only one bounded run credential or return to empty.
@@ -77,7 +77,8 @@ spec:
     - name: run
       expression: variables.job.metadata.labels['homelab-talos/run-id']
     - name: labels
-      expression: "{'homelab-talos/test': 'nocodb-restore-drill', 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'restore'}"
+      expression: '{''homelab-talos/test'': dyn(''nocodb-restore-drill''), ''homelab-talos/run-id'': dyn(variables.run),
+        ''homelab-talos/role'': dyn(''restore'')}'
     - name: pod
       expression: variables.job.spec.template.spec
     - name: container

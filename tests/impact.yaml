@@ -6,6 +6,7 @@ groups:
   ci-framework: {execution: ci-framework, always: false}
 full_groups: [core, observability, automation, ci-framework]
 full_paths:
+  - .gitleaks.toml
   - .github/**
   - .just/bootstrap.just
   - .just/repository.just
@@ -251,6 +252,7 @@ core_paths:
   - scripts/test/talos-apply-live-test.sh
   - scripts/test/tautulli-verify-test.sh
   - scripts/test/core/**
+  - scripts/test/cel/**
   - scripts/test/helpers/qbit_manage_policy_api.py
   - scripts/test/scenarios/cilium-connectivity.sh
   - scripts/test/scenarios/media-hardlink-test.sh

@@ -1,0 +1,11 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Public Kubernetes v0.35.6 Go module checksums (also scanned in staged diff input)"
+regexTarget = "line"
+regexes = [
+  '''(?m)^\+?k8s\.io/api v0\.35\.6 h1:phPzP79F3kcONsD2TzmDiITNCV6/1Z5U3CCEcjtsXzI=$''',
+  '''(?m)^\+?k8s\.io/apimachinery v0\.35\.6 h1:ASSpfmmsOArKb2Hsu8gGlIcbIcEMVTboI3FfsfYuQ8k=$''',
+  '''(?m)^\+?k8s\.io/apiserver v0\.35\.6 h1:VWYg2S0wlAmN3URFpVeuLa4PP2RCpTFg1nvlUHOy2C8=$''',
+]

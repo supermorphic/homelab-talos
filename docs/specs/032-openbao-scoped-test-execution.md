@@ -496,11 +496,15 @@ command prompts privately for the OpenBao password and requires its exact
 source/target confirmation:
 
 ```sh
+OPENBAO_RECOVERY_RECIPIENT="$(mise exec -- yq -er '.sops.age[0].recipient' kubernetes/apps/security/openbao/app/openbao-seal.sops.yaml)" \
 OPENBAO_OPERATOR_KUBECONFIG=/absolute/path/to/operator-kubeconfig \
   OPENBAO_CONFIG_AUTH=userpass mise exec -- just kube openbao-config-apply
 OPENBAO_OPERATOR_KUBECONFIG=/absolute/path/to/operator-kubeconfig \
   mise exec -- just kube openbao-workstation rotate
 ```
+
+The recipient comes from public SOPS metadata; this step does not decrypt the seal
+artifact or read the age private key.
 
 The combined `just bootstrap openbao-agent <absolute-operator-config>` command
 applies configuration and uses `enroll`, so reserve that path for new enrollment.
@@ -538,6 +542,13 @@ accounts, forbidden volumes/Secret references, changed executable fixtures,
 broader network selectors, unauthorized Flux fields, Node writes, RBAC changes,
 and attempts to choose dedicated profiles through unrelated suites. Policy-source
 inspection and `auth can-i` alone do not prove admission behavior.
+
+The core offline suite also compiles the rendered admission expressions with the
+Kubernetes 1.35 CEL compiler, pinned to the cluster's Kubernetes patch version.
+This catches static type errors that the Python CEL request evaluator does not
+check. Mixed-type map and list literals use `dyn()` on their values while retaining
+exact equality against the permitted fixture shapes. Compiler checks complement
+the request allow/deny tests and deployed policy type-checking status.
 
 For a registered mapped test whose ordinary run is too short, set
 `TEST_ACCESS_ACCEPTANCE_CONFIRM=verify:scoped-access:ttl-and-denials` when invoking
