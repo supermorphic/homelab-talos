@@ -9,6 +9,7 @@ source scripts/lib/common.sh
 source scripts/lib/lease.sh
 # shellcheck source=scripts/test/lib/job.sh
 source scripts/test/lib/job.sh
+source scripts/test/lib/owned-resources.sh
 # shellcheck source=scripts/test/lib/automation-data-restore-command.sh
 source scripts/test/lib/automation-data-restore-command.sh
 # shellcheck source=scripts/test/lib/nocodb-restore-command.sh
@@ -39,9 +40,24 @@ fi
 kubeconfig="$1"
 run_dir="${HOMELAB_TEST_RUN_DIR:-}"
 [[ -f "$kubeconfig" ]] || {
-	echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
+	echo 'The restore drill requires the selected invocation config.' >&2
 	exit 1
 }
+# Variant authority comes from the checked invocation, not an environment flag.
+variant_binding="$(uv run --locked python -m scripts.test.access validate "$kubeconfig")" || {
+  echo 'NocoDB requires its bound canonical suite.' >&2
+  exit 1
+}
+variant_suite="$(jq -er '.suite_id // empty' <<<"$variant_binding")" || {
+  echo 'NocoDB requires its bound canonical suite.' >&2
+  exit 1
+}
+case "$variant_suite:$extension_enabled" in
+  test.nocodb-restore-drill:false|test.nocodb-restore-drill-extension:true) ;;
+  *) echo 'NocoDB variant requires its canonical suite and exact confirmation.' >&2; exit 1 ;;
+esac
+unset variant_binding
+
 [[ -n "$run_dir" && -d "$run_dir" ]] || {
 	echo 'Refusing NocoDB restore drill outside the catalog run coordinator.' >&2
 	exit 1
@@ -65,9 +81,7 @@ app="$prefix-nocodb"
 app_service="$prefix-nocodb"
 request_job="$prefix-request"
 application_probe_job="$prefix-app-probe"
-application_probe_secret="$prefix-app-credential"
 policy="$prefix-policy"
-backup_configmap=''
 kc=(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace")
 kcluster=(kubectl --kubeconfig "$kubeconfig")
 
@@ -78,6 +92,12 @@ fi
 umask 077
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-nocodb-restore.XXXXXX")"
 chmod 700 "$temp_dir"
+ledger="$run_dir/diagnostics/nocodb-restore-owned.jsonl"
+[[ ! -e "$ledger" ]] || {
+  echo 'Refusing to overwrite prior restore ownership evidence.' >&2
+  exit 1
+}
+: >"$ledger"
 
 write_phase() {
 	local phase="$1" status="$2" reason="$3"
@@ -108,10 +128,10 @@ create_owned_manifests() { # <namespace-or-dash> <manifest>
 		nocodb_restore_resource_is_owned "$run_hash" "$temp_dir/create-object.json" || return 1
 		verify_lease || return 1
 		if [[ "$target_namespace" == - ]]; then
-			"${kcluster[@]}" create --filename "$temp_dir/create-object.json" >/dev/null || return 1
+			test_create_owned "$ledger" "$temp_dir/create-object.json" "${kcluster[@]}" || return 1
 		else
-			kubectl --kubeconfig "$kubeconfig" --namespace "$target_namespace" \
-				create --filename "$temp_dir/create-object.json" >/dev/null || return 1
+			test_create_owned "$ledger" "$temp_dir/create-object.json" \
+        kubectl --kubeconfig "$kubeconfig" --namespace "$target_namespace" || return 1
 		fi
 	done <"$temp_dir/create-objects.jsonl"
 }
@@ -133,22 +153,21 @@ resource_absent() { # <namespace-or-dash> <target>
 	[[ ! -s "$output" || "$(jq -r '.kind // ""' "$output")" == '' ]]
 }
 
-delete_owned() { # <namespace-or-dash> <target>
-	local target_namespace="$1" target="$2" object
-	object="$temp_dir/delete-${target//\//-}.json"
-	resource_json "$target_namespace" "$target" "$object" || return 1
-	[[ -s "$object" && "$(jq -r '.kind // ""' "$object")" != '' ]] || return 0
-	nocodb_restore_resource_is_owned "$run_hash" "$object" || {
-		echo "Refusing cleanup of $target_namespace/$target because both run ownership labels do not match." >&2
-		return 1
-	}
-	verify_lease || return 1
-	if [[ "$target_namespace" == - ]]; then
-		"${kcluster[@]}" delete "$target" --wait=true --timeout=5m >/dev/null
-	else
-		kubectl --kubeconfig "$kubeconfig" --namespace "$target_namespace" \
-			delete "$target" --wait=true --timeout=5m >/dev/null
-	fi
+delete_owned() { # <namespace> <target>
+  local target_namespace="$1" target="$2" kind
+  [[ "$target_namespace" == "$namespace" ]] || return 2
+  case "${target%%/*}" in
+    job) kind=Job ;;
+    deployment) kind=Deployment ;;
+    service) kind=Service ;;
+    statefulset) kind=StatefulSet ;;
+    pvc) kind=PersistentVolumeClaim ;;
+    ciliumnetworkpolicy) kind=CiliumNetworkPolicy ;;
+    *) return 2 ;;
+  esac
+  verify_lease || return 1
+  test_delete_owned "$ledger" "$kind" "$target_namespace" "${target#*/}" \
+    kubectl --kubeconfig "$kubeconfig" --namespace "$target_namespace"
 }
 
 route_targets_service() {
@@ -254,83 +273,9 @@ database_manifests() {
 }
 
 restore_job_manifest() {
-	local command
-	command="$(automation_data_restore_job_command)"
-	command+="$(
-		cat <<'EOF'
-
-printf '%s\n' 'restore_stage=nocodb-source-registry'
-if [ "$restored_platform_revision" = '026-nocodb-v3' ]; then
-source_registry="$(psql --dbname=automation_data_control --tuples-only --no-align --command="
-SELECT jsonb_build_object(
-  'items', COALESCE(jsonb_agg(jsonb_build_object(
-    'domain', source.domain,
-    'pair', source.pair,
-    'accessKind', source.access_kind,
-    'state', source.state,
-    'baseId', source.base_id,
-    'sourceId', source.source_id,
-    'integrationId', source.integration_id,
-    'schema', CASE source.access_kind WHEN 'reader' THEN
-      COALESCE(mapping.reader_schema, 'read_model') ELSE
-      COALESCE(mapping.operator_schema, 'operator') END,
-    'valid', (platform_operations.validate_nocodb_access(source.domain, source.pair, source.access_kind)->>'valid')::boolean
-  ) ORDER BY source.pair, source.access_kind), '[]'::jsonb)
-)
-FROM platform_operations.managed_nocodb_sources AS source
-LEFT JOIN platform_operations.managed_nocodb_schema_mappings AS mapping
-  ON mapping.domain = source.domain AND mapping.pair = source.pair
-WHERE source.domain = 'automation_data_acceptance';
-")" || restore_fail nocodb-source-registry-query
-elif [ "$restored_platform_revision" = '026-nocodb-v2' ]; then
-source_registry="$(psql --dbname=automation_data_control --tuples-only --no-align --command="
-SELECT jsonb_build_object(
-  'items', COALESCE(jsonb_agg(jsonb_build_object(
-    'domain', source.domain,
-    'pair', 'default',
-    'accessKind', source.access_kind,
-    'state', source.state,
-    'baseId', source.base_id,
-    'sourceId', source.source_id,
-    'integrationId', source.integration_id,
-    'schema', CASE source.access_kind WHEN 'reader' THEN
-      COALESCE(mapping.reader_schema, 'read_model') ELSE
-      COALESCE(mapping.operator_schema, 'operator') END,
-    'valid', (platform_operations.validate_nocodb_access(source.domain, source.access_kind)->>'valid')::boolean
-  ) ORDER BY source.access_kind), '[]'::jsonb)
-)
-FROM platform_operations.managed_nocodb_sources AS source
-LEFT JOIN platform_operations.managed_nocodb_schema_mappings AS mapping
-  ON mapping.domain = source.domain
-WHERE source.domain = 'automation_data_acceptance';
-")" || restore_fail nocodb-source-registry-query
-else
-source_registry="$(psql --dbname=automation_data_control --tuples-only --no-align --command="
-SELECT jsonb_build_object(
-  'items', COALESCE(jsonb_agg(jsonb_build_object(
-    'domain', source.domain,
-    'pair', 'default',
-    'accessKind', source.access_kind,
-    'state', source.state,
-    'baseId', source.base_id,
-    'sourceId', source.source_id,
-    'integrationId', source.integration_id,
-    'schema', CASE source.access_kind WHEN 'reader' THEN 'read_model' ELSE 'operator' END,
-    'valid', (platform_operations.validate_nocodb_access(source.domain, source.access_kind)->>'valid')::boolean
-  ) ORDER BY source.access_kind), '[]'::jsonb)
-)
-FROM platform_operations.managed_nocodb_sources AS source
-WHERE source.domain = 'automation_data_acceptance';
-")" || restore_fail nocodb-source-registry-query
-fi
-# Validate decoded JSON in the caller; the pinned PostgreSQL image has no jq.
-test -n "$source_registry" || restore_fail nocodb-source-registry-shape
-printf 'source_registry_base64=%s\n' "$(printf '%s' "$source_registry" | base64 | tr -d '\n')"
-EOF
-	)"
-	JOB_NAME="$restore_job" JOB_COMMAND="$command" DATABASE_SERVICE="$database_service" \
+	JOB_NAME="$restore_job" DATABASE_SERVICE="$database_service" \
 		RUN_HASH="$run_hash" SELECTED_BUNDLE="$selected_bundle" \
-		BACKUP_CONFIGMAP="$backup_configmap" yq --null-input --output-format yaml '
+		BACKUP_CONFIGMAP="automation-data-test-helpers-v1" yq --null-input --output-format yaml '
       {
         "apiVersion":"batch/v1","kind":"Job",
         "metadata":{"name":strenv(JOB_NAME),"namespace":"automation-data","labels":{
@@ -342,7 +287,7 @@ EOF
             "securityContext":{"fsGroup":70,"fsGroupChangePolicy":"OnRootMismatch","runAsNonRoot":true,"runAsUser":70,"runAsGroup":70,"seccompProfile":{"type":"RuntimeDefault"}},
             "containers":[{
               "name":"restore","image":"postgres:17.11-alpine3.24","imagePullPolicy":"IfNotPresent",
-              "command":["/bin/sh","-ceu"],"args":[strenv(JOB_COMMAND)],
+              "command":["/bin/sh","-eu","/helpers/nocodb-restore.sh"],
               "env":[
                 {"name":"PGHOST","value":strenv(DATABASE_SERVICE)},{"name":"PGPORT","value":"5432"},{"name":"PGUSER","value":"postgres"},
                 {"name":"PGPASSWORD","valueFrom":{"secretKeyRef":{"name":"postgresql-credentials","key":"postgres-superuser-password"}}},
@@ -356,7 +301,8 @@ EOF
                 {"name":"post-recovery","mountPath":"/post-recovery"},
                 {"name":"scripts","mountPath":"/scripts/backup.sh","subPath":"backup.sh","readOnly":true},
                 {"name":"scripts","mountPath":"/scripts/update-backup-status.sql","subPath":"update-backup-status.sql","readOnly":true},
-                {"name":"tmp","mountPath":"/tmp"}
+                {"name":"tmp","mountPath":"/tmp"},
+                {"name":"scripts","mountPath":"/helpers","readOnly":true}
               ]
             }],
             "volumes":[
@@ -372,9 +318,7 @@ EOF
 }
 
 request_job_manifest() {
-	local request_script
-	request_script="$(nocodb_restore_request_script)"
-	JOB_NAME="$request_job" APP_SERVICE="$app_service" REQUEST_SCRIPT="$request_script" \
+	JOB_NAME="$request_job" APP_SERVICE="$app_service" \
 		RUN_HASH="$run_hash" SOURCE_REGISTRY="$(jq -c . "$temp_dir/source-registry.json")" yq --null-input --output-format yaml '
       {
         "apiVersion":"batch/v1","kind":"Job",
@@ -387,7 +331,7 @@ request_job_manifest() {
             "securityContext":{"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}},
             "containers":[{
               "name":"request","image":"docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9","imagePullPolicy":"IfNotPresent",
-              "command":["node","--input-type=module","--eval"],"args":[strenv(REQUEST_SCRIPT)],
+              "command":["node","/helpers/nocodb-restore-request.mjs"],
               "env":[
                 {"name":"APP_SERVICE","value":strenv(APP_SERVICE)},{"name":"RUN_HASH","value":strenv(RUN_HASH)},
                 {"name":"SOURCE_REGISTRY","value":strenv(SOURCE_REGISTRY)},
@@ -397,8 +341,8 @@ request_job_manifest() {
               ],
               "resources":{"requests":{"cpu":"10m","memory":"64Mi"},"limits":{"memory":"256Mi"}},
               "securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true,"runAsNonRoot":true,"runAsUser":1000,"runAsGroup":1000},
-              "volumeMounts":[{"name":"tmp","mountPath":"/tmp"}]
-            }],"volumes":[{"name":"tmp","emptyDir":{}}]
+              "volumeMounts":[{"name":"tmp","mountPath":"/tmp"},{"name":"helpers","mountPath":"/helpers","readOnly":true}]
+            }],"volumes":[{"name":"tmp","emptyDir":{}},{"name":"helpers","configMap":{"name":"nocodb-test-helpers-v1"}}]
           }
         }}
       }
@@ -412,13 +356,17 @@ cleanup() {
 	set +e
 	verify_lease || cleanup_ok=false
 	if [[ "$cleanup_ok" == true ]]; then
-		for target in "job/$application_probe_job" "secret/$application_probe_secret" "job/$request_job" "deployment/$app" "service/$app_service" \
+		for target in "job/$application_probe_job" "job/$request_job" "deployment/$app" "service/$app_service" \
 			"job/$restore_job" "job/$preflight_job" "statefulset/$database" "service/$database_service" \
 			"pvc/$database_pvc" "ciliumnetworkpolicy/$policy"; do
 			delete_owned "$namespace" "$target" || cleanup_ok=false
 		done
+		if [[ "$extension_enabled" == true ]]; then
+			verify_lease && uv run --locked python scripts/test/lib/automation-data-application-acceptance.py \
+				clear-restore-credential "$kubeconfig" "$temp_dir" "$run_hash" || cleanup_ok=false
+		fi
 	fi
-	for target in "job/$application_probe_job" "secret/$application_probe_secret" "job/$request_job" "deployment/$app" "service/$app_service" \
+	for target in "job/$application_probe_job" "job/$request_job" "deployment/$app" "service/$app_service" \
 		"job/$restore_job" "job/$preflight_job" "statefulset/$database" "service/$database_service" \
 		"pvc/$database_pvc" "ciliumnetworkpolicy/$policy"; do
 		resource_absent "$namespace" "$target" || cleanup_ok=false
@@ -448,7 +396,7 @@ route_targets_service "$app_service" "$routes" && {
 	exit 1
 }
 
-for target in "job/$application_probe_job" "secret/$application_probe_secret" "job/$request_job" "deployment/$app" "service/$app_service" \
+for target in "job/$application_probe_job" "job/$request_job" "deployment/$app" "service/$app_service" \
 	"job/$restore_job" "job/$preflight_job" "statefulset/$database" "service/$database_service" \
 	"pvc/$database_pvc" "ciliumnetworkpolicy/$policy"; do
 	resource_absent "$namespace" "$target" || {
@@ -498,7 +446,6 @@ CONFIGMAP_NAME="$deployed_backup_configmap" jq -e '
 	echo 'The deployed backup ConfigMap is missing a required script key.' >&2
 	exit 1
 }
-backup_configmap="$deployed_backup_configmap"
 
 # This observational Job is the only resource allowed before the logical recovery input passes.
 preflight_manifest="$temp_dir/preflight.yaml"
@@ -580,8 +527,11 @@ if [[ "$extension_enabled" == true ]]; then
 		exit 1
 	}
 	# The independent policy check above restricts role=restore to this run's database.
-	# Retained credentials are placed only in a run-owned ephemeral Secret outside reports.
+	# The named empty fixture is shared only under the checked campaign Lease.
 	uv run --locked python scripts/test/lib/automation-data-application-acceptance.py restore-manifests "$temp_dir" "$run_hash" "$run_id"
+	verify_lease
+	uv run --locked python scripts/test/lib/automation-data-application-acceptance.py \
+		fill-restore-credential "$kubeconfig" "$temp_dir" "$run_hash"
 	create_owned_manifests "$namespace" "$temp_dir/application-probe.yaml"
 	wait_for_job_terminal "$application_probe_job" 180 5 "${kc[@]}"
 	[[ "$("${kc[@]}" logs "job/$application_probe_job" --tail=1)" == application_acceptance=passed ]] || {

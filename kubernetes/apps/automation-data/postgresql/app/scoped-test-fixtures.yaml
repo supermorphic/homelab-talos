@@ -1,0 +1,12 @@
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nocodb-restore-application-credential
+  annotations:
+    kustomize.toolkit.fluxcd.io/ssa: IfNotPresent
+    homelab-talos/credential-run: ""
+  labels:
+    homelab-talos/test: nocodb-restore-extension
+type: Opaque
+data: {}

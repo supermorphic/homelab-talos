@@ -19,11 +19,11 @@ from unittest.mock import patch
 
 import yaml
 
-from scripts.openbao import apply, restore, workstation
+from scripts.openbao import apply, credentials, restore, workstation
 from scripts.openbao.client import AmbiguousWrite, NotFound
 from scripts.openbao.configuration import SafeError, load_document
-from scripts.test.scenarios.openbao_restore import ScratchClient
 from scripts.test.scenarios.agent_credentials import BrokerScope
+from scripts.test.scenarios.openbao_restore import ScratchClient
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -158,9 +158,8 @@ class PinnedServerContract(unittest.TestCase):
                 patch("scripts.openbao.guards.assert_mutation_allowed"),
                 patch("scripts.openbao.workstation.cluster_metadata", return_value=metadata),
             ):
-                args = dict(
-                    directory=private, client=local_client, kubeconfig=Path("/synthetic/operator")
-                )
+                args = {"directory": private, "client": local_client,
+                        "kubeconfig": Path("/synthetic/operator")}
                 for action in ("enroll", "rotate"):
                     plan = workstation.run(action, workstation.ROLE, confirm="", **args)
                     result = workstation.run(
@@ -210,12 +209,12 @@ class PinnedServerContract(unittest.TestCase):
             self.assertEqual(request("POST", "kubernetes/config", {
                 "kubernetes_host": "http://127.0.0.1:1",
                 "service_account_jwt": "synthetic-local-issuer"})[0], 204)
-            for profile in ("observer", "diagnostic", "publisher", "campaign-coordinator"):
+            for profile in {**credentials.LEGACY_PROFILES, **credentials.PROFILES}:
                 self.assertEqual(request("POST", "kubernetes/creds/" + profile,
                     {}, token=auth["client_token"])[0], 500)
             self.assertEqual(request("POST", "identity/entity/id/" + entity_id,
                                     {"disabled": True})[0], 204)
-            for profile in ("observer", "diagnostic", "publisher", "campaign-coordinator"):
+            for profile in {**credentials.LEGACY_PROFILES, **credentials.PROFILES}:
                 self.assertEqual(request("POST", "kubernetes/creds/" + profile,
                     {}, token=auth["client_token"])[0], 403)
             # Applying source configuration touches roles, never entities.

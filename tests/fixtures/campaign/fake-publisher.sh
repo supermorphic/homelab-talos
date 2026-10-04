@@ -3,6 +3,12 @@ set -euo pipefail
 
 [[ "$#" -eq 1 ]]
 run_id="$1"
+[[ "$KUBECONFIG" == /dev/null && -z "${TEST_KUBECONFIG:-}" && -z "${TEST_ACCESS_CONFIG:-}" ]]
+[[ -z "${TALOSCONFIG:-}" ]]
+source scripts/test/lib/access.sh
+trap test_access_purposes_close EXIT
+test_access_purpose_open report-publisher "$run_id"
+[[ "$TEST_ACCESS_PURPOSE_CONFIG" == *-report-publisher/config ]]
 printf '%s\n' "$run_id" >>"${CAMPAIGN_TEST_PUBLISH_CALLS:?}"
 if [[ -n "${CAMPAIGN_TEST_PUBLISH_CONTEXT_CALLS:-}" ]]; then
   printf '%s\t%s\t%s\n' \

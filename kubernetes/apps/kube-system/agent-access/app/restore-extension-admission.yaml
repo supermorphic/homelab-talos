@@ -1,0 +1,129 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-nocodb-credential
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [UPDATE]
+        resources: [secrets]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+  variables:
+    - name: ownerKey
+      expression: "'homelab-talos/credential-run'"
+    - name: owner
+      expression: object.metadata.annotations[variables.ownerKey]
+    - name: oldOwner
+      expression: oldObject.metadata.annotations[variables.ownerKey]
+  validations:
+    - expression: >-
+        request.namespace == 'automation-data' && request.name == 'nocodb-restore-application-credential' &&
+        object.metadata.name == request.name && object.metadata.namespace == request.namespace &&
+        object.metadata.uid == oldObject.metadata.uid &&
+        object.type == 'Opaque' && oldObject.type == 'Opaque' &&
+        !has(object.stringData) && (!has(object.immutable) || !object.immutable) &&
+        object.metadata.labels == oldObject.metadata.labels &&
+        object.metadata.labels['homelab-talos/test'] == 'nocodb-restore-extension' &&
+        object.metadata.annotations['kustomize.toolkit.fluxcd.io/ssa'] == 'IfNotPresent' &&
+        !has(object.metadata.ownerReferences) &&
+        (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0) &&
+        !has(object.metadata.deletionTimestamp) && !has(object.metadata.generateName) &&
+        object.metadata.annotations.size() == oldObject.metadata.annotations.size() &&
+        oldObject.metadata.annotations.all(k, k == variables.ownerKey ||
+          (k in object.metadata.annotations && object.metadata.annotations[k] == oldObject.metadata.annotations[k]))
+      message: The optional application credential must preserve its named fixture and metadata.
+    - expression: >-
+        ((!has(object.data) || object.data.size() == 0) && variables.owner == '') ||
+        (variables.owner.matches('^[0-9a-f]{12}$') && variables.oldOwner in ['', variables.owner] &&
+         object.data.size() == 1 && 'pgpass' in object.data && object.data['pgpass'].size() > 0 &&
+         object.data['pgpass'].size() <= 4096)
+      message: The credential fixture may hold only one bounded run credential or return to empty.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-nocodb-credential
+spec:
+  policyName: homelab-test-nocodb-credential
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-nocodb-application-probe
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [batch]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [jobs]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: application-probe
+      expression: >-
+        (request.operation == 'DELETE' ? oldObject : object).metadata.name.endsWith('-app-probe')
+  variables:
+    - name: job
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: run
+      expression: variables.job.metadata.labels['homelab-talos/run-id']
+    - name: labels
+      expression: "{'homelab-talos/test': 'nocodb-restore-drill', 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'restore'}"
+    - name: pod
+      expression: variables.job.spec.template.spec
+    - name: container
+      expression: variables.pod.containers[0]
+  validations:
+    - expression: >-
+        request.operation != 'UPDATE' && request.namespace == 'automation-data' &&
+        variables.run.matches('^[0-9a-f]{12}$') &&
+        variables.job.metadata.name == 'nc-restore-' + variables.run + '-app-probe' &&
+        variables.job.metadata.labels == variables.labels &&
+        variables.job.spec.template.metadata.labels['homelab-talos/role'] == 'restore' &&
+        variables.job.spec.activeDeadlineSeconds == 180 &&
+        (!has(variables.job.spec.suspend) || !variables.job.spec.suspend) &&
+        !has(variables.job.spec.podFailurePolicy) && !has(variables.job.spec.successPolicy) &&
+        variables.pod.securityContext.runAsNonRoot && variables.pod.securityContext.runAsUser == 70 &&
+        variables.pod.securityContext.runAsGroup == 70 && variables.pod.securityContext.fsGroup == 70 &&
+        variables.container.name == 'application-probe' && variables.container.image == 'postgres:17.11-alpine3.24' &&
+        variables.container.command == ['/bin/sh', '-eu', '/helpers/nocodb-application-probe.sh'] &&
+        !has(variables.container.args) && variables.container.securityContext.readOnlyRootFilesystem &&
+        (!has(variables.container.securityContext.runAsUser) || variables.container.securityContext.runAsUser == 70) &&
+        (!has(variables.container.securityContext.runAsGroup) || variables.container.securityContext.runAsGroup == 70) &&
+        variables.container.resources.requests == {'cpu': '10m', 'memory': '32Mi'} &&
+        variables.container.resources.limits == {'memory': '128Mi'} && !has(variables.container.resources.claims)
+      message: The application probe must execute its fixed program with the bounded run-owned Job shape.
+    - expression: >-
+        variables.container.env.size() == 2 &&
+        variables.container.env.exists(e, e.name == 'PGHOST' && e.value == 'nc-restore-' + variables.run + '-db' && !has(e.valueFrom)) &&
+        variables.container.env.exists(e, e.name == 'RUN_ID' && e.value.matches('^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$') && !has(e.valueFrom)) &&
+        variables.pod.volumes.size() == 3 &&
+        variables.pod.volumes.exists(v, v.name == 'credential' && v.secret.secretName == 'nocodb-restore-application-credential' &&
+          v.secret.defaultMode == 256 && !has(v.secret.items) && (!has(v.secret.optional) || !v.secret.optional)) &&
+        variables.pod.volumes.exists(v, v.name == 'scratch' && has(v.emptyDir)) &&
+        variables.pod.volumes.exists(v, v.name == 'helpers' && v.configMap.name == 'automation-data-test-helpers-v1' &&
+          !has(v.configMap.items) && (!has(v.configMap.optional) || !v.configMap.optional)) &&
+        variables.container.volumeMounts.size() == 3 &&
+        variables.container.volumeMounts.exists(m, m.name == 'credential' && m.mountPath == '/credentials' && m.readOnly) &&
+        variables.container.volumeMounts.exists(m, m.name == 'scratch' && m.mountPath == '/tmp' && (!has(m.readOnly) || !m.readOnly)) &&
+        variables.container.volumeMounts.exists(m, m.name == 'helpers' && m.mountPath == '/helpers' && m.readOnly) &&
+        variables.container.volumeMounts.all(m, !has(m.subPath) && !has(m.subPathExpr) &&
+          (!has(m.mountPropagation) || m.mountPropagation == 'None'))
+      message: The application probe may read only its named credential fixture and immutable helper against its scratch database.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-nocodb-application-probe
+spec:
+  policyName: homelab-test-nocodb-application-probe
+  validationActions: [Deny]

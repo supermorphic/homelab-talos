@@ -25,6 +25,13 @@ defines each identity's permissions. OpenBao authenticates the workstation and
 issues temporary credentials. Checkout location and branch do not select
 credential authority. Source and evidence authority retain their separate checks.
 
+[Specification 032](032-openbao-scoped-test-execution.md) extends these interfaces
+with catalog-selected test profiles, separate base configs, enrollment schema 2,
+and suite/purpose-bound invocation configs. Its feature implementation preserves
+the attended enrollment and recovery root. Its staged deployment and required
+live acceptance are recorded separately; the prior reports above do not prove
+those new interfaces.
+
 ## Implementation scope and proportionality
 
 Keep the implementation to the existing platform plus one local credential path:

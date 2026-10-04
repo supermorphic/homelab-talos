@@ -14,6 +14,33 @@ fail() {
   exit 1
 }
 
+# A protected database must be refused before any database client is invoked.
+mkdir -p "$temp_dir/guard-bin"
+for client in psql createdb dropdb pg_restore; do
+  cat >"$temp_dir/guard-bin/$client" <<'EOF'
+#!/bin/sh
+printf 'called\n' >>"$GUARD_LOG"
+exit 0
+EOF
+  chmod +x "$temp_dir/guard-bin/$client"
+done
+for helper in \
+  kubernetes/apps/automation/n8n/app/test-helpers/n8n-restore-load.sh \
+  kubernetes/apps/automation/n8n/app/test-helpers/n8n-restore-drop.sh; do
+  [[ -f "$helper" ]] || fail "missing immutable helper $helper"
+  for database in postgres n8n n8n_restore_invalid; do
+    : >"$temp_dir/guard.log"
+    if env PATH="$temp_dir/guard-bin:$PATH" RESTORE_DATABASE="$database" \
+      GUARD_LOG="$temp_dir/guard.log" /bin/sh -eu "$helper" \
+      >"$temp_dir/guard-output" 2>&1; then
+      fail 'a protected database was accepted'
+    fi
+    [[ ! -s "$temp_dir/guard.log" ]] || fail 'database guard ran a database client'
+    rg -Fxq 'restore_failure=database-name' "$temp_dir/guard-output" ||
+      fail 'protected database was not explicitly refused'
+  done
+done
+
 restore_command="$(n8n_restore_job_command)"
 fixture_command="${restore_command//\/backups/$temp_dir/backups}"
 restore_status=0

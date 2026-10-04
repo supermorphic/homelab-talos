@@ -35,6 +35,23 @@ def jwt(**changes):
     )
 
 
+BROKER_ACCOUNTS = [
+    "homelab-observer",
+    "homelab-diagnostic",
+    "homelab-report-publisher",
+    "homelab-campaign-coordinator",
+    "homelab-test-runner",
+    "homelab-test-flux-restart",
+    "homelab-test-cilium-connectivity",
+    "homelab-test-node-reschedule",
+    "homelab-test-conformance",
+    "homelab-test-openbao-issuance",
+    "homelab-test-openbao-ha",
+    "homelab-test-openbao-restore",
+    "homelab-test-openbao-lifecycle"
+]
+
+
 class API:
     def __init__(self, clock):
         self.clock = clock
@@ -44,9 +61,34 @@ class API:
         self.denied_status = 403
         self.expired_status = 401
         self.calls = []
+        self.broker_tokens = {}
+        self.broker_identity_override = None
+        self.broker_ttl = 600
+        self.broker_status = 201
 
     def request(self, method, path, *, payload=None, token=None, headers=None):
         self.calls.append((method, path, payload, headers))
+        prefix = "/api/v1/namespaces/kube-system/serviceaccounts/"
+        if path.startswith(prefix) and path.endswith("/token"):
+            account = path[len(prefix) : -len("/token")]
+            if account in BROKER_ACCOUNTS:
+                identity = "system:serviceaccount:kube-system:" + account
+                issued_token = jwt(sub=identity, exp=1000 + self.broker_ttl)
+                self.broker_tokens[issued_token] = identity
+                return self.broker_status, {
+                    "status": {
+                        "token": issued_token,
+                        "expirationTimestamp": "1970-01-01T00:26:40Z",
+                    }
+                }
+        if path.endswith("selfsubjectreviews") and token in self.broker_tokens:
+            return 201, {
+                "status": {
+                    "userInfo": {
+                        "username": self.broker_identity_override or self.broker_tokens[token]
+                    }
+                }
+            }
         if path.endswith("/token"):
             if (
                 path
@@ -191,6 +233,58 @@ class IssuanceTests(unittest.TestCase):
             self.api.allowed_status = status
             with self.assertRaises(self.module.AcceptanceError):
                 self.module.issuer_boundary(self.api, self.clock, "synthetic-run")
+
+
+    def test_issuer_proves_every_expanded_named_account_with_actual_api_identity(self):
+        result = self.module.issuer_boundary(self.api, self.clock, "synthetic-run")
+        actual = {
+            path
+            for method, path, _, _ in self.api.calls
+            if method == "POST"
+            and path.startswith("/api/v1/namespaces/kube-system/serviceaccounts/")
+            and path.endswith("/token")
+            and path.split("/")[-2] in BROKER_ACCOUNTS
+        }
+        self.assertEqual(
+            actual,
+            {
+                f"/api/v1/namespaces/kube-system/serviceaccounts/{account}/token"
+                for account in BROKER_ACCOUNTS
+            },
+        )
+        self.assertEqual(set(result["agent_accounts"]), set(BROKER_ACCOUNTS))
+        self.assertEqual(len(result["agent_accounts"]), 13)
+        paths = {p for _, p, _, _ in self.api.calls}
+        self.assertIn(
+            "/api/v1/namespaces/kube-system/serviceaccounts/openbao-unapproved/token", paths
+        )
+        self.assertIn(
+            "/api/v1/namespaces/openbao/serviceaccounts/homelab-test-runner/token", paths
+        )
+        self.assertNotIn("fixture.", json.dumps(result))
+        for _, path, payload, _ in self.api.calls:
+            if path.endswith("/token"):
+                self.assertEqual(
+                    payload["spec"],
+                    {"audiences": ["https://192.168.90.20:6443"], "expirationSeconds": 600},
+                )
+
+
+    def test_expanded_issuer_claims_require_ten_minute_lifetime_and_actual_api_authentication(
+        self,
+    ):
+        for status in (401, 403, 404, 429, 500):
+            self.api.broker_status = status
+            with self.subTest(status=status), self.assertRaises(self.module.AcceptanceError):
+                self.module.issuer_boundary(self.api, self.clock, "synthetic-run")
+        self.api.broker_status = 201
+        self.api.broker_ttl = 1200
+        with self.assertRaises(self.module.AcceptanceError):
+            self.module.issuer_boundary(self.api, self.clock, "synthetic-run")
+        self.api.broker_ttl = 600
+        self.api.broker_identity_override = "system:anonymous"
+        with self.assertRaises(self.module.AcceptanceError):
+            self.module.issuer_boundary(self.api, self.clock, "synthetic-run")
 
 
 class AdapterTests(unittest.TestCase):
@@ -621,7 +715,8 @@ class DiagnosticBoundaryTest(unittest.TestCase):
                         self.assertTrue(all('--as' not in command for command in calls))
                         validate.assert_called_once_with(path, adapter.ROOT)
                         self.assertIn('create', calls[2]); self.assertIn('get', calls[3])
-                        self.assertTrue(all('homelab-diagnostic' in command for command in calls))
+                        self.assertTrue(all('--context' not in command for command in calls))
+                        self.assertTrue(all(str(path) in command for command in calls))
                     else:
                         with self.assertRaises(adapter.issuance.AcceptanceError):
                             adapter.diagnostic_boundary(path, 'expected-cluster')

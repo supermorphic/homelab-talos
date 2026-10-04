@@ -5,6 +5,14 @@ source scripts/test/lib/results.sh
 
 fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/homelab-sonobuoy-test.XXXXXX")"
 trap 'rm -rf -- "$fixture_root"' EXIT
+mkdir "$fixture_root/bin"
+TEST_FIXTURE_REAL_UV="$(command -v uv)"
+export TEST_FIXTURE_REAL_UV
+export TEST_FIXTURE_ACCESS_ROOT="$fixture_root"
+export TEST_FIXTURE_ACCESS_TRACE="$fixture_root/access-trace"
+cp tests/fixtures/test-access/fake-uv.sh "$fixture_root/bin/uv"
+cp tests/fixtures/result-coordinator/fake-kubectl.sh "$fixture_root/bin/kubectl"
+export PATH="$fixture_root/bin:$PATH"
 run_dir="$fixture_root/run"
 fragment_dir="$run_dir/diagnostics/fragments"
 archive_root="$fixture_root/archive/plugins/e2e/results/global"
@@ -24,6 +32,7 @@ tar -czf "$archive" -C "$fixture_root/archive" .
 calls="$fixture_root/sonobuoy-calls"
 private_root="$fixture_root/private"
 
+for mode in quick certified; do
 FAKE_SONOBUOY_ARCHIVE="$archive" \
 FAKE_SONOBUOY_CALLS="$calls" \
 TEST_SONOBUOY_BIN=tests/fixtures/result-coordinator/fake-sonobuoy.sh \
@@ -31,11 +40,16 @@ TEST_KUBECTL_BIN=tests/fixtures/result-coordinator/fake-kubectl.sh \
 TEST_SONOBUOY_PRIVATE_ROOT="$private_root" \
 HOMELAB_TEST_RUN_DIR="$run_dir" \
 TEST_RESULT_FRAGMENT_DIR="$fragment_dir" \
-  scripts/test/run-sonobuoy.sh quick "$fixture_root/kubeconfig" >/dev/null
+  scripts/test/run-sonobuoy.sh "$mode" "$fixture_root/kubeconfig" >/dev/null
+done
 
 rg -q --fixed-strings \
   "run --mode quick --plugin e2e --timeout 900 --wait=20 --kubeconfig $fixture_root/kubeconfig " \
   "$calls"
+rg -q --fixed-strings \
+  "run --mode certified-conformance --plugin e2e --timeout 10800 --wait=190 --kubeconfig $fixture_root/kubeconfig " \
+  "$calls"
+[[ "$(rg -Fc "delete --wait --kubeconfig $fixture_root/kubeconfig " "$calls")" == 2 ]]
 [[ -f "$run_dir/diagnostics/sonobuoy/summary.txt" ]]
 [[ -f "$run_dir/diagnostics/sonobuoy/e2e-summary.txt" ]]
 [[ ! -e "$run_dir/diagnostics/sonobuoy/sonobuoy-results.tar.gz" ]]
@@ -141,6 +155,8 @@ standalone_private="$fixture_root/standalone-private"
 standalone_reports="$fixture_root/standalone-reports"
 standalone_run_id_file="$fixture_root/standalone.run-id"
 lease_state="$fixture_root/standalone-lease.json"
+printf '%s\n' '{"apiVersion":"coordination.k8s.io/v1","kind":"Lease","metadata":{"name":"homelab-test-run-lock","namespace":"flux-system","resourceVersion":"1"},"spec":{"holderIdentity":null,"leaseDurationSeconds":90}}' \
+  >"$lease_state"
 healthy_nodes="$fixture_root/healthy-nodes.json"
 printf '%s\n' '{"items":[{"metadata":{"name":"nuc1","annotations":{}},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"nuc2","annotations":{}},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}},{"metadata":{"name":"nuc3","annotations":{}},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}' \
   >"$healthy_nodes"
@@ -159,10 +175,10 @@ TEST_CAMPAIGN_LEASE_FAILURE_MARKER="$fixture_root/outer-lease-renewal-failed" \
   TEST_KUBECTL_BIN=tests/fixtures/result-coordinator/fake-kubectl.sh \
   TEST_SONOBUOY_PRIVATE_ROOT="$standalone_private" \
   TEST_RESULTS_ROOT="$standalone_results" \
-  TEST_KUBECONFIG="$fixture_root/kubeconfig" \
+  TEST_KUBECONFIG='' \
   TEST_EXECUTION_ORIGIN=agent \
   TEST_RUN_ID_FILE="$standalone_run_id_file" \
-    scripts/test/run-conformance.sh "$fixture_root/kubeconfig" >/dev/null
+    scripts/test/run-conformance.sh >/dev/null
 
 standalone_run_id="$(cat "$standalone_run_id_file")"
 standalone_run="$standalone_results/$standalone_run_id"

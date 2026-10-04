@@ -13,8 +13,6 @@ from typing import NamedTuple
 NAMESPACE = "automation"
 DEPLOYMENT = "n8n"
 CONTAINER = "n8n-main"
-OBSERVER_CONTEXT = "homelab-observer"
-DIAGNOSTIC_CONTEXT = "homelab-diagnostic"
 MAX_RESULT_BYTES = 16 * 1024
 PHASES = (
     "search",
@@ -133,8 +131,6 @@ def exec_command(kubeconfig: Path, pod_name: str) -> list[str]:
         "kubectl",
         "--kubeconfig",
         str(kubeconfig),
-        "--context",
-        DIAGNOSTIC_CONTEXT,
         "--namespace",
         NAMESPACE,
         "--request-timeout=9m",
@@ -168,8 +164,6 @@ def read_command(
         "kubectl",
         "--kubeconfig",
         str(kubeconfig),
-        "--context",
-        OBSERVER_CONTEXT,
         "--namespace",
         NAMESPACE,
         "--request-timeout=20s",
@@ -188,20 +182,6 @@ def confirm_target(initial: Target, current: Target) -> Target:
     if initial != current:
         raise ContractFailure("preflight")
     return current
-
-
-def context_command(kubeconfig: Path, context: str) -> list[str]:
-    if context not in {OBSERVER_CONTEXT, DIAGNOSTIC_CONTEXT}:
-        raise ContractFailure("preflight")
-    return [
-        "kubectl",
-        "--kubeconfig",
-        str(kubeconfig),
-        "config",
-        "get-contexts",
-        context,
-        "--no-headers",
-    ]
 
 
 def _invoke(command: list[str], *, stdin: str | None = None, timeout: int | None = None) -> CommandResult:
@@ -260,9 +240,6 @@ def execute(
     *,
     invoke: Callable[..., CommandResult] = _invoke,
 ) -> list[dict]:
-    for context in (OBSERVER_CONTEXT, DIAGNOSTIC_CONTEXT):
-        if invoke(context_command(kubeconfig, context), timeout=20).returncode != 0:
-            raise ContractFailure("preflight")
     initial = collect_target(kubeconfig, invoke)
     current = collect_target(kubeconfig, invoke)
     target = confirm_target(initial, current)

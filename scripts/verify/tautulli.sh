@@ -20,9 +20,7 @@ expected_rules=(
   TautulliPersistentVolumeClaimNotBound
 )
 kc=(kubectl --kubeconfig "$kubeconfig")
-if "${kc[@]}" config get-contexts homelab-diagnostic --no-headers >/dev/null 2>&1; then
-  kc+=(--context homelab-diagnostic)
-fi
+
 
 [[ "$("${kc[@]}" --namespace flux-system get kustomization tautulli --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo 'tautulli Kustomization not Ready.' >&2; exit 1; }
 [[ "$("${kc[@]}" --namespace "$ns" get helmrelease tautulli --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo 'tautulli HelmRelease not Ready.' >&2; exit 1; }

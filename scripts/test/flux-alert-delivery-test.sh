@@ -116,6 +116,17 @@ set -euo pipefail
 
 printf '%s\n' "$*" >>"$KUBECTL_LOG"
 case " $* " in
+  *' get kustomizations flux-alert-e2e-'*)
+    if [[ -e "$RUN_RESOURCE_CREATED" ]]; then
+      if [[ -e "$DELETE_ATTEMPTED" ]]; then
+        jq '.metadata.uid="synthetic-replacement"' "$RUN_RESOURCE_CREATED"
+      else cat "$RUN_RESOURCE_CREATED"; fi
+    elif [[ "${POST_DELETE_GET_ERROR:-false}" == 'true' ]]; then
+      echo 'Error from server (Forbidden): cleanup lookup denied' >&2
+      exit 1
+    fi
+    ;;
+
   *' get kustomization flux-alert-e2e-'*)
     if [[ -e "$RUN_RESOURCE_CREATED" ]]; then
       [[ " $* " == *' --output=name '* ]] && echo "kustomization.kustomize.toolkit.fluxcd.io/$test_name"
@@ -133,10 +144,23 @@ case " $* " in
     exit 1
     ;;
   *' get gitrepository flux-alert-e2e-'*) exit 1 ;;
-  *' create --filename '*) touch "$RUN_RESOURCE_CREATED" ;;
-  *' delete kustomization flux-alert-e2e-'*)
+  *' create --filename '*)
+    filename=''; previous=''
+    for argument in "$@"; do
+      [[ "$previous" != --filename ]] || filename="$argument"
+      previous="$argument"
+    done
+    yq -o=json '.' "$filename" | jq '.metadata.uid="synthetic-api-created" | .metadata.resourceVersion="12"' >"$RUN_RESOURCE_CREATED"
+    [[ " $* " != *' --output json '* ]] || cat "$RUN_RESOURCE_CREATED"
+    ;;
+  *' delete --raw /apis/kustomize.toolkit.fluxcd.io/v1/namespaces/flux-system/kustomizations/flux-alert-e2e-'*)
+    jq -e '.preconditions == {uid:"synthetic-api-created",resourceVersion:"12"} and .propagationPolicy == "Foreground"' >/dev/null
     touch "$DELETE_ATTEMPTED"
     [[ "${KEEP_RUN_RESOURCE:-false}" == 'true' ]] || rm -f -- "$RUN_RESOURCE_CREATED"
+    ;;
+  *' delete kustomization flux-alert-e2e-'*)
+    echo 'Flux alert cleanup must enforce creation UID and current resourceVersion.' >&2
+    exit 66
     ;;
   *) echo "Unexpected kubectl request: $*" >&2; exit 64 ;;
 esac
@@ -268,7 +292,7 @@ EOF
     echo 'Scenario did not create exactly one run-owned Kustomization.' >&2
     exit 1
   }
-  [[ "$(rg -c '^.* delete kustomization flux-alert-e2e-' "$fixture/kubectl.log")" -eq 1 ]] || {
+  [[ "$(rg -c '^.* delete --raw /apis/kustomize.toolkit.fluxcd.io/v1/namespaces/flux-system/kustomizations/flux-alert-e2e-' "$fixture/kubectl.log")" -eq 1 ]] || {
     echo 'Scenario did not delete exactly its run-owned Kustomization.' >&2
     exit 1
   }
@@ -412,7 +436,7 @@ rg -Fq 'notification_failed_series_query=' "$scenario"
 rg -Fq 'notification metric series are absent' "$scenario"
 rg -Fq 'production_metric_selector="$(flux_alerts_metric_selector)"' "$scenario"
 rg -Fq '${production_metric_selector%?},customresource_kind=' "$scenario"
-rg -q 'delete kustomization "\$test_name"' "$scenario"
+rg -Fq 'test_delete_owned' "$scenario"
 rg -q 'created=false' "$scenario"
 
 echo 'Flux alert delivery E2E guard and ownership assertions passed.'

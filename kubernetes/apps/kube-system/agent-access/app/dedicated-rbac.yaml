@@ -1,0 +1,1134 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: homelab-test-flux-restart
+  namespace: kube-system
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: homelab-test-cilium-connectivity
+  namespace: kube-system
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: homelab-test-node-reschedule
+  namespace: kube-system
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: homelab-test-conformance
+  namespace: kube-system
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: homelab-test-openbao-issuance
+  namespace: kube-system
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: homelab-test-openbao-ha
+  namespace: kube-system
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: homelab-test-openbao-restore
+  namespace: kube-system
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: homelab-test-openbao-lifecycle
+  namespace: kube-system
+automountServiceAccountToken: false
+---
+# Sonobuoy's canonical workload and RBAC lifecycle requires administrator authority.
+# This exception belongs only to the dedicated conformance identity.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-conformance
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-conformance
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-flux-restart
+  namespace: flux-system
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [source-controller, kustomize-controller, helm-controller, notification-controller]
+    verbs: [patch, update]
+  - apiGroups: [source.toolkit.fluxcd.io]
+    resources: [gitrepositories]
+    resourceNames: [flux-system]
+    verbs: [patch, update]
+  - apiGroups: [kustomize.toolkit.fluxcd.io]
+    resources: [kustomizations]
+    resourceNames: [flux-canary, cluster-apps]
+    verbs: [patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-flux-restart
+  namespace: flux-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-flux-restart
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-flux-restart
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-flux-restart-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-flux-restart
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-flux-restart-observation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-observer-extra
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-flux-restart
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: homelab-test-node-scheduling
+rules:
+  - apiGroups:
+      - ''
+    resources:
+      - nodes
+    resourceNames:
+      - nuc1
+      - nuc2
+      - nuc3
+    verbs:
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-node-scheduling
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-test-node-scheduling
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-node-reschedule
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-node-reschedule-runtime
+  namespace: media
+rules:
+  - apiGroups:
+      - ''
+    resources:
+      - pods/exec
+    verbs:
+      - get
+      - create
+  - apiGroups:
+      - ''
+    resources:
+      - pods
+    verbs:
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-node-reschedule-runtime
+  namespace: media
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-node-reschedule-runtime
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-node-reschedule
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-node-reschedule-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-node-reschedule
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-node-reschedule-observation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-observer-extra
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-node-reschedule
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-openbao-member-tunnels
+  namespace: openbao
+rules:
+  - apiGroups:
+      - ''
+    resources:
+      - pods/portforward
+    resourceNames:
+      - openbao-0
+      - openbao-1
+      - openbao-2
+    verbs:
+      - get
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-openbao-member-tunnels
+  namespace: openbao
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-openbao-member-tunnels
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-openbao-ha
+    namespace: kube-system
+  - kind: ServiceAccount
+    name: homelab-test-openbao-lifecycle
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-openbao-ha-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-openbao-ha
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-openbao-ha-observation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-observer-extra
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-openbao-ha
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-openbao-lifecycle-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-openbao-lifecycle
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-openbao-lifecycle-observation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-observer-extra
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-openbao-lifecycle
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-openbao-ha-eviction
+  namespace: openbao
+rules:
+  - apiGroups:
+      - ''
+    resources:
+      - pods/eviction
+    resourceNames:
+      - openbao-0
+      - openbao-1
+      - openbao-2
+    verbs:
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-openbao-ha-eviction
+  namespace: openbao
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-openbao-ha-eviction
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-openbao-ha
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-openbao-acceptance-runtime
+  namespace: openbao-acceptance
+rules:
+  - apiGroups:
+      - ''
+    resources:
+      - pods
+    verbs:
+      - create
+      - delete
+  - apiGroups:
+      - ''
+    resources:
+      - pods/exec
+    verbs:
+      - get
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-openbao-acceptance-runtime
+  namespace: openbao-acceptance
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-openbao-acceptance-runtime
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-openbao-issuance
+    namespace: kube-system
+  - kind: ServiceAccount
+    name: homelab-test-openbao-ha
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-openbao-issuer-runtime
+  namespace: openbao
+rules:
+  - apiGroups:
+      - ''
+    resources:
+      - pods
+    verbs:
+      - create
+      - delete
+  - apiGroups:
+      - ''
+    resources:
+      - pods/exec
+    verbs:
+      - get
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-openbao-issuer-runtime
+  namespace: openbao
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-openbao-issuer-runtime
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-openbao-issuance
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-openbao-issuance-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-openbao-issuance
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-openbao-issuance-observation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-observer-extra
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-openbao-issuance
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-openbao-restore-runtime
+  namespace: openbao-restore-test
+rules:
+  - apiGroups:
+      - apps
+    resources:
+      - statefulsets
+    verbs:
+      - create
+  - apiGroups:
+      - apps
+    resources:
+      - statefulsets
+    resourceNames:
+      - scratch
+    verbs:
+      - delete
+  - apiGroups:
+      - ''
+    resources:
+      - persistentvolumeclaims
+      - secrets
+      - configmaps
+    verbs:
+      - create
+  - apiGroups:
+      - ''
+    resources:
+      - persistentvolumeclaims
+    resourceNames:
+      - scratch-data
+    verbs:
+      - delete
+  - apiGroups:
+      - ''
+    resources:
+      - secrets
+    resourceNames:
+      - scratch-seal
+    verbs:
+      - get
+      - delete
+  - apiGroups:
+      - ''
+    resources:
+      - secrets
+    verbs:
+      - list
+  - apiGroups:
+      - ''
+    resources:
+      - configmaps
+    resourceNames:
+      - scratch-config
+    verbs:
+      - delete
+  - apiGroups:
+      - ''
+    resources:
+      - pods
+    resourceNames:
+      - scratch-0
+    verbs:
+      - delete
+  - apiGroups:
+      - ''
+    resources:
+      - pods/exec
+    resourceNames:
+      - scratch-0
+    verbs:
+      - get
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-openbao-restore-runtime
+  namespace: openbao-restore-test
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-openbao-restore-runtime
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-openbao-restore
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-openbao-restore-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-openbao-restore
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-openbao-restore-observation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-observer-extra
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-openbao-restore
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: homelab-test-cilium-namespaces
+rules:
+  - apiGroups:
+      - ''
+    resources:
+      - namespaces
+    verbs:
+      - create
+  - apiGroups:
+      - ''
+    resources:
+      - namespaces
+    resourceNames:
+      - cilium-test-1
+      - cilium-test-ccnp1
+      - cilium-test-ccnp2
+    verbs:
+      - update
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-cilium-namespaces
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-test-cilium-namespaces
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-cilium-connectivity
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-cilium-connectivity-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-cilium-connectivity
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-cilium-connectivity-observation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-observer-extra
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-cilium-connectivity
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-cilium-helm-observation
+  namespace: kube-system
+rules:
+  - apiGroups:
+      - ''
+    resources:
+      - secrets
+    verbs:
+      - list
+  - apiGroups:
+      - ''
+    resources:
+      - secrets
+    resourceNames:
+      - cilium-etcd-secrets
+    verbs:
+      - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-cilium-helm-observation
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-cilium-helm-observation
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-cilium-connectivity
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-cilium-ephemeral-diagnostics
+  namespace: kube-system
+rules:
+  - apiGroups:
+      - ''
+    resources:
+      - pods/ephemeralcontainers
+    verbs:
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-cilium-ephemeral-diagnostics
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-cilium-ephemeral-diagnostics
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-cilium-connectivity
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-cilium-system-runtime
+  namespace: kube-system
+rules:
+  - apiGroups:
+      - ''
+    resources:
+      - pods/exec
+      - pods/portforward
+    verbs:
+      - get
+      - create
+  - apiGroups:
+      - ''
+    resources:
+      - pods/proxy
+    verbs:
+      - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-cilium-system-runtime
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-cilium-system-runtime
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-cilium-connectivity
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: homelab-test-cilium-cluster-policies
+rules:
+  - apiGroups:
+      - cilium.io
+    resources:
+      - ciliumclusterwidenetworkpolicies
+    resourceNames:
+      - allow-ingress-specific-namespace-ccnp
+      - allow-egress-specific-namespace-ccnp
+      - host-firewall-ingress
+      - host-firewall-egress
+    verbs:
+      - get
+      - patch
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-cilium-cluster-policies
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-test-cilium-cluster-policies
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-cilium-connectivity
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: homelab-test-cilium-diagnostic-observation
+rules:
+  - apiGroups:
+      - cilium.io
+    resources:
+      - ciliumcidrgroups
+      - ciliumegressgatewaypolicies
+      - ciliumlocalredirectpolicies
+      - ciliumendpointslices
+      - ciliumnodeconfigs
+      - ciliumpodippools
+      - ciliuml2announcementpolicies
+      - ciliumenvoyconfigs
+      - ciliumclusterwideenvoyconfigs
+      - ciliumgatewayclassconfigs
+      - ciliumbgppeeringpolicies
+      - ciliumbgpclusterconfigs
+      - ciliumbgppeerconfigs
+      - ciliumbgpadvertisements
+      - ciliumbgpnodeconfigs
+      - ciliumbgpnodeconfigoverrides
+      - podinfo
+      - tracingpolicies
+      - tracingpoliciesnamespaced
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - gateway.networking.k8s.io
+    resources:
+      - listenersets
+      - backendtlspolicies
+      - tlsroutes
+      - tcproutes
+      - udproutes
+      - grpcroutes
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - networking.k8s.io
+    resources:
+      - ingressclasses
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - policy.networking.k8s.io
+    resources:
+      - clusternetworkpolicies
+    verbs:
+      - get
+      - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-cilium-diagnostic-observation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-test-cilium-diagnostic-observation
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-cilium-connectivity
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-cilium-copy-diagnostics
+  namespace: kube-system
+rules:
+  - apiGroups:
+      - ''
+    resources:
+      - pods
+    verbs:
+      - create
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-cilium-copy-diagnostics
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-cilium-copy-diagnostics
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-cilium-connectivity
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: homelab-test-cilium-fixtures-1
+rules:
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+      - daemonsets
+    verbs:
+      - create
+      - delete
+  - apiGroups:
+      - ''
+    resources:
+      - serviceaccounts
+      - services
+      - configmaps
+      - secrets
+    verbs:
+      - create
+  - apiGroups:
+      - ''
+    resources:
+      - serviceaccounts
+      - services
+      - configmaps
+    verbs:
+      - delete
+  - apiGroups:
+      - ''
+    resources:
+      - secrets
+    resourceNames:
+      - cabundle
+      - externaltarget-tls
+      - header-match
+    verbs:
+      - get
+      - update
+      - delete
+  - apiGroups:
+      - ''
+    resources:
+      - pods/exec
+    verbs:
+      - get
+      - create
+  - apiGroups:
+      - cilium.io
+    resources:
+      - ciliumnetworkpolicies
+    resourceNames:
+      - all-egress-deny
+      - all-entities-deny
+      - all-ingress-deny
+      - allow-all-egress
+      - allow-all-except-world
+      - allow-all-ingress
+      - allow-from-cilium-ingress
+      - cidr-deny
+      - client-egress-icmp
+      - client-egress-l7-http
+      - client-egress-l7-http-external-node
+      - client-egress-l7-http-from-any
+      - client-egress-l7-http-matchheader-secret
+      - client-egress-l7-http-matchheader-secret-port-range
+      - client-egress-l7-http-method
+      - client-egress-l7-http-method-port-range
+      - client-egress-l7-http-named-port
+      - client-egress-l7-http-port-range
+      - client-egress-l7-tls
+      - client-egress-l7-tls-other-sni
+      - client-egress-l7-tls-port-range
+      - client-egress-l7-tls-sni
+      - client-egress-node-local-dns
+      - client-egress-only-dns
+      - client-egress-only-port-53
+      - client-egress-tls-sni
+      - client-egress-tls-sni-double-wildcard
+      - client-egress-tls-sni-other
+      - client-egress-tls-sni-random-wildcard
+      - client-egress-tls-sni-wildcard
+      - client-egress-to-cidr
+      - client-egress-to-cidr-deny
+      - client-egress-to-cidr-k8s
+      - client-egress-to-cidr-lrp-deny
+      - client-egress-to-cidrgroup-deny
+      - client-egress-to-cidrgroup-deny-label
+      - client-egress-to-echo
+      - client-egress-to-echo-deny
+      - client-egress-to-echo-deny-port-range
+      - client-egress-to-echo-expression
+      - client-egress-to-echo-expression-deny
+      - client-egress-to-echo-expression-deny-port-range
+      - client-egress-to-echo-expression-port-range
+      - client-egress-to-echo-no-cluster-policy
+      - client-egress-to-echo-service-account
+      - client-egress-to-echo-service-account-deny
+      - client-egress-to-echo-service-account-deny-port-range
+      - client-egress-to-echo-service-account-port-range
+      - client-egress-to-entities-host
+      - client-egress-to-entities-k8s
+      - client-egress-to-entities-world
+      - client-egress-to-entities-world-port-range
+      - client-egress-to-fqdns-one.one.one.one
+      - client-egress-to-fqdns-proxy-one.one.one.one
+      - client-ingress-from-client2
+      - client-ingress-from-client2-icmp
+      - client-ingress-from-other-client-icmp-deny
+      - client-ingress-to-echo-named-port-deny
+      - client-with-service-account-egress-to-echo
+      - client-with-service-account-egress-to-echo-deny
+      - client-with-service-account-egress-to-echo-deny-port-range
+      - client-with-service-account-egress-to-echo-port-range
+      - echo-ingress-from-cidr
+      - echo-ingress-from-client-tiered-wildcard-pass-l7
+      - echo-ingress-from-other-client
+      - echo-ingress-from-other-client-deny
+      - echo-ingress-l7-http
+      - echo-ingress-l7-http-from-anywhere
+      - echo-ingress-l7-http-from-anywhere-port-range
+      - echo-ingress-l7-http-named-port
+      - echo-ingress-mutual-authentication
+      - echo-ingress-mutual-authentication-fail
+      - echo-ingress-mutual-authentication-fail-port-range
+      - echo-ingress-mutual-authentication-port-range
+      - entity-cluster
+      - host-cluster-egress
+      - host-cluster-ingress
+      - ingress-backend-deny
+      - ingress-entity-deny
+      - ingress-source-egress-deny-other-node
+      - world-entity-deny
+    verbs:
+      - get
+      - patch
+      - delete
+  - apiGroups:
+      - cilium.io
+    resources:
+      - ciliumlocalredirectpolicies
+    resourceNames:
+      - lrp-address-matcher-skip-redirect-from-backend-v4
+      - lrp-address-matcher-skip-redirect-from-backend-v6
+      - lrp-address-matcher-v4
+      - lrp-address-matcher-v6
+    verbs:
+      - get
+      - patch
+      - delete
+  - apiGroups:
+      - networking.k8s.io
+    resources:
+      - networkpolicies
+    resourceNames:
+      - all-egress-deny
+      - all-ingress-deny
+      - client-egress-to-cidr
+      - client-egress-to-cidr-cp-host
+      - client-egress-to-echo
+      - client-egress-to-echo-expression
+      - client-egress-to-echo-expression-port-range
+      - client-egress-to-node-cidr
+      - client-ingress-from-client2
+      - echo-ingress-from-other-client
+    verbs:
+      - get
+      - patch
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: homelab-test-cilium-fixtures-ccnp
+rules:
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+    verbs:
+      - create
+      - delete
+  - apiGroups:
+      - ''
+    resources:
+      - serviceaccounts
+    verbs:
+      - create
+      - delete
+  - apiGroups:
+      - ''
+    resources:
+      - pods/exec
+    verbs:
+      - get
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: homelab-test-cilium-global-fixtures
+rules:
+  - apiGroups:
+      - cilium.io
+    resources:
+      - ciliumcidrgroups
+    resourceNames:
+      - cilium-test-external-cidr
+      - cilium-test-external-cidr-label
+    verbs:
+      - get
+      - patch
+      - delete
+  - apiGroups:
+      - cilium.io
+    resources:
+      - ciliumclusterwideenvoyconfigs
+    resourceNames:
+      - client-egress-to-fqdns-proxy-one.one.one.one
+    verbs:
+      - get
+      - patch
+      - delete
+  - apiGroups:
+      - policy.networking.k8s.io
+    resources:
+      - clusternetworkpolicies
+    resourceNames:
+      - echo-ingress-from-client-tiered-wildcard-pass-l7
+    verbs:
+      - get
+      - patch
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-cilium-global-fixtures
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-test-cilium-global-fixtures
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-cilium-connectivity
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: homelab-test-cilium-bootstrap
+rules:
+  - apiGroups:
+      - rbac.authorization.k8s.io
+    resources:
+      - rolebindings
+    verbs:
+      - create
+  - apiGroups:
+      - rbac.authorization.k8s.io
+    resources:
+      - rolebindings
+    resourceNames:
+      - homelab-test-cilium-fixtures
+    verbs:
+      - get
+      - delete
+  - apiGroups:
+      - rbac.authorization.k8s.io
+    resources:
+      - clusterroles
+    resourceNames:
+      - homelab-test-cilium-fixtures-1
+      - homelab-test-cilium-fixtures-ccnp
+    verbs:
+      - bind
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-test-cilium-bootstrap
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-test-cilium-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-cilium-connectivity
+    namespace: kube-system

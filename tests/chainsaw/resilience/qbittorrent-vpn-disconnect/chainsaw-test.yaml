@@ -33,7 +33,7 @@ spec:
             content: >-
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
-              scripts/test/scenarios/qbittorrent_vpn_disconnect.py baseline .kube/config
+              scripts/test/scenarios/qbittorrent_vpn_disconnect.py baseline "${TEST_KUBECONFIG:?}"
     - name: capture-stop-analyze-and-recover-vpn
       try:
         - script:
@@ -41,13 +41,13 @@ spec:
             content: >-
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
-              scripts/test/scenarios/qbittorrent_vpn_disconnect.py disrupt .kube/config
+              scripts/test/scenarios/qbittorrent_vpn_disconnect.py disrupt "${TEST_KUBECONFIG:?}"
         - script:
             content: >-
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
               scripts/test/scenarios/qbittorrent_vpn_disconnect.py
-              assert-fail-closed .kube/config
+              assert-fail-closed "${TEST_KUBECONFIG:?}"
       finally:
         - delete:
             ref:
@@ -81,7 +81,7 @@ spec:
             content: >-
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
-              scripts/test/scenarios/qbittorrent_vpn_disconnect.py cleanup .kube/config
+              scripts/test/scenarios/qbittorrent_vpn_disconnect.py cleanup "${TEST_KUBECONFIG:?}"
     - name: analyze-recovered-vpn-and-construct-evidence
       try:
         - script:
@@ -89,4 +89,4 @@ spec:
             content: >-
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
-              scripts/test/scenarios/qbittorrent_vpn_disconnect.py verify .kube/config
+              scripts/test/scenarios/qbittorrent_vpn_disconnect.py verify "${TEST_KUBECONFIG:?}"

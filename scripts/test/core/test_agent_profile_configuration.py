@@ -16,6 +16,17 @@ ACCOUNTS = {
     "diagnostic": "homelab-diagnostic",
     "publisher": "homelab-report-publisher",
     "campaign-coordinator": "homelab-campaign-coordinator",
+    "debugger": "homelab-diagnostic",
+    "test-runner": "homelab-test-runner",
+    "report-publisher": "homelab-report-publisher",
+    "test-flux-restart": "homelab-test-flux-restart",
+    "test-cilium-connectivity": "homelab-test-cilium-connectivity",
+    "test-node-reschedule": "homelab-test-node-reschedule",
+    "test-conformance": "homelab-test-conformance",
+    "test-openbao-issuance": "homelab-test-openbao-issuance",
+    "test-openbao-ha": "homelab-test-openbao-ha",
+    "test-openbao-restore": "homelab-test-openbao-restore",
+    "test-openbao-lifecycle": "homelab-test-openbao-lifecycle"
 }
 
 
@@ -50,10 +61,7 @@ class AgentProfileConfigurationTests(unittest.TestCase):
         self.assertEqual(fields["token_policies"], ["agent-profiles"])
         policy = objects[("policy", "agent-profiles")].fields["policy"]
         self.assertEqual(policy, {"path": {
-            "kubernetes/creds/observer": {"capabilities": ["update"]},
-            "kubernetes/creds/diagnostic": {"capabilities": ["update"]},
-            "kubernetes/creds/publisher": {"capabilities": ["update"]},
-            "kubernetes/creds/campaign-coordinator": {"capabilities": ["update"]},
+            **{f"kubernetes/creds/{profile}": {"capabilities": ["update"]} for profile in ACCOUNTS},
             "auth/token/revoke-self": {"capabilities": ["update"]},
         }})
 
@@ -92,13 +100,33 @@ class AgentProfileConfigurationTests(unittest.TestCase):
         issuer = by_key[("Role", "openbao-agent-tokenrequest")]
         self.assertEqual(issuer["metadata"]["namespace"], "kube-system")
         self.assertEqual(issuer["rules"], [{"apiGroups": [""],
-            "resources": ["serviceaccounts/token"], "resourceNames": list(ACCOUNTS.values()),
+            "resources": ["serviceaccounts/token"], "resourceNames": list(dict.fromkeys(ACCOUNTS.values())),
             "verbs": ["create"]}])
         self.assertEqual(by_key[("RoleBinding", "openbao-agent-tokenrequest")]["subjects"],
                          [{"kind": "ServiceAccount", "name": "openbao", "namespace": "openbao"}])
         lease = yaml.safe_load((ROOT /
             "kubernetes/apps/kube-system/agent-access/app/campaign-lease.yaml").read_text())
         self.assertNotIn("spec", lease)
+
+
+    def test_configuration_reader_observes_each_named_role_without_issuance_authority(self):
+        objects = {(o.kind, o.name): o for o in load_document(DESIRED)["objects"]}
+        policy = objects[("policy", "openbao-config-reader")].fields["policy"]["path"]
+        role_reads = {k: v for k, v in policy.items() if k.startswith("kubernetes/roles/")}
+        self.assertEqual(
+            role_reads,
+            {
+                f"kubernetes/roles/{p}": {"capabilities": ["read"]}
+                for p in ["openbao-acceptance", *ACCOUNTS]
+            },
+        )
+        self.assertFalse(any(k.startswith("kubernetes/creds/") or "*" in k for k in policy))
+        self.assertEqual(
+            {k for k, v in policy.items() if "update" in v["capabilities"]},
+            {"auth/token/revoke-self"},
+        )
+        roles = {o.name for o in objects.values() if o.kind == "issuance-role"}
+        self.assertEqual(roles, {"openbao-acceptance", *ACCOUNTS})
 
 
 if __name__ == "__main__":

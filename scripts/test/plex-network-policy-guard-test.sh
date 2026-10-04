@@ -26,12 +26,10 @@ set -euo pipefail
 
 printf '%s\n' "$*" >>"$FAKE_KUBECTL_LOG"
 
-if [[ "${FAKE_DIAGNOSTIC_CONTEXT:-false}" == 'true' &&
-      " $* " != *' config get-contexts homelab-diagnostic '* &&
-      " $* " != *' --context homelab-diagnostic '* ]]; then
-  echo "Missing diagnostic context: $*" >&2
+[[ " $* " != *' --context '* ]] || {
+  echo 'The selected test config must not switch contexts.' >&2
   exit 65
-fi
+}
 
 case " $* " in
   *' config get-contexts homelab-diagnostic '*)
@@ -75,10 +73,37 @@ case " $* " in
 JSON
     ;;
   *' create --filename '*)
-    file="${*: -1}"
+    arguments=("$@")
+    for ((index=0; index<${#arguments[@]}; index++)); do
+      if [[ "${arguments[index]}" == '--filename' ]]; then file="${arguments[index+1]}"; fi
+    done
     name="$(sed -n 's/^  name: //p' "$file" | head -n 1)"
     cp "$file" "$FAKE_MANIFEST_DIR/$name.yaml"
-    printf 'pod/%s created\n' "$name"
+    TEST_POD_NAME="$name" yq -o=json '.metadata.uid = ("synthetic-" + strenv(TEST_POD_NAME)) |
+      .metadata.resourceVersion = "12"' "$file" >"$FAKE_MANIFEST_DIR/$name.current.json"
+    cat "$FAKE_MANIFEST_DIR/$name.current.json"
+    ;;
+  *' get pods plex-policy-'*|*' get pod plex-policy-'*)
+    arguments=("$@")
+    for ((index=0; index<${#arguments[@]}; index++)); do
+      if [[ "${arguments[index]}" == 'get' ]]; then name="${arguments[index+2]}"; fi
+    done
+    if [[ -f "$FAKE_MANIFEST_DIR/$name.current.json" ]]; then
+      if [[ " $* " == *' --output name '* ]]; then printf 'pod/%s\n' "$name"
+      else cat "$FAKE_MANIFEST_DIR/$name.current.json"; fi
+    fi
+    ;;
+  *' delete --raw '*)
+    arguments=("$@")
+    for ((index=0; index<${#arguments[@]}; index++)); do
+      if [[ "${arguments[index]}" == '--raw' ]]; then uri="${arguments[index+1]}"; fi
+    done
+    name="${uri##*/}"
+    [[ "$uri" == /api/v1/namespaces/media/pods/plex-policy-* ]]
+    cat >"$FAKE_MANIFEST_DIR/$name.delete.json"
+    jq -e --arg uid "synthetic-$name" '.preconditions == {uid:$uid,resourceVersion:"12"} and
+      .propagationPolicy == "Foreground"' "$FAKE_MANIFEST_DIR/$name.delete.json" >/dev/null
+    rm "$FAKE_MANIFEST_DIR/$name.current.json"
     ;;
   *' wait '*)
     sleep "${FAKE_WAIT_SLEEP:-0}"
@@ -192,13 +217,13 @@ assert_pod_manifest() {
 }
 
 assert_cleanup_ran() {
-  rg -q -F ' delete pod ' "$kubectl_log" || {
+  rg -q -F ' delete --raw ' "$kubectl_log" || {
     echo 'Scenario exited without deleting its run-scoped pods.' >&2
     cat "$kubectl_log" >&2
     exit 1
   }
   local delete_line
-  delete_line="$(rg -F ' delete pod ' "$kubectl_log")"
+  delete_line="$(rg -F ' delete --raw ' "$kubectl_log")"
   control_name="$(basename "$fixture/manifests"/plex-policy-control-*.yaml .yaml 2>/dev/null || true)"
   selected_name="$(basename "$fixture/manifests"/plex-policy-selected-*.yaml .yaml 2>/dev/null || true)"
   if [[ -n "$control_name" && -n "$selected_name" ]]; then
@@ -235,10 +260,10 @@ fi
 rg -q 'Refusing' "$output"
 [[ ! -s "$kubectl_log" ]]
 
-echo '3. Available diagnostic credentials are selected for every cluster operation.'
+echo '3. Every cluster operation retains the selected invocation config.'
 if ! FAKE_DIAGNOSTIC_CONTEXT=true \
   PLEX_NETWORK_POLICY_CONFIRM='test:plex-network-policy' run_scenario; then
-  echo 'Scenario did not select the available homelab-diagnostic context.' >&2
+  echo 'Scenario switched away from the selected invocation config.' >&2
   cat "$output" >&2
   exit 1
 fi
@@ -284,7 +309,7 @@ ingress_line="$(line_number "exec $control_name -- timeout 10 bash -c </dev/tcp/
 [[ "$ingress_line" -gt "$previous" ]]
 verify_line="$(line_number ' get kustomization plex ')"
 [[ "$verify_line" -gt "$ingress_line" ]]
-[[ "$(line_number ' delete pod ')" -gt "$verify_line" ]]
+[[ "$(line_number ' delete --raw ')" -gt "$verify_line" ]]
 assert_cleanup_ran
 
 echo '5. A control target failure stops the run before any selected-pod probe.'

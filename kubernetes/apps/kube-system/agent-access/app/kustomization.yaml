@@ -5,3 +5,17 @@ resources:
   - ./campaign-lease.yaml
   - ./report-publication-lease.yaml
   - ./rbac.yaml
+  - ./test-rbac.yaml
+  - ./dedicated-rbac.yaml
+  - ./dedicated-admission.yaml
+  - ./node-reschedule-admission.yaml
+  - ./openbao-test-admission.yaml
+  - ./test-admission.yaml
+  - ./restore-admission.yaml
+  - ./restore-workload-admission.yaml
+  - ./restore-network-admission.yaml
+  - ./restore-extension-admission.yaml
+  - ./provisioning-admission.yaml
+  - ./network-probe-admission.yaml
+  - ./openbao-restore-admission.yaml
+  - ./cilium-test-admission.yaml

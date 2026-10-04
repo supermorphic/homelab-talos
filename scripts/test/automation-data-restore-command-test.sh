@@ -6,11 +6,11 @@ source scripts/test/lib/automation-data-restore-command.sh
 # shellcheck source=scripts/test/lib/n8n-restore-command.sh
 source scripts/test/lib/n8n-restore-command.sh
 
-rg -Fq 'read_platform_revision' scripts/test/lib/automation-data-restore-command.sh || {
+rg -Fq 'read_platform_revision' kubernetes/apps/automation-data/postgresql/app/test-helpers/restore-body.sh || {
   echo 'automation-data restore command test failed: upgraded classification bypasses the revision oracle' >&2
   exit 1
 }
-rg -Fq 'assert_nocodb_access_kind' scripts/test/lib/automation-data-restore-command.sh || {
+rg -Fq 'assert_nocodb_access_kind' kubernetes/apps/automation-data/postgresql/app/test-helpers/restore-body.sh || {
   echo 'automation-data restore command test failed: old classification accepts leftover extension functions' >&2
   exit 1
 }
@@ -95,7 +95,10 @@ request_job="$prefix-request"
 n8n_app="$prefix-n8n"
 export request_job n8n_app
 request_job_manifest >"$test_root/request-job.yaml"
-request_script="$(yq -r '.spec.template.spec.containers[0].args[0]' "$test_root/request-job.yaml")"
+[[ "$(yq -o=json -I=0 '.spec.template.spec.containers[0].command' "$test_root/request-job.yaml")" == \
+  '["node","/helpers/automation-data-restore-request.mjs"]' ]] ||
+  fail 'the restored request does not execute its fixed helper'
+request_script="$(cat kubernetes/apps/monitoring/gatus/app/test-helpers/automation-data-restore-request.mjs)"
 rg -Fq '/webhook/automation-data-canary' <<<"$request_script" ||
   fail 'the restored request does not invoke the stable automation-data canary'
 rg -Fq "body.database !== 'automation_data_canary'" <<<"$request_script" ||

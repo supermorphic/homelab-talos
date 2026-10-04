@@ -58,6 +58,8 @@ n8n_verification_contract_test='scripts/test/n8n-verification-contract-test.sh'
 n8n_job_wait_lib='scripts/test/lib/job.sh'
 n8n_job_wait_test='scripts/test/n8n-job-wait-test.sh'
 n8n_restore_command_lib='scripts/test/lib/n8n-restore-command.sh'
+n8n_restore_common='kubernetes/apps/automation/n8n/app/test-helpers/n8n-restore-common.sh'
+n8n_restore_drop='kubernetes/apps/automation/n8n/app/test-helpers/n8n-restore-drop.sh'
 n8n_restore_command_test='scripts/test/n8n-restore-command-test.sh'
 n8n_persistence='scripts/test/scenarios/n8n-persistence.sh'
 n8n_restore_drill='scripts/test/scenarios/n8n-restore-drill.sh'
@@ -238,29 +240,31 @@ rg -Fq 'N8N_RESTORE_DRILL_CONFIRM=restore:n8n-postgresql:temporary' \
 # interface. These assertions operate on parsed YAML and the validator independently
 # enforces command safety, access tiers, and exact-order constants.
 [[ "$(yq -r '.suites[] | select(.metadata.id == "verification.n8n") |
-    [.metadata.execution_owner, .metadata.mutates_cluster, .access.tier,
+    [.metadata.execution_owner, .metadata.mutates_cluster, .access.profile,
      .confirmation.type, .runner.command, .runner.implementation] | join(",")' "$catalog")" == \
-    'human,false,observer,none,mise exec -- just kube n8n-verify,scripts/verify/n8n.sh' && \
+    'shared,false,observer,none,mise exec -- just kube n8n-verify,scripts/verify/n8n.sh' && \
   "$(yq -r '.suites[] | select(.metadata.id == "chainsaw.smoke.platform.n8n") |
     [.metadata.execution_owner, .metadata.mutates_cluster, .metadata.target,
      .metadata.scenario, .dispatch.mode, .dispatch.path, .dispatch.selector] | join(",")' \
     "$catalog")" == \
-    'human,false,platform,n8n,chainsaw,tests/chainsaw/smoke/platform/n8n,homelab-talos/suite=platform' && \
+    'shared,false,platform,n8n,chainsaw,tests/chainsaw/smoke/platform/n8n,homelab-talos/suite=platform' && \
   "$(yq -r '.suites[] | select(.metadata.id == "test.n8n-persistence") |
-    [.metadata.execution_owner, .metadata.mutates_cluster, .metadata.tier,
+    [.metadata.execution_owner, .metadata.mutates_cluster, .metadata.tier, .access.profile,
      .confirmation.type, .confirmation.variable, .confirmation.expected,
      .dispatch.mode, .dispatch.runtime, .dispatch.path] | join(",")' "$catalog")" == \
-    'human,true,resilience,exact,CLUSTER_CHAOS_CONFIRM,chaos:n8n-persistence,direct,bash,scripts/test/scenarios/n8n-persistence.sh' && \
+    'human,true,resilience,test-runner,exact,CLUSTER_CHAOS_CONFIRM,chaos:n8n-persistence,direct,bash,scripts/test/scenarios/n8n-persistence.sh' && \
+  "$(yq -r '.suites[] | select(.metadata.id == "test.n8n-persistence") |
+    .access.prerequisites | join(",")' "$catalog")" == 'application-credential' && \
   "$(yq -r '.suites[] | select(.metadata.id == "test.n8n-persistence") |
     .metadata.scenario == null' "$catalog")" == 'true' && \
   "$(yq -r '.suites[] | select(.metadata.id == "test.n8n-persistence") | .runner.command' \
     "$catalog")" == \
     'CLUSTER_CHAOS_CONFIRM=chaos:n8n-persistence mise exec -- just test resilience n8n-persistence' && \
   "$(yq -r '.suites[] | select(.metadata.id == "test.n8n-restore-drill") |
-    [.metadata.execution_owner, .metadata.mutates_cluster, .metadata.tier,
+    [.metadata.execution_owner, .metadata.mutates_cluster, .metadata.tier, .access.profile,
      .confirmation.type, .confirmation.variable, .confirmation.expected,
      .dispatch.mode, .dispatch.runtime, .dispatch.path] | join(",")' "$catalog")" == \
-    'human,true,integration,exact,N8N_RESTORE_DRILL_CONFIRM,restore:n8n-postgresql:temporary,direct,bash,scripts/test/scenarios/n8n-restore-drill.sh' ]] || {
+    'shared,true,integration,test-runner,exact,N8N_RESTORE_DRILL_CONFIRM,restore:n8n-postgresql:temporary,direct,bash,scripts/test/scenarios/n8n-restore-drill.sh' ]] || {
   echo 'n8n catalog ownership, confirmation, access, or dispatch differs from the contract.' >&2
   exit 1
 }
@@ -503,7 +507,7 @@ fi
 # shellcheck disable=SC2016 # These are literal recovery-source markers.
 for marker in 'LC_ALL=C sort -r' 'sha256sum -c' 'pg_restore --list' \
   'pg_restore --dbname=' 'dropdb --if-exists --force'; do
-  rg -Fq "$marker" "$n8n_restore_command_lib" || {
+  rg -Fq "$marker" "$n8n_restore_common" "$n8n_restore_drop" || {
     echo "n8n restore command safety invariant is absent: $marker" >&2
     exit 1
   }
@@ -513,7 +517,7 @@ for marker in 'credentialDecryptionProvedByAuthenticatedCanary' \
   'write_phase cleanup failed' \
   'automation_policy="$resource_prefix-automation"' \
   'request_policy="$resource_prefix-request"' \
-  'policy_manifest | "${k_cluster[@]}" create --filename -' \
+  'policy_manifest | test_create_owned_stream "$ledger" "${k_cluster[@]}"' \
   'n8n_routes_target_service automation "$service"' \
   'request_resource_absent "ciliumnetworkpolicy/$request_policy"' \
   'automation_resource_absent "$target"'; do
@@ -522,12 +526,12 @@ for marker in 'credentialDecryptionProvedByAuthenticatedCanary' \
     exit 1
   }
 done
-! rg -Fq 'sha256sum --check' "$n8n_restore_command_lib" || {
+! rg -Fq 'sha256sum --check' "$n8n_restore_common" || {
   echo 'The Alpine restore container must not use GNU-only sha256sum options.' >&2
   exit 1
 }
 if rg -n 'SELECT[[:space:]]+([^;]*\.)?data\b|credential\.data' \
-  "$n8n_restore_command_lib" "$n8n_restore_drill"; then
+  "$n8n_restore_common" "$n8n_restore_drop" "$n8n_restore_drill"; then
   echo 'The n8n restore drill selects credential ciphertext.' >&2
   exit 1
 fi
@@ -586,7 +590,8 @@ bash -n "$n8n_verifier" "$n8n_verification_lib" "$n8n_verification_contract_test
   "$n8n_persistence" "$n8n_restore_drill"
 shellcheck --external-sources "$n8n_verifier" "$n8n_verification_lib" \
   "$n8n_verification_contract_test" "$n8n_job_wait_lib" "$n8n_job_wait_test" \
-  "$n8n_restore_command_lib" "$n8n_restore_command_test" \
+  "$n8n_restore_command_lib" "$n8n_restore_common" "$n8n_restore_drop" \
+  'kubernetes/apps/automation/n8n/app/test-helpers/n8n-restore-load.sh' "$n8n_restore_command_test" \
   "$n8n_persistence" "$n8n_restore_drill"
 for file in "$n8n_verifier" "$n8n_verification_contract_test" "$n8n_persistence" \
   "$n8n_job_wait_test" "$n8n_restore_command_test" "$n8n_restore_drill"; do
@@ -636,11 +641,22 @@ kubeconform -strict -summary -ignore-missing-schemas \
   "$temp_dir/persistence-cleanup.yaml" "$temp_dir/restore-policy.yaml" \
   "$temp_dir/restore-job.yaml" "$temp_dir/restore-drop-job.yaml" \
   "$temp_dir/restore-application.yaml" "$temp_dir/restore-request-job.yaml"
-rg -Fq 'SELECT count(*) FROM pg_database WHERE datname = current_setting' \
-  "$temp_dir/restore-drop-job.yaml" || {
+kustomize build "$base/n8n/app" >"$temp_dir/n8n-fixtures.yaml"
+yq ea -r 'select(.kind == "ConfigMap" and .metadata.name == "n8n-test-helpers-v1") |
+  .data."n8n-restore-drop.sh"' "$temp_dir/n8n-fixtures.yaml" >"$temp_dir/restore-drop-program.sh"
+if [[ "$(yq -r '.spec.template.spec.containers[0].command | join(",")' \
+    "$temp_dir/restore-drop-job.yaml")" == '/bin/sh,-eu,/helpers/n8n-restore-drop.sh' && \
+  "$(yq -r '.spec.template.spec.volumes[0].configMap.name' \
+    "$temp_dir/restore-drop-job.yaml")" == 'n8n-test-helpers-v1' && \
+  "$(yq ea -r 'select(.kind == "ConfigMap" and .metadata.name == "n8n-test-helpers-v1") |
+    .immutable' "$temp_dir/n8n-fixtures.yaml")" == 'true' ]] && \
+  rg -Fq 'SELECT count(*) FROM pg_database WHERE datname = current_setting' \
+  "$temp_dir/restore-drop-program.sh"; then
+  :
+else
   echo 'Rendered n8n restore cleanup does not prove temporary database absence through the catalog.' >&2
   exit 1
-}
+fi
 # shellcheck disable=SC2016 # These are exact commands rendered into the helper Jobs.
 [[ "$(yq -r '.spec.template.spec.volumes[0].persistentVolumeClaim.claimName' \
     "$temp_dir/persistence-write.yaml")" == 'n8n-data' && \
@@ -705,18 +721,23 @@ actual_request_egress="$(yq ea -o=json -I=0 '
   echo 'Rendered n8n restore request policy must select only its Job and allow only DNS and its temporary n8n endpoint.' >&2
   exit 1
 }
-restore_command="$(yq -r '.spec.template.spec.containers[0].args[0]' \
-  "$temp_dir/restore-job.yaml")"
-request_command="$(yq -r '.spec.template.spec.containers[0].args[0]' \
-  "$temp_dir/restore-request-job.yaml")"
-[[ "$restore_command" == *'count(*) = 1'* && \
+restore_command="$(yq ea -r 'select(.kind == "ConfigMap" and .metadata.name == "n8n-test-helpers-v1") |
+  .data."n8n-restore-common.sh"' "$temp_dir/n8n-fixtures.yaml")"
+kustomize build "$(dirname -- "$gatus_kustomization")" >"$temp_dir/gatus-fixtures.yaml"
+request_command="$(yq ea -r 'select(.kind == "ConfigMap" and .metadata.name == "n8n-test-request-helpers-v1") |
+  .data."n8n-restore-request.mjs"' "$temp_dir/gatus-fixtures.yaml")"
+[[ "$(yq -r '.spec.template.spec.containers[0].command | join(",")' \
+    "$temp_dir/restore-job.yaml")" == '/bin/sh,-eu,/helpers/n8n-restore-load.sh' && \
+  "$restore_command" == *'count(*) = 1'* && \
   "$restore_command" == *'Platform Canary Header'* && \
   "$restore_command" == *'httpHeaderAuth'* && \
   "$restore_command" == *'jsonb_array_elements(workflow.nodes::jsonb)'* && \
   "$restore_command" != *'credential.data'* && \
   "$restore_command" != *'SELECT data'* && \
   "$(yq -r '.spec.template.spec.containers[0].command | join(",")' \
-    "$temp_dir/restore-request-job.yaml")" == 'node,--input-type=module,--eval' && \
+    "$temp_dir/restore-request-job.yaml")" == 'node,/helpers/n8n-restore-request.mjs' && \
+  "$(yq ea -r 'select(.kind == "ConfigMap" and .metadata.name == "n8n-test-request-helpers-v1") |
+    .immutable' "$temp_dir/gatus-fixtures.yaml")" == 'true' && \
   "$request_command" == *'const negative = await send'* && \
   "$request_command" == *'[400, 401, 403, 404]'* && \
   "$request_command" == *'Object.keys(body).sort()'* && \
@@ -1194,7 +1215,7 @@ for resource in ciliumnetworkpolicy.yaml helmrelease.yaml httproute.yaml ocirepo
     exit 1
   }
 done
-expected_n8n_configmaps='[{"files":["values.yaml=values.yaml"],"name":"n8n-values"},{"files":["automation-data-credential-inventory.json=workflows/automation-data-credential-inventory.json","automation-data-provisioner.json=workflows/automation-data-provisioner.json","automation-data-canary.json=workflows/automation-data-canary.json","nocodb-acceptance-domain.json=workflows/nocodb-acceptance-domain.json","nocodb-source-provisioner.json=workflows/nocodb-source-provisioner.json","platform-canary.json=workflows/platform-canary.json","platform-workflow-failure.json=workflows/platform-workflow-failure.json"],"name":"n8n-workflow-templates"}]'
+expected_n8n_configmaps='[{"files":["test-helpers/n8n-restore-common.sh","test-helpers/n8n-restore-load.sh","test-helpers/n8n-restore-drop.sh","test-helpers/n8n-restore-isolated.sh"],"name":"n8n-test-helpers-v1"},{"files":["values.yaml=values.yaml"],"name":"n8n-values"},{"files":["automation-data-credential-inventory.json=workflows/automation-data-credential-inventory.json","automation-data-provisioner.json=workflows/automation-data-provisioner.json","automation-data-canary.json=workflows/automation-data-canary.json","nocodb-acceptance-domain.json=workflows/nocodb-acceptance-domain.json","nocodb-source-provisioner.json=workflows/nocodb-source-provisioner.json","platform-canary.json=workflows/platform-canary.json","platform-workflow-failure.json=workflows/platform-workflow-failure.json"],"name":"n8n-workflow-templates"}]'
 actual_n8n_configmaps="$(yq -o=json -I=0 '
   [.configMapGenerator[] | {"files": .files, "name": .name}] | sort_by(.name)
 ' "$n8n_kustomization")"

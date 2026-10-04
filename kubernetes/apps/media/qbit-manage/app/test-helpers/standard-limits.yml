@@ -1,0 +1,51 @@
+commands:
+  dry_run: false
+  recheck: false
+  cat_update: false
+  tag_update: false
+  rem_unregistered: false
+  tag_tracker_error: false
+  rem_orphaned: false
+  tag_nohardlinks: false
+  share_limits: true
+  skip_cleanup: true
+qbt:
+  host: http://qbittorrent.media.svc.cluster.local:8080
+  user: !ENV 'QBT_USER'
+  pass: !ENV 'QBT_PASS'
+settings:
+  disable_qbt_default_share_limits: false
+  share_limits_filter_completed: true
+  share_limits_tag: ~e2e_qbm_qbmscopetemplatenonce
+  share_limits_min_seeding_time_tag: e2e_qbm_min_seed_qbmscopetemplatenonce
+  share_limits_min_num_seeds_tag: e2e_qbm_min_seeds_qbmscopetemplatenonce
+  share_limits_last_active_tag: e2e_qbm_last_active_qbmscopetemplatenonce
+directory:
+  root_dir: /data/downloads
+recyclebin:
+  enabled: true
+  empty_after_x_days: 7
+  save_torrents: false
+tracker:
+  tracker.czteam.me:
+    tag:
+    - tracker-private
+    - tracker-czteam
+  other:
+    tag: tracker-public
+share_limits:
+  e2e_qbm_qbmscopetemplatenonce:
+    priority: 1
+    categories:
+    - e2e-qbm-qbmscopetemplatenonce
+    include_all_tags:
+    - e2e-qbm-qbmscopetemplatenonce
+    exclude_any_tags:
+    - tracker-private
+    custom_tag: e2e-qbm-limit-qbmscopetemplatenonce
+    add_group_to_tag: true
+    max_ratio: 0.01
+    min_seeding_time: 1m
+    max_seeding_time: 2m
+    share_limit_action: Stop
+    cleanup: false

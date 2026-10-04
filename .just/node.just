@@ -3,7 +3,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 set working-directory := ".."
 
 talosconfig := ".talos/config"
-kubeconfig := ".kube/config"
+kubeconfig := env("TEST_KUBECONFIG", ".kube/config")
 
 # Check whether one established node can safely enter planned maintenance.
 maintenance-check node:

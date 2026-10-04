@@ -9,6 +9,13 @@ resources:
   - ./n8n-canary.sops.yaml
   - ./namespace.yaml
 configMapGenerator:
+  - name: n8n-test-request-helpers-v1
+    namespace: gatus
+    files:
+      - test-helpers/n8n-restore-request.mjs
+      - test-helpers/automation-data-restore-request.mjs
+    options:
+      immutable: true
   - name: gatus-values
     namespace: gatus
     files:

@@ -1,0 +1,85 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-wan-reference-pods
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [pods]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: reference-name
+      expression: >-
+        (request.operation == 'DELETE' ? oldObject : object).metadata.name.matches('^(qbprobe|qbsentinel|vpndis)-wan-[0-9]{1,10}$')
+  variables:
+    - name: reference
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: pod
+      expression: variables.reference.spec
+    - name: container
+      expression: variables.pod.containers[0]
+    - name: run
+      expression: variables.reference.metadata.labels['homelab-talos/run-id']
+  validations:
+    - expression: >-
+        request.operation != 'UPDATE' && request.namespace == 'media' &&
+        variables.run.matches('^[0-9a-f]{12}$') &&
+        variables.reference.metadata.labels == {'homelab-talos/test': 'vpn-wan-reference', 'homelab-talos/run-id': variables.run} &&
+        !has(variables.reference.metadata.ownerReferences) && !has(variables.reference.metadata.annotations) &&
+        (!has(variables.reference.metadata.finalizers) || variables.reference.metadata.finalizers.size() == 0) &&
+        variables.pod.activeDeadlineSeconds == 60 && variables.pod.restartPolicy == 'Never' &&
+        variables.pod.automountServiceAccountToken == false &&
+        (!has(variables.pod.serviceAccountName) || variables.pod.serviceAccountName in ['', 'default']) &&
+        variables.pod.containers.size() == 1 && !has(variables.pod.initContainers) && !has(variables.pod.ephemeralContainers) &&
+        (!has(variables.pod.volumes) || variables.pod.volumes.size() == 0) &&
+        (!has(variables.pod.hostNetwork) || !variables.pod.hostNetwork) &&
+        (!has(variables.pod.hostPID) || !variables.pod.hostPID) && (!has(variables.pod.hostIPC) || !variables.pod.hostIPC) &&
+        !has(variables.pod.hostAliases) && !has(variables.pod.dnsConfig) &&
+        (!has(variables.pod.dnsPolicy) || variables.pod.dnsPolicy == 'ClusterFirst') &&
+        (request.operation == 'DELETE' || !has(variables.pod.nodeName)) &&
+        !has(variables.pod.nodeSelector) && !has(variables.pod.affinity) &&
+        !has(variables.pod.imagePullSecrets) && !has(variables.pod.priorityClassName) &&
+        !has(variables.pod.runtimeClassName) && !has(variables.pod.resourceClaims) &&
+        !has(variables.pod.readinessGates) && !has(variables.pod.schedulingGates) &&
+        (!has(variables.pod.schedulerName) || variables.pod.schedulerName == 'default-scheduler') &&
+        variables.pod.securityContext.runAsNonRoot && variables.pod.securityContext.runAsUser == 10001 &&
+        variables.pod.securityContext.runAsGroup == 10001 && !has(variables.pod.securityContext.fsGroup) &&
+        variables.pod.securityContext.seccompProfile.type == 'RuntimeDefault' &&
+        !has(variables.pod.securityContext.sysctls) && !has(variables.pod.securityContext.supplementalGroups) &&
+        !has(variables.pod.securityContext.seLinuxOptions) && !has(variables.pod.securityContext.windowsOptions) &&
+        !has(variables.pod.securityContext.appArmorProfile)
+      message: WAN references must be fresh bounded tokenless non-VPN measurement Pods.
+    - expression: >-
+        variables.container.name == 'reference' && variables.container.image == 'curlimages/curl:8.11.1' &&
+        variables.container.command == ['curl', '-sS', '-m', '15', 'https://ifconfig.me/ip'] && !has(variables.container.args) &&
+        !has(variables.container.env) && !has(variables.container.envFrom) && !has(variables.container.lifecycle) &&
+        !has(variables.container.workingDir) && !has(variables.container.ports) &&
+        !has(variables.container.volumeMounts) && !has(variables.container.volumeDevices) &&
+        !has(variables.container.livenessProbe) && !has(variables.container.readinessProbe) && !has(variables.container.startupProbe) &&
+        (!has(variables.container.stdin) || !variables.container.stdin) && (!has(variables.container.tty) || !variables.container.tty) &&
+        variables.container.resources.requests == {'cpu': '10m', 'memory': '16Mi'} &&
+        variables.container.resources.limits == {'memory': '64Mi'} && !has(variables.container.resources.claims) &&
+        variables.container.securityContext.allowPrivilegeEscalation == false && variables.container.securityContext.readOnlyRootFilesystem &&
+        variables.container.securityContext.capabilities.drop == ['ALL'] && !has(variables.container.securityContext.capabilities.add) &&
+        (!has(variables.container.securityContext.privileged) || !variables.container.securityContext.privileged) &&
+        (!has(variables.container.securityContext.runAsUser) || variables.container.securityContext.runAsUser == 10001) &&
+        (!has(variables.container.securityContext.runAsGroup) || variables.container.securityContext.runAsGroup == 10001) &&
+        (!has(variables.container.securityContext.runAsNonRoot) || variables.container.securityContext.runAsNonRoot) &&
+        !has(variables.container.securityContext.seccompProfile) && !has(variables.container.securityContext.procMount) &&
+        !has(variables.container.securityContext.seLinuxOptions) && !has(variables.container.securityContext.windowsOptions) &&
+        !has(variables.container.securityContext.appArmorProfile)
+      message: WAN reference Pods may execute only the fixed curl measurement without inputs or mounted data.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-wan-reference-pods
+spec:
+  policyName: homelab-test-wan-reference-pods
+  validationActions: [Deny]

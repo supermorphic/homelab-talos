@@ -5,6 +5,7 @@ set -euo pipefail
 source scripts/lib/common.sh
 source scripts/test/lib/catalog.sh
 source scripts/lib/lease.sh
+source scripts/test/lib/access.sh
 require_bash
 
 [[ "$#" -eq 2 ]] || {
@@ -24,8 +25,11 @@ cd "$repo_root"
 catalog="${TEST_CATALOG_PATH:-tests/catalog.yaml}"
 results_root="${TEST_RESULTS_ROOT:-$repo_root/.test-results}"
 campaigns_root="${TEST_CAMPAIGNS_ROOT:-$repo_root/.test-campaigns}"
-kubeconfig="${KUBECONFIG:-$repo_root/.kube/config}"
-talosconfig="${TALOSCONFIG:-$repo_root/.talos/config}"
+kubeconfig=''
+coordinator_kubeconfig=''
+access_run_id=''
+export -n kubeconfig coordinator_kubeconfig access_run_id observer_kubeconfig
+talosconfig=''
 scoped_preflight_bin="${TEST_SCOPED_PREFLIGHT_BIN:-$repo_root/scripts/test/scoped-campaign-preflight.sh}"
 publish_bin="${TEST_CAMPAIGN_PUBLISH_BIN:-$repo_root/scripts/test/publish-report.sh}"
 validate_run_bin="${TEST_CAMPAIGN_VALIDATE_RUN_BIN:-$repo_root/scripts/test/validate-run.sh}"
@@ -36,6 +40,8 @@ campaign_id=''
 campaign=''
 manifest=''
 lease_acquired=false
+campaign_cleanup_done=false
+campaign_cleanup_status=0
 lease_holder=''
 lease_failure=''
 overall_failed=false
@@ -67,6 +73,12 @@ if [[ "$test_mode" == 'true' ]]; then
 elif [[ "$test_mode" != 'false' ]]; then
   echo 'TEST_CAMPAIGN_TEST_MODE must be true or false.' >&2
   exit 2
+else
+  catalog_abs="$(cd "$(dirname "$catalog")" && pwd)/$(basename "$catalog")"
+  [[ "$catalog_abs" == "$repo_root/tests/catalog.yaml" ]] || {
+    echo 'Production campaigns require the canonical test catalog.' >&2
+    exit 2
+  }
 fi
 if [[ -n "${TEST_RECORD_LINKED_WORKTREE:-}" ]]; then
   [[ "$test_mode" == 'true' ]] || {
@@ -92,6 +104,44 @@ fi
 
 random_hex() {
   od -An -N4 -tx1 /dev/urandom | tr -d ' \n'
+}
+
+prepare_campaign_observer() {
+  [[ -z "$kubeconfig" ]] || return 0
+  access_run_id="$(date -u +%Y%m%dT%H%M%SZ)-campaign-access-$(random_hex)"
+  test_access_purpose_open campaign-observer "$access_run_id" || return 1
+  kubeconfig="$TEST_ACCESS_PURPOSE_CONFIG"
+}
+
+canonical_member_access() {
+  # A fixture may replace commands for orchestration tests, never authority.
+  env -u TEST_CATALOG_PATH uv run --locked --no-dev python -m scripts.test.access resolve "$1"
+}
+
+prepare_selected_prerequisites() {
+  local suite_id declaration talos_info needs_reader=false
+  talosconfig=''
+  while IFS= read -r suite_id; do
+    [[ -n "$suite_id" ]] || continue
+    declaration="$(canonical_member_access "$suite_id")" || return 1
+    if [[ "$(yq -r '[.prerequisites[] | select(. == "talos-reader")] | length' \
+      - <<<"$declaration")" != 0 ]]; then
+      needs_reader=true
+    fi
+  done < <(selected_member_ids)
+  [[ "$needs_reader" == true ]] || return 0
+  talosconfig="$repo_root/.talos/config"
+  if [[ ! -f "$talosconfig" && "$test_mode" != true ]]; then
+    mise exec -- just talos readerconfig || return 1
+  fi
+  if [[ "$test_mode" != true ]]; then
+    talos_info="$(talosctl config info --talosconfig "$talosconfig" --output json)" || return 1
+    [[ "$(yq -r '[(.roles // .Roles // .certificate.roles // .identity.roles // [])[]] |
+      sort | join(",")' - <<<"$talos_info")" == os:reader ]] || {
+      echo 'The declared Talos reader prerequisite requires exactly os:reader.' >&2
+      return 1
+    }
+  fi
 }
 
 source_state() {
@@ -193,31 +243,35 @@ campaign_uses_test_lease() {
     "$selection" == 'test.agent-credentials' ]]; then
     return 1
   fi
-  [[ "$record_mode" != 'true' || "$record_scoped" != 'true' ]]
+  if [[ "$record_mode" == true ]]; then
+    local suite_id entry
+    while IFS= read -r suite_id; do
+      entry="$(catalog_entry_by_id "$catalog" "$suite_id")" || return 1
+      [[ "$(yq -r '.metadata.mutates_cluster' - <<<"$entry")" != true ]] || return 0
+    done < <(selected_member_ids)
+    return 1
+  fi
+  return 0
 }
 
 record_suite_allowed() {
-  local suite_id="$1"
-  local entry tier scenario owner mutates
-
+  local suite_id="$1" entry tier scenario declaration
   entry="$(catalog_entry_by_id "$catalog" "$suite_id")" || return "$?"
+  declaration="$(canonical_member_access "$suite_id")" || return "$?"
   tier="$(yq -r '.metadata.tier' - <<<"$entry")"
   scenario="$(yq -r '.metadata.scenario // ""' - <<<"$entry")"
-  owner="$(yq -r '.metadata.execution_owner' - <<<"$entry")"
-  mutates="$(yq -r '.metadata.mutates_cluster' - <<<"$entry")"
-  [[ "$tier" != 'diagnostics' && "$scenario" != 'diagnostics-self-test' ]] || {
+  [[ "$tier" != diagnostics && "$scenario" != diagnostics-self-test ]] || {
     echo "Record session excludes diagnostic suite: $suite_id." >&2
     return 1
   }
-  if [[ "$record_scoped" == 'true' ]]; then
-    if [[ "$suite_id" != 'validation.ci' &&
-      ("$owner" != 'shared' || "$mutates" != 'false' || "$tier" == 'offline') ]] &&
-      ! catalog_campaign_ids "$catalog" scoped-verification |
-        SUITE_ID="$suite_id" awk '$0 == ENVIRON["SUITE_ID"] { found = 1 } END { exit !found }'; then
-      echo "Linked-worktree record session accepts scoped-verification members, validation.ci, or non-mutating shared live suites: $suite_id. Use validation.ci to retain offline validation." >&2
-      return 1
-    fi
-  fi
+  # Keep ordinary offline iteration local; validation.ci retains the aggregate.
+  [[ "$tier" != offline || "$suite_id" == validation.ci ]] || {
+    echo "Use validation.ci to retain offline validation: $suite_id." >&2
+    return 1
+  }
+  # The canonical resolver validates the declared profile and finite prerequisite
+  # vocabulary. Attended credentials remain the selected backend's responsibility.
+  [[ "$(yq -r '.suite_id' - <<<"$declaration")" == "$suite_id" ]]
 }
 
 require_record_suite_confirmation() {
@@ -522,14 +576,41 @@ print_summary() {
 # Invoked directly and through the EXIT trap below.
 # shellcheck disable=SC2329
 cleanup_campaign() {
-  campaign_uses_test_lease || return 0
+  [[ "$campaign_cleanup_done" != true ]] || return "$campaign_cleanup_status"
+  campaign_cleanup_done=true
   stop_test_lease_renewal 2>/dev/null || true
-  if [[ "$lease_acquired" == 'true' ]]; then
-    release_test_lease "$kubeconfig" "$lease_holder" >/dev/null 2>&1 || {
-      echo 'Warning: could not release the campaign test Lease.' >&2
+  if [[ "$lease_acquired" == true ]]; then
+    release_test_lease "$coordinator_kubeconfig" "$lease_holder" >/dev/null 2>&1 || {
+      echo 'Campaign Lease release failed.' >&2
+      campaign_cleanup_status=1
     }
     lease_acquired=false
   fi
+  test_access_purposes_close || {
+    echo 'Campaign private config cleanup failed.' >&2
+    campaign_cleanup_status=1
+  }
+  if [[ -n "$manifest" && -f "$manifest" ]]; then
+    local cleanup_result=passed reason
+    [[ "$campaign_cleanup_status" == 0 ]] || cleanup_result=failed
+    CLEANUP_RESULT="$cleanup_result" yq -o=json -i \
+      '.cleanup_status = strenv(CLEANUP_RESULT)' "$manifest" || campaign_cleanup_status=1
+    if [[ "$campaign_cleanup_status" != 0 ]]; then
+      reason="$(yq -r '.stop_reason // "coordination-cleanup-failed"' "$manifest")"
+      finish_manifest broken broken "$reason" || true
+    fi
+  fi
+  return "$campaign_cleanup_status"
+}
+
+# shellcheck disable=SC2329
+finish_campaign_exit() {
+  local status="$?"
+  trap - EXIT
+  cleanup_campaign || {
+    [[ "$status" != 0 ]] || status=2
+  }
+  exit "$status"
 }
 
 # Invoked through the signal traps below.
@@ -539,14 +620,14 @@ handle_signal() {
   trap - EXIT INT TERM
   [[ -z "$manifest" || ! -f "$manifest" ]] ||
     finish_manifest broken broken "interrupted-$signal"
-  cleanup_campaign
+  cleanup_campaign || true
   case "$signal" in
     INT) exit 130 ;;
     TERM) exit 143 ;;
   esac
 }
 
-trap cleanup_campaign EXIT
+trap finish_campaign_exit EXIT
 trap 'handle_signal INT' INT
 trap 'handle_signal TERM' TERM
 
@@ -561,9 +642,11 @@ acquire_campaign_lease() {
   fi
   lease_holder="campaign:$campaign_id"
   lease_failure="$(dirname "$manifest")/lease-renewal-failed"
-  acquire_test_lease "$kubeconfig" "$lease_holder"
+  test_access_purpose_open campaign-coordinator "$access_run_id" || return 1
+  coordinator_kubeconfig="$TEST_ACCESS_PURPOSE_CONFIG"
+  acquire_test_lease "$coordinator_kubeconfig" "$lease_holder" 5 existing-only
   lease_acquired=true
-  start_test_lease_renewal "$kubeconfig" "$lease_holder" "$lease_failure"
+  start_test_lease_renewal "$coordinator_kubeconfig" "$lease_holder" "$lease_failure"
   export TEST_CAMPAIGN_LEASE_HOLDER="$lease_holder"
   export TEST_CAMPAIGN_LEASE_FAILURE_MARKER="$lease_failure"
 }
@@ -577,7 +660,7 @@ require_campaign_lease() {
     echo 'Campaign test Lease renewal failed.' >&2
     return 1
   }
-  verify_test_lease_holder "$kubeconfig" "$lease_holder"
+  verify_test_lease_holder "$coordinator_kubeconfig" "$lease_holder"
 }
 
 resolve_member_command() {
@@ -621,21 +704,21 @@ publish_run() {
         TEST_RESULTS_ROOT="$results_root" \
         TEST_PUBLISH_RESULT_FILE="$result_file" \
         TEST_REPORT_REQUIRE_AUTHORITATIVE=false \
-        KUBECONFIG="$kubeconfig" \
+        KUBECONFIG=/dev/null TEST_KUBECONFIG='' TEST_ACCESS_CONFIG='' TALOSCONFIG='' \
         "$publish_bin" "$run_id" || publish_exit="$?"
     elif [[ "$record_mode" == 'true' ]]; then
       TEST_RESULTS_ROOT="$results_root" \
       TEST_PUBLISH_RESULT_FILE="$result_file" \
       TEST_REPORT_REQUIRE_AUTHORITATIVE=false \
       TEST_REPORT_PUBLISH_CONFIRM="publish:test-report:$run_id" \
-      KUBECONFIG="$kubeconfig" \
+      KUBECONFIG=/dev/null TEST_KUBECONFIG='' TEST_ACCESS_CONFIG='' TALOSCONFIG='' \
         "$publish_bin" "$run_id" || publish_exit="$?"
     else
       TEST_RESULTS_ROOT="$results_root" \
       TEST_PUBLISH_RESULT_FILE="$result_file" \
       TEST_REPORT_REQUIRE_AUTHORITATIVE=true \
       TEST_REPORT_PUBLISH_CONFIRM="publish:test-report:$run_id" \
-      KUBECONFIG="$kubeconfig" \
+      KUBECONFIG=/dev/null TEST_KUBECONFIG='' TEST_ACCESS_CONFIG='' TALOSCONFIG='' \
         "$publish_bin" "$run_id" || publish_exit="$?"
     fi
     if [[ "$publish_exit" -eq 0 && -f "$result_file" ]]; then
@@ -657,8 +740,16 @@ run_member() {
   local suite_id="$1"
   local command run_id_file publish_result_file log_file run_id run_dir
   local command_exit result cleanup recovery unsafe_child=false
+  local declaration prerequisite member_talosconfig=''
 
   command="$(resolve_member_command "$suite_id")" || return 20
+  declaration="$(canonical_member_access "$suite_id")" || return 20
+  while IFS= read -r prerequisite; do
+    case "$prerequisite" in
+      talos-reader) member_talosconfig="$talosconfig" ;;
+      talos-operator) member_talosconfig="${TALOSCONFIG:-}" ;;
+    esac
+  done < <(yq -r '.prerequisites[]' - <<<"$declaration")
   run_id_file="$(dirname "$manifest")/${suite_id}.run-id"
   publish_result_file="$(dirname "$manifest")/${suite_id}.publish.json"
   log_file="$(dirname "$manifest")/logs/${suite_id}.log"
@@ -668,18 +759,16 @@ run_member() {
   echo "=== campaign $campaign: $suite_id ==="
   command_exit=0
   if [[ "$scoped_mode" == 'true' ]]; then
-    env -u TEST_CAMPAIGN_CONFIRM \
+    env -u TEST_CAMPAIGN_CONFIRM -u TEST_CATALOG_PATH \
     TEST_RUN_ID_FILE="$run_id_file" \
     TEST_RESULTS_ROOT="$results_root" \
-    TEST_KUBECONFIG="$kubeconfig" \
-    KUBECONFIG="$kubeconfig" \
+    TEST_KUBECONFIG='' TEST_ACCESS_CONFIG='' KUBECONFIG=/dev/null TALOSCONFIG="$member_talosconfig" \
       bash -o pipefail -c "$command" >"$log_file" 2>&1 || command_exit="$?"
   else
-    env -u TEST_CAMPAIGN_CONFIRM \
+    env -u TEST_CAMPAIGN_CONFIRM -u TEST_CATALOG_PATH \
     TEST_RUN_ID_FILE="$run_id_file" \
     TEST_RESULTS_ROOT="$results_root" \
-    TEST_KUBECONFIG="$kubeconfig" \
-    KUBECONFIG="$kubeconfig" \
+    TEST_KUBECONFIG='' TEST_ACCESS_CONFIG='' KUBECONFIG=/dev/null TALOSCONFIG="$member_talosconfig" \
       bash -o pipefail -c "$command" 2>&1 | tee "$log_file" ||
       command_exit="${PIPESTATUS[0]}"
   fi
@@ -858,6 +947,8 @@ prepare_new_campaign() {
     echo 'scoped-verification requires scoped local-only mode.' >&2
     exit 2
   fi
+  prepare_selected_prerequisites || exit 1
+  prepare_campaign_observer || exit 1
   if [[ "$scoped_mode" == 'true' ]]; then
     "$scoped_preflight_bin" "$repo_root" "$kubeconfig" "$talosconfig"
   fi
@@ -902,6 +993,8 @@ prepare_new_record() {
     campaign='recorded-evidence'
     record_suite_allowed "$selection" || exit "$?"
   fi
+  prepare_selected_prerequisites || exit 1
+  prepare_campaign_observer || exit 1
   if [[ "$record_scoped" == 'true' ]]; then
     "$scoped_preflight_bin" "$repo_root" "$kubeconfig" "$talosconfig"
   fi
@@ -970,9 +1063,13 @@ prepare_resume() {
       [[ -n "$completed_suite" ]] || continue
       record_suite_allowed "$completed_suite" || exit "$?"
     done < <(selected_member_ids)
+    prepare_selected_prerequisites || exit 1
+    prepare_campaign_observer || exit 1
     [[ "$record_scoped" != 'true' ]] ||
       "$scoped_preflight_bin" "$repo_root" "$kubeconfig" "$talosconfig"
   else
+    prepare_selected_prerequisites || exit 1
+    prepare_campaign_observer || exit 1
     [[ "$campaign" != 'scoped-verification' && "$execution_mode" != 'scoped-local' ]] || {
       echo 'scoped-local campaigns cannot be resumed or published.' >&2
       exit 1
@@ -1079,5 +1176,8 @@ if [[ "$campaign_exit" -eq 0 ]]; then
     campaign_exit="$?"
   fi
 fi
+cleanup_campaign || {
+  [[ "$campaign_exit" != 0 ]] || campaign_exit=2
+}
 print_summary
 exit "$campaign_exit"

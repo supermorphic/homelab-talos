@@ -5,6 +5,7 @@ source scripts/lib/common.sh
 source scripts/lib/n8n-verification.sh
 # shellcheck source=scripts/test/lib/job.sh
 source scripts/test/lib/job.sh
+source scripts/test/lib/owned-resources.sh
 # shellcheck source=scripts/test/lib/n8n-restore-command.sh
 source scripts/test/lib/n8n-restore-command.sh
 source scripts/lib/lease.sh
@@ -30,7 +31,7 @@ run_dir="${HOMELAB_TEST_RUN_DIR:-}"
   exit 1
 }
 [[ -f "$kubeconfig" ]] || {
-  echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
+  echo 'The restore drill requires the selected invocation config.' >&2
   exit 1
 }
 
@@ -52,6 +53,12 @@ k_auto=(kubectl --kubeconfig "$kubeconfig" --namespace "$automation_namespace")
 k_request=(kubectl --kubeconfig "$kubeconfig" --namespace "$request_namespace")
 k_cluster=(kubectl --kubeconfig "$kubeconfig")
 database_possible=false
+ledger="$run_dir/diagnostics/n8n-owned.jsonl"
+[[ ! -e "$ledger" ]] || {
+  echo 'Refusing to overwrite prior restore ownership evidence.' >&2
+  exit 1
+}
+: >"$ledger"
 
 automation_resource_absent() {
   local target="$1" resource
@@ -223,21 +230,21 @@ policy_manifest() {
 }
 
 database_job_manifest() {
-  local name="$1" operation="$2" job_command volume_mounts_json volumes_json
+  local name="$1" operation="$2" helper volume_mounts_json volumes_json
   if [[ "$operation" == 'restore' ]]; then
-    job_command="$(n8n_restore_job_command)"
-    volume_mounts_json='[{"name":"backups","mountPath":"/backups","readOnly":true},{"name":"tmp","mountPath":"/tmp"}]'
-    volumes_json='[{"name":"backups","persistentVolumeClaim":{"claimName":"n8n-postgresql-backups"}},{"name":"tmp","emptyDir":{}}]'
+    helper='/helpers/n8n-restore-load.sh'
+    volume_mounts_json='[{"name":"helpers","mountPath":"/helpers","readOnly":true},{"name":"backups","mountPath":"/backups","readOnly":true},{"name":"tmp","mountPath":"/tmp"}]'
+    volumes_json='[{"name":"helpers","configMap":{"name":"n8n-test-helpers-v1"}},{"name":"backups","persistentVolumeClaim":{"claimName":"n8n-postgresql-backups","readOnly":true}},{"name":"tmp","emptyDir":{}}]'
   elif [[ "$operation" == 'drop' ]]; then
-    job_command="$(n8n_drop_restore_database_job_command)"
-    volume_mounts_json='[{"name":"tmp","mountPath":"/tmp"}]'
-    volumes_json='[{"name":"tmp","emptyDir":{}}]'
+    helper='/helpers/n8n-restore-drop.sh'
+    volume_mounts_json='[{"name":"helpers","mountPath":"/helpers","readOnly":true},{"name":"tmp","mountPath":"/tmp"}]'
+    volumes_json='[{"name":"helpers","configMap":{"name":"n8n-test-helpers-v1"}},{"name":"tmp","emptyDir":{}}]'
   else
     return 2
   fi
-  # shellcheck disable=SC2016,SC2026,SC2086 # yq emits this shell program for the Job.
+  # shellcheck disable=SC2016 # yq emits literal environment and fixture references.
   JOB_NAME="$name" OPERATION="$operation" RUN_HASH="$run_hash" \
-  DATABASE_NAME="$database_name" JOB_COMMAND="$job_command" \
+  DATABASE_NAME="$database_name" HELPER="$helper" \
   VOLUME_MOUNTS_JSON="$volume_mounts_json" VOLUMES_JSON="$volumes_json" \
     yq --null-input --output-format yaml --expression '
       {
@@ -273,11 +280,10 @@ database_job_manifest() {
                 "seccompProfile": {"type": "RuntimeDefault"}
               },
               "containers": [{
-                "name": strenv(OPERATION),
+                "name": "restore",
                 "image": "postgres:17.11-alpine3.24",
                 "imagePullPolicy": "IfNotPresent",
-                "command": ["/bin/sh", "-ceu"],
-                "args": [strenv(JOB_COMMAND)],
+                "command": ["/bin/sh", "-eu", strenv(HELPER)],
                 "env": [
                   {"name": "PGHOST", "value": "n8n-postgresql.automation.svc.cluster.local"},
                   {"name": "PGPORT", "value": "5432"},
@@ -316,7 +322,7 @@ application_manifests() {
         "metadata": {
           "name": strenv(APP_NAME),
           "namespace": "automation",
-          "labels": {"homelab-talos/test": "n8n-restore-drill", "homelab-talos/run-id": strenv(RUN_HASH)}
+          "labels": {"homelab-talos/test": "n8n-restore-drill", "homelab-talos/run-id": strenv(RUN_HASH), "homelab-talos/role": "n8n"}
         },
         "spec": {
           "replicas": 1,
@@ -387,7 +393,7 @@ application_manifests() {
         "metadata": {
           "name": strenv(APP_NAME),
           "namespace": "automation",
-          "labels": {"homelab-talos/test": "n8n-restore-drill", "homelab-talos/run-id": strenv(RUN_HASH)}
+          "labels": {"homelab-talos/test": "n8n-restore-drill", "homelab-talos/run-id": strenv(RUN_HASH), "homelab-talos/role": "n8n"}
         },
         "spec": {
           "type": "ClusterIP",
@@ -434,8 +440,7 @@ request_job_manifest() {
                 "name": "request",
                 "image": "docker.n8n.io/n8nio/n8n:2.36.7",
                 "imagePullPolicy": "IfNotPresent",
-                "command": ["node", "--input-type=module", "--eval"],
-                "args": ["const endpoint = `http://${process.env.APP_NAME}.automation.svc.cluster.local:5678/webhook/platform-canary`;\nconst correlation = `restore-${process.env.RUN_HASH}`;\nconst send = (value, token) => fetch(endpoint, {\n  method: \"POST\",\n  headers: {\n    \"Content-Type\": \"application/json\",\n    ...(token ? {\"X-Platform-Canary\": token} : {}),\n  },\n  body: JSON.stringify({correlation: value}),\n  signal: AbortSignal.timeout(60000),\n});\nconst negative = await send(`restore-negative-${process.env.RUN_HASH}`);\nif (![400, 401, 403, 404].includes(negative.status)) {\n  throw new Error(`Unauthenticated request returned HTTP ${negative.status}`);\n}\nconst positive = await send(correlation, process.env.CANARY_TOKEN);\nif (!positive.ok) throw new Error(`Authenticated request returned HTTP ${positive.status}`);\nlet body;\ntry { body = await positive.json(); } catch { throw new Error(\"Authenticated response was not JSON\"); }\nconst keys = Object.keys(body).sort();\nif (JSON.stringify(keys) !== JSON.stringify([\"correlation\", \"executionId\", \"status\"])) {\n  throw new Error(\"Authenticated response had an unexpected key set\");\n}\nif (body.status !== \"ok\" || body.correlation !== correlation ||\n    typeof body.executionId !== \"string\" || body.executionId.length === 0) {\n  throw new Error(\"Authenticated response failed its exact value contract\");\n}"],
+                "command": ["node", "/helpers/n8n-restore-request.mjs"],
                 "env": [
                   {"name": "APP_NAME", "value": strenv(APP_NAME)},
                   {"name": "RUN_HASH", "value": strenv(RUN_HASH)},
@@ -456,9 +461,9 @@ request_job_manifest() {
                   "runAsNonRoot": true,
                   "runAsUser": 1000
                 },
-                "volumeMounts": [{"name": "tmp", "mountPath": "/tmp"}]
+                "volumeMounts": [{"name": "helpers", "mountPath": "/helpers", "readOnly": true}, {"name": "tmp", "mountPath": "/tmp"}]
               }],
-              "volumes": [{"name": "tmp", "emptyDir": {}}]
+              "volumes": [{"name": "helpers", "configMap": {"name": "n8n-test-request-helpers-v1"}}, {"name": "tmp", "emptyDir": {}}]
             }
           }
         }
@@ -470,13 +475,13 @@ cleanup() {
   trap - EXIT INT TERM
   set +e
 
-  "${k_request[@]}" delete job "$request_job" --ignore-not-found --wait=true --timeout=2m >/dev/null 2>&1 || cleanup_ok=false
-  "${k_auto[@]}" delete deployment "$deployment" --ignore-not-found --wait=true --timeout=5m >/dev/null 2>&1 || cleanup_ok=false
-  "${k_auto[@]}" delete service "$service" --ignore-not-found --wait=true --timeout=2m >/dev/null 2>&1 || cleanup_ok=false
+  test_delete_owned "$ledger" Job "$request_namespace" "$request_job" "${k_request[@]}" || cleanup_ok=false
+  test_delete_owned "$ledger" Deployment "$automation_namespace" "$deployment" "${k_auto[@]}" || cleanup_ok=false
+  test_delete_owned "$ledger" Service "$automation_namespace" "$service" "${k_auto[@]}" || cleanup_ok=false
 
-  if [[ "$database_possible" == 'true' ]]; then
-    "${k_auto[@]}" delete job "$drop_job" --ignore-not-found --wait=true --timeout=2m >/dev/null 2>&1 || cleanup_ok=false
-    if database_job_manifest "$drop_job" drop | "${k_auto[@]}" create --filename - >/dev/null 2>&1 &&
+  if [[ "$database_possible" == true ]]; then
+    if verify_lease &&
+      database_job_manifest "$drop_job" drop | test_create_owned_stream "$ledger" "${k_auto[@]}" &&
       wait_for_job_terminal "$drop_job" 600 2 "${k_auto[@]}" >/dev/null 2>&1; then
       :
     else
@@ -485,10 +490,10 @@ cleanup() {
   fi
 
   for job in "$restore_job" "$drop_job"; do
-    "${k_auto[@]}" delete job "$job" --ignore-not-found --wait=true --timeout=2m >/dev/null 2>&1 || cleanup_ok=false
+    test_delete_owned "$ledger" Job "$automation_namespace" "$job" "${k_auto[@]}" || cleanup_ok=false
   done
-  "${k_request[@]}" delete ciliumnetworkpolicy "$request_policy" --ignore-not-found --wait=true --timeout=2m >/dev/null 2>&1 || cleanup_ok=false
-  "${k_auto[@]}" delete ciliumnetworkpolicy "$automation_policy" --ignore-not-found --wait=true --timeout=2m >/dev/null 2>&1 || cleanup_ok=false
+  test_delete_owned "$ledger" CiliumNetworkPolicy "$request_namespace" "$request_policy" "${k_request[@]}" || cleanup_ok=false
+  test_delete_owned "$ledger" CiliumNetworkPolicy "$automation_namespace" "$automation_policy" "${k_auto[@]}" || cleanup_ok=false
 
   request_resource_absent "job/$request_job" >/dev/null 2>&1 || cleanup_ok=false
   request_resource_absent "ciliumnetworkpolicy/$request_policy" >/dev/null 2>&1 || cleanup_ok=false
@@ -502,7 +507,7 @@ cleanup() {
     write_phase cleanup failed 'temporary database or one or more run-owned Kubernetes resources could not be removed'
   fi
   set -e
-  [[ "$cleanup_ok" == 'true' ]] || exit 1
+  if [[ "$cleanup_ok" != true && "$original_exit" == 0 ]]; then original_exit=1; fi
   exit "$original_exit"
 }
 trap cleanup EXIT
@@ -533,10 +538,10 @@ if n8n_routes_target_service automation "$service" <(printf '%s\n' "$routes_json
   exit 1
 fi
 
-policy_manifest | "${k_cluster[@]}" create --filename - >/dev/null
+policy_manifest | test_create_owned_stream "$ledger" "${k_cluster[@]}"
 verify_lease
 database_possible=true
-database_job_manifest "$restore_job" restore | "${k_auto[@]}" create --filename - >/dev/null
+database_job_manifest "$restore_job" restore | test_create_owned_stream "$ledger" "${k_auto[@]}"
 wait_for_job_terminal "$restore_job" 1800 2 "${k_auto[@]}"
 selected_dump="$("${k_auto[@]}" logs "job/$restore_job" | sed -n 's/^selected_dump=//p' | tail -n 1)"
 [[ "$selected_dump" =~ ^n8n-postgresql-[0-9]{8}T[0-9]{6}Z\.dump$ ]] || {
@@ -545,7 +550,7 @@ selected_dump="$("${k_auto[@]}" logs "job/$restore_job" | sed -n 's/^selected_du
 }
 
 verify_lease
-application_manifests | "${k_auto[@]}" create --filename - >/dev/null
+application_manifests | test_create_owned_stream "$ledger" "${k_auto[@]}"
 "${k_auto[@]}" rollout status "deployment/$deployment" --timeout=20m >/dev/null
 
 # Recheck after Service creation. The drill must remain cluster-internal and does
@@ -557,7 +562,7 @@ if n8n_routes_target_service automation "$service" <(printf '%s\n' "$routes_json
 fi
 
 verify_lease
-request_job_manifest | "${k_request[@]}" create --filename - >/dev/null
+request_job_manifest | test_create_owned_stream "$ledger" "${k_request[@]}"
 wait_for_job_terminal "$request_job" 600 2 "${k_request[@]}"
 
 RUN_HASH="$run_hash" DATABASE_NAME="$database_name" SELECTED_DUMP="$selected_dump" \

@@ -10,6 +10,11 @@ resources:
   - ./ocirepository.yaml
   - ./nocodb-credentials.sops.yaml
 configMapGenerator:
+  - name: nocodb-test-helpers-v1
+    options:
+      immutable: true
+    files:
+      - test-helpers/nocodb-restore-request.mjs
   - name: nocodb-values
     files:
       - values.yaml=values.yaml

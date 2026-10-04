@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "$*" == 'exec -- just talos readerconfig' ]]; then
+  [[ "${TALOSCONFIG:-}" == "$CAMPAIGN_TEST_REPO_ROOT/.talos/config" ]]
+  exit
+fi
+
 [[ -z "${TEST_CAMPAIGN_CONFIRM+x}" ]] || {
   echo 'Campaign confirmation leaked into a child suite.' >&2
   exit 2
@@ -12,6 +17,12 @@ set -euo pipefail
   exit 2
 }
 
+[[ -z "${TEST_KUBECONFIG:-}" && -z "${TEST_ACCESS_CONFIG:-}" && "$KUBECONFIG" == /dev/null ]] || {
+  echo 'Campaign passed orchestration credentials to a suite.' >&2
+  exit 2
+}
+[[ -z "${TEST_ACCESS_PURPOSE_CONFIG+x}" && -z "${observer_kubeconfig+x}" &&
+   -z "${coordinator_kubeconfig+x}" ]]
 target="$5"
 case "$target" in
   pass)
@@ -40,7 +51,9 @@ case "$target" in
     ;;
   scoped-nested)
     suite_id='verification.metrics-server'
-    command=(bash -c '"${CAMPAIGN_TEST_REPO_ROOT:?}/scripts/test/run-catalog-suite.sh" verification.cilium -- true')
+    # Expansion belongs to the child shell.
+    # shellcheck disable=SC2016
+    command=(bash -c '"${CAMPAIGN_TEST_REPO_ROOT:?}/scripts/test/run-catalog-suite.sh" verification.flux -- true')
     ;;
   mutating-pass)
     suite_id='test.cilium-connectivity'
@@ -84,6 +97,21 @@ case "$target" in
   *)
     echo "Unknown fixture target: $target" >&2
     exit 2
+    ;;
+esac
+
+case "$suite_id" in
+  verification.cilium|test.cilium-connectivity|test.agent-credentials)
+    [[ "${TALOSCONFIG:-}" == "$CAMPAIGN_TEST_REPO_ROOT/.talos/config" ]] || {
+      echo 'Campaign did not select its declared Talos reader path.' >&2
+      exit 2
+    }
+    ;;
+  *)
+    [[ -z "${TALOSCONFIG:-}" ]] || {
+      echo 'Campaign passed Talos access without a declared prerequisite.' >&2
+      exit 2
+    }
     ;;
 esac
 

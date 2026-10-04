@@ -1,0 +1,118 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-node-scheduling
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - ''
+        apiVersions:
+          - v1
+        operations:
+          - UPDATE
+        resources:
+          - nodes
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-node-reschedule'
+  validations:
+    - expression: |-
+        request.namespace == '' && request.subResource == '' &&
+        request.name in ['nuc1', 'nuc2', 'nuc3'] && object.metadata.name == request.name &&
+        object.all(k, k in ['metadata', 'spec'] || (k in oldObject && object[k] == oldObject[k])) &&
+        oldObject.all(k, k in ['metadata', 'spec'] || k in object) &&
+        object.metadata.all(k, k in ['resourceVersion', 'managedFields'] || (k in oldObject.metadata && object.metadata[k] == oldObject.metadata[k])) &&
+        oldObject.metadata.all(k, k in ['resourceVersion', 'managedFields'] || k in object.metadata) &&
+        (!has(object.spec.unschedulable) || type(object.spec.unschedulable) == bool) &&
+        object.spec.all(k, k == 'unschedulable' || (k in oldObject.spec && object.spec[k] == oldObject.spec[k])) &&
+        oldObject.spec.all(k, k == 'unschedulable' || k in object.spec)
+      message: Only the three named Nodes scheduling flag may change; preserve all other Node state.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-node-scheduling
+spec:
+  policyName: homelab-test-node-scheduling
+  validationActions:
+    - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-node-plex-runtime
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - ''
+        apiVersions:
+          - v1
+        operations:
+          - CONNECT
+        resources:
+          - pods/exec
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-node-reschedule'
+  validations:
+    - expression: |-
+        request.namespace == 'media' && request.subResource == 'exec' &&
+        request.name.matches('^plex-[a-z0-9]{5,10}-[a-z0-9]{5}$') && object.container == 'app' &&
+        (!has(object.tty) || !object.tty) && (!has(object.stdin) || !object.stdin)
+      message: Cross-node scheduling may access only the Plex application container without stdin or a
+        TTY.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-node-plex-runtime
+spec:
+  policyName: homelab-test-node-plex-runtime
+  validationActions:
+    - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-node-plex-disruption
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - ''
+        apiVersions:
+          - v1
+        operations:
+          - DELETE
+        resources:
+          - pods
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-node-reschedule'
+  validations:
+    - expression: |-
+        request.namespace == 'media' && request.subResource == '' &&
+        request.name.matches('^plex-[a-z0-9]{5,10}-[a-z0-9]{5}$') &&
+        oldObject.metadata.name == request.name && oldObject.metadata.namespace == request.namespace &&
+        oldObject.metadata.uid != '' && oldObject.metadata.labels['app.kubernetes.io/name'] == 'plex' &&
+        oldObject.metadata.ownerReferences.size() == 1 &&
+        oldObject.metadata.ownerReferences[0].apiVersion == 'apps/v1' &&
+        oldObject.metadata.ownerReferences[0].kind == 'ReplicaSet' &&
+        oldObject.metadata.ownerReferences[0].name.matches('^plex-[a-z0-9]{5,10}$') &&
+        oldObject.metadata.ownerReferences[0].uid != '' && oldObject.metadata.ownerReferences[0].controller
+      message: Cross-node scheduling may delete only a controller-owned Plex application Pod.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-node-plex-disruption
+spec:
+  policyName: homelab-test-node-plex-disruption
+  validationActions:
+    - Deny

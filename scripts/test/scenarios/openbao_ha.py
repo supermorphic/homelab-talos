@@ -281,7 +281,7 @@ def main(mode="ha"):
     result = {"status": "fail", "cleanup": "not-required", "recovery": "not-required"}
     scope = run_dir = None
     try:
-        scope, run_dir = run_scope()
+        scope, run_dir = run_scope("test.openbao-ha")
         result.update(execute(scope, mode, progress=result))
     except Exception:  # noqa: BLE001 -- Discard credential-bearing adapter exception text.
         result["status"] = "fail"

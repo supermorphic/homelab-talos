@@ -1,0 +1,450 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-restore-databases
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [statefulsets]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+  variables:
+    - name: workload
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: family
+      expression: variables.workload.metadata.labels['homelab-talos/test']
+    - name: run
+      expression: variables.workload.metadata.labels['homelab-talos/run-id']
+    - name: role
+      expression: variables.workload.metadata.labels['homelab-talos/role']
+    - name: n8n
+      expression: variables.role == 'n8n-database'
+    - name: prefix
+      expression: "(variables.family == 'nocodb-restore-drill' ? 'nc' : 'ad') + '-restore-' + variables.run"
+    - name: name
+      expression: "variables.prefix + (variables.n8n ? '-n8n-db' : '-db')"
+    - name: claim
+      expression: "variables.prefix + (variables.n8n ? '-n8n-data' : variables.family == 'nocodb-restore-drill' ? '-db-data' : '-ad-data')"
+    - name: labels
+      expression: "{'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role': variables.role}"
+    - name: pod
+      expression: variables.workload.spec.template.spec
+    - name: container
+      expression: variables.pod.containers[0]
+  validations:
+    - expression: >-
+        request.operation != 'UPDATE' && variables.run.matches('^[0-9a-f]{12}$') &&
+        variables.workload.metadata.name == variables.name &&
+        variables.workload.metadata.labels == variables.labels &&
+        ((variables.family == 'automation-data-restore-drill' &&
+          ((request.namespace == 'automation-data' && variables.role == 'ad-database') ||
+           (request.namespace == 'automation' && variables.role == 'n8n-database'))) ||
+         (variables.family == 'nocodb-restore-drill' && request.namespace == 'automation-data' && variables.role == 'database')) &&
+        !has(variables.workload.metadata.annotations) && !has(variables.workload.metadata.ownerReferences) &&
+        (!has(variables.workload.metadata.finalizers) || variables.workload.metadata.finalizers.size() == 0) &&
+        variables.workload.spec.replicas == 1 && variables.workload.spec.serviceName == variables.name &&
+        variables.workload.spec.selector.matchLabels == variables.labels &&
+        !has(variables.workload.spec.selector.matchExpressions) &&
+        variables.workload.spec.template.metadata.labels == variables.labels &&
+        !has(variables.workload.spec.template.metadata.annotations) &&
+        !has(variables.workload.spec.template.metadata.ownerReferences) &&
+        !has(variables.workload.spec.template.metadata.finalizers) &&
+        !has(variables.workload.spec.volumeClaimTemplates) && !has(variables.workload.spec.ordinals) &&
+        (!has(variables.workload.spec.persistentVolumeClaimRetentionPolicy) ||
+          (variables.workload.spec.persistentVolumeClaimRetentionPolicy.whenDeleted == 'Retain' &&
+           variables.workload.spec.persistentVolumeClaimRetentionPolicy.whenScaled == 'Retain')) &&
+        (!has(variables.workload.spec.podManagementPolicy) || variables.workload.spec.podManagementPolicy == 'OrderedReady') &&
+        (!has(variables.workload.spec.updateStrategy) ||
+          (variables.workload.spec.updateStrategy.type == 'RollingUpdate' &&
+           (!has(variables.workload.spec.updateStrategy.rollingUpdate) ||
+            ((!has(variables.workload.spec.updateStrategy.rollingUpdate.partition) || variables.workload.spec.updateStrategy.rollingUpdate.partition == 0) &&
+             !has(variables.workload.spec.updateStrategy.rollingUpdate.maxUnavailable)))))
+      message: Only new run-owned single-member restore databases are permitted.
+    - expression: >-
+        variables.pod.automountServiceAccountToken == false &&
+        (!has(variables.pod.serviceAccountName) || variables.pod.serviceAccountName == '' || variables.pod.serviceAccountName == 'default') &&
+        variables.pod.containers.size() == 1 && !has(variables.pod.initContainers) && !has(variables.pod.ephemeralContainers) &&
+        (!has(variables.pod.hostNetwork) || !variables.pod.hostNetwork) &&
+        (!has(variables.pod.hostPID) || !variables.pod.hostPID) && (!has(variables.pod.hostIPC) || !variables.pod.hostIPC) &&
+        !has(variables.pod.hostAliases) && !has(variables.pod.dnsConfig) &&
+        (!has(variables.pod.dnsPolicy) || variables.pod.dnsPolicy == 'ClusterFirst') &&
+        !has(variables.pod.nodeName) && !has(variables.pod.nodeSelector) && !has(variables.pod.affinity) &&
+        !has(variables.pod.imagePullSecrets) && !has(variables.pod.priorityClassName) && !has(variables.pod.resourceClaims) &&
+        !has(variables.pod.runtimeClassName) &&
+        !has(variables.pod.readinessGates) && !has(variables.pod.schedulingGates) &&
+        (!has(variables.pod.schedulerName) || variables.pod.schedulerName == 'default-scheduler') &&
+        (!has(variables.pod.restartPolicy) || variables.pod.restartPolicy == 'Always') &&
+        variables.pod.securityContext.fsGroup == 70 && variables.pod.securityContext.fsGroupChangePolicy == 'OnRootMismatch' &&
+        variables.pod.securityContext.seccompProfile.type == 'RuntimeDefault' &&
+        !has(variables.pod.securityContext.seccompProfile.localhostProfile) &&
+        !has(variables.pod.securityContext.runAsUser) && !has(variables.pod.securityContext.runAsGroup) &&
+        !has(variables.pod.securityContext.sysctls) && !has(variables.pod.securityContext.supplementalGroups) &&
+        !has(variables.pod.securityContext.seLinuxOptions) && !has(variables.pod.securityContext.windowsOptions) &&
+        !has(variables.pod.securityContext.appArmorProfile)
+      message: Restore databases cannot select another identity, host access, DNS override, or additional containers.
+    - expression: >-
+        variables.container.name == 'postgresql' && variables.container.image == 'postgres:17.11-alpine3.24' &&
+        variables.container.imagePullPolicy == 'IfNotPresent' &&
+        !has(variables.container.command) && !has(variables.container.args) && !has(variables.container.envFrom) &&
+        !has(variables.container.lifecycle) && !has(variables.container.livenessProbe) && !has(variables.container.startupProbe) &&
+        (!has(variables.container.stdin) || !variables.container.stdin) && (!has(variables.container.tty) || !variables.container.tty) &&
+        !has(variables.container.volumeDevices) && !has(variables.container.restartPolicy) &&
+        variables.container.securityContext.allowPrivilegeEscalation == false &&
+        variables.container.securityContext.readOnlyRootFilesystem && variables.container.securityContext.runAsNonRoot &&
+        variables.container.securityContext.runAsUser == 70 && variables.container.securityContext.runAsGroup == 70 &&
+        variables.container.securityContext.capabilities.drop == ['ALL'] &&
+        !has(variables.container.securityContext.capabilities.add) &&
+        (!has(variables.container.securityContext.privileged) || !variables.container.securityContext.privileged) &&
+        !has(variables.container.securityContext.procMount) && !has(variables.container.securityContext.seccompProfile) &&
+        !has(variables.container.securityContext.seLinuxOptions) && !has(variables.container.securityContext.windowsOptions) &&
+        !has(variables.container.securityContext.appArmorProfile) &&
+        variables.container.resources.requests == {'cpu': '50m', 'memory': '128Mi'} &&
+        variables.container.resources.limits == {'memory': '1Gi'} && !has(variables.container.resources.claims) &&
+        variables.container.env.size() == (variables.n8n ? 4 : 3) &&
+        variables.container.env.exists(e, e.name == 'PGDATA' && e.value == '/var/lib/postgresql/data/pgdata' && !has(e.valueFrom)) &&
+        variables.container.env.exists(e, e.name == 'POSTGRES_DB' && e.value == 'postgres' && !has(e.valueFrom)) &&
+        (!variables.n8n || variables.container.env.exists(e, e.name == 'POSTGRES_USER' && e.value == 'n8n' && !has(e.valueFrom))) &&
+        variables.container.env.exists(e, e.name == 'POSTGRES_PASSWORD' && (!has(e.value) || e.value == '') &&
+          e.valueFrom.secretKeyRef.name == 'postgresql-credentials' &&
+          e.valueFrom.secretKeyRef.key == (variables.n8n ? 'n8n-password' : 'postgres-superuser-password') &&
+          !has(e.valueFrom.configMapKeyRef) && !has(e.valueFrom.fieldRef) && !has(e.valueFrom.resourceFieldRef))
+      message: Restore databases must use the pinned PostgreSQL entrypoint and the fixed namespace credential reference.
+    - expression: >-
+        variables.pod.volumes.size() == 3 &&
+        variables.pod.volumes.exists(v, v.name == 'data' && v.persistentVolumeClaim.claimName == variables.claim &&
+          (!has(v.persistentVolumeClaim.readOnly) || !v.persistentVolumeClaim.readOnly)) &&
+        variables.pod.volumes.exists(v, v.name == 'run' && has(v.emptyDir)) &&
+        variables.pod.volumes.exists(v, v.name == 'tmp' && has(v.emptyDir)) &&
+        variables.container.volumeMounts.size() == 3 &&
+        variables.container.volumeMounts.exists(v, v.name == 'data' && v.mountPath == '/var/lib/postgresql/data') &&
+        variables.container.volumeMounts.exists(v, v.name == 'run' && v.mountPath == '/var/run/postgresql') &&
+        variables.container.volumeMounts.exists(v, v.name == 'tmp' && v.mountPath == '/tmp') &&
+        variables.container.volumeMounts.all(v, !has(v.subPath) && !has(v.subPathExpr) &&
+          (!has(v.readOnly) || !v.readOnly) && (!has(v.mountPropagation) || v.mountPropagation == 'None')) &&
+        variables.container.ports.size() == 1 && variables.container.ports[0].name == 'postgresql' &&
+        variables.container.ports[0].containerPort == 5432 &&
+        (!has(variables.container.ports[0].hostPort) || variables.container.ports[0].hostPort == 0) &&
+        (!has(variables.container.ports[0].hostIP) || variables.container.ports[0].hostIP == '') &&
+        (!has(variables.container.ports[0].protocol) || variables.container.ports[0].protocol == 'TCP') &&
+        variables.container.readinessProbe.exec.command == ['pg_isready', '--username=' + (variables.n8n ? 'n8n' : 'postgres'), '--dbname=postgres'] &&
+        !has(variables.container.readinessProbe.httpGet) && !has(variables.container.readinessProbe.tcpSocket) &&
+        !has(variables.container.readinessProbe.grpc) && variables.container.readinessProbe.periodSeconds == 5 &&
+        variables.container.readinessProbe.failureThreshold == (variables.family == 'nocodb-restore-drill' ? 120 : 60)
+      message: Restore databases may mount only their fresh claim and expose the canonical local readiness command.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-restore-databases
+spec:
+  policyName: homelab-test-restore-databases
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-nocodb-applications
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [deployments]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: nocodb-family
+      expression: >-
+        (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/test'] == 'nocodb-restore-drill'
+  variables:
+    - name: workload
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: run
+      expression: variables.workload.metadata.labels['homelab-talos/run-id']
+    - name: name
+      expression: "'nc-restore-' + variables.run + '-nocodb'"
+    - name: labels
+      expression: "{'homelab-talos/test': 'nocodb-restore-drill', 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'nocodb'}"
+    - name: pod
+      expression: variables.workload.spec.template.spec
+    - name: container
+      expression: variables.pod.containers[0]
+    - name: expectedValues
+      expression: >-
+        {'NC_SITE_URL': 'http://' + variables.name + '.automation-data.svc.cluster.local:8080',
+         'NC_ALLOW_LOCAL_EXTERNAL_DBS': 'true', 'NC_DISABLE_TELE': 'true', 'NC_DISABLE_SUPPORT_CHAT': 'true'}
+    - name: expectedSecrets
+      expression: "['DATABASE_URL', 'NC_AUTH_JWT_SECRET', 'NC_CONNECTION_ENCRYPT_KEY']"
+  validations:
+    - expression: >-
+        request.namespace == 'automation-data' && request.operation != 'UPDATE' &&
+        variables.run.matches('^[0-9a-f]{12}$') && variables.workload.metadata.name == variables.name &&
+        variables.workload.metadata.labels == variables.labels &&
+        variables.workload.spec.replicas == 1 && variables.workload.spec.strategy.type == 'Recreate' &&
+        !has(variables.workload.spec.strategy.rollingUpdate) &&
+        variables.workload.spec.selector.matchLabels == variables.labels &&
+        !has(variables.workload.spec.selector.matchExpressions) &&
+        variables.workload.spec.template.metadata.labels == variables.labels &&
+        (!has(variables.pod.restartPolicy) || variables.pod.restartPolicy == 'Always') &&
+        variables.pod.securityContext.fsGroup == 1000 && variables.pod.securityContext.fsGroupChangePolicy == 'OnRootMismatch' &&
+        variables.container.name == 'nocodb' &&
+        variables.container.image == 'docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9' &&
+        variables.container.imagePullPolicy == 'IfNotPresent' &&
+        !has(variables.container.command) && !has(variables.container.args) &&
+        variables.container.securityContext.runAsUser == 1000 && variables.container.securityContext.runAsGroup == 1000 &&
+        variables.container.securityContext.runAsNonRoot && variables.container.securityContext.readOnlyRootFilesystem
+      message: Only the pinned isolated NocoDB application template is permitted.
+    - expression: >-
+        variables.container.env.size() == 7 &&
+        variables.expectedValues.all(k, variables.container.env.exists(e, e.name == k && !has(e.valueFrom) && e.value == variables.expectedValues[k])) &&
+        variables.expectedSecrets.all(k, variables.container.env.exists(e, e.name == k && (!has(e.value) || e.value == '') &&
+          e.valueFrom.secretKeyRef.name == 'nocodb-credentials' && e.valueFrom.secretKeyRef.key == k &&
+          !has(e.valueFrom.configMapKeyRef) && !has(e.valueFrom.fieldRef) && !has(e.valueFrom.resourceFieldRef))) &&
+        variables.pod.volumes.size() == 2 && variables.pod.volumes.all(v, has(v.emptyDir)) &&
+        variables.pod.volumes.exists(v, v.name == 'data') && variables.pod.volumes.exists(v, v.name == 'tmp') &&
+        variables.container.volumeMounts.size() == 2 &&
+        variables.container.volumeMounts.exists(v, v.name == 'data' && v.mountPath == '/usr/app/data') &&
+        variables.container.volumeMounts.exists(v, v.name == 'tmp' && v.mountPath == '/tmp') &&
+        variables.container.volumeMounts.all(v, !has(v.subPath) && !has(v.subPathExpr) &&
+          (!has(v.mountPropagation) || v.mountPropagation == 'None'))
+      message: NocoDB must retain its fixed credential references and empty application storage.
+    - expression: >-
+        variables.container.ports.size() == 1 && variables.container.ports[0].name == 'http' &&
+        variables.container.ports[0].containerPort == 8080 &&
+        (!has(variables.container.ports[0].hostPort) || variables.container.ports[0].hostPort == 0) &&
+        (!has(variables.container.ports[0].hostIP) || variables.container.ports[0].hostIP == '') &&
+        (!has(variables.container.ports[0].protocol) || variables.container.ports[0].protocol == 'TCP') &&
+        variables.container.readinessProbe.httpGet.path == '/api/v1/health' && variables.container.readinessProbe.httpGet.port == 'http' &&
+        (!has(variables.container.readinessProbe.httpGet.host) || variables.container.readinessProbe.httpGet.host == '') &&
+        (!has(variables.container.readinessProbe.httpGet.scheme) || variables.container.readinessProbe.httpGet.scheme == 'HTTP') &&
+        !has(variables.container.readinessProbe.httpGet.httpHeaders) &&
+        !has(variables.container.readinessProbe.exec) && !has(variables.container.readinessProbe.tcpSocket) &&
+        !has(variables.container.readinessProbe.grpc) &&
+        !has(variables.container.livenessProbe) && !has(variables.container.startupProbe) &&
+        variables.container.resources.requests == {'cpu': '50m', 'memory': '256Mi'} &&
+        variables.container.resources.limits == {'memory': '1Gi'} && !has(variables.container.resources.claims)
+      message: NocoDB exposes only its fixed readiness endpoint and bounded resource requests.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-nocodb-applications
+spec:
+  policyName: homelab-test-nocodb-applications
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-restore-jobs
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [batch]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [jobs]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: restore-database-family
+      expression: >-
+        (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/test'] in ['automation-data-restore-drill', 'nocodb-restore-drill'] &&
+        (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/role'] in ['ad-restore', 'n8n-restore', 'restore', 'preflight'] &&
+        !(request.operation == 'DELETE' ? oldObject : object).metadata.name.endsWith('-app-probe')
+  variables:
+    - name: job
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: family
+      expression: variables.job.metadata.labels['homelab-talos/test']
+    - name: run
+      expression: variables.job.metadata.labels['homelab-talos/run-id']
+    - name: role
+      expression: variables.job.metadata.labels['homelab-talos/role']
+    - name: n8n
+      expression: variables.role == 'n8n-restore'
+    - name: preflight
+      expression: variables.role == 'preflight'
+    - name: nc
+      expression: variables.family == 'nocodb-restore-drill'
+    - name: prefix
+      expression: "(variables.nc ? 'nc' : 'ad') + '-restore-' + variables.run"
+    - name: helper
+      expression: "variables.n8n ? 'n8n-test-helpers-v1' : 'automation-data-test-helpers-v1'"
+    - name: expectedValues
+      expression: >-
+        variables.preflight ? {'BACKUP_DIR': '/backups'} : variables.n8n ?
+          {'PGHOST': variables.prefix + '-n8n-db', 'PGPORT': '5432', 'PGUSER': 'n8n', 'RESTORE_DATABASE': 'n8n'} :
+          {'PGHOST': variables.prefix + '-db', 'PGPORT': '5432', 'PGUSER': 'postgres',
+           'BACKUP_DIR': '/backups', 'POST_RECOVERY_BACKUP_DIR': '/post-recovery'}
+    - name: expectedSecrets
+      expression: >-
+        variables.preflight ? {} : variables.n8n ? {'PGPASSWORD': 'n8n-password'} :
+          {'PGPASSWORD': 'postgres-superuser-password', 'AUTOMATION_DATA_BACKUP_PASSWORD': 'backup-password'}
+    - name: selector
+      expression: "variables.n8n ? 'N8N_RESTORE_DUMP' : 'AUTOMATION_DATA_RESTORE_BUNDLE'"
+    - name: pod
+      expression: variables.job.spec.template.spec
+    - name: container
+      expression: variables.pod.containers[0]
+  validations:
+    - expression: >-
+        request.operation != 'UPDATE' && variables.run.matches('^[0-9a-f]{12}$') &&
+        variables.job.metadata.labels == {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role': variables.role} &&
+        ((variables.nc && request.namespace == 'automation-data' && variables.role in ['restore', 'preflight'] &&
+          variables.job.metadata.name == variables.prefix + (variables.preflight ? '-preflight' : '-load')) ||
+         (!variables.nc && ((variables.n8n && request.namespace == 'automation' && variables.job.metadata.name == variables.prefix + '-n8n-load') ||
+          (variables.role == 'ad-restore' && request.namespace == 'automation-data' && variables.job.metadata.name == variables.prefix + '-ad-load')))) &&
+        variables.job.spec.template.metadata.labels['homelab-talos/role'] == variables.role &&
+        variables.job.spec.activeDeadlineSeconds == (variables.preflight ? 300 : 1800) &&
+        (!has(variables.job.spec.suspend) || !variables.job.spec.suspend) &&
+        !has(variables.job.spec.podFailurePolicy) && !has(variables.job.spec.successPolicy) &&
+        variables.pod.securityContext.runAsNonRoot && variables.pod.securityContext.runAsUser == 70 &&
+        variables.pod.securityContext.runAsGroup == 70 && variables.pod.securityContext.fsGroup == 70 &&
+        variables.pod.securityContext.fsGroupChangePolicy == 'OnRootMismatch' &&
+        variables.container.name == (variables.preflight ? 'preflight' : 'restore') &&
+        variables.container.image == 'postgres:17.11-alpine3.24' && variables.container.imagePullPolicy == 'IfNotPresent' &&
+        variables.container.command == ['/bin/sh', '-eu', '/helpers/' + (variables.preflight ? 'nocodb-restore-preflight.sh' :
+          variables.n8n ? 'n8n-restore-isolated.sh' : variables.nc ? 'nocodb-restore.sh' : 'automation-data-restore.sh')] &&
+        !has(variables.container.args) &&
+        (!has(variables.container.securityContext.runAsUser) || variables.container.securityContext.runAsUser == 70) &&
+        (!has(variables.container.securityContext.runAsGroup) || variables.container.securityContext.runAsGroup == 70) &&
+        variables.container.resources.requests == {'cpu': (variables.preflight ? '10m' : '50m'), 'memory': '64Mi'} &&
+        variables.container.resources.limits == {'memory': (variables.preflight ? '256Mi' : '512Mi')} &&
+        !has(variables.container.resources.claims)
+      message: Restore jobs must execute their immutable canonical program against a run-owned scratch database.
+    - expression: >-
+        variables.expectedValues.all(k, variables.container.env.exists(e, e.name == k && e.value == variables.expectedValues[k] && !has(e.valueFrom))) &&
+        variables.expectedSecrets.all(k, variables.container.env.exists(e, e.name == k && (!has(e.value) || e.value == '') &&
+          e.valueFrom.secretKeyRef.name == 'postgresql-credentials' && e.valueFrom.secretKeyRef.key == variables.expectedSecrets[k] &&
+          !has(e.valueFrom.configMapKeyRef) && !has(e.valueFrom.fieldRef) && !has(e.valueFrom.resourceFieldRef))) &&
+        variables.container.env.size() == variables.expectedValues.size() + variables.expectedSecrets.size() +
+          (variables.container.env.exists(e, e.name == variables.selector) ? 1 : 0) &&
+        variables.container.env.all(e, e.name in variables.expectedValues || e.name in variables.expectedSecrets ||
+          (!variables.preflight && !variables.nc && e.name == variables.selector && !has(e.valueFrom) &&
+           e.value.matches(variables.n8n ? '^n8n-postgresql-[0-9]{8}T[0-9]{6}Z\\.dump$' : '^automation-data-[0-9]{8}T[0-9]{6}Z$')))
+      message: Restore jobs may use only their fixed namespace credentials and a validated backup selector.
+    - expression: >-
+        variables.pod.volumes.size() == (variables.preflight || variables.n8n ? 3 : variables.nc ? 4 : 5) &&
+        variables.pod.volumes.exists(v, v.name == (variables.nc && !variables.preflight ? 'scripts' : 'helpers') &&
+          v.configMap.name == variables.helper && !has(v.configMap.items) && (!has(v.configMap.optional) || !v.configMap.optional)) &&
+        (variables.preflight || variables.n8n || variables.nc || variables.pod.volumes.exists(v, v.name == 'scripts' &&
+          v.configMap.name == variables.helper && !has(v.configMap.items))) &&
+        variables.pod.volumes.exists(v, v.name == 'backups' &&
+          v.persistentVolumeClaim.claimName == (variables.n8n ? 'n8n-postgresql-backups' : 'automation-data-postgresql-backups') &&
+          v.persistentVolumeClaim.readOnly) &&
+        variables.pod.volumes.exists(v, v.name == 'tmp' && has(v.emptyDir)) &&
+        (variables.preflight || variables.n8n || variables.pod.volumes.exists(v, v.name == 'post-recovery' && has(v.emptyDir))) &&
+        variables.container.volumeMounts.size() == (variables.preflight || variables.n8n ? 3 : 6) &&
+        variables.container.volumeMounts.exists(m, m.name == (variables.nc && !variables.preflight ? 'scripts' : 'helpers') &&
+          m.mountPath == '/helpers' && m.readOnly && !has(m.subPath) && !has(m.subPathExpr)) &&
+        variables.container.volumeMounts.exists(m, m.name == 'tmp' && m.mountPath == '/tmp' && !has(m.subPath) && !has(m.subPathExpr)) &&
+        variables.container.volumeMounts.exists(m, m.name == 'backups' && m.readOnly && !has(m.subPathExpr) &&
+          (variables.nc && !variables.preflight ? m.subPath.matches('^automation-data-[0-9]{8}T[0-9]{6}Z$') && m.mountPath == '/backups/' + m.subPath :
+            m.mountPath == '/backups' && !has(m.subPath))) &&
+        (variables.preflight || variables.n8n ||
+          (variables.container.volumeMounts.exists(m, m.name == 'post-recovery' && m.mountPath == '/post-recovery' && !has(m.subPath) && !has(m.subPathExpr)) &&
+           ['backup.sh', 'update-backup-status.sql'].all(k, variables.container.volumeMounts.exists(m,
+             m.name == 'scripts' && m.mountPath == '/scripts/' + k && m.subPath == k && m.readOnly && !has(m.subPathExpr))))) &&
+        variables.container.volumeMounts.all(m, !has(m.mountPropagation) || m.mountPropagation == 'None')
+      message: Restore jobs may mount only immutable helpers, read-only backup inputs, and scratch directories.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-restore-jobs
+spec:
+  policyName: homelab-test-restore-jobs
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-restore-request-jobs
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [batch]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [jobs]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: restore-request-family
+      expression: >-
+        (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/test'] in ['automation-data-restore-drill', 'nocodb-restore-drill'] &&
+        (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/role'] == 'request'
+  variables:
+    - name: job
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: family
+      expression: variables.job.metadata.labels['homelab-talos/test']
+    - name: run
+      expression: variables.job.metadata.labels['homelab-talos/run-id']
+    - name: nc
+      expression: variables.family == 'nocodb-restore-drill'
+    - name: prefix
+      expression: "(variables.nc ? 'nc' : 'ad') + '-restore-' + variables.run"
+    - name: pod
+      expression: variables.job.spec.template.spec
+    - name: container
+      expression: variables.pod.containers[0]
+    - name: expectedValues
+      expression: >-
+        variables.nc ? {'APP_SERVICE': variables.prefix + '-nocodb', 'RUN_HASH': variables.run, 'HOME': '/tmp'} :
+          {'APP_NAME': variables.prefix + '-n8n', 'HOME': '/tmp'}
+    - name: expectedSecrets
+      expression: "variables.nc ? {'ADMIN_EMAIL': 'NC_ADMIN_EMAIL', 'ADMIN_PASSWORD': 'NC_ADMIN_PASSWORD'} : {'CANARY_TOKEN': 'token'}"
+  validations:
+    - expression: >-
+        request.operation != 'UPDATE' && variables.run.matches('^[0-9a-f]{12}$') &&
+        request.namespace == (variables.nc ? 'automation-data' : 'gatus') &&
+        variables.job.metadata.name == variables.prefix + '-request' &&
+        variables.job.metadata.labels == {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'request'} &&
+        variables.job.spec.template.metadata.labels['homelab-talos/role'] == 'request' &&
+        variables.job.spec.activeDeadlineSeconds == (variables.nc ? 600 : 300) &&
+        variables.pod.securityContext.runAsNonRoot && !has(variables.pod.securityContext.runAsUser) &&
+        !has(variables.pod.securityContext.runAsGroup) && !has(variables.pod.securityContext.fsGroup) &&
+        variables.container.name == 'request' && variables.container.image == (variables.nc ?
+          'docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9' : 'docker.n8n.io/n8nio/n8n:2.36.7') &&
+        variables.container.command == ['node', '/helpers/' + (variables.nc ? 'nocodb' : 'automation-data') + '-restore-request.mjs'] &&
+        !has(variables.container.args) && variables.container.imagePullPolicy == 'IfNotPresent' &&
+        variables.container.securityContext.runAsUser == 1000 && variables.container.securityContext.runAsGroup == 1000 &&
+        variables.container.securityContext.runAsNonRoot &&
+        variables.container.resources.requests == {'cpu': '10m', 'memory': (variables.nc ? '64Mi' : '32Mi')} &&
+        variables.container.resources.limits == {'memory': (variables.nc ? '256Mi' : '128Mi')} && !has(variables.container.resources.claims)
+      message: Restore requests must execute the fixed application proof against their run-owned endpoint.
+    - expression: >-
+        variables.container.env.size() == (variables.nc ? 6 : 3) &&
+        variables.expectedValues.all(k, variables.container.env.exists(e, e.name == k && e.value == variables.expectedValues[k] && !has(e.valueFrom))) &&
+        variables.expectedSecrets.all(k, variables.container.env.exists(e, e.name == k && (!has(e.value) || e.value == '') &&
+          e.valueFrom.secretKeyRef.name == (variables.nc ? 'nocodb-credentials' : 'n8n-canary') && e.valueFrom.secretKeyRef.key == variables.expectedSecrets[k] &&
+          !has(e.valueFrom.configMapKeyRef) && !has(e.valueFrom.fieldRef) && !has(e.valueFrom.resourceFieldRef))) &&
+        (!variables.nc || variables.container.env.exists(e, e.name == 'SOURCE_REGISTRY' && !has(e.valueFrom) && e.value.size() > 0 && e.value.size() <= 65536)) &&
+        variables.pod.volumes.size() == 2 &&
+        variables.pod.volumes.exists(v, v.name == 'helpers' && v.configMap.name == (variables.nc ? 'nocodb-test-helpers-v1' : 'n8n-test-request-helpers-v1') && !has(v.configMap.items)) &&
+        variables.pod.volumes.exists(v, v.name == 'tmp' && has(v.emptyDir)) &&
+        variables.container.volumeMounts.size() == 2 &&
+        variables.container.volumeMounts.exists(m, m.name == 'helpers' && m.mountPath == '/helpers' && m.readOnly && !has(m.subPath) && !has(m.subPathExpr)) &&
+        variables.container.volumeMounts.exists(m, m.name == 'tmp' && m.mountPath == '/tmp' && !has(m.subPath) && !has(m.subPathExpr)) &&
+        variables.container.volumeMounts.all(m, !has(m.mountPropagation) || m.mountPropagation == 'None')
+      message: Restore requests may use only fixed helpers, scratch storage, and their existing application credentials.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-restore-request-jobs
+spec:
+  policyName: homelab-test-restore-request-jobs
+  validationActions: [Deny]

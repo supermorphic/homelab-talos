@@ -34,6 +34,7 @@ export NTFY_TEST_HOMEPAGE_TOKEN="$homepage_token"
 cat >"$stub_bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+[[ " $* " != *' --context '* ]] || exit 65
 printf '%s\n' 'observation' >>"$NTFY_TEST_EVENT_LOG"
 case " $* " in
   *' config get-contexts homelab-diagnostic --no-headers '*) ;;

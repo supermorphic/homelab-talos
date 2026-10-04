@@ -14,23 +14,28 @@ publisher_role_names := {
 	"homelab-report-publisher-test-reports",
 }
 
-profile_role_names := {"homelab-campaign-coordinator", "openbao-agent-tokenrequest"}
+profile_role_names := {"homelab-campaign-coordinator", "openbao-agent-tokenrequest"} | object.keys(dedicated_role_contracts)
 
 connection_role_names := {"homelab-automation-data-connect"}
 
 publisher_role_namespace(role_name) := trim_prefix(role_name, "homelab-report-publisher-")
 
 expected_document_names := {
-	"ClusterRole": agent_role_names,
+	"ClusterRole": ((agent_role_names | object.keys(dedicated_cluster_contracts)) | object.keys(dedicated_unbound_cluster_contracts)),
 	"ClusterRoleBinding": {
 		"homelab-observer-view",
 		"homelab-diagnostic-view",
 		"homelab-observer-extra",
-	},
+		"homelab-test-runner-view",
+		"homelab-test-runner-observation",
+		"homelab-test-conformance",
+	} | dedicated_binding_names,
 	"Lease": {"homelab-test-report-publish-lock", "homelab-test-run-lock"},
-	"Role": ((publisher_role_names | connection_role_names) | profile_role_names),
-	"RoleBinding": (((publisher_role_names | diagnostic_role_names) | connection_role_names) | profile_role_names),
-	"ServiceAccount": {"homelab-observer", "homelab-diagnostic", "homelab-report-publisher", "homelab-campaign-coordinator"},
+	"Role": (((publisher_role_names | connection_role_names) | profile_role_names) | ordinary_role_names),
+	"RoleBinding": ((((publisher_role_names | diagnostic_role_names) | connection_role_names) | profile_role_names) | ordinary_role_names),
+	"ServiceAccount": {"homelab-observer", "homelab-diagnostic", "homelab-report-publisher", "homelab-campaign-coordinator", "homelab-test-runner"} | dedicated_account_names,
+	"ValidatingAdmissionPolicy": controlled_admission_names,
+	"ValidatingAdmissionPolicyBinding": controlled_admission_names,
 }
 
 required_read_rules := {
@@ -534,25 +539,28 @@ deny contains msg if {
 	msg := sprintf("unexpected agent-access %s %s", [kind, name])
 }
 
-profile_role_contracts := {
-	"homelab-campaign-coordinator": {
-		"namespace": "flux-system",
-		"rules": [{
-			"apiGroups": ["coordination.k8s.io"], "resources": ["leases"],
-			"resourceNames": ["homelab-test-run-lock"], "verbs": ["get", "update"],
-		}],
-		"subjects": [{"kind": "ServiceAccount", "name": "homelab-campaign-coordinator", "namespace": "kube-system"}],
+profile_role_contracts := object.union(
+	{
+		"homelab-campaign-coordinator": {
+			"namespace": "flux-system",
+			"rules": [{
+				"apiGroups": ["coordination.k8s.io"], "resources": ["leases"],
+				"resourceNames": ["homelab-test-run-lock"], "verbs": ["get", "update"],
+			}],
+			"subjects": [{"kind": "ServiceAccount", "name": "homelab-campaign-coordinator", "namespace": "kube-system"}],
+		},
+		"openbao-agent-tokenrequest": {
+			"namespace": "kube-system",
+			"rules": [{
+				"apiGroups": [""], "resources": ["serviceaccounts/token"],
+				"resourceNames": ["homelab-observer", "homelab-diagnostic", "homelab-report-publisher", "homelab-campaign-coordinator", "homelab-test-runner", "homelab-test-flux-restart", "homelab-test-cilium-connectivity", "homelab-test-node-reschedule", "homelab-test-conformance", "homelab-test-openbao-issuance", "homelab-test-openbao-ha", "homelab-test-openbao-restore", "homelab-test-openbao-lifecycle"],
+				"verbs": ["create"],
+			}],
+			"subjects": [{"kind": "ServiceAccount", "name": "openbao", "namespace": "openbao"}],
+		},
 	},
-	"openbao-agent-tokenrequest": {
-		"namespace": "kube-system",
-		"rules": [{
-			"apiGroups": [""], "resources": ["serviceaccounts/token"],
-			"resourceNames": ["homelab-observer", "homelab-diagnostic", "homelab-report-publisher", "homelab-campaign-coordinator"],
-			"verbs": ["create"],
-		}],
-		"subjects": [{"kind": "ServiceAccount", "name": "openbao", "namespace": "openbao"}],
-	},
-}
+	dedicated_role_contracts,
+)
 
 profile_role_exact(document, name) if {
 	contract := profile_role_contracts[name]

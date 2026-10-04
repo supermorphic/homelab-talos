@@ -35,32 +35,27 @@ from scripts.openbao.operator import (
     operator_password_session,
     private_prompt,
 )
+from scripts.test import access
 from scripts.test.scenarios.resilience_support import atomic_write_json, install_interrupt_handlers
 
 ACCEPTANCE_DIRECTORY = Path.home() / ".config/homelab-talos/acceptance"
 
 
 def operator_kubeconfig():
+    """Explicit operator config for the separate, attended recovery command."""
     selected = os.environ.get("OPENBAO_OPERATOR_KUBECONFIG", "")
     config = Path(selected)
-    if (
-        not selected
-        or not config.is_absolute()
-        or not config.is_file()
-        or os.environ.get("TEST_KUBECONFIG") != selected
-        or os.environ.get("TEST_CAMPAIGN_LEASE_HOLDER")
-    ):
+    if (not selected or not config.is_absolute() or not config.is_file()
+            or os.environ.get("TEST_KUBECONFIG") != selected
+            or os.environ.get("TEST_CAMPAIGN_LEASE_HOLDER")):
         raise SafeError("invalid-source")
     return config
 
 
 def run_inputs():
-    config = operator_kubeconfig()
-    run = os.environ.get("HOMELAB_TEST_RUN_DIR", "")
-    directory = Path(run)
-    if not run or not directory.is_dir():
+    if os.environ.get("TEST_CAMPAIGN_LEASE_HOLDER"):
         raise SafeError("invalid-source")
-    return config, directory
+    return access.suite_inputs(ROOT, "test.agent-credentials")
 
 
 class BrokerScope:
@@ -198,7 +193,7 @@ class BrokerScope:
                 "run_id": self.run_id,
                 "target": self.approved,
                 "actors": [
-                    {k: v for k, v in actor.items() if k != "directory"} for actor in self.actors
+                    {k: v for k, v in actor.items() if k not in {"directory", "audit_configs"}} for actor in self.actors
                 ],
             },
         )
@@ -409,7 +404,7 @@ def fixture_launcher():
 set -euo pipefail
 set +x
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.."
-exec mise exec -- uv run --locked --no-dev python - "$1" <<'PYTHON'
+exec mise exec -- uv run --locked --no-dev python - "$@" <<'PYTHON'
 import base64, json, os, sys, time
 from pathlib import Path
 from scripts.openbao import credentials, workstation
@@ -430,7 +425,7 @@ class MeasuredClient(BaoClient):
             with os.fdopen(fd, 'a') as out: out.write(json.dumps(record) + '\\n')
         return response
 credentials.BaoClient = MeasuredClient
-raise SystemExit(credentials.main(['exec', sys.argv[1]]))
+raise SystemExit(credentials.main(['exec', *sys.argv[1:]]))
 PYTHON
 """
 
@@ -473,8 +468,25 @@ def fixtures(directory, actor):
         launcher = root / credentials.LAUNCHER
         launcher.write_text(fixture_launcher())
         launcher.chmod(0o755)
-        credentials.install_kubeconfig(root, actor["directory"])
+        prepare_actor_profiles(root, actor, Path(os.environ["HOMELAB_TEST_RUN_DIR"]).name)
     return standalone, linked
+
+
+def prepare_actor_profiles(root, actor, run_id):
+    declaration = access.resolve_suite_access(root, "test.agent-credentials")
+    binding = {"schema_version": 1, "run_id": run_id, **declaration}
+    parent = credentials.install_invocation_kubeconfig(root, actor["directory"], binding)
+    profiles = {}
+    actor.setdefault("audit_configs", {})[str(root)] = profiles
+    for profile in declaration["profile_checks"]:
+        profiles[profile] = access.prepare_profile_check(root, parent, profile, directory=actor["directory"])
+
+
+def profile_config(root, actor, profile):
+    try:
+        return actor["audit_configs"][str(root)][profile]
+    except KeyError:
+        raise SafeError("invalid-source") from None
 
 
 def environment(root, actor):
@@ -493,9 +505,7 @@ def kubectl(root, actor, profile, *args, allowed=True):
             "--",
             "kubectl",
             "--kubeconfig",
-            str(root / ".kube/config"),
-            "--context",
-            credentials.PROFILES[profile],
+            str(profile_config(root, actor, profile)),
             "--request-timeout=20s",
             *args,
         ],
@@ -513,14 +523,15 @@ def kubectl(root, actor, profile, *args, allowed=True):
 def permissions(root, actor):
     matrix = {
         "observer": [("list", "nodes", None, True), ("create", "pods", "openbao", False)],
-        "diagnostic": [
+        "debugger": [
             ("create", "pods/automation-data-postgresql-0", "automation-data", True),
             ("create", "pods/openbao-0", "openbao", False),
         ],
-        "publisher": [
+        "report-publisher": [
             ("get", "deployments.apps/test-reports", "test-reports", True),
             ("update", "roles.rbac.authorization.k8s.io", "test-reports", False),
         ],
+        "test-runner": [("create", "jobs.batch", "automation", True), ("create", "namespaces", None, False)],
         "campaign-coordinator": [
             ("update", "leases.coordination.k8s.io/homelab-test-run-lock", "flux-system", True),
             ("list", "leases.coordination.k8s.io", "flux-system", False),
@@ -537,7 +548,7 @@ def permissions(root, actor):
             args = ["auth", "can-i", verb, resource]
             if namespace:
                 args += ["-n", namespace]
-            if profile == "diagnostic":
+            if profile == "debugger":
                 args += [
                     "--subresource",
                     "portforward" if namespace == "automation-data" else "exec",
@@ -605,9 +616,7 @@ def watch_connection(root, actor):
         [
             "kubectl",
             "--kubeconfig",
-            str(root / ".kube/config"),
-            "--context",
-            "homelab-observer",
+            str(profile_config(root, actor, "observer")),
             "get",
             "--raw=/api/v1/nodes?watch=true&resourceVersion=0&timeoutSeconds=900",
             "--request-timeout=15m",
@@ -642,9 +651,7 @@ def diagnostic_connection(root, actor):
         [
             "kubectl",
             "--kubeconfig",
-            str(root / ".kube/config"),
-            "--context",
-            "homelab-diagnostic",
+            str(profile_config(root, actor, "debugger")),
             "-n",
             "automation-data",
             "port-forward",
@@ -669,7 +676,7 @@ def publisher_operations(root, actor):
     kubectl(
         root,
         actor,
-        "publisher",
+        "report-publisher",
         "-n",
         "test-reports",
         "rollout",
@@ -680,7 +687,7 @@ def publisher_operations(root, actor):
     kubectl(
         root,
         actor,
-        "publisher",
+        "report-publisher",
         "-n",
         "test-reports",
         "exec",
@@ -712,7 +719,7 @@ def lifetime_outage(
     if diagnostics is None:
         diagnostics = {}
     diagnostics["caller_stage"] = "start-callers"
-    config = str(root / ".kube/config")
+    config = str(profile_config(root, actor, "observer"))
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
@@ -731,8 +738,6 @@ def lifetime_outage(
                 "kubectl",
                 "--kubeconfig",
                 config,
-                "--context",
-                "homelab-observer",
                 "proxy",
                 "--address=127.0.0.1",
                 f"--port={port}",
@@ -807,7 +812,7 @@ def lifetime_outage(
             kubectl(root, actor, "observer", "get", "nodes")
         diagnostics["caller_stage"] = "stop-callers"
     diagnostics["caller_stage"] = "verify-caller-refresh"
-    assert_caller_refresh(actor, ["observer", "diagnostic", "publisher"])
+    assert_caller_refresh(actor, ["observer", "debugger", "report-publisher"])
     assert_caller_refresh(coordinator_actor or actor, ["campaign-coordinator"])
     diagnostics.pop("caller_stage", None)
     return {
@@ -829,7 +834,6 @@ def coordinator_window(root, actor):
     failed = actor["directory"] / "coordinator-failed"
     stop.unlink(missing_ok=True)
     failed.unlink(missing_ok=True)
-    credentials.install_kubeconfig(root, actor["directory"], "campaign-coordinator")
     script = """set -euo pipefail
 export TEST_LEASE_NAMESPACE=flux-system TEST_LEASE_NAME=homelab-test-run-lock
 export TEST_LEASE_DURATION_SECONDS=90 TEST_LEASE_RENEW_INTERVAL_SECONDS=15
@@ -850,36 +854,33 @@ verify_test_lease_holder "$1" "$2"
 release_test_lease "$1" "$2"
 trap - EXIT
 """
-    try:
-        with process(
-            [
-                "bash",
-                "-c",
-                script,
-                "acceptance",
-                str(root / ".kube/config"),
-                holder,
-                str(stop),
-                str(failed),
-            ],
-            root,
-            actor,
-            stdout=subprocess.PIPE,
-        ) as child:
-            try:
-                if (
-                    not select.select([child.stdout], [], [], 30)[0]
-                    or child.stdout.readline() != b"READY\n"
-                    or child.poll() is not None
-                ):
-                    raise SafeError("invalid-response")
-                yield child
-            finally:
-                stop.touch(mode=0o600)
-                if child.wait(timeout=30) != 0 or failed.exists():
-                    raise SafeError("invalid-response")
-    finally:
-        credentials.install_kubeconfig(root, actor["directory"])
+    with process(
+        [
+            "bash",
+            "-c",
+            script,
+            "acceptance",
+            str(profile_config(root, actor, "campaign-coordinator")),
+            holder,
+            str(stop),
+            str(failed),
+        ],
+        root,
+        actor,
+        stdout=subprocess.PIPE,
+    ) as child:
+        try:
+            if (
+                not select.select([child.stdout], [], [], 30)[0]
+                or child.stdout.readline() != b"READY\n"
+                or child.poll() is not None
+            ):
+                raise SafeError("invalid-response")
+            yield child
+        finally:
+            stop.touch(mode=0o600)
+            if child.wait(timeout=30) != 0 or failed.exists():
+                raise SafeError("invalid-response")
 
 
 def revocation(scope, actor, other):
@@ -906,7 +907,7 @@ def revocation(scope, actor, other):
     scope.disable(actor)
     if time.monotonic() - started >= 50:
         raise SafeError("timeout")
-    for profile in credentials.PROFILES:
+    for profile in access.resolve_suite_access(ROOT, "test.agent-credentials")["profile_checks"]:
         try:
             route.post("kubernetes/creds/" + profile, {"ttl": 600}, token=auth["client_token"])
         except AmbiguousWrite as error:
@@ -934,6 +935,7 @@ def main():
     result = {"status": "fail", "cleanup": "not-required"}
     client = scope = run_dir = None
     private = None
+    coordination_config = None
     stage = "preflight"
     try:
         kubeconfig, run_dir = run_inputs()
@@ -948,6 +950,7 @@ def main():
             and private_prompt(f"Exact confirmation {confirmation}: ") != confirmation
         ):
             raise SafeError("invalid-source")
+        coordination_config = access.prepare_profile_check(ROOT, kubeconfig, "campaign-coordinator")
         install_interrupt_handlers()
         workstation.ensure_private_directory(parent)
         private = Path(tempfile.mkdtemp(prefix="agent-", dir=parent)).resolve()
@@ -958,7 +961,7 @@ def main():
             scope = BrokerScope(kubeconfig, run_dir.name, private, client, approved)
             try:
                 stage = "create-identities"
-                with lease(kubeconfig):
+                with lease(kubeconfig, coordination_config=coordination_config):
                     if apply.verify_configuration(apply.DESIRED, client) != {"differences": []}:
                         raise SafeError("source-mismatch")
                     metadata = workstation.cluster_metadata(kubeconfig)
@@ -967,6 +970,7 @@ def main():
                         scope.create(actor, metadata)
                 stage = "profiles-and-parallel-checkouts"
                 primary, linked = fixtures(private, b)
+                prepare_actor_profiles(linked, a, run_dir.name)
                 for root in (primary, linked):
                     permissions(root, b)
                 with ThreadPoolExecutor(max_workers=2) as pool:
@@ -983,7 +987,7 @@ def main():
                 )
                 result["caller_transports_and_coordinator"] = True
                 stage = "revocation-and-rotation"
-                with lease(kubeconfig):
+                with lease(kubeconfig, coordination_config=coordination_config):
                     revocation(scope, a, b)
                     old = credentials.load_workstation(b["directory"])
                     scope.rotate(b, metadata)
@@ -1018,7 +1022,7 @@ def main():
                 raise
             finally:
                 try:
-                    with lease(kubeconfig):
+                    with lease(kubeconfig, coordination_config=coordination_config):
                         scope.cleanup()
                     result["cleanup"] = "passed"
                 except BaseException as error:
@@ -1035,6 +1039,12 @@ def main():
         if scope and result["cleanup"] != "passed":
             result["cleanup"] = "failed"
     finally:
+        if coordination_config is not None:
+            try:
+                access.remove_invocation(ROOT, coordination_config)
+            except SafeError:
+                result["status"] = "fail"
+                result["cleanup"] = "failed"
         if client:
             client.close()
         if private and result["cleanup"] == "passed":

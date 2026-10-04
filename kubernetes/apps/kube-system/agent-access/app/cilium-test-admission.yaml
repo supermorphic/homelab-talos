@@ -1,0 +1,614 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-cilium-namespaces
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - ''
+        apiVersions:
+          - v1
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - namespaces
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'
+  variables:
+    - name: item
+      expression: 'request.operation == ''DELETE'' ? oldObject : object'
+  validations:
+    - expression: request.namespace == '' && request.subResource == '' && request.name in ['cilium-test-1','cilium-test-ccnp1','cilium-test-ccnp2']
+        && variables.item.apiVersion == 'v1' && variables.item.kind == 'Namespace' && variables.item.metadata.name
+        == request.name && (!has(variables.item.metadata.namespace) || variables.item.metadata.namespace
+        == '') && variables.item.all(k, k in ['apiVersion','kind','metadata','spec','status']) && !has(variables.item.metadata.ownerReferences)
+        && (!has(variables.item.metadata.finalizers) || variables.item.metadata.finalizers.size() == 0)
+        && variables.item.spec.all(k, k == 'finalizers' && variables.item.spec[k] == ['kubernetes']) &&
+        (request.operation == 'CREATE' || (has(variables.item.metadata.uid) && variables.item.metadata.uid
+        != ''))
+      message: Only the three registered connectivity fixture namespaces may be allocated, updated or
+        removed.
+    - expression: variables.item.metadata.labels['app.kubernetes.io/name'] == 'cilium-cli' && variables.item.metadata.labels['pod-security.kubernetes.io/enforce']
+        == 'privileged' && variables.item.metadata.labels.all(k, k in ['app.kubernetes.io/name','pod-security.kubernetes.io/enforce']
+        || (k == 'kubernetes.io/metadata.name' && variables.item.metadata.labels[k] == request.name))
+        && variables.item.metadata.annotations['homelab.supermorphic.com/test-run'].matches('^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$')
+        && variables.item.metadata.annotations.all(k, k == 'homelab.supermorphic.com/test-run' || (k ==
+        'clustermesh.cilium.io/global' && variables.item.metadata.annotations[k] == 'true'))
+      message: Fixture identity, privileged connectivity mode and checked run ownership are mandatory.
+    - expression: 'request.operation == ''UPDATE'' ? (oldObject.metadata.annotations[''homelab.supermorphic.com/test-run'']
+        == object.metadata.annotations[''homelab.supermorphic.com/test-run''] && oldObject.metadata.annotations.all(k,
+        k in object.metadata.annotations && object.metadata.annotations[k] == oldObject.metadata.annotations[k])
+        && object.metadata.labels == oldObject.metadata.labels && object.metadata.all(k, k in [''resourceVersion'',''managedFields'',''annotations'']
+        || (k in oldObject.metadata && object.metadata[k] == oldObject.metadata[k])) && oldObject.metadata.all(k,
+        k in [''resourceVersion'',''managedFields'',''annotations''] || (k in object.metadata && object.metadata[k]
+        == oldObject.metadata[k])) && object.all(k, k == ''metadata'' || (k in oldObject && object[k]
+        == oldObject[k])) && oldObject.all(k, k == ''metadata'' || (k in object && object[k] == oldObject[k])))
+        : true'
+      message: The pinned client may only add its global-namespace annotation; existing namespace identity
+        and specification remain unchanged.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-cilium-namespaces
+spec:
+  policyName: homelab-test-cilium-namespaces
+  validationActions:
+    - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-cilium-ephemeral-diagnostics
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - ''
+        apiVersions:
+          - v1
+        operations:
+          - UPDATE
+        resources:
+          - pods/ephemeralcontainers
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'
+  variables:
+    - name: before
+      expression: 'has(oldObject.spec.ephemeralContainers) ? oldObject.spec.ephemeralContainers : []'
+    - name: after
+      expression: object.spec.ephemeralContainers
+    - name: added
+      expression: variables.after[variables.after.size() - 1]
+    - name: source
+      expression: oldObject.spec.containers.filter(c, c.name == variables.added.targetContainerName)[0]
+  validations:
+    - expression: request.namespace == 'kube-system' && request.subResource == 'ephemeralcontainers' &&
+        request.name == oldObject.metadata.name && oldObject.metadata.namespace == 'kube-system' && oldObject.metadata.uid
+        != '' && ((variables.added.targetContainerName == 'cilium-agent' && oldObject.metadata.labels['k8s-app']
+        == 'cilium') || (variables.added.targetContainerName == 'tetragon' && oldObject.metadata.labels['app.kubernetes.io/name']
+        == 'tetragon') || (variables.added.targetContainerName == 'spire-server' && oldObject.metadata.labels.app
+        == 'spire-server'))
+      message: Stopped-container diagnostics may reach only existing Cilium, Tetragon or SPIRE server
+        containers in kube-system.
+    - expression: 'variables.after.size() == variables.before.size() + 1 && variables.after.filter(c,
+        c.name != variables.added.name) == variables.before && variables.added.name.matches(''^sysdump-[0-9]{1,10}$'')
+        && variables.added.command == [''/bin/sleep'',''1d''] && variables.added.image == variables.source.image
+        && (has(variables.added.env) ? variables.added.env : []) == (has(variables.source.env) ? variables.source.env
+        : []) && (has(variables.added.volumeMounts) ? variables.added.volumeMounts : []) == (has(variables.source.volumeMounts)
+        ? variables.source.volumeMounts : []) && has(variables.added.securityContext) == has(variables.source.securityContext)
+        && (has(variables.source.securityContext) ? variables.added.securityContext == variables.source.securityContext
+        : true) && variables.added.all(k, k in [''name'',''targetContainerName'',''image'',''command'',''env'',''volumeMounts'',''securityContext'']
+        || (k == ''resources'' && variables.added[k] == {}) || (k == ''imagePullPolicy'' && variables.added[k]
+        == ''IfNotPresent'') || (k == ''terminationMessagePath'' && variables.added[k] == ''/dev/termination-log'')
+        || (k == ''terminationMessagePolicy'' && variables.added[k] == ''File'') || (k in [''stdin'',''stdinOnce'',''tty'']
+        && !variables.added[k]))'
+      message: Append exactly one canonical sleeping sysdump container copied from its existing source;
+        preserve all earlier entries.
+    - expression: object.metadata.all(k, k in ['resourceVersion','managedFields'] || (k in oldObject.metadata
+        && object.metadata[k] == oldObject.metadata[k])) && oldObject.metadata.all(k, k in ['resourceVersion','managedFields']
+        || (k in object.metadata && object.metadata[k] == oldObject.metadata[k])) && object.spec.all(k,
+        k == 'ephemeralContainers' || (k in oldObject.spec && object.spec[k] == oldObject.spec[k])) &&
+        oldObject.spec.all(k, k == 'ephemeralContainers' || (k in object.spec && object.spec[k] == oldObject.spec[k]))
+        && object.all(k, k in ['metadata','spec'] || (k in oldObject && object[k] == oldObject[k])) &&
+        oldObject.all(k, k in ['metadata','spec'] || (k in object && object[k] == oldObject[k]))
+      message: Keep the complete stored Pod identity, specification, status and runtime authority unchanged
+        except for that appended container.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-cilium-ephemeral-diagnostics
+spec:
+  policyName: homelab-test-cilium-ephemeral-diagnostics
+  validationActions:
+    - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-cilium-system-connect
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - ''
+        apiVersions:
+          - v1
+        operations:
+          - CONNECT
+        resources:
+          - pods/exec
+          - pods/portforward
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'
+  validations:
+    - expression: 'request.namespace == ''kube-system'' ? (request.namespace == ''kube-system'' && request.subResource
+        in [''exec'',''portforward''] && (request.name.matches(''^cilium-[a-z0-9]{5}$'') || request.name.matches(''^cilium-envoy-[a-z0-9]{5}$'')
+        || request.name.matches(''^cilium-operator-[a-z0-9]{5,10}-[a-z0-9]{5}$'') || request.name.matches(''^hubble-[a-z0-9]{5}$'')
+        || request.name.matches(''^hubble-relay-[a-z0-9]{5,10}-[a-z0-9]{5}$'') || request.name.matches(''^clustermesh-apiserver-[a-z0-9]{5,10}-[a-z0-9]{5}$'')
+        || request.name.matches(''^tetragon-[a-z0-9]{5}$'') || request.name.matches(''^spire-server-[0-9]{1,4}$'')
+        || request.name.matches(''^sysdump-[a-z0-9]{5}$''))) : (request.namespace in [''cilium-test-1'',''cilium-test-ccnp1'',''cilium-test-ccnp2'']
+        && request.subResource == ''exec'' && request.name.matches("^(client|client2|client3|client-cp|echo-same-node|echo-other-node|echo-external-node|lrp-client|lrp-backend|socat-client|l7-lb|host-netns|host-netns-non-cilium|frr-external-node|socat-server-daemonset|client-ccnp)(-[a-z0-9]{5,10})?-[a-z0-9]{5}$"))'
+      message: Cilium runtime connections may reach only registered system component and sysdump recovery
+        Pod names.
+    - expression: 'request.namespace == ''kube-system'' ? (request.subResource == ''exec'' ? ((!has(object.stdin)
+        || !object.stdin) && (!has(object.tty) || !object.tty) && ((request.name.matches(''^cilium-[a-z0-9]{5}$'')
+        && (object.container in [''cilium-agent''] || object.container.matches(''^sysdump-[0-9]{1,10}$'')))
+        || (request.name.matches(''^cilium-envoy-[a-z0-9]{5}$'') && (object.container in [''cilium-envoy'']))
+        || (request.name.matches(''^cilium-operator-[a-z0-9]{5,10}-[a-z0-9]{5}$'') && (object.container
+        in [''cilium-operator''])) || (request.name.matches(''^hubble-[a-z0-9]{5}$'') && (object.container
+        in [''hubble''])) || (request.name.matches(''^hubble-relay-[a-z0-9]{5,10}-[a-z0-9]{5}$'') && (object.container
+        in [''hubble-relay''])) || (request.name.matches(''^clustermesh-apiserver-[a-z0-9]{5,10}-[a-z0-9]{5}$'')
+        && (object.container in [''apiserver'', ''kvstoremesh'', ''etcd''])) || (request.name.matches(''^tetragon-[a-z0-9]{5}$'')
+        && (object.container in [''tetragon''] || object.container.matches(''^sysdump-[0-9]{1,10}$'')))
+        || (request.name.matches(''^spire-server-[0-9]{1,4}$'') && (object.container in [''spire-server'']
+        || object.container.matches(''^sysdump-[0-9]{1,10}$''))) || (request.name.matches(''^sysdump-[a-z0-9]{5}$'')
+        && (object.container in [''cilium-agent'', ''tetragon'', ''spire-server''])))) : true) : ((!has(object.stdin)
+        || !object.stdin) && (!has(object.tty) || !object.tty) && object.container in ["client", "client2",
+        "client3", "client-cp", "echo-same-node", "echo-other-node", "echo-external-node", "lrp-client",
+        "lrp-backend", "socat-client", "l7-lb", "host-netns", "host-netns-non-cilium", "frr-external-node",
+        "socat-server-daemonset", "client-ccnp", "dns-test-server"])'
+      message: Exec permits the canonical component or recovery container without interactive input; this
+        profile has privileged application runtime authority.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-cilium-system-connect
+spec:
+  policyName: homelab-test-cilium-system-connect
+  validationActions:
+    - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-cilium-cluster-policies
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - cilium.io
+        apiVersions:
+          - v2
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - ciliumclusterwidenetworkpolicies
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'
+  variables:
+    - name: item
+      expression: 'request.operation == ''DELETE'' ? oldObject : object'
+  validations:
+    - expression: request.namespace == '' && request.subResource == '' && variables.item.apiVersion ==
+        'cilium.io/v2' && variables.item.kind == 'CiliumClusterwideNetworkPolicy' && variables.item.metadata.name
+        == request.name && (!has(variables.item.metadata.namespace) || variables.item.metadata.namespace
+        == '') && variables.item.all(k, k in ['apiVersion','kind','metadata','spec','status']) && (!has(variables.item.metadata.labels)
+        || variables.item.metadata.labels.size() == 0) && (!has(variables.item.metadata.annotations) ||
+        variables.item.metadata.annotations.size() == 0) && (!has(variables.item.metadata.ownerReferences)
+        || variables.item.metadata.ownerReferences.size() == 0) && (!has(variables.item.metadata.finalizers)
+        || variables.item.metadata.finalizers.size() == 0) && (request.operation == 'CREATE' || (has(variables.item.metadata.uid)
+        && variables.item.metadata.uid != ''))
+      message: Only canonical named cluster-wide connectivity fixtures without extra ownership or runtime
+        fields are permitted.
+    - expression: '(request.name == "allow-egress-specific-namespace-ccnp" && variables.item.spec == {"endpointSelector":
+        {"matchLabels": {"io.kubernetes.pod.namespace": "cilium-test-ccnp1", "kind": "ccnp"}}, "egress":
+        [{"toEndpoints": [{"matchLabels": {"io.kubernetes.pod.namespace": "cilium-test-ccnp2"}}]}]}) ||
+        (request.name == "allow-ingress-specific-namespace-ccnp" && variables.item.spec == {"endpointSelector":
+        {"matchLabels": {"io.kubernetes.pod.namespace": "cilium-test-ccnp1", "kind": "ccnp"}}, "ingress":
+        [{"fromEndpoints": [{"matchLabels": {"io.kubernetes.pod.namespace": "cilium-test-ccnp2"}}]}]})
+        || (request.name == "host-firewall-egress" && variables.item.spec == {"nodeSelector": {}, "egress":
+        [{"toEntities": ["health", "kube-apiserver", "remote-node", "world"]}, {"toEndpoints": [{"matchExpressions":
+        [{"key": "name", "operator": "NotIn", "values": ["echo-other-node"]}, {"key": "io.cilium.k8s.policy.cluster",
+        "operator": "Exists"}]}]}]}) || (request.name == "host-firewall-ingress" && variables.item.spec
+        == {"nodeSelector": {}, "ingress": [{"fromEntities": ["health", "kube-apiserver", "remote-node",
+        "world"]}, {"fromEndpoints": [{"matchExpressions": [{"key": "name", "operator": "NotIn", "values":
+        ["client"]}, {"key": "io.cilium.k8s.policy.cluster", "operator": "Exists"}]}]}]})'
+      message: Keep the complete pinned connectivity policy specification; host firewall fixtures are
+        an explicit dedicated exception.
+    - expression: 'request.operation == ''UPDATE'' ? object.metadata.uid == oldObject.metadata.uid : true'
+      message: Preserve the existing policy identity on apply.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-cilium-cluster-policies
+spec:
+  policyName: homelab-test-cilium-cluster-policies
+  validationActions:
+    - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-cilium-copy-diagnostics
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - ''
+        apiVersions:
+          - v1
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - pods
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'
+  variables:
+    - name: item
+      expression: 'request.operation == ''DELETE'' ? oldObject : object'
+    - name: pod
+      expression: variables.item.spec
+    - name: container
+      expression: variables.pod.containers[0]
+  validations:
+    - expression: request.operation in ['CREATE','DELETE'] && request.namespace == 'kube-system' && request.subResource
+        == '' && request.name.matches('^sysdump-[a-z0-9]{5}$') && variables.item.apiVersion == 'v1' &&
+        variables.item.kind == 'Pod' && variables.item.metadata.name == request.name && variables.item.metadata.generateName
+        == 'sysdump-' && variables.item.metadata.namespace == request.namespace && (request.operation
+        == 'CREATE' || (has(variables.item.metadata.uid) && variables.item.metadata.uid != '')) && (!has(variables.item.metadata.ownerReferences)
+        || variables.item.metadata.ownerReferences.size() == 0) && (!has(variables.item.metadata.finalizers)
+        || variables.item.metadata.finalizers.size() == 0)
+      message: Only native generated sysdump recovery Pods in kube-system may be created or deleted; no
+        Pod updates.
+    - expression: variables.pod.containers.size() == 1 && (!has(variables.pod.initContainers) || variables.pod.initContainers.size()
+        == 0) && (!has(variables.pod.ephemeralContainers) || variables.pod.ephemeralContainers.size()
+        == 0) && variables.pod.restartPolicy == 'Never' && has(variables.pod.nodeName) && variables.pod.nodeName
+        != '' && variables.container.command == ['/bin/sleep','1d'] && (!has(variables.container.args)
+        || variables.container.args.size() == 0) && (!has(variables.container.envFrom) || variables.container.envFrom.size()
+        == 0) && (!has(variables.container.stdin) || !variables.container.stdin) && (!has(variables.container.tty)
+        || !variables.container.tty)
+      message: Retain one noninteractive native recovery sleeper on the selected source node.
+    - expression: (variables.pod.serviceAccountName == 'cilium' && variables.container.name == 'cilium-agent'
+        && variables.container.image.matches('^quay[.]io/cilium/cilium(:|@).+$')) || (variables.pod.serviceAccountName
+        == 'tetragon' && variables.container.name == 'tetragon' && variables.container.image.matches('^quay[.]io/cilium/tetragon(:|@).+$'))
+        || (variables.pod.serviceAccountName == 'spire-server' && variables.container.name == 'spire-server'
+        && variables.container.image.matches('^ghcr[.]io/spiffe/spire-server(:|@).+$'))
+      message: Only registered privileged Cilium, Tetragon and SPIRE component runtime families may be
+        copied.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-cilium-copy-diagnostics
+spec:
+  policyName: homelab-test-cilium-copy-diagnostics
+  validationActions:
+    - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-cilium-fixtures
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - apps
+        apiVersions:
+          - v1
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - deployments
+          - daemonsets
+      - apiGroups:
+          - ''
+        apiVersions:
+          - v1
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - serviceaccounts
+          - services
+          - configmaps
+          - secrets
+      - apiGroups:
+          - cilium.io
+        apiVersions:
+          - v2
+          - v2alpha1
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - ciliumnetworkpolicies
+          - ciliumlocalredirectpolicies
+      - apiGroups:
+          - networking.k8s.io
+        apiVersions:
+          - v1
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - networkpolicies
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'
+  variables:
+    - name: item
+      expression: 'request.operation == ''DELETE'' ? oldObject : object'
+    - name: families
+      expression: '{"Deployment": ["client", "client2", "client3", "client-cp", "echo-same-node", "echo-other-node",
+        "echo-external-node", "lrp-client", "lrp-backend", "socat-client", "l7-lb"], "DaemonSet": ["host-netns",
+        "host-netns-non-cilium", "frr-external-node", "socat-server-daemonset"], "ServiceAccount": ["client",
+        "client2", "client3", "client-cp", "echo-same-node", "echo-other-node", "echo-external-node",
+        "lrp-client", "lrp-backend", "socat-client", "l7-lb"], "Service": ["echo-same-node", "echo-other-node",
+        "echo-other-node-headless", "echo-external-node", "l7-lb", "l7-lb-non-l7"], "ConfigMap": ["coredns-configmap",
+        "frr-config"], "Secret": ["cabundle", "externaltarget-tls", "header-match"], "CiliumLocalRedirectPolicy":
+        ["lrp-address-matcher-skip-redirect-from-backend-v4", "lrp-address-matcher-skip-redirect-from-backend-v6",
+        "lrp-address-matcher-v4", "lrp-address-matcher-v6"], "CiliumNetworkPolicy": ["all-egress-deny",
+        "all-entities-deny", "all-ingress-deny", "allow-all-egress", "allow-all-except-world", "allow-all-ingress",
+        "allow-from-cilium-ingress", "cidr-deny", "client-egress-icmp", "client-egress-l7-http", "client-egress-l7-http-external-node",
+        "client-egress-l7-http-from-any", "client-egress-l7-http-matchheader-secret", "client-egress-l7-http-matchheader-secret-port-range",
+        "client-egress-l7-http-method", "client-egress-l7-http-method-port-range", "client-egress-l7-http-named-port",
+        "client-egress-l7-http-port-range", "client-egress-l7-tls", "client-egress-l7-tls-other-sni",
+        "client-egress-l7-tls-port-range", "client-egress-l7-tls-sni", "client-egress-node-local-dns",
+        "client-egress-only-dns", "client-egress-only-port-53", "client-egress-tls-sni", "client-egress-tls-sni-double-wildcard",
+        "client-egress-tls-sni-other", "client-egress-tls-sni-random-wildcard", "client-egress-tls-sni-wildcard",
+        "client-egress-to-cidr", "client-egress-to-cidr-deny", "client-egress-to-cidr-k8s", "client-egress-to-cidr-lrp-deny",
+        "client-egress-to-cidrgroup-deny", "client-egress-to-cidrgroup-deny-label", "client-egress-to-echo",
+        "client-egress-to-echo-deny", "client-egress-to-echo-deny-port-range", "client-egress-to-echo-expression",
+        "client-egress-to-echo-expression-deny", "client-egress-to-echo-expression-deny-port-range", "client-egress-to-echo-expression-port-range",
+        "client-egress-to-echo-no-cluster-policy", "client-egress-to-echo-service-account", "client-egress-to-echo-service-account-deny",
+        "client-egress-to-echo-service-account-deny-port-range", "client-egress-to-echo-service-account-port-range",
+        "client-egress-to-entities-host", "client-egress-to-entities-k8s", "client-egress-to-entities-world",
+        "client-egress-to-entities-world-port-range", "client-egress-to-fqdns-one.one.one.one", "client-egress-to-fqdns-proxy-one.one.one.one",
+        "client-ingress-from-client2", "client-ingress-from-client2-icmp", "client-ingress-from-other-client-icmp-deny",
+        "client-ingress-to-echo-named-port-deny", "client-with-service-account-egress-to-echo", "client-with-service-account-egress-to-echo-deny",
+        "client-with-service-account-egress-to-echo-deny-port-range", "client-with-service-account-egress-to-echo-port-range",
+        "echo-ingress-from-cidr", "echo-ingress-from-client-tiered-wildcard-pass-l7", "echo-ingress-from-other-client",
+        "echo-ingress-from-other-client-deny", "echo-ingress-l7-http", "echo-ingress-l7-http-from-anywhere",
+        "echo-ingress-l7-http-from-anywhere-port-range", "echo-ingress-l7-http-named-port", "echo-ingress-mutual-authentication",
+        "echo-ingress-mutual-authentication-fail", "echo-ingress-mutual-authentication-fail-port-range",
+        "echo-ingress-mutual-authentication-port-range", "entity-cluster", "host-cluster-egress", "host-cluster-ingress",
+        "ingress-backend-deny", "ingress-entity-deny", "ingress-source-egress-deny-other-node", "world-entity-deny"],
+        "NetworkPolicy": ["all-egress-deny", "all-ingress-deny", "client-egress-to-cidr", "client-egress-to-cidr-cp-host",
+        "client-egress-to-echo", "client-egress-to-echo-expression", "client-egress-to-echo-expression-port-range",
+        "client-egress-to-node-cidr", "client-ingress-from-client2", "echo-ingress-from-other-client"]}'
+    - name: pod
+      expression: 'variables.item.kind in [''Deployment'',''DaemonSet''] ? variables.item.spec.template.spec
+        : {}'
+  validations:
+    - expression: request.subResource == '' && variables.item.metadata.namespace == request.namespace
+        && variables.item.metadata.name == request.name && ((request.namespace == 'cilium-test-1' && variables.item.kind
+        in variables.families && request.name in variables.families[variables.item.kind]) || (request.namespace
+        in ['cilium-test-ccnp1','cilium-test-ccnp2'] && variables.item.kind in ['Deployment','ServiceAccount']
+        && request.name == 'client-ccnp')) && (request.operation == 'CREATE' || (has(variables.item.metadata.uid)
+        && variables.item.metadata.uid != ''))
+      message: Only enumerated pinned connectivity resource families in their registered test namespaces
+        are permitted.
+    - expression: request.operation != 'UPDATE' || (variables.item.kind in ['CiliumNetworkPolicy','CiliumLocalRedirectPolicy','NetworkPolicy','Secret']
+        && object.metadata.uid == oldObject.metadata.uid && object.metadata.name == oldObject.metadata.name
+        && object.metadata.namespace == oldObject.metadata.namespace)
+      message: Only the native policy apply and three test Secret update paths may update existing resources.
+    - expression: 'variables.item.kind in [''Deployment'',''DaemonSet''] ? (variables.item.spec.template.metadata.labels.name
+        == request.name && variables.item.spec.selector.matchLabels.name == request.name && (variables.item.kind
+        == ''Deployment'' ? variables.pod.serviceAccountName == request.name : (!has(variables.pod.serviceAccountName)
+        || variables.pod.serviceAccountName == '''' || variables.pod.serviceAccountName == ''default''))
+        && (!has(variables.pod.initContainers) || variables.pod.initContainers.size() == 0) && (!has(variables.pod.ephemeralContainers)
+        || variables.pod.ephemeralContainers.size() == 0) && variables.pod.containers.size() in [1,2]
+        && variables.pod.containers.all(c, c.name in [request.name,''dns-test-server''] && c.image in
+        ["quay.io/cilium/alpine-curl:v1.10.0@sha256:913e8c9f3d960dde03882defa0edd3a919d529c2eb167caa7f54194528bde364",
+        "quay.io/cilium/json-mock:v1.4.1@sha256:6a66df90808a39c02e7a9d58af7bf0e54d8f8b7d4bc528f48c891969a7049195",
+        "registry.k8s.io/coredns/coredns:v1.14.4@sha256:3e98f280fd601b37411c5fb7075fd9f337833c480f1644970b727ae0af067782",
+        "quay.io/frrouting/frr:10.6.1@sha256:813497af103e972600f6161012b3bf2a2a1c5ea10d09cd1eacd74f1dc510a57b",
+        "docker.io/alpine/socat:1.8.1.3@sha256:d85531a29ef5ba99dfb4717485c239307e2902d522a1bc010992a2728c92cfad",
+        "gcr.io/k8s-staging-gateway-api/echo-advanced:v20251204-v1.4.1"] && (!has(c.envFrom) || c.envFrom.size()
+        == 0) && (!has(c.env) || c.env.all(e, !has(e.valueFrom)))) && (!has(variables.pod.volumes) ||
+        variables.pod.volumes.all(v, has(v.configMap) && v.configMap.name in [''coredns-configmap'',''frr-config'']
+        && v.all(k, k in [''name'',''configMap''])))) : true'
+      message: Canonical privileged fixture workloads retain their own unbound account, pinned images
+        and test ConfigMap mounts; no other Secret or host-volume inputs.
+    - expression: 'variables.item.kind == ''ServiceAccount'' ? ((!has(variables.item.secrets) || variables.item.secrets.size()
+        == 0) && (!has(variables.item.imagePullSecrets) || variables.item.imagePullSecrets.size() == 0))
+        : true'
+      message: Fixture accounts have no referenced credentials or image-pull Secret inputs.
+    - expression: 'variables.item.kind == ''Service'' ? (has(variables.item.spec.selector.name) && variables.item.spec.selector.name
+        in ["client", "client2", "client3", "client-cp", "echo-same-node", "echo-other-node", "echo-external-node",
+        "lrp-client", "lrp-backend", "socat-client", "l7-lb"] && variables.item.spec.type in [''ClusterIP'',''NodePort'',''LoadBalancer'']
+        && (!has(variables.item.spec.externalName) || variables.item.spec.externalName == '''')) : true'
+      message: Fixture Services select only registered connectivity workloads in the owned test namespace.
+    - expression: 'variables.item.kind == ''Secret'' ? ((request.name == ''cabundle'' && (!has(variables.item.type)
+        || variables.item.type in ['''',''Opaque'']) && variables.item.data.size() == 1 && ''ca.crt''
+        in variables.item.data) || (request.name == ''externaltarget-tls'' && (!has(variables.item.type)
+        || variables.item.type in ['''',''Opaque'',''kubernetes.io/tls'']) && variables.item.data.size()
+        == 2 && ''tls.crt'' in variables.item.data && ''tls.key'' in variables.item.data) || (request.name
+        == ''header-match'' && (!has(variables.item.type) || variables.item.type in ['''',''Opaque''])
+        && variables.item.data.size() == 1 && ''value'' in variables.item.data)) : true'
+      message: Only the three native test certificate/header data shapes may be provisioned.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-cilium-fixtures
+spec:
+  policyName: homelab-test-cilium-fixtures
+  validationActions:
+    - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-cilium-global-fixtures
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - cilium.io
+        apiVersions:
+          - v2
+          - v2alpha1
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - ciliumcidrgroups
+          - ciliumclusterwideenvoyconfigs
+      - apiGroups:
+          - policy.networking.k8s.io
+        apiVersions:
+          - v1alpha2
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - clusternetworkpolicies
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'
+  variables:
+    - name: item
+      expression: 'request.operation == ''DELETE'' ? oldObject : object'
+    - name: expected
+      expression: '{"client-egress-to-fqdns-proxy-one.one.one.one": {"kind": "CiliumClusterwideEnvoyConfig",
+        "spec": {"resources": [{"@type": "type.googleapis.com/envoy.config.listener.v3.Listener", "name":
+        "proxy-one.one.one.one-listener", "filter_chains": [{"filter_chain_match": {"destination_port":
+        80}, "filters": [{"name": "envoy.filters.network.tcp_proxy", "typed_config": {"@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
+        "stat_prefix": "test-listener", "cluster": "proxy-one.one.one.one-cluster"}}]}]}, {"@type": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
+        "connectTimeout": "55s", "name": "proxy-one.one.one.one-cluster", "type": "ORIGINAL_DST", "lb_policy":
+        "CLUSTER_PROVIDED"}]}}, "echo-ingress-from-client-tiered-wildcard-pass-l7": {"kind": "ClusterNetworkPolicy",
+        "spec": {"tier": "Admin", "priority": 0, "subject": {"pods": {"namespaceSelector": {"matchLabels":
+        {"kubernetes.io/metadata.name": "cilium-test-1"}}, "podSelector": {"matchLabels": {"kind": "echo"}}}},
+        "ingress": [{"action": "Accept", "from": [{"pods": {"podSelector": {"matchExpressions": [{"key":
+        "reserved:host", "operator": "Exists"}]}}}]}, {"action": "Accept", "from": [{"pods": {"podSelector":
+        {}}}], "protocols": [{"udp": {"destinationPort": {"number": 53}}}, {"tcp": {"destinationPort":
+        {"number": 53}}}]}, {"action": "Pass", "from": [{"pods": {"namespaceSelector": {"matchLabels":
+        {"kubernetes.io/metadata.name": "cilium-test-1"}}, "podSelector": {"matchLabels": {"name": "client"},
+        "matchExpressions": [{"key": "io.cilium.k8s.policy.cluster", "operator": "Exists"}]}}}]}, {"action":
+        "Deny", "from": [{"namespaces": {}}]}]}}}'
+  validations:
+    - expression: request.namespace == '' && request.subResource == '' && variables.item.metadata.name
+        == request.name && (!has(variables.item.metadata.namespace) || variables.item.metadata.namespace
+        == '') && variables.item.all(k, k in ['apiVersion','kind','metadata','spec','status']) && (!has(variables.item.metadata.annotations)
+        || variables.item.metadata.annotations.size() == 0) && (!has(variables.item.metadata.ownerReferences)
+        || variables.item.metadata.ownerReferences.size() == 0) && (!has(variables.item.metadata.finalizers)
+        || variables.item.metadata.finalizers.size() == 0) && (request.operation == 'CREATE' || (has(variables.item.metadata.uid)
+        && variables.item.metadata.uid != ''))
+      message: Only registered global connectivity fixtures without unrelated metadata or authority fields
+        may be applied or deleted.
+    - expression: 'variables.item.kind == ''CiliumCIDRGroup'' ? (request.name in [''cilium-test-external-cidr'',''cilium-test-external-cidr-label'']
+        && variables.item.spec.size() == 1 && has(variables.item.spec.externalCIDRs) && variables.item.spec.externalCIDRs.size()
+        in [1,2] && variables.item.spec.externalCIDRs.all(c, c.size() <= 64 && c.matches(''^[0-9a-fA-F:.]+/[0-9]{1,3}$''))
+        && (request.name == ''cilium-test-external-cidr-label'' ? (has(variables.item.metadata.labels)
+        && variables.item.metadata.labels == {''destination'':''external''}) : (!has(variables.item.metadata.labels)
+        || variables.item.metadata.labels.size() == 0))) : (request.name in variables.expected && variables.item.kind
+        == variables.expected[request.name].kind && variables.item.spec == variables.expected[request.name].spec
+        && (!has(variables.item.metadata.labels) || variables.item.metadata.labels.size() == 0))'
+      message: Keep the complete pinned Envoy/tiered policy specifications and finite native external-CIDR
+        fixture shape; the CRD validates CIDR syntax.
+    - expression: 'request.operation == ''UPDATE'' ? object.metadata.uid == oldObject.metadata.uid : true'
+      message: Preserve the stored global fixture identity on native apply.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-cilium-global-fixtures
+spec:
+  policyName: homelab-test-cilium-global-fixtures
+  validationActions:
+    - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-cilium-bootstrap
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - rbac.authorization.k8s.io
+        apiVersions:
+          - v1
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - rolebindings
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-cilium-connectivity'
+  variables:
+    - name: item
+      expression: 'request.operation == ''DELETE'' ? oldObject : object'
+  validations:
+    - expression: request.operation in ['CREATE','DELETE'] && request.namespace in ['cilium-test-1','cilium-test-ccnp1','cilium-test-ccnp2']
+        && request.subResource == '' && request.name == 'homelab-test-cilium-fixtures' && variables.item.apiVersion
+        == 'rbac.authorization.k8s.io/v1' && variables.item.kind == 'RoleBinding' && variables.item.all(k,
+        k in ['apiVersion','kind','metadata','roleRef','subjects']) && variables.item.metadata.name ==
+        request.name && variables.item.metadata.namespace == request.namespace && (!has(variables.item.metadata.finalizers)
+        || variables.item.metadata.finalizers.size() == 0) && (request.operation == 'CREATE' || (has(variables.item.metadata.uid)
+        && variables.item.metadata.uid != ''))
+      message: Only new or checked deletion of the registered fixture binding is permitted.
+    - expression: 'variables.item.roleRef == {''apiGroup'':''rbac.authorization.k8s.io'',''kind'':''ClusterRole'',''name'':
+        request.namespace == ''cilium-test-1'' ? ''homelab-test-cilium-fixtures-1'' : ''homelab-test-cilium-fixtures-ccnp''}
+        && variables.item.subjects == [{''kind'':''ServiceAccount'',''name'':''homelab-test-cilium-connectivity'',''namespace'':''kube-system''}]'
+      message: Bind only the namespace-specific fixed fixture role to the dedicated connectivity account.
+    - expression: variables.item.metadata.annotations.size() == 1 && variables.item.metadata.annotations['homelab.supermorphic.com/test-run'].matches('^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$')
+        && (!has(variables.item.metadata.labels) || variables.item.metadata.labels.size() == 0) && variables.item.metadata.ownerReferences.size()
+        == 1 && variables.item.metadata.ownerReferences.all(o, o.apiVersion == 'v1' && o.kind == 'Namespace'
+        && o.name == request.namespace && o.uid != '' && o.all(k, k in ['apiVersion','kind','name','uid'])
+        )
+      message: Run ownership and the wrapper-checked namespace UID are mandatory.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-cilium-bootstrap
+spec:
+  policyName: homelab-test-cilium-bootstrap
+  validationActions:
+    - Deny

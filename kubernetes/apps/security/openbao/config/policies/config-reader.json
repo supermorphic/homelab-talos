@@ -129,6 +129,61 @@
       "capabilities": [
         "read"
       ]
+    },
+    "kubernetes/roles/debugger": {
+      "capabilities": [
+        "read"
+      ]
+    },
+    "kubernetes/roles/test-runner": {
+      "capabilities": [
+        "read"
+      ]
+    },
+    "kubernetes/roles/report-publisher": {
+      "capabilities": [
+        "read"
+      ]
+    },
+    "kubernetes/roles/test-flux-restart": {
+      "capabilities": [
+        "read"
+      ]
+    },
+    "kubernetes/roles/test-cilium-connectivity": {
+      "capabilities": [
+        "read"
+      ]
+    },
+    "kubernetes/roles/test-node-reschedule": {
+      "capabilities": [
+        "read"
+      ]
+    },
+    "kubernetes/roles/test-conformance": {
+      "capabilities": [
+        "read"
+      ]
+    },
+    "kubernetes/roles/test-openbao-issuance": {
+      "capabilities": [
+        "read"
+      ]
+    },
+    "kubernetes/roles/test-openbao-ha": {
+      "capabilities": [
+        "read"
+      ]
+    },
+    "kubernetes/roles/test-openbao-restore": {
+      "capabilities": [
+        "read"
+      ]
+    },
+    "kubernetes/roles/test-openbao-lifecycle": {
+      "capabilities": [
+        "read"
+      ]
     }
   }
 }

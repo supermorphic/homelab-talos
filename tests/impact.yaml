@@ -56,6 +56,14 @@ full_paths:
   - scripts/test/run-native-junit-validator*
   - scripts/test/run-probe*
   - scripts/test/validate-*
+  - scripts/test/scoped_access_acceptance.py
+  - scripts/test/run_bound_backend.py
+  - scripts/test/test-access-bridge-test.sh
+  - scripts/test/lib/owned-resources.sh
+  - scripts/test/lib/wan-reference.sh
+  - scripts/test/access.py
+  - scripts/test/lib/access.sh
+  - tests/fixtures/test-access/**
   - scripts/test/lib/catalog.sh
   - scripts/test/lib/chainsaw-inputs*
   - scripts/test/lib/common-test.sh
@@ -269,6 +277,7 @@ core_paths:
   - tests/fixtures/cluster-commands/**
   - tests/fixtures/links/**
   - tests/fixtures/node-lifecycle/**
+  - tests/fixtures/cilium/**
   - tests/fixtures/openbao/**
   - tests/probes/**
   - tests/prometheus/media-alerts_test.yaml

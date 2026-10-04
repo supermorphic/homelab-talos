@@ -2,10 +2,12 @@
 """Probe only the fixed synthetic application, using its retained private credential."""
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -29,6 +31,8 @@ APPLICATION = 'interview'
 ROLE = 'app_' + hashlib.md5(f'{DATABASE}:{APPLICATION}'.encode(),
                            usedforsecurity=False).hexdigest() + '_integration'
 REPOSITORY = Path(__file__).resolve().parents[3]
+CREDENTIAL_FIXTURE = 'nocodb-restore-application-credential'
+CREDENTIAL_OWNER = 'homelab-talos/credential-run'
 
 
 def run_identity(run_id: str) -> tuple[int, str]:
@@ -111,43 +115,11 @@ def probe_live(kubeconfig: Path, run_id: str) -> None:
 
 
 def client_command(host: str, run_id: str) -> str:
-    identity, value = run_identity(run_id)
+    run_identity(run_id)
     if host != 'restore-postgresql' and not re.fullmatch(r'nc-restore-[a-f0-9]{12}-db', host):
         raise ValueError('isolated_database_required')
-    return f'''set -eu
-set +x
-umask 077
-IFS=: read -r retained_host retained_port retained_database retained_role retained_password < /credentials/pgpass
-[ "$retained_database" = '{DATABASE}' ] && [ "$retained_role" = '{ROLE}' ]
-printf '%s:5432:%s:%s:%s\\n' '{host}' '{DATABASE}' '{ROLE}' "$retained_password" > /tmp/application.pgpass
-chmod 600 /tmp/application.pgpass
-unset retained_password
-client() {{
-  env -i PATH="$PATH" PGHOST='{host}' PGPORT=5432 PGDATABASE='{DATABASE}' PGUSER='{ROLE}' \\
-    PGPASSFILE=/tmp/application.pgpass PGCONNECT_TIMEOUT=5 PGOPTIONS='-c statement_timeout=5000' \\
-    psql --no-psqlrc --no-password --tuples-only --no-align --set=ON_ERROR_STOP=1 "$@"
-}}
-if env -i PATH="$PATH" PGHOST='{host}' PGPORT=5432 PGDATABASE='{DATABASE}' PGUSER='{ROLE}' \\
-  PGPASSWORD=acceptance-wrong-password PGCONNECT_TIMEOUT=5 \\
-  psql --no-psqlrc --no-password --command 'SELECT current_user' >/dev/null 2>&1; then
-  exit 1
-fi
-[ "$(client --command 'SELECT current_database() || chr(58) || session_user || chr(58) || current_user' 2>/dev/null)" = '{DATABASE}:{ROLE}:{ROLE}' ]
-client --command "SELECT app.record_integration_fact({identity},'{value}')" >/dev/null 2>&1
-[ "$(client --command 'SELECT fact FROM app.integration_facts WHERE id={identity}' 2>/dev/null)" = '{value}' ]
-denied() {{
-  if client --set=VERBOSITY=sqlstate --command "$1" >/tmp/denial.out 2>/tmp/denial.err; then exit 1; fi
-  # A missing table/function or connection failure cannot satisfy this oracle.
-  test "$(sed -n 's/^ERROR: *//p' /tmp/denial.err)" = 42501
-}}
-denied 'SELECT * FROM app.withheld_bookkeeping'
-denied 'SELECT app.withheld_admin()'
-denied "INSERT INTO app.integration_facts VALUES (-491,'denied')"
-denied 'SELECT * FROM extra_read.visible_facts'
-denied 'SET ROLE automation_data_acceptance_owner'
-rm -f /tmp/application.pgpass /tmp/denial.out /tmp/denial.err
-printf '%s\\n' 'application_acceptance=passed'
-'''
+    program = (REPOSITORY / 'kubernetes/apps/automation-data/postgresql/app/test-helpers/nocodb-application-probe.sh').read_text()
+    return f"PGHOST='{host}'\nRUN_ID='{run_id}'\nexport PGHOST RUN_ID\n" + program
 
 
 def write_restore_manifests(directory: Path, run_hash: str, run_id: str, password: str) -> None:
@@ -162,10 +134,9 @@ def write_restore_manifests(directory: Path, run_hash: str, run_id: str, passwor
     prefix = f'nc-restore-{run_hash}'
     labels = {'homelab-talos/test': 'nocodb-restore-drill', 'homelab-talos/run-id': run_hash,
               'homelab-talos/role': 'restore'}
-    secret_name, job_name = prefix + '-app-credential', prefix + '-app-probe'
-    secret = {'apiVersion': 'v1', 'kind': 'Secret', 'type': 'Opaque',
-              'metadata': {'name': secret_name, 'namespace': 'automation-data', 'labels': labels},
-              'stringData': {'pgpass': f'{prefix}-db:5432:{DATABASE}:{ROLE}:{password}\n'}}
+    secret_name, job_name = 'nocodb-restore-application-credential', prefix + '-app-probe'
+    credential = {'runHash': run_hash, 'runId': run_id,
+                  'pgpass': f'{prefix}-db:5432:{DATABASE}:{ROLE}:{password}\n'}
     job = {'apiVersion': 'batch/v1', 'kind': 'Job',
            'metadata': {'name': job_name, 'namespace': 'automation-data', 'labels': labels},
            'spec': {'backoffLimit': 0, 'activeDeadlineSeconds': 180, 'template': {
@@ -176,8 +147,9 @@ def write_restore_manifests(directory: Path, run_hash: str, run_id: str, passwor
                                        'seccompProfile': {'type': 'RuntimeDefault'}},
                    'containers': [{'name': 'application-probe',
                                    'image': 'postgres:17.11-alpine3.24',
-                                   'command': ['/bin/sh', '-ec'],
-                                   'args': [client_command(prefix + '-db', run_id)],
+                                   'command': ['/bin/sh', '-eu', '/helpers/nocodb-application-probe.sh'],
+                                   'env': [{'name': 'PGHOST', 'value': prefix + '-db'},
+                                           {'name': 'RUN_ID', 'value': run_id}],
                                    'securityContext': {'allowPrivilegeEscalation': False,
                                                        'readOnlyRootFilesystem': True,
                                                        'capabilities': {'drop': ['ALL']}},
@@ -185,12 +157,106 @@ def write_restore_manifests(directory: Path, run_hash: str, run_id: str, passwor
                                                  'limits': {'memory': '128Mi'}},
                                    'volumeMounts': [{'name': 'credential',
                                                      'mountPath': '/credentials', 'readOnly': True},
-                                                    {'name': 'scratch', 'mountPath': '/tmp'}]}],
+                                                    {'name': 'scratch', 'mountPath': '/tmp'},
+                                                    {'name': 'helpers', 'mountPath': '/helpers', 'readOnly': True}]}],
                    'volumes': [{'name': 'credential', 'secret': {'secretName': secret_name,
                                                                 'defaultMode': 0o400}},
-                               {'name': 'scratch', 'emptyDir': {}}]}}}}
+                               {'name': 'scratch', 'emptyDir': {}},
+                               {'name': 'helpers', 'configMap': {'name': 'automation-data-test-helpers-v1'}}]}}}}
     write_private_file_exclusive(directory / 'application-probe.yaml',
-                                 yaml.safe_dump_all([secret, job], sort_keys=False).encode())
+                                 yaml.safe_dump(job, sort_keys=False).encode())
+    write_private_file_exclusive(directory / 'application-credential.json',
+                                 json.dumps(credential).encode())
+
+
+def credential_directory(directory: Path, run_hash: str) -> Path:
+    if not re.fullmatch(r'[a-f0-9]{12}', run_hash):
+        raise PrivateFileError('fixture_ownership_invalid')
+    directory = validate_private_directory(directory)
+    if directory.resolve() == REPOSITORY or REPOSITORY in directory.resolve().parents:
+        raise PrivateFileError('credential_artifact_inside_checkout')
+    return directory
+
+
+def fixture_command(kubeconfig: Path, *arguments: str, payload: object = None) -> str:
+    # Both API bodies and errors can contain credentials. Keep them out of logs.
+    result = subprocess.run(['kubectl', '--kubeconfig', str(kubeconfig), '-n',
+                             'automation-data', *arguments], capture_output=True, text=True,
+                            input=None if payload is None else json.dumps(payload), check=False)
+    if result.returncode:
+        raise PrivateFileError('credential_fixture_request_failed')
+    return result.stdout
+
+
+def read_credential_fixture(kubeconfig: Path) -> dict:
+    fixture = json.loads(fixture_command(kubeconfig, 'get', 'secret', CREDENTIAL_FIXTURE,
+                                        '-o', 'json'))
+    metadata = fixture.get('metadata', {})
+    if fixture.get('kind') != 'Secret' or fixture.get('type') != 'Opaque' or \
+            metadata.get('name') != CREDENTIAL_FIXTURE or \
+            metadata.get('namespace') != 'automation-data' or \
+            metadata.get('labels', {}).get('homelab-talos/test') != 'nocodb-restore-extension' or \
+            metadata.get('annotations', {}).get('kustomize.toolkit.fluxcd.io/ssa') != 'IfNotPresent' or \
+            not metadata.get('uid') or not metadata.get('resourceVersion') or \
+            metadata.get('deletionTimestamp') or \
+            not isinstance(metadata.get('annotations', {}).get(CREDENTIAL_OWNER), str) or \
+            not isinstance(fixture.get('data', {}), dict):
+        raise PrivateFileError('fixture_ownership_invalid')
+    return fixture
+
+
+def patch_credential_fixture(kubeconfig: Path, fixture: dict, run_hash: str, data: dict) -> None:
+    metadata = fixture['metadata']
+    patch = [
+        {'op': 'test', 'path': '/metadata/uid', 'value': metadata['uid']},
+        {'op': 'test', 'path': '/metadata/resourceVersion', 'value': metadata['resourceVersion']},
+        {'op': 'replace' if 'data' in fixture else 'add', 'path': '/data', 'value': data},
+        {'op': 'replace', 'path': '/metadata/annotations/homelab-talos~1credential-run',
+         'value': run_hash},
+    ]
+    fixture_command(kubeconfig, 'patch', 'secret', CREDENTIAL_FIXTURE, '--type=json',
+                    '--patch-file=/dev/stdin', '-o', 'name', payload=patch)
+
+
+def fill_restore_credential(kubeconfig: Path, directory: Path, run_hash: str) -> None:
+    directory = credential_directory(directory, run_hash)
+    credential = json.loads(validate_private_file(directory / 'application-credential.json').read_text())
+    if credential.get('runHash') != run_hash or \
+            not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', credential.get('runId', '')) or \
+            not re.fullmatch(rf'nc-restore-{run_hash}-db:5432:{DATABASE}:{ROLE}:'
+                             r'[A-Za-z0-9_-]{32,256}\n', credential.get('pgpass', '')):
+        raise PrivateFileError('fixture_ownership_invalid')
+    fixture = read_credential_fixture(kubeconfig)
+    metadata = fixture['metadata']
+    owner = metadata['annotations'][CREDENTIAL_OWNER]
+    if owner not in ('', run_hash) or (not owner and fixture.get('data')):
+        raise PrivateFileError('fixture_ownership_invalid')
+    record = {'uid': metadata['uid'], 'runHash': run_hash}
+    ledger = directory / 'application-credential-owner.json'
+    if ledger.exists():
+        if json.loads(validate_private_file(ledger).read_text()) != record:
+            raise PrivateFileError('fixture_ownership_invalid')
+    else:
+        # Record before PATCH so interrupted or uncertain writes remain cleanable.
+        write_private_file_exclusive(ledger, json.dumps(record).encode())
+    patch_credential_fixture(kubeconfig, fixture, run_hash,
+                             {'pgpass': base64.b64encode(credential['pgpass'].encode()).decode()})
+
+
+def clear_restore_credential(kubeconfig: Path, directory: Path, run_hash: str) -> None:
+    directory = credential_directory(directory, run_hash)
+    ledger = directory / 'application-credential-owner.json'
+    if not ledger.exists():
+        return
+    record = json.loads(validate_private_file(ledger).read_text())
+    fixture = read_credential_fixture(kubeconfig)
+    metadata = fixture['metadata']
+    owner = metadata['annotations'][CREDENTIAL_OWNER]
+    if record != {'uid': metadata['uid'], 'runHash': run_hash} or \
+            owner not in ('', run_hash) or (not owner and fixture.get('data')):
+        raise PrivateFileError('fixture_ownership_invalid')
+    if owner:
+        patch_credential_fixture(kubeconfig, fixture, '', {})
 
 
 def main() -> None:
@@ -204,6 +270,9 @@ def main() -> None:
     elif len(sys.argv) == 5 and sys.argv[1] == 'restore-manifests':
         _, password = retained_profile()
         write_restore_manifests(Path(sys.argv[2]), sys.argv[3], sys.argv[4], password)
+    elif len(sys.argv) == 5 and sys.argv[1] in ('fill-restore-credential', 'clear-restore-credential'):
+        operation = fill_restore_credential if sys.argv[1] == 'fill-restore-credential' else clear_restore_credential
+        operation(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
     elif len(sys.argv) == 4 and sys.argv[1] == 'disposable-command':
         write_private_file_exclusive(Path(sys.argv[3]),
                                      client_command('restore-postgresql', sys.argv[2]).encode())

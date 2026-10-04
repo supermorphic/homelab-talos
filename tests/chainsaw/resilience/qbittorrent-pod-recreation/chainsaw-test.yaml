@@ -55,7 +55,7 @@ spec:
             content: >-
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
-              scripts/test/scenarios/qbittorrent_pod_recreation.py prepare .kube/config
+              scripts/test/scenarios/qbittorrent_pod_recreation.py prepare "${TEST_KUBECONFIG:?}"
       cleanup:
         - wait:
             apiVersion: apps/v1
@@ -81,7 +81,7 @@ spec:
             content: >-
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
-              scripts/test/scenarios/qbittorrent_pod_recreation.py cleanup .kube/config
+              scripts/test/scenarios/qbittorrent_pod_recreation.py cleanup "${TEST_KUBECONFIG:?}"
     - name: guard-and-delete-qbittorrent-pod-natively
       try:
         - script:
@@ -103,7 +103,7 @@ spec:
             content: >-
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
-              scripts/test/scenarios/qbittorrent_pod_recreation.py observe .kube/config
+              scripts/test/scenarios/qbittorrent_pod_recreation.py observe "${TEST_KUBECONFIG:?}"
     - name: wait-for-native-kubernetes-readiness
       try:
         - wait:
@@ -145,4 +145,4 @@ spec:
             content: >-
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
-              scripts/test/scenarios/qbittorrent_pod_recreation.py verify .kube/config
+              scripts/test/scenarios/qbittorrent_pod_recreation.py verify "${TEST_KUBECONFIG:?}"

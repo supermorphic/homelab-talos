@@ -4,6 +4,7 @@ set -euo pipefail
 
 source scripts/lib/common.sh
 source scripts/test/lib/catalog.sh
+source scripts/test/lib/access.sh
 require_bash
 
 [[ "$#" -ge 2 && "$#" -le 3 ]] || {
@@ -26,8 +27,10 @@ if [[ "$tier" == 'resilience' && "$target" == 'node-abrupt-loss' ]]; then
       ;;
   esac
 fi
-catalog='tests/catalog.yaml'
-entry_json="$(catalog_dispatch_entry "$catalog" "$tier" "$target" "$scenario")" || exit "$?"
+test_access_snapshot || exit 1
+entry_json="$(catalog_dispatch_entry - "$tier" "$target" "$scenario" <<<"$TEST_ACCESS_CATALOG_JSON")" || exit "$?"
+unset TEST_ACCESS_CATALOG_JSON
+export TEST_ACCESS_EXPECTED_CATALOG_DIGEST="$_TEST_ACCESS_CATALOG_DIGEST"
 mode="$(yq -r '.dispatch.mode' - <<<"$entry_json")"
 
 if [[ "$mode" == 'chainsaw' || "$mode" == 'diagnostics' ]]; then

@@ -8,6 +8,7 @@ metadata:
 spec:
   dependsOn:
     - name: cilium
+    - name: openbao-restore-test
   interval: 1h
   path: ./kubernetes/apps/kube-system/agent-access/app
   prune: true

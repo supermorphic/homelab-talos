@@ -156,7 +156,7 @@ def assert_tunnel_active(port: int) -> None:
 
 
 def scoped_kubeconfig(kubeconfig: Path | None) -> Path:
-    """Accept the checkout-bound exec configuration and preserve observer default."""
+    """Accept the checked debugger config without changing its selected context."""
     root = Path(__file__).resolve().parents[2]
     # This module is also shipped alone to cluster workloads. Load the local
     # credential helper only for this workstation-only tunnel operation.
@@ -168,16 +168,22 @@ def scoped_kubeconfig(kubeconfig: Path | None) -> Path:
     selected = kubeconfig or root / ".kube" / "config"
     try:
         selected = validate_private_file(selected)
-        validate_scoped_kubeconfig(selected, root)
-        if yaml.safe_load(selected.read_text()).get("current-context") != "homelab-observer":
-            raise ValueError("observer_default_required")
+        if selected.parent.parent == root / ".kube/invocations":
+            from scripts.test.access import validate_invocation
+
+            if validate_invocation(root, selected)["profile"] != "debugger":
+                raise ValueError("debugger_profile_required")
+        else:
+            validate_scoped_kubeconfig(selected, root)
+        if yaml.safe_load(selected.read_text()).get("current-context") != "homelab-diagnostic":
+            raise ValueError("debugger_context_required")
     except (OSError, KeyError, TypeError, ValueError, yaml.YAMLError, SafeError) as exc:
         raise PrivateTunnelUnavailable("scoped_kubeconfig_required") from exc
     return selected
 
 
 def _kubectl(config: Path, *arguments: str) -> list[str]:
-    return ["kubectl", "--kubeconfig", str(config), "--context", "homelab-diagnostic",
+    return ["kubectl", "--kubeconfig", str(config),
             "--namespace", "automation-data", *arguments]
 
 

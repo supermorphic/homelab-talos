@@ -15,6 +15,12 @@ observer verification passed with retained reports. Issue 449 is ready for
 closeout. These tests establish the observed behavior; future issuer maintenance
 still follows the stable-issuer lifecycle below.
 
+[Specification 032](032-openbao-scoped-test-execution.md) records the additive
+scoped-test issuer allowlist, Git admission fixtures and attended credential
+boundary. Those additions require their own staged deployment and live evidence;
+they do not change this platform's independent recovery root or retroactively
+extend the retained acceptance below.
+
 ### Retained acceptance evidence
 
 All runs below passed and were published on 2026-09-30. Issuance and HA used the

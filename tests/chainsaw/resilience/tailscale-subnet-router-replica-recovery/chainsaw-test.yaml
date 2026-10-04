@@ -24,7 +24,7 @@ spec:
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
               scripts/test/scenarios/tailscale_subnet_router_replica_recovery.py
-              baseline .kube/config
+              baseline "${TEST_KUBECONFIG:?}"
       cleanup:
         - script:
             timeout: 6m
@@ -32,7 +32,7 @@ spec:
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
               scripts/test/scenarios/tailscale_subnet_router_replica_recovery.py
-              cleanup .kube/config
+              cleanup "${TEST_KUBECONFIG:?}"
     - name: guard-and-delete-one-recorded-replica
       try:
         - script:
@@ -46,7 +46,7 @@ spec:
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
               scripts/test/scenarios/tailscale_subnet_router_replica_recovery.py
-              disrupt .kube/config
+              disrupt "${TEST_KUBECONFIG:?}"
     - name: verify-two-replica-cross-node-recovery
       try:
         - script:
@@ -55,4 +55,4 @@ spec:
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
               scripts/test/scenarios/tailscale_subnet_router_replica_recovery.py
-              verify .kube/config
+              verify "${TEST_KUBECONFIG:?}"

@@ -15,7 +15,7 @@ if [[ "$mode" == check ]]; then
   assert_established_disruption_admissible "$kubeconfig" >/dev/null
   exit
 fi
-[[ "$mode" == hold && "$#" -eq 4 ]]
+[[ "$mode" == hold && ( "$#" -eq 4 || "$#" -eq 5 ) ]]
 marker="$4"
 cleanup() {
   status="$?"
@@ -23,7 +23,7 @@ cleanup() {
   release_test_lease "$kubeconfig" "$holder" >/dev/null 2>&1 || status=1
   exit "$status"
 }
-assert_established_disruption_admissible "$kubeconfig" >/dev/null
+assert_established_disruption_admissible "${5:-$kubeconfig}" >/dev/null
 acquire_test_lease "$kubeconfig" "$holder" 1 existing-only >/dev/null
 trap cleanup EXIT
 trap 'exit 1' INT TERM

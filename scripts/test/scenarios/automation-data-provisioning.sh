@@ -6,6 +6,7 @@ source scripts/lib/flux-alerts.sh
 source scripts/lib/network.sh
 # shellcheck source=scripts/test/lib/job.sh
 source scripts/test/lib/job.sh
+source scripts/test/lib/owned-resources.sh
 # shellcheck source=scripts/lib/lease.sh
 source scripts/lib/lease.sh
 require_bash
@@ -37,7 +38,7 @@ provisioning_token="${AUTOMATION_DATA_PROVISIONING_TOKEN:-}"
 kubeconfig="$1"
 run_dir="${HOMELAB_TEST_RUN_DIR:-}"
 [[ -f "$kubeconfig" ]] || {
-  echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
+  echo 'Provisioning acceptance requires the selected invocation config.' >&2
   exit 1
 }
 [[ -n "$run_dir" && -d "$run_dir" ]] || {
@@ -59,6 +60,12 @@ helper_job="automation-data-bundle-$run_hash"
 kc=(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace")
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/automation-data-provisioning.XXXXXX")"
 umask 077
+ledger="$run_dir/diagnostics/automation-data-provisioning-owned.jsonl"
+[[ ! -e "$ledger" ]] || {
+  echo 'Refusing to overwrite prior provisioning ownership evidence.' >&2
+  exit 1
+}
+: >"$ledger"
 
 write_phase() {
   local phase="$1" phase_status="$2" reason="$3"
@@ -91,8 +98,7 @@ cleanup() {
   trap - EXIT INT TERM
   set +e
   for job in "$helper_job" "$backup_job" "$error_job"; do
-    "${kc[@]}" delete job "$job" --ignore-not-found --wait=true --timeout=2m \
-      >/dev/null 2>&1 || cleanup_ok=false
+    test_delete_owned "$ledger" Job "$namespace" "$job" "${kc[@]}" || cleanup_ok=false
   done
   for job in "$helper_job" "$backup_job" "$error_job"; do
     job_absent "$job" >/dev/null 2>&1 || cleanup_ok=false
@@ -104,9 +110,12 @@ cleanup() {
   else
     write_phase cleanup failed 'one or more run-owned Jobs or local temporary files remain'
   fi
+  if [[ "$cleanup_ok" != true && "$original_exit" == 0 ]]; then original_exit=1; fi
   exit "$original_exit"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 workflow_request() {
   local operation="$1" credential="${2:-}" output="$3"
@@ -232,38 +241,7 @@ for job in "$error_job" "$backup_job" "$helper_job"; do
 done
 
 error_job_manifest() {
-  local error_command
-  # This attended backup fixture is deliberately retained. Fresh platforms seed
-  # only the exact row, after proving that no similarly named object exists.
-  error_command="$(
-    cat <<'SQL'
-psql --no-psqlrc --set=ON_ERROR_STOP=1 >/dev/null <<'EOSQL'
-BEGIN;
-SELECT pg_advisory_xact_lock(hashtextextended('automation-data:automation_data_backup_error', 0));
-DO $fixture$
-BEGIN
-  IF EXISTS (SELECT FROM pg_database WHERE datname = 'automation_data_backup_error') OR
-    EXISTS (SELECT FROM pg_roles WHERE rolname IN ('automation_data_backup_error_owner', 'automation_data_backup_error_migrator', 'automation_data_backup_error_runtime')) THEN
-    RAISE EXCEPTION 'backup_fixture_collision';
-  END IF;
-  IF NOT EXISTS (SELECT FROM platform_operations.managed_domains WHERE domain = 'automation_data_backup_error') THEN
-    INSERT INTO platform_operations.managed_domains
-      (domain, database_name, owner_role, migrator_role, runtime_role, state, generation)
-    VALUES ('automation_data_backup_error', 'automation_data_backup_error', 'automation_data_backup_error_owner',
-      'automation_data_backup_error_migrator', 'automation_data_backup_error_runtime', 'error', platform_internal.bump_generation());
-  END IF;
-  IF EXISTS (SELECT FROM platform_operations.managed_domains WHERE domain = 'automation_data_backup_error'
-      AND (has_reached_ready OR state <> 'error')) THEN
-    RAISE EXCEPTION 'backup_fixture_not_error';
-  END IF;
-  PERFORM platform_operations.record_operation_error('automation_data_backup_error', 'acceptance_backup_error');
-END;
-$fixture$;
-COMMIT;
-EOSQL
-SQL
-  )"
-  JOB_NAME="$error_job" RUN_HASH="$run_hash" ERROR_COMMAND="$error_command" \
+  JOB_NAME="$error_job" RUN_HASH="$run_hash" \
     yq --null-input --output-format yaml '
     {
       "apiVersion": "batch/v1",
@@ -298,8 +276,7 @@ SQL
             "containers": [{
               "name": "record-error",
               "image": "postgres:17.11-alpine3.24",
-              "command": ["/bin/sh", "-ceu"],
-              "args": [strenv(ERROR_COMMAND)],
+              "command": ["/bin/sh", "-eu", "/helpers/provision-error.sh"],
               "env": [
                 {"name": "PGDATABASE", "value": "automation_data_control"},
                 {"name": "PGHOST", "value": "automation-data-postgresql"},
@@ -318,9 +295,11 @@ SQL
                 "capabilities": {"drop": ["ALL"]},
                 "readOnlyRootFilesystem": true
               },
-              "volumeMounts": [{"name": "tmp", "mountPath": "/tmp"}]
+              "volumeMounts": [{"name": "tmp", "mountPath": "/tmp"},
+                {"name": "helpers", "mountPath": "/helpers", "readOnly": true}]
             }],
-            "volumes": [{"name": "tmp", "emptyDir": {}}]
+            "volumes": [{"name": "tmp", "emptyDir": {}},
+              {"name": "helpers", "configMap": {"name": "automation-data-test-helpers-v1"}}]
           }
         }
       }
@@ -328,7 +307,7 @@ SQL
 }
 
 verify_lease
-error_job_manifest | "${kc[@]}" create --filename - >/dev/null
+error_job_manifest | test_create_owned_stream "$ledger" "${kc[@]}"
 wait_for_job_terminal "$error_job" 300 2 "${kc[@]}"
 
 query_database_set() {
@@ -374,15 +353,23 @@ active_backup_jobs="$(
   echo 'Refusing to overlap the acceptance backup with an active backup Job.' >&2
   exit 1
 }
-"${kc[@]}" create job "$backup_job" \
-  --from=cronjob/automation-data-postgresql-backup --dry-run=client --output yaml |
+backup_job_manifest() { # <client-generated CronJob Job manifest>
   JOB_NAME="$backup_job" RUN_HASH="$run_hash" yq '
     .metadata.name = strenv(JOB_NAME) |
+    .metadata.namespace = "automation-data" |
     .metadata.labels."homelab-talos/test" = "automation-data-provisioning" |
     .metadata.labels."homelab-talos/run-id" = strenv(RUN_HASH) |
+    .metadata.labels."homelab-talos/role" = "backup" |
     .spec.template.metadata.labels."homelab-talos/test" = "automation-data-provisioning" |
-    .spec.template.metadata.labels."homelab-talos/run-id" = strenv(RUN_HASH)
-  ' | "${kc[@]}" create --filename - >/dev/null
+    .spec.template.metadata.labels."homelab-talos/run-id" = strenv(RUN_HASH) |
+    .spec.template.metadata.labels."homelab-talos/role" = "backup" |
+    (.spec.template.spec.volumes[] | select(.name == "backup-script") | .configMap.name) = "automation-data-test-helpers-v1"
+  ' "$1"
+}
+"${kc[@]}" create job "$backup_job" \
+  --from=cronjob/automation-data-postgresql-backup --dry-run=client --output yaml >"$temp_dir/backup-job-source.yaml"
+verify_lease
+backup_job_manifest "$temp_dir/backup-job-source.yaml" | test_create_owned_stream "$ledger" "${kc[@]}"
 wait_for_job_terminal "$backup_job" 1800 5 "${kc[@]}"
 
 backup_timestamp_after=''
@@ -412,12 +399,10 @@ database_set_after="$(query_database_set)"
 }
 expected_database_set_base64="$(printf '%s\n' "$database_set_before" | base64 | tr -d '\n')"
 
-helper_command="$(<scripts/test/lib/automation-data-bundle.sh)"
-
 helper_job_manifest() {
   JOB_NAME="$helper_job" RUN_HASH="$run_hash" \
     EXPECTED_DATABASE_SET_BASE64="$expected_database_set_base64" \
-    HELPER_COMMAND="$helper_command" yq --null-input --output-format yaml '
+    yq --null-input --output-format yaml '
       {
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -453,8 +438,7 @@ helper_job_manifest() {
               "containers": [{
                 "name": "validate-bundle",
                 "image": "postgres:17.11-alpine3.24",
-                "command": ["/bin/sh", "-ceu"],
-                "args": [strenv(HELPER_COMMAND)],
+                "command": ["/bin/sh", "-eu", "/helpers/automation-data-bundle.sh"],
                 "env": [{
                   "name": "EXPECTED_DATABASE_SET_BASE64",
                   "value": strenv(EXPECTED_DATABASE_SET_BASE64)
@@ -470,14 +454,16 @@ helper_job_manifest() {
                 },
                 "volumeMounts": [
                   {"name": "backups", "mountPath": "/backups", "readOnly": true},
-                  {"name": "tmp", "mountPath": "/tmp"}
+                  {"name": "tmp", "mountPath": "/tmp"},
+                  {"name": "helpers", "mountPath": "/helpers", "readOnly": true}
                 ]
               }],
               "volumes": [
                 {"name": "backups", "persistentVolumeClaim": {
                   "claimName": "automation-data-postgresql-backups", "readOnly": true
                 }},
-                {"name": "tmp", "emptyDir": {}}
+                {"name": "tmp", "emptyDir": {}},
+                {"name": "helpers", "configMap": {"name": "automation-data-test-helpers-v1"}}
               ]
             }
           }
@@ -486,7 +472,7 @@ helper_job_manifest() {
 }
 
 verify_lease
-helper_job_manifest | "${kc[@]}" create --filename - >/dev/null
+helper_job_manifest | test_create_owned_stream "$ledger" "${kc[@]}"
 if ! wait_for_job_terminal "$helper_job" 300 2 "${kc[@]}" >/dev/null 2>&1; then
   # Only relay the helper's fixed diagnostic tokens; never arbitrary Pod output.
   "${kc[@]}" logs "job/$helper_job" --tail=20 --limit-bytes=4096 2>/dev/null |

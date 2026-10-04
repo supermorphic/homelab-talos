@@ -286,20 +286,21 @@ class AcceptanceGuardTests(unittest.TestCase):
         events = self.directory / "events.jsonl"
         actor = {"directory": self.directory}
         records = [
-            {"profile": "diagnostic", "issued_at": 100, "expires_at": 700},
-            {"profile": "diagnostic", "issued_at": 699, "expires_at": 1299},
+            {"profile": "debugger", "issued_at": 100, "expires_at": 700},
+            {"profile": "debugger", "issued_at": 699, "expires_at": 1299},
         ]
         events.write_text("\n".join(json.dumps(r) for r in records))
         with self.assertRaises(SafeError):
-            scenario.assert_caller_refresh(actor, ["diagnostic"])
+            scenario.assert_caller_refresh(actor, ["debugger"])
         records[1]["issued_at"] = 701
         events.write_text("\n".join(json.dumps(r) for r in records))
-        scenario.assert_caller_refresh(actor, ["diagnostic"])
+        scenario.assert_caller_refresh(actor, ["debugger"])
         with self.assertRaises(SafeError):
-            scenario.assert_caller_refresh(actor, ["diagnostic", "publisher"])
+            scenario.assert_caller_refresh(actor, ["debugger", "report-publisher"])
 
     def test_lifetime_cannot_pass_when_watch_reconnection_fails(self):
         actor = {"directory": self.directory}
+        actor["audit_configs"] = {str(self.directory): {"observer": self.directory / "selected-observer"}}
         diagnostics = {}
 
         @contextmanager
@@ -380,7 +381,7 @@ class AcceptanceGuardTests(unittest.TestCase):
         output = io.StringIO()
 
         @contextmanager
-        def session(*args):
+        def session(*args, **kwargs):
             yield "SYNTHETIC"
 
         with (
@@ -400,6 +401,9 @@ class AcceptanceGuardTests(unittest.TestCase):
             patch.object(scenario, "BrokerScope", return_value=scope),
             patch.object(scenario.apply, "verify_configuration", return_value={"differences": []}),
             patch.object(scenario.workstation, "cluster_metadata", return_value={}),
+            patch.object(scenario.access, "prepare_profile_check", return_value=Path("/synthetic/coordinator")),
+            patch.object(scenario.access, "remove_invocation"),
+            patch.object(scenario, "prepare_actor_profiles"),
             patch.object(scenario, "fixtures", return_value=(self.directory, self.directory)),
             patch.object(scenario, "permissions"),
             patch.object(scenario, "kubectl"),

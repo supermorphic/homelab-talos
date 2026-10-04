@@ -7,6 +7,8 @@
 set -euo pipefail
 
 source scripts/lib/common.sh
+# shellcheck source=scripts/test/lib/owned-resources.sh
+source scripts/test/lib/owned-resources.sh
 require_bash
 
 [[ "$#" -eq 1 ]] || {
@@ -24,13 +26,19 @@ image='ghcr.io/home-operations/plex:1.43.3.10828@sha256:0c0b6899339503af17cb190b
 temp_dir="$(mktemp -d /tmp/homelab-talos-plex-network-policy.XXXXXX)"
 kc=(kubectl --kubeconfig "$kubeconfig")
 created=false
+owned_ledger="${HOMELAB_TEST_RUN_DIR:-$temp_dir}/owned-resources.jsonl"
 
 cleanup() {
+  local cleanup_ok=true pod
   if [[ "$created" == 'true' ]]; then
-    "${kc[@]}" --namespace "$namespace" delete pod "$control_pod" "$selected_pod" \
-      --ignore-not-found --wait=true --timeout=2m >/dev/null 2>&1 || true
+    for pod in "$control_pod" "$selected_pod"; do
+      test_delete_owned "$owned_ledger" Pod "$namespace" "$pod" "${kc[@]}" \
+        --namespace "$namespace" || cleanup_ok=false
+      [[ -z "$("${kc[@]}" --namespace "$namespace" get pod "$pod" --ignore-not-found --output name)" ]] || cleanup_ok=false
+    done
   fi
   rm -rf -- "$temp_dir"
+  [[ "$cleanup_ok" == true ]]
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -44,9 +52,7 @@ trap 'exit 143' TERM
   echo "Refusing state-changing Plex network-policy test; set PLEX_NETWORK_POLICY_CONFIRM='$expected_confirmation' after reviewing its run-scoped Pod lifecycle." >&2
   exit 1
 }
-if "${kc[@]}" config get-contexts homelab-diagnostic --no-headers >/dev/null 2>&1; then
-  kc+=(--context homelab-diagnostic)
-fi
+
 
 resolve_service_ip() {
   local service_namespace="$1" service="$2" address
@@ -78,7 +84,9 @@ metadata:
     app.kubernetes.io/name: $app_label
     app.kubernetes.io/instance: plex-network-policy-test
     homelab-talos/test: plex-network-policy
+    homelab-talos/run-id: $run_suffix
 spec:
+  activeDeadlineSeconds: 1800
   restartPolicy: Never
   automountServiceAccountToken: false
   securityContext:
@@ -115,9 +123,9 @@ render_probe "$control_pod" 'plex-policy-control'
 # selecting either probe.
 render_probe "$selected_pod" 'plex'
 
-"${kc[@]}" create --filename "$temp_dir/$control_pod.yaml" >/dev/null
-"${kc[@]}" create --filename "$temp_dir/$selected_pod.yaml" >/dev/null
 created=true
+test_create_owned "$owned_ledger" "$temp_dir/$control_pod.yaml" "${kc[@]}"
+test_create_owned "$owned_ledger" "$temp_dir/$selected_pod.yaml" "${kc[@]}"
 "${kc[@]}" --namespace "$namespace" wait --for=condition=Ready \
   "pod/$control_pod" "pod/$selected_pod" --timeout=120s >/dev/null
 

@@ -11,9 +11,7 @@ source scripts/lib/network.sh
 
 kubeconfig="$1"
 kc=(kubectl --kubeconfig "$kubeconfig")
-if "${kc[@]}" config get-contexts homelab-diagnostic --no-headers >/dev/null 2>&1; then
-  kc+=(--context homelab-diagnostic)
-fi
+
 ns='media'
 gateway_ip="$HOMELAB_GATEWAY_VIP"
 host='plex.lab.supermorphic.com'

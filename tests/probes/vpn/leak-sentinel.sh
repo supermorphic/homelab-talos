@@ -9,6 +9,8 @@
 # The VPN stop/recovery transition capture that wraps this is a future resilience
 # scenario (item 4).
 set -euo pipefail
+# shellcheck source=scripts/test/lib/wan-reference.sh
+source scripts/test/lib/wan-reference.sh
 
 [[ "$#" -eq 1 ]] || {
   echo 'Usage: leak-sentinel.sh <kubeconfig>' >&2
@@ -30,10 +32,8 @@ apikey="$(gx sh -c 'grep -E "^apikey" /gluetun/auth/config.toml | sed -E "s/.*\"
 vpn_ip="$(gx wget -qO- --header "X-API-Key: $apikey" http://localhost:8000/v1/publicip/ip 2>/dev/null | yq -r '.public_ip // ""' 2>/dev/null || true)"
 [[ -n "$vpn_ip" ]] || { echo 'Could not read the VPN public IP from the control server.' >&2; exit 1; }
 
-# Home/WAN reference: a throwaway no-VPN pod egresses via the node WAN (ephemeral --rm).
-home_ip="$(kubectl --kubeconfig "$kubeconfig" --namespace "$ns" run "qbsentinel-wan-$RANDOM" \
-  --image=curlimages/curl:8.11.1 --restart=Never --rm -i --quiet \
-  --command -- curl -sS -m 15 https://ifconfig.me/ip 2>/dev/null | tr -d '\r\n ' || true)"
+# The no-VPN reference is returned after the creation-owned Pod is removed.
+home_ip="$(wan_reference_ip "$kubeconfig" "qbsentinel-wan-$RANDOM")"
 [[ -n "$home_ip" ]] || { echo 'Could not determine the node WAN IP (leak reference).' >&2; exit 1; }
 
 if [[ -n "${HOMELAB_TEST_RUN_DIR:-}" ]]; then

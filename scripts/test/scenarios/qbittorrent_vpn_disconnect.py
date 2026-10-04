@@ -143,25 +143,10 @@ class Controller:
         self._qbit_probe()
         home_ip = self.runner(
             [
-                "kubectl",
-                "--kubeconfig",
+                "bash",
+                str(self.repo_root / "scripts/test/lib/wan-reference.sh"),
                 self.kubeconfig,
-                "--namespace",
-                NAMESPACE,
-                "run",
                 f"vpndis-wan-{os.getpid()}",
-                "--image=curlimages/curl:8.11.1",
-                "--restart=Never",
-                "--rm",
-                "-i",
-                "--quiet",
-                "--command",
-                "--",
-                "curl",
-                "-sS",
-                "-m",
-                "15",
-                "https://ifconfig.me/ip",
             ]
         ).strip()
         if not home_ip:

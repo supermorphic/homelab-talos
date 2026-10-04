@@ -10,9 +10,7 @@ kubeconfig="$1"
 ns='ntfy'
 base_url='https://ntfy.lab.supermorphic.com'
 kc=(kubectl --kubeconfig "$kubeconfig")
-if "${kc[@]}" config get-contexts homelab-diagnostic --no-headers >/dev/null 2>&1; then
-  kc+=(--context homelab-diagnostic)
-fi
+
 
 # Do not print credentials, Authorization headers, or message bodies.
 code() { curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$@"; }

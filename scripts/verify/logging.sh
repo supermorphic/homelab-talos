@@ -17,11 +17,6 @@ kubeconfig="$1"
 ns='monitoring'
 longhorn_ns='longhorn-system'
 kc=(kubectl --kubeconfig "$kubeconfig")
-"${kc[@]}" config get-contexts homelab-diagnostic --no-headers >/dev/null 2>&1 || {
-  echo 'Logging verification requires kubeconfig context homelab-diagnostic.' >&2
-  exit 2
-}
-kc+=(--context homelab-diagnostic)
 
 for resource in loki alloy-logs alloy-events; do
   "${kc[@]}" --namespace flux-system wait \

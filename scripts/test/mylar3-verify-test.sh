@@ -34,8 +34,8 @@ EOF
 cat >"$fixture/bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "$1" == --kubeconfig && "$3 $4" == '--context homelab-observer' ]] || exit 64
-shift 4
+[[ "$1" == --kubeconfig && " $* " != *' --context '* ]] || exit 64
+shift 2
 case "$*" in
   '-n flux-system get kustomization mylar3 -o jsonpath='*|'-n media get helmrelease mylar3 -o jsonpath='*) printf True ;;
   '-n media rollout status deployment/mylar3 --timeout=60s') exit 0 ;;

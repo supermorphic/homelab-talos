@@ -309,6 +309,215 @@
           "https://192.168.90.20:6443"
         ]
       }
+    },
+    {
+      "kind": "issuance-role",
+      "name": "debugger",
+      "path": "kubernetes/roles/debugger",
+      "fields": {
+        "allowed_kubernetes_namespaces": [
+          "kube-system"
+        ],
+        "allowed_kubernetes_namespace_selector": "",
+        "service_account_name": "homelab-diagnostic",
+        "kubernetes_role_name": "",
+        "generated_role_rules": "",
+        "token_default_ttl": 600,
+        "token_max_ttl": 600,
+        "token_default_audiences": [
+          "https://192.168.90.20:6443"
+        ]
+      }
+    },
+    {
+      "kind": "issuance-role",
+      "name": "test-runner",
+      "path": "kubernetes/roles/test-runner",
+      "fields": {
+        "allowed_kubernetes_namespaces": [
+          "kube-system"
+        ],
+        "allowed_kubernetes_namespace_selector": "",
+        "service_account_name": "homelab-test-runner",
+        "kubernetes_role_name": "",
+        "generated_role_rules": "",
+        "token_default_ttl": 600,
+        "token_max_ttl": 600,
+        "token_default_audiences": [
+          "https://192.168.90.20:6443"
+        ]
+      }
+    },
+    {
+      "kind": "issuance-role",
+      "name": "report-publisher",
+      "path": "kubernetes/roles/report-publisher",
+      "fields": {
+        "allowed_kubernetes_namespaces": [
+          "kube-system"
+        ],
+        "allowed_kubernetes_namespace_selector": "",
+        "service_account_name": "homelab-report-publisher",
+        "kubernetes_role_name": "",
+        "generated_role_rules": "",
+        "token_default_ttl": 600,
+        "token_max_ttl": 600,
+        "token_default_audiences": [
+          "https://192.168.90.20:6443"
+        ]
+      }
+    },
+    {
+      "kind": "issuance-role",
+      "name": "test-flux-restart",
+      "path": "kubernetes/roles/test-flux-restart",
+      "fields": {
+        "allowed_kubernetes_namespaces": [
+          "kube-system"
+        ],
+        "allowed_kubernetes_namespace_selector": "",
+        "service_account_name": "homelab-test-flux-restart",
+        "kubernetes_role_name": "",
+        "generated_role_rules": "",
+        "token_default_ttl": 600,
+        "token_max_ttl": 600,
+        "token_default_audiences": [
+          "https://192.168.90.20:6443"
+        ]
+      }
+    },
+    {
+      "kind": "issuance-role",
+      "name": "test-cilium-connectivity",
+      "path": "kubernetes/roles/test-cilium-connectivity",
+      "fields": {
+        "allowed_kubernetes_namespaces": [
+          "kube-system"
+        ],
+        "allowed_kubernetes_namespace_selector": "",
+        "service_account_name": "homelab-test-cilium-connectivity",
+        "kubernetes_role_name": "",
+        "generated_role_rules": "",
+        "token_default_ttl": 600,
+        "token_max_ttl": 600,
+        "token_default_audiences": [
+          "https://192.168.90.20:6443"
+        ]
+      }
+    },
+    {
+      "kind": "issuance-role",
+      "name": "test-node-reschedule",
+      "path": "kubernetes/roles/test-node-reschedule",
+      "fields": {
+        "allowed_kubernetes_namespaces": [
+          "kube-system"
+        ],
+        "allowed_kubernetes_namespace_selector": "",
+        "service_account_name": "homelab-test-node-reschedule",
+        "kubernetes_role_name": "",
+        "generated_role_rules": "",
+        "token_default_ttl": 600,
+        "token_max_ttl": 600,
+        "token_default_audiences": [
+          "https://192.168.90.20:6443"
+        ]
+      }
+    },
+    {
+      "kind": "issuance-role",
+      "name": "test-conformance",
+      "path": "kubernetes/roles/test-conformance",
+      "fields": {
+        "allowed_kubernetes_namespaces": [
+          "kube-system"
+        ],
+        "allowed_kubernetes_namespace_selector": "",
+        "service_account_name": "homelab-test-conformance",
+        "kubernetes_role_name": "",
+        "generated_role_rules": "",
+        "token_default_ttl": 600,
+        "token_max_ttl": 600,
+        "token_default_audiences": [
+          "https://192.168.90.20:6443"
+        ]
+      }
+    },
+    {
+      "kind": "issuance-role",
+      "name": "test-openbao-issuance",
+      "path": "kubernetes/roles/test-openbao-issuance",
+      "fields": {
+        "allowed_kubernetes_namespaces": [
+          "kube-system"
+        ],
+        "allowed_kubernetes_namespace_selector": "",
+        "service_account_name": "homelab-test-openbao-issuance",
+        "kubernetes_role_name": "",
+        "generated_role_rules": "",
+        "token_default_ttl": 600,
+        "token_max_ttl": 600,
+        "token_default_audiences": [
+          "https://192.168.90.20:6443"
+        ]
+      }
+    },
+    {
+      "kind": "issuance-role",
+      "name": "test-openbao-ha",
+      "path": "kubernetes/roles/test-openbao-ha",
+      "fields": {
+        "allowed_kubernetes_namespaces": [
+          "kube-system"
+        ],
+        "allowed_kubernetes_namespace_selector": "",
+        "service_account_name": "homelab-test-openbao-ha",
+        "kubernetes_role_name": "",
+        "generated_role_rules": "",
+        "token_default_ttl": 600,
+        "token_max_ttl": 600,
+        "token_default_audiences": [
+          "https://192.168.90.20:6443"
+        ]
+      }
+    },
+    {
+      "kind": "issuance-role",
+      "name": "test-openbao-restore",
+      "path": "kubernetes/roles/test-openbao-restore",
+      "fields": {
+        "allowed_kubernetes_namespaces": [
+          "kube-system"
+        ],
+        "allowed_kubernetes_namespace_selector": "",
+        "service_account_name": "homelab-test-openbao-restore",
+        "kubernetes_role_name": "",
+        "generated_role_rules": "",
+        "token_default_ttl": 600,
+        "token_max_ttl": 600,
+        "token_default_audiences": [
+          "https://192.168.90.20:6443"
+        ]
+      }
+    },
+    {
+      "kind": "issuance-role",
+      "name": "test-openbao-lifecycle",
+      "path": "kubernetes/roles/test-openbao-lifecycle",
+      "fields": {
+        "allowed_kubernetes_namespaces": [
+          "kube-system"
+        ],
+        "allowed_kubernetes_namespace_selector": "",
+        "service_account_name": "homelab-test-openbao-lifecycle",
+        "kubernetes_role_name": "",
+        "generated_role_rules": "",
+        "token_default_ttl": 600,
+        "token_max_ttl": 600,
+        "token_default_audiences": [
+          "https://192.168.90.20:6443"
+        ]
+      }
     }
   ],
   "inventories": {
@@ -340,7 +549,18 @@
       "observer",
       "diagnostic",
       "publisher",
-      "campaign-coordinator"
+      "campaign-coordinator",
+      "debugger",
+      "test-runner",
+      "report-publisher",
+      "test-flux-restart",
+      "test-cilium-connectivity",
+      "test-node-reschedule",
+      "test-conformance",
+      "test-openbao-issuance",
+      "test-openbao-ha",
+      "test-openbao-restore",
+      "test-openbao-lifecycle"
     ],
     "approle-role": [
       "agent-workstation"

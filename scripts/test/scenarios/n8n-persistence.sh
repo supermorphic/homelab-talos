@@ -6,6 +6,7 @@ source scripts/lib/flux-alerts.sh
 source scripts/lib/network.sh
 # shellcheck source=scripts/test/lib/job.sh
 source scripts/test/lib/job.sh
+source scripts/test/lib/owned-resources.sh
 source scripts/lib/lease.sh
 # shellcheck source=scripts/test/lib/n8n-persistence-query.sh
 source scripts/test/lib/n8n-persistence-query.sh
@@ -36,7 +37,7 @@ token="${N8N_CANARY_TOKEN:-}"
   exit 1
 }
 [[ -f "$kubeconfig" ]] || {
-  echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
+  echo "Missing selected invocation config: $kubeconfig." >&2
   exit 1
 }
 
@@ -54,6 +55,12 @@ kc=(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace")
 tmp_dir=''
 sentinel_possible=false
 disruption_started=false
+ledger="$run_dir/diagnostics/n8n-persistence-owned.jsonl"
+[[ ! -e "$ledger" ]] || {
+  echo 'Refusing to overwrite prior persistence ownership evidence.' >&2
+  exit 1
+}
+: >"$ledger"
 
 write_phase() {
   local phase="$1" phase_status="$2" reason="$3"
@@ -177,9 +184,9 @@ run_sentinel_job() {
     echo "Refusing to adopt Job $namespace/$name or proceed without proving its absence." >&2
     return 1
   }
-  job_manifest "$name" "$node" "$operation" | "${kc[@]}" create --filename - >/dev/null
+  job_manifest "$name" "$node" "$operation" | test_create_owned_stream "$ledger" "${kc[@]}"
   wait_for_job_terminal "$name" 300 2 "${kc[@]}"
-  "${kc[@]}" delete job "$name" --wait=true --timeout=2m >/dev/null
+  test_delete_owned "$ledger" Job "$namespace" "$name" "${kc[@]}"
   job_absent "$name"
 }
 
@@ -248,14 +255,15 @@ cleanup() {
   set +e
 
   for job in "$writer_job" "$reader_job" "$cleanup_job"; do
-    "${kc[@]}" delete job "$job" --ignore-not-found --wait=true --timeout=2m >/dev/null 2>&1 || cleanup_ok=false
+    test_delete_owned "$ledger" Job "$namespace" "$job" "${kc[@]}" || cleanup_ok=false
   done
   if [[ "$sentinel_possible" == 'true' ]]; then
     node="$(current_n8n_node 2>/dev/null)"
     if [[ -n "$node" ]]; then
-      job_manifest "$cleanup_job" "$node" cleanup | "${kc[@]}" create --filename - >/dev/null 2>&1 &&
+      verify_lease &&
+        job_manifest "$cleanup_job" "$node" cleanup | test_create_owned_stream "$ledger" "${kc[@]}" &&
         wait_for_job_terminal "$cleanup_job" 300 2 "${kc[@]}" >/dev/null 2>&1 &&
-        "${kc[@]}" delete job "$cleanup_job" --wait=true --timeout=2m >/dev/null 2>&1 || cleanup_ok=false
+        test_delete_owned "$ledger" Job "$namespace" "$cleanup_job" "${kc[@]}" || cleanup_ok=false
     else
       cleanup_ok=false
     fi
@@ -288,8 +296,8 @@ cleanup() {
   fi
   set -e
 
-  if [[ "$cleanup_ok" != 'true' || "$recovery_ok" != 'true' ]]; then
-    exit 1
+  if [[ ( "$cleanup_ok" != true || "$recovery_ok" != true ) && "$original_exit" == 0 ]]; then
+    original_exit=1
   fi
   exit "$original_exit"
 }
@@ -324,7 +332,7 @@ sentinel_possible=true
 run_sentinel_job "$writer_job" "$n8n_node" write
 verify_lease
 disruption_started=true
-"${kc[@]}" delete pod "$n8n_pod" --wait=true --timeout=5m >/dev/null
+test_delete_pod_instance "$n8n_uid" "$namespace" "$n8n_pod" "${kc[@]}"
 "${kc[@]}" rollout status deployment/n8n --timeout=10m >/dev/null
 new_n8n_json="$("${kc[@]}" get pods --selector app.kubernetes.io/name=n8n --output json)"
 new_n8n_identity="$(n8n_single_pod_identity <<<"$new_n8n_json")"
@@ -347,7 +355,7 @@ IFS=$'\t' read -r postgresql_pod postgresql_uid _postgresql_node <<<"$postgresql
   exit 1
 }
 verify_lease
-"${kc[@]}" delete pod "$postgresql_pod" --wait=true --timeout=5m >/dev/null
+test_delete_pod_instance "$postgresql_uid" "$namespace" "$postgresql_pod" "${kc[@]}"
 "${kc[@]}" rollout status statefulset/n8n-postgresql --timeout=10m >/dev/null
 "${kc[@]}" rollout status deployment/n8n --timeout=10m >/dev/null
 new_postgresql_identity="$("${kc[@]}" get pods \

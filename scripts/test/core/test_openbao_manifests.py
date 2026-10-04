@@ -172,13 +172,19 @@ class OpenBaoManifestTests(unittest.TestCase):
 
     def test_flux_units_require_exact_suspended_set(self):
         names = ("openbao-prerequisites", "openbao", "openbao-access", "openbao-acceptance",
-                 "openbao-backup", "openbao-monitoring")
-        parts = ("namespace", "app", "access", "acceptance", "backup", "monitoring")
+                 "openbao-backup", "openbao-monitoring", "openbao-restore-test")
+        parts = ("namespace", "app", "access", "acceptance", "backup", "monitoring", "restore-test")
         units = [{"kind": "Kustomization", "metadata": {"name": name, "namespace": "flux-system"},
                   "spec": {"suspend": True,
                            "path": "./kubernetes/apps/security/openbao/" + part}}
                  for name, part in zip(names, parts)]
+        units[-1]["spec"].update(dependsOn=[{"name": "cilium"}], prune=True, wait=True,
+            sourceRef={"kind": "GitRepository", "name": "flux-system", "namespace": "flux-system"})
         self.assertEqual(validate_flux_units(units), [])
+        for field, value in (("prune", False), ("wait", False), ("dependsOn", [])):
+            altered = copy.deepcopy(units)
+            altered[-1]["spec"][field] = value
+            self.assertIn("flux-activation", validate_flux_units(altered))
         missing = copy.deepcopy(units)
         missing[2]["metadata"]["name"] = "openbao-extra"
         self.assertIn("flux-activation", validate_flux_units(missing))

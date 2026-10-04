@@ -124,6 +124,8 @@ def target(kubeconfig):
 
 
 def cluster_metadata(kubeconfig):
+    from .credentials import PROFILES as current_profiles
+
     # Read only the selected cluster section from an explicitly authorized file.
     view = guards.kube(kubeconfig, "config", "view", "--minify", "--raw", "-o", "json")
     try:
@@ -147,11 +149,11 @@ def cluster_metadata(kubeconfig):
         if b"-----BEGIN CERTIFICATE-----" not in base64.b64decode(ca, validate=True):
             raise SafeError("invalid-source")
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "server": server,
             "certificate_authority_data": ca,
             "openbao_server": ENDPOINT,
-            "profiles": PROFILES,
+            "profiles": list(current_profiles),
         }
     except (KeyError, TypeError, ValueError, IndexError):
         raise SafeError("invalid-source") from None

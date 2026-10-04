@@ -6,7 +6,7 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 topology_storage_runtime_cases=(
 	trim-only
 	all-evidence-present
-	missing-diagnostic-context
+	missing-selected-config
 	healthy-two-pod-daemonset
 	duplicate-alloy-log-node
 	two-alloy-events-pods
@@ -163,8 +163,13 @@ printf 'kubectl' >>"$FAKE_KUBECTL_LOG"
 printf ' %s' "$@" >>"$FAKE_KUBECTL_LOG"
 printf '\n' >>"$FAKE_KUBECTL_LOG"
 
+[[ " $* " != *' --context '* ]] || {
+  echo 'The supplied logging config must remain selected.' >&2
+  exit 65
+}
+
 if [[ " $* " == *' config get-contexts homelab-diagnostic --no-headers '* ]]; then
-  [[ "$FAKE_LAYOUT" != 'missing-diagnostic-context' ]] || exit 1
+  [[ "$FAKE_LAYOUT" != 'missing-selected-config' ]] || exit 1
   printf 'homelab-diagnostic\n'
   exit 0
 fi
@@ -485,7 +490,8 @@ chmod +x "$fixture/bin/sed"
 
 run_case() {
 	local layout="$1" expected_status="$2" expected_message="$3" expected_starts="$4" expected_stops="$5"
-	local case_root="$fixture/$layout" output status case_verifier="$verifier"
+	local case_root="$fixture/$layout" output status case_verifier="$verifier" case_config="$fixture/kubeconfig"
+	[[ "$layout" != missing-selected-config ]] || case_config="$fixture/absent-config"
 	if [[ "${LOGGING_VERIFY_CONTRACT_CAPTURE:-false}" == true ]]; then
 		"$verifier"
 		printf '%s\n' "$layout"
@@ -511,7 +517,7 @@ run_case() {
 	PATH="$fixture/bin:$PATH" TMPDIR="$fixture/tmp" FAKE_LAYOUT="$layout" \
 		FAKE_KUBECTL_LOG="$case_root/kubectl.log" FAKE_CURL_LOG="$case_root/curl.log" \
 		FAKE_PROCESS_LOG="$case_root/process.log" REAL_SED="$real_sed" \
-		"$case_verifier" "$fixture/kubeconfig" >"$output" 2>&1
+		"$case_verifier" "$case_config" >"$output" 2>&1
 	status="$?"
 	set -e
 
@@ -548,7 +554,10 @@ run_case() {
 if case_selected trim-only; then
 	run_case trim-only 0 'Logging acceptance passed' 2 2
 	if [[ "${LOGGING_VERIFY_CONTRACT_CAPTURE:-false}" != true ]]; then
-		rg -F -q -- '--context homelab-diagnostic' "$fixture/trim-only/kubectl.log"
+		if rg -q -- '--context' "$fixture/trim-only/kubectl.log"; then
+      echo 'Logging verification switched away from the supplied config.' >&2
+      exit 1
+    fi
 		rg -F -q -- 'get volumes.longhorn.io --output json' "$fixture/trim-only/kubectl.log"
 		! rg -q -- ' get persistentvolume(s)? ' "$fixture/trim-only/kubectl.log" || {
 			echo 'Verifier attempted a forbidden PersistentVolume read.' >&2
@@ -582,7 +591,7 @@ if case_selected all-evidence-present; then
 	fi
 fi
 
-case_selected missing-diagnostic-context && run_case missing-diagnostic-context 2 'Logging verification requires kubeconfig context homelab-diagnostic.' 0 0
+case_selected missing-selected-config && run_case missing-selected-config 2 'Logging verification kubeconfig is missing.' 0 0
 case_selected healthy-two-pod-daemonset && run_case healthy-two-pod-daemonset 1 'Alloy Logs topology does not have exactly three fully available scheduled instances.' 0 0
 case_selected duplicate-alloy-log-node && run_case duplicate-alloy-log-node 1 'Alloy Logs pods are not Ready on exactly three distinct production nodes.' 0 0
 case_selected two-alloy-events-pods && run_case two-alloy-events-pods 1 'Alloy Events topology does not have exactly one fully available instance.' 0 0

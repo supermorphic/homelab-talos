@@ -131,14 +131,14 @@ verification_contract="$(yq -o=json -I=0 '
   {
     "mutates": .metadata.mutates_cluster,
     "owner": .metadata.execution_owner,
-    "access": .access.tier,
+    "access": .access.profile,
     "confirmation": .confirmation.type,
     "command": .runner.command,
     "implementation": .runner.implementation
   }
 ' "$catalog")"
 [[ "$verification_contract" == \
-  '{"mutates":false,"owner":"human","access":"observer","confirmation":"none","command":"mise exec -- just kube automation-data-verify","implementation":"scripts/verify/automation-data.sh"}' ]] ||
+  '{"mutates":false,"owner":"shared","access":"observer","confirmation":"none","command":"mise exec -- just kube automation-data-verify","implementation":"scripts/verify/automation-data.sh"}' ]] ||
   fail 'the read-only automation-data catalog contract is missing or unsafe'
 
 provisioning_contract="$(yq -o=json -I=0 '
@@ -153,7 +153,7 @@ provisioning_contract="$(yq -o=json -I=0 '
   }
 ' "$catalog")"
 [[ "$provisioning_contract" == \
-  '{"mutates":true,"owner":"human","confirmation":{"type":"exact","variable":"AUTOMATION_DATA_PROVISIONING_CONFIRM","expected":"test:automation-data:provisioning"},"command":"AUTOMATION_DATA_PROVISIONING_CONFIRM=test:automation-data:provisioning mise exec -- just kube automation-data-provisioning-test","implementation":"scripts/test/scenarios/automation-data-provisioning.sh","dispatch":{"mode":"direct","runtime":"bash","path":"scripts/test/scenarios/automation-data-provisioning.sh","args":[".kube/config"],"selector":null}}' ]] ||
+  '{"mutates":true,"owner":"human","confirmation":{"type":"exact","variable":"AUTOMATION_DATA_PROVISIONING_CONFIRM","expected":"test:automation-data:provisioning"},"command":"AUTOMATION_DATA_PROVISIONING_CONFIRM=test:automation-data:provisioning mise exec -- just kube automation-data-provisioning-test","implementation":"scripts/test/scenarios/automation-data-provisioning.sh","dispatch":{"mode":"direct","runtime":"bash","path":"scripts/test/scenarios/automation-data-provisioning.sh","args":["@test-kubeconfig@"],"selector":null}}' ]] ||
   fail 'the attended automation-data provisioning catalog contract is missing or unsafe'
 
 restore_contract="$(yq -o=json -I=0 '
@@ -168,7 +168,7 @@ restore_contract="$(yq -o=json -I=0 '
   }
 ' "$catalog")"
 [[ "$restore_contract" == \
-  '{"mutates":true,"owner":"human","confirmation":{"type":"exact","variable":"AUTOMATION_DATA_RESTORE_CONFIRM","expected":"restore:automation-data:full-chain"},"command":"AUTOMATION_DATA_RESTORE_CONFIRM=restore:automation-data:full-chain mise exec -- just kube automation-data-restore-drill","implementation":"scripts/test/scenarios/automation-data-restore-drill.sh","dispatch":{"mode":"direct","runtime":"bash","path":"scripts/test/scenarios/automation-data-restore-drill.sh","args":[".kube/config"],"selector":null}}' ]] ||
+  '{"mutates":true,"owner":"shared","confirmation":{"type":"exact","variable":"AUTOMATION_DATA_RESTORE_CONFIRM","expected":"restore:automation-data:full-chain"},"command":"AUTOMATION_DATA_RESTORE_CONFIRM=restore:automation-data:full-chain mise exec -- just kube automation-data-restore-drill","implementation":"scripts/test/scenarios/automation-data-restore-drill.sh","dispatch":{"mode":"direct","runtime":"bash","path":"scripts/test/scenarios/automation-data-restore-drill.sh","args":["@test-kubeconfig@"],"selector":null}}' ]] ||
   fail 'the attended automation-data restore catalog contract is missing or unsafe'
 
 verifier='scripts/verify/automation-data.sh'
@@ -198,7 +198,7 @@ for scenario_contract in \
   "domain='automation_data_acceptance'" \
   "error_domain='automation_data_backup_error'" \
   'secretKeyRef' \
-  'record_operation_error' \
+  '/helpers/provision-error.sh' \
   '--from=cronjob/automation-data-postgresql-backup' \
   'automation-data-postgresql-backups", "readOnly": true' \
   'backup_timestamp_after' \
@@ -206,18 +206,24 @@ for scenario_contract in \
   rg -Fq -- "$scenario_contract" "$scenario" ||
     fail "the attended provisioning scenario omits $scenario_contract"
 done
+provision_error_helper='kubernetes/apps/automation-data/postgresql/app/test-helpers/provision-error.sh'
+for fixture_contract in 'SELECT FROM pg_database' 'SELECT FROM pg_roles' \
+  "PERFORM platform_operations.record_operation_error('automation_data_backup_error', 'acceptance_backup_error');"; do
+  rg -Fq -- "$fixture_contract" "$provision_error_helper" ||
+    fail "the fixed provisioning helper omits $fixture_contract"
+done
 ! rg -n 'echo[^\n]*(provisioning_token|PGPASSWORD)|printf[^\n]*PGPASSWORD|globals\.sql[^\n]*(cat|less|head|tail)' \
   "$scenario" >/dev/null ||
   fail 'the attended provisioning scenario can print a credential or globals dump'
 
 for restore_contract_value in \
   "expected_confirmation='restore:automation-data:full-chain'" \
-  'n8n_restore_job_command' \
-  'automation_data_restore_job_command' \
+  '/helpers/n8n-restore-isolated.sh' \
+  '/helpers/automation-data-restore.sh' \
   'automation-data-postgresql-backups' \
   'n8n-postgresql-backups' \
   'N8N_ENCRYPTION_KEY' \
-  'automation-data-canary' \
+  '/helpers/automation-data-restore-request.mjs' \
   'restored_runtime_credential=authenticated' \
   'n8n_routes_target_service' \
   'storage": "20Gi"'; do
@@ -306,8 +312,13 @@ request_job_manifest >"$temp_dir/request.yaml"
 kubeconform -strict -summary -ignore-missing-schemas "$temp_dir"/*.yaml >/dev/null
 
 [[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "scripts") | .configMap.name' \
-  "$temp_dir/automation-data-job.yaml")" == "$backup_configmap" ]] ||
-  fail 'the automation-data restore Job does not use the resolved backup ConfigMap'
+  "$temp_dir/automation-data-job.yaml")" == 'automation-data-test-helpers-v1' ]] ||
+  fail 'the automation-data restore Job does not use the fixed canonical backup helper'
+for restore_job_file in automation-data-job n8n-job; do
+  yq -e '.spec.template.spec.containers[0] | has("args") | not' \
+    "$temp_dir/$restore_job_file.yaml" >/dev/null ||
+    fail 'a restore Job accepts an inline executable program'
+done
 
 [[ "$(yq -r '.spec.template.spec.containers[0].env[].name' \
   "$temp_dir/automation-data-job.yaml" | LC_ALL=C sort | paste -sd, -)" == \

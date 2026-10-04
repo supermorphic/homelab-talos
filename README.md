@@ -37,7 +37,8 @@ profile selection, the supported connection, and blocked results.
   [NocoDB](docs/specs/028-nocodb-operator-ui.md), and
   [web research](docs/specs/029-selfhost-web-research.md).
 - [OpenBao recovery](docs/specs/030-openbao-kubernetes-credential-broker.md) and
-  [agent credentials](docs/specs/031-openbao-agent-credential-profiles.md).
+  [agent credentials](docs/specs/031-openbao-agent-credential-profiles.md), and
+  [scoped test execution and rollout](docs/specs/032-openbao-scoped-test-execution.md).
 - [Test evidence](docs/specs/011-test-reporting-standard.md) and
   [CI guarantees](docs/specs/027-deterministic-ci-gates.md).
 

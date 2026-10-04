@@ -1,0 +1,122 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-ad-restore-hosts
+spec:
+  failurePolicy: Fail
+  paramKind:
+    apiVersion: v1
+    kind: Service
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+  variables:
+    - name: run
+      expression: object.metadata.labels['homelab-talos/run-id']
+    - name: aliases
+      expression: object.spec.template.spec.hostAliases
+  validations:
+    - expression: >-
+        has(params.metadata) && request.namespace == 'automation' &&
+        variables.run.matches('^[0-9a-f]{12}$') &&
+        object.metadata.labels['homelab-talos/test'] == 'automation-data-restore-drill' &&
+        object.metadata.name == 'ad-restore-' + variables.run + '-n8n' &&
+        params.metadata.namespace == 'automation-data' &&
+        params.metadata.name == 'ad-restore-' + variables.run + '-db' && params.metadata.uid != '' &&
+        params.metadata.labels['homelab-talos/test'] == 'automation-data-restore-drill' &&
+        params.metadata.labels['homelab-talos/run-id'] == variables.run &&
+        params.metadata.labels['homelab-talos/role'] == 'ad-database' &&
+        params.spec.type == 'ClusterIP' && params.spec.clusterIP != '' && params.spec.clusterIP != 'None' &&
+        variables.aliases.size() == 1 && variables.aliases[0].ip == params.spec.clusterIP &&
+        variables.aliases[0].hostnames == ['automation-data-postgresql', 'automation-data-postgresql.automation-data.svc.cluster.local']
+      message: Restored n8n must map the two canonical database hostnames to its run's allocated scratch Service IP.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-ad-restore-hosts
+spec:
+  policyName: homelab-test-ad-restore-hosts
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: automation
+    objectSelector:
+      matchLabels:
+        homelab-talos/test: automation-data-restore-drill
+  paramRef:
+    namespace: automation-data
+    selector:
+      matchLabels:
+        homelab-talos/test: automation-data-restore-drill
+        homelab-talos/role: ad-database
+    parameterNotFoundAction: Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-nc-restore-hosts
+spec:
+  failurePolicy: Fail
+  paramKind:
+    apiVersion: v1
+    kind: Service
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+  variables:
+    - name: run
+      expression: object.metadata.labels['homelab-talos/run-id']
+    - name: aliases
+      expression: object.spec.template.spec.hostAliases
+  validations:
+    - expression: >-
+        has(params.metadata) && request.namespace == 'automation-data' &&
+        variables.run.matches('^[0-9a-f]{12}$') &&
+        object.metadata.labels['homelab-talos/test'] == 'nocodb-restore-drill' &&
+        object.metadata.name == 'nc-restore-' + variables.run + '-nocodb' &&
+        params.metadata.namespace == 'automation-data' &&
+        params.metadata.name == 'nc-restore-' + variables.run + '-db' && params.metadata.uid != '' &&
+        params.metadata.labels['homelab-talos/test'] == 'nocodb-restore-drill' &&
+        params.metadata.labels['homelab-talos/run-id'] == variables.run &&
+        params.metadata.labels['homelab-talos/role'] == 'database' &&
+        params.spec.type == 'ClusterIP' && params.spec.clusterIP != '' && params.spec.clusterIP != 'None' &&
+        variables.aliases.size() == 1 && variables.aliases[0].ip == params.spec.clusterIP &&
+        variables.aliases[0].hostnames == ['automation-data-postgresql', 'automation-data-postgresql.automation-data.svc.cluster.local']
+      message: Restored NocoDB must map the two canonical database hostnames to its run's allocated scratch Service IP.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-nc-restore-hosts
+spec:
+  policyName: homelab-test-nc-restore-hosts
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: automation-data
+    objectSelector:
+      matchLabels:
+        homelab-talos/test: nocodb-restore-drill
+  paramRef:
+    namespace: automation-data
+    selector:
+      matchLabels:
+        homelab-talos/test: nocodb-restore-drill
+        homelab-talos/role: database
+    parameterNotFoundAction: Deny

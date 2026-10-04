@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-[[ "$#" -eq 1 ]] || {
-  echo 'Usage: run-conformance.sh <kubeconfig>' >&2
+[[ "$#" -le 1 ]] || {
+  echo 'Usage: run-conformance.sh [selected-invocation-kubeconfig]' >&2
   exit 2
 }
-kubeconfig="$1"
+if [[ "$#" -eq 1 && "$1" != '@test-kubeconfig@' ]]; then
+  [[ -n "${TEST_ACCESS_CONFIG:-}" && "$1" == "$TEST_ACCESS_CONFIG" ]] || {
+    echo 'Conformance selects credentials from the catalog; an unbound config is not accepted.' >&2
+    exit 2
+  }
+fi
 mode="${MODE:-quick}"
 case "$mode" in
   quick) suite_id='conformance.quick' ;;
@@ -16,4 +21,4 @@ case "$mode" in
     ;;
 esac
 exec scripts/test/run-catalog-suite.sh "$suite_id" -- \
-  scripts/test/run-sonobuoy.sh "$mode" "$kubeconfig"
+  scripts/test/run-sonobuoy.sh "$mode" '@test-kubeconfig@'

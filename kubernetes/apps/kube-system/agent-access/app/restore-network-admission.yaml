@@ -1,0 +1,142 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-restore-network-policies
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - cilium.io
+        apiVersions:
+          - v2
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - ciliumnetworkpolicies
+  matchConditions:
+    - name: test-runner
+      expression: >-
+        request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: restore-family
+      expression: >-
+        (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/test'] in
+        ['automation-data-restore-drill', 'nocodb-restore-drill']
+  variables:
+    - name: policy
+      expression: 'request.operation == ''DELETE'' ? oldObject : object'
+    - name: family
+      expression: variables.policy.metadata.labels['homelab-talos/test']
+    - name: run
+      expression: variables.policy.metadata.labels['homelab-talos/run-id']
+    - name: nc
+      expression: variables.family == 'nocodb-restore-drill'
+    - name: prefix
+      expression: '(variables.nc ? ''nc'' : ''ad'') + ''-restore-'' + variables.run'
+    - name: rules
+      expression: 'request.namespace == ''gatus'' ? [variables.policy.spec] : variables.policy.specs'
+    - name: roles
+      expression: >-
+        variables.nc ? ['database', 'restore', 'nocodb', 'request'] : request.namespace == 'gatus' ? ['request']
+        : request.namespace == 'automation' ? ['n8n-database', 'n8n-restore', 'n8n'] : ['ad-database',
+        'ad-restore']
+    - name: localPeers
+      expression: >-
+        {'ad-database': {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run,
+        'homelab-talos/role': 'ad-database'}, 'ad-restore': {'homelab-talos/test': variables.family, 'homelab-talos/run-id':
+        variables.run, 'homelab-talos/role': 'ad-restore'}, 'n8n-database': {'homelab-talos/test': variables.family,
+        'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'n8n-database'}, 'n8n-restore': {'homelab-talos/test':
+        variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'n8n-restore'},
+        'n8n': {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role':
+        'n8n'}, 'database': {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run,
+        'homelab-talos/role': 'database'}, 'restore': {'homelab-talos/test': variables.family, 'homelab-talos/run-id':
+        variables.run, 'homelab-talos/role': 'restore'}, 'nocodb': {'homelab-talos/test': variables.family,
+        'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'nocodb'}, 'request': {'homelab-talos/test':
+        variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'request'}}
+    - name: remoteN8n
+      expression: >-
+        {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role':
+        'n8n', 'k8s:io.kubernetes.pod.namespace': 'automation'}
+    - name: remoteDatabase
+      expression: >-
+        {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role':
+        'ad-database', 'k8s:io.kubernetes.pod.namespace': 'automation-data'}
+    - name: remoteRestore
+      expression: >-
+        {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role':
+        'ad-restore', 'k8s:io.kubernetes.pod.namespace': 'automation-data'}
+    - name: remoteRequest
+      expression: >-
+        {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role':
+        'request', 'k8s:io.kubernetes.pod.namespace': 'gatus'}
+    - name: dns
+      expression: '{''k8s:io.kubernetes.pod.namespace'': ''kube-system'', ''k8s:k8s-app'': ''kube-dns''}'
+  validations:
+    - expression: >-
+        request.operation != 'UPDATE' && variables.run.matches('^[0-9a-f]{12}$') && (variables.nc ? request.namespace
+        == 'automation-data' : request.namespace in ['automation-data', 'automation', 'gatus']) && variables.policy.metadata.name
+        == variables.prefix + (variables.nc ? '-policy' : request.namespace == 'automation-data' ? '-ad-policy'
+        : request.namespace == 'automation' ? '-n8n-policy' : '-request-policy') && variables.policy.metadata.labels
+        == {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role':
+        'policy'} && !has(variables.policy.metadata.ownerReferences) && !has(variables.policy.metadata.annotations)
+        && (request.namespace == 'gatus' ? !has(variables.policy.specs) : !has(variables.policy.spec))
+        && variables.rules.size() == variables.roles.size() && variables.roles.all(role, variables.rules.exists(r,
+        r.endpointSelector.matchLabels == variables.localPeers[role])) && variables.rules.all(r, !has(r.endpointSelector.matchExpressions)
+        && !has(r.nodeSelector) && !has(r.ingressDeny) && !has(r.egressDeny) && !has(r.enableDefaultDeny)
+        && !has(r.log) && !has(r.labels) && !has(r.description))
+      message: >-
+        Restore policies must select only the complete run-owned scratch workload family.
+    - expression: >-
+        variables.rules.all(r, r.ingress.all(i, !has(i.fromCIDR) && !has(i.fromCIDRSet) && !has(i.fromEntities)
+        && !has(i.fromGroups) && !has(i.fromNodes) && !has(i.fromRequires) && !has(i.authentication) &&
+        !has(i.icmps) && i.fromEndpoints.all(p, !has(p.matchExpressions)) && i.toPorts.size() == 1 &&
+        i.toPorts.all(p, !has(p.listener) && !has(p.originatingTLS) && !has(p.rules) && !has(p.serverNames)
+        && !has(p.terminatingTLS) && p.ports.size() == 1 && p.ports.all(v, v.protocol == 'TCP' && !has(v.endPort))))
+        && r.egress.all(e, !has(e.toCIDR) && !has(e.toCIDRSet) && !has(e.toEntities) && !has(e.toFQDNs)
+        && !has(e.toGroups) && !has(e.toNodes) && !has(e.toRequires) && !has(e.toServices) && !has(e.authentication)
+        && !has(e.icmps) && e.toEndpoints.size() == 1 && !has(e.toEndpoints[0].matchExpressions) && e.toPorts.size()
+        == 1 && e.toPorts.all(p, !has(p.listener) && !has(p.originatingTLS) && !has(p.rules) && !has(p.serverNames)
+        && !has(p.terminatingTLS) && p.ports.all(v, !has(v.endPort)))))
+      message: >-
+        Restore policies cannot add alternate peers, selectors, L7, TLS, ICMP, or authentication rules.
+    - expression: >-
+        variables.rules.all(r, r.endpointSelector.matchLabels['homelab-talos/role'] in ['database', 'ad-database',
+        'n8n-database'] ? (r.egress.size() == 0 && r.ingress.size() == 1 && r.ingress[0].fromEndpoints.size()
+        == 2 && r.ingress[0].toPorts[0].ports[0].port == '5432' && r.ingress[0].fromEndpoints[0].matchLabels
+        == (variables.nc ? variables.localPeers['restore'] : request.namespace == 'automation' ? variables.localPeers['n8n-restore']
+        : variables.remoteRestore) && r.ingress[0].fromEndpoints[1].matchLabels == (variables.nc ? variables.localPeers['nocodb']
+        : request.namespace == 'automation' ? variables.localPeers['n8n'] : variables.remoteN8n)) : r.endpointSelector.matchLabels['homelab-talos/role']
+        in ['n8n', 'nocodb'] ? (r.ingress.size() == 1 && r.ingress[0].fromEndpoints.size() == 1 && r.ingress[0].fromEndpoints[0].matchLabels
+        == (variables.nc ? variables.localPeers['request'] : variables.remoteRequest) && r.ingress[0].toPorts[0].ports[0].port
+        == (variables.nc ? '8080' : '5678')) : r.ingress.size() == 0)
+      message: >-
+        Restore ingress permits only canonical scratch database clients and canary requests.
+    - expression: >-
+        variables.rules.all(r, r.endpointSelector.matchLabels['homelab-talos/role'] in ['database', 'ad-database',
+        'n8n-database'] || (r.egress.size() == (!variables.nc && r.endpointSelector.matchLabels['homelab-talos/role']
+        == 'n8n' ? 3 : 2) && r.egress[0].toEndpoints[0].matchLabels == variables.dns && r.egress[0].toPorts[0].ports.size()
+        == 2 && r.egress[0].toPorts[0].ports.all(p, p.port == '53' && p.protocol in ['UDP', 'TCP']) &&
+        r.egress[0].toPorts[0].ports.exists(p, p.protocol == 'UDP') && r.egress[0].toPorts[0].ports.exists(p,
+        p.protocol == 'TCP') && r.egress[1].toEndpoints[0].matchLabels == (r.endpointSelector.matchLabels['homelab-talos/role']
+        == 'request' ? (variables.nc ? variables.localPeers['nocodb'] : variables.remoteN8n) : variables.nc
+        ? variables.localPeers['database'] : request.namespace == 'automation' ? variables.localPeers['n8n-database']
+        : variables.localPeers['ad-database']) && r.egress[1].toPorts[0].ports.size() == 1 && r.egress[1].toPorts[0].ports[0].protocol
+        == 'TCP' && r.egress[1].toPorts[0].ports[0].port == (r.endpointSelector.matchLabels['homelab-talos/role']
+        == 'request' ? (variables.nc ? '8080' : '5678') : '5432') && (variables.nc || r.endpointSelector.matchLabels['homelab-talos/role']
+        != 'n8n' || (r.egress[2].toEndpoints[0].matchLabels == variables.remoteDatabase && r.egress[2].toPorts[0].ports.size()
+        == 1 && r.egress[2].toPorts[0].ports[0].port == '5432' && r.egress[2].toPorts[0].ports[0].protocol
+        == 'TCP'))))
+      message: >-
+        Restore egress permits only cluster DNS and the canonical scratch database or application peers.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-restore-network-policies
+spec:
+  policyName: homelab-test-restore-network-policies
+  validationActions:
+    - Deny

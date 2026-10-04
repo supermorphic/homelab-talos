@@ -104,7 +104,7 @@ valid_fixture_base := [
 	role_binding("homelab-campaign-coordinator", "flux-system", "homelab-campaign-coordinator", "kube-system", "homelab-campaign-coordinator"),
 	role("openbao-agent-tokenrequest", "kube-system", [{
 		"apiGroups": [""], "resources": ["serviceaccounts/token"],
-		"resourceNames": ["homelab-observer", "homelab-diagnostic", "homelab-report-publisher", "homelab-campaign-coordinator"],
+		"resourceNames": ["homelab-observer", "homelab-diagnostic", "homelab-report-publisher", "homelab-campaign-coordinator", "homelab-test-runner", "homelab-test-flux-restart", "homelab-test-cilium-connectivity", "homelab-test-node-reschedule", "homelab-test-conformance", "homelab-test-openbao-issuance", "homelab-test-openbao-ha", "homelab-test-openbao-restore", "homelab-test-openbao-lifecycle"],
 		"verbs": ["create"],
 	}]),
 	role_binding("openbao-agent-tokenrequest", "kube-system", "openbao", "openbao", "openbao-agent-tokenrequest"),
@@ -193,7 +193,7 @@ diagnostic_test_bindings := [object.union(
 	name := concat("", ["homelab-diagnostic-", capability])
 ]
 
-valid_fixture := array.concat(valid_fixture_base, diagnostic_test_bindings)
+valid_fixture := array.concat(array.concat(array.concat(array.concat(array.concat(array.concat(array.concat(array.concat(array.concat(array.concat(array.concat(array.concat(array.concat(array.concat(array.concat(array.concat(array.concat(valid_fixture_base, diagnostic_test_bindings), runner_fixture), dedicated_identity_fixture), dedicated_flux_fixture), dedicated_node_fixture), dedicated_member_fixture), dedicated_ha_eviction_fixture), dedicated_probe_fixture), dedicated_restore_fixture), dedicated_cilium_namespace_fixture), dedicated_cilium_ephemeral_fixture), dedicated_cilium_connect_fixture), dedicated_cilium_cluster_policy_fixture), dedicated_cilium_observation_fixture), dedicated_cilium_copy_fixture), dedicated_cilium_namespaced_fixture), dedicated_cilium_global_fixture)
 
 combined_fixture := [{
 	"path": "kubernetes/apps/kube-system/agent-access/app/rbac.yaml",

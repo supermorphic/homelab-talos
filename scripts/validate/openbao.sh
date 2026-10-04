@@ -5,7 +5,7 @@ base='kubernetes/apps/security/openbao'
 temp_dir="$(mktemp -d /tmp/homelab-talos-openbao-validate.XXXXXX)"
 trap 'rm -rf -- "$temp_dir"' EXIT
 
-for part in namespace app access acceptance backup monitoring; do
+for part in namespace app access acceptance backup monitoring restore-test; do
   kustomize build "$base/$part" >"$temp_dir/$part.yaml"
 done
 kustomize build kubernetes/apps/security >"$temp_dir/security.yaml"
@@ -24,11 +24,14 @@ import yaml
 from scripts.openbao.manifests import (
     validate_documents, validate_issuance_role, validate_gateway_namespace,
     validate_network_policy, validate_tokenrequest_binding, validate_flux_units,
+    validate_restore_baseline,
 )
 from scripts.openbao.configuration import load_document
 from scripts.openbao import issuance
 
 desired = load_document(pathlib.Path("kubernetes/apps/security/openbao/config/desired.json"))
+assert not validate_restore_baseline(list(yaml.safe_load_all(
+    (pathlib.Path(sys.argv[1]) / "restore-test.yaml").read_text())))
 api_audience = yaml.safe_load(pathlib.Path("talos/talconfig.yaml").read_text())["endpoint"]
 issuance_role = next(obj for obj in desired["objects"] if obj.kind == "issuance-role" and
                      obj.name == "openbao-acceptance")
@@ -49,8 +52,23 @@ assert all("*" not in path and not path.startswith("kubernetes/creds/")
            for path in reader_paths)
 assert all(path == "auth/token/revoke-self" or "update" not in rule["capabilities"]
            for path, rule in reader_paths.items())
-profiles = {"observer": "homelab-observer", "diagnostic": "homelab-diagnostic",
-            "publisher": "homelab-report-publisher", "campaign-coordinator": "homelab-campaign-coordinator"}
+profiles = {
+    "observer": "homelab-observer",
+    "diagnostic": "homelab-diagnostic",
+    "publisher": "homelab-report-publisher",
+    "campaign-coordinator": "homelab-campaign-coordinator",
+    "debugger": "homelab-diagnostic",
+    "test-runner": "homelab-test-runner",
+    "report-publisher": "homelab-report-publisher",
+    "test-flux-restart": "homelab-test-flux-restart",
+    "test-cilium-connectivity": "homelab-test-cilium-connectivity",
+    "test-node-reschedule": "homelab-test-node-reschedule",
+    "test-conformance": "homelab-test-conformance",
+    "test-openbao-issuance": "homelab-test-openbao-issuance",
+    "test-openbao-ha": "homelab-test-openbao-ha",
+    "test-openbao-restore": "homelab-test-openbao-restore",
+    "test-openbao-lifecycle": "homelab-test-openbao-lifecycle"
+}
 objects = {(o.kind, o.name): o for o in desired["objects"]}
 for profile, account in profiles.items():
     fields = objects[("issuance-role", profile)].fields

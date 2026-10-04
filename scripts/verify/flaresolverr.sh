@@ -15,9 +15,7 @@ kubeconfig="$1"
 ns='media'
 local_port='18191'
 kc=(kubectl --kubeconfig "$kubeconfig")
-if "${kc[@]}" config get-contexts homelab-diagnostic --no-headers >/dev/null 2>&1; then
-  kc+=(--context homelab-diagnostic)
-fi
+
 
 [[ "$("${kc[@]}" --namespace flux-system get kustomization flaresolverr --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo 'flaresolverr Kustomization not Ready.' >&2; exit 1; }
 [[ "$("${kc[@]}" --namespace "$ns" get helmrelease flaresolverr --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo 'flaresolverr HelmRelease not Ready.' >&2; exit 1; }

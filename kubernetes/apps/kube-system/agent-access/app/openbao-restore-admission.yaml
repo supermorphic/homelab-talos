@@ -1,0 +1,308 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-openbao-restore-statefulset
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - apps
+        apiVersions:
+          - v1
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - statefulsets
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-openbao-restore'
+  variables:
+    - name: item
+      expression: 'request.operation == ''DELETE'' ? oldObject : object'
+    - name: core
+      expression: '{"serviceName":"scratch","replicas":1,"updateStrategy":{"type":"OnDelete"},"selector":{"matchLabels":{"app":"openbao-restore-scratch"}}}'
+    - name: pod
+      expression: variables.item.spec.template.spec
+    - name: podCore
+      expression: '{"serviceAccountName":"scratch","automountServiceAccountToken":false,"enableServiceLinks":false,"securityContext":{"runAsNonRoot":true,"runAsUser":100,"runAsGroup":1000,"fsGroup":1000,"seccompProfile":{"type":"RuntimeDefault"}}}'
+    - name: podDefaults
+      expression: '{"dnsPolicy":"ClusterFirst","schedulerName":"default-scheduler","restartPolicy":"Always","terminationGracePeriodSeconds":30,"hostNetwork":false,"hostPID":false,"hostIPC":false,"initContainers":[],"ephemeralContainers":[],"tolerations":[]}'
+    - name: containers
+      expression: '[{"name":"server","image":"quay.io/openbao/openbao:2.7.0@sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315","command":["bao","server","-config=/scratch-config/server.hcl"],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}},"resources":{"requests":{"cpu":"100m","memory":"256Mi"},"limits":{"cpu":"1","memory":"1Gi"}},"volumeMounts":[{"name":"data","mountPath":"/openbao/data"},{"name":"seal","mountPath":"/scratch-seal","readOnly":true},{"name":"config","mountPath":"/scratch-config","readOnly":true}]},{"name":"runner","image":"python:3.13.14-slim@sha256:9662417aace5ae7b8e2609cce472b72a8958e134ba372808abe9cc1a0c0125e6","command":["python","-c","import
+        time; time.sleep(86400)"],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true},"resources":{"requests":{"cpu":"25m","memory":"32Mi"},"limits":{"cpu":"250m","memory":"128Mi"}}}]'
+    - name: containerDefaults
+      expression: '{"imagePullPolicy":"IfNotPresent","terminationMessagePath":"/dev/termination-log","terminationMessagePolicy":"File","stdin":false,"stdinOnce":false,"tty":false}'
+    - name: volumes
+      expression: '[{"name":"data","persistentVolumeClaim":{"claimName":"scratch-data"}},{"name":"seal","secret":{"secretName":"scratch-seal","defaultMode":288}},{"name":"config","configMap":{"name":"scratch-config"}}]'
+  validations:
+    - expression: request.namespace == 'openbao-restore-test' && request.subResource == '' && request.operation
+        != 'UPDATE' && request.name == 'scratch' && variables.item.kind == 'StatefulSet' && variables.item.apiVersion
+        == 'apps/v1' && variables.item.metadata.name == 'scratch' && variables.item.metadata.namespace
+        == 'openbao-restore-test' && variables.item.metadata.annotations['homelab.supermorphic.com/test-run'].matches('^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$')
+        && variables.item.metadata.annotations.all(k, k == 'homelab.supermorphic.com/test-run') && (!has(variables.item.metadata.labels)
+        || variables.item.metadata.labels.size() == 0) && !has(variables.item.metadata.ownerReferences)
+        && (!has(variables.item.metadata.finalizers) || variables.item.metadata.finalizers.size() == 0)
+        && (request.operation != 'DELETE' || (has(variables.item.metadata.uid) && variables.item.metadata.uid
+        != ''))
+      message: Only the run-owned scratch StatefulSet may be created or deleted.
+    - expression: variables.core.all(k, k in variables.item.spec && variables.item.spec[k] == variables.core[k])
+        && variables.item.spec.all(k, k in variables.core || k == 'template' || (k == 'podManagementPolicy'
+        && variables.item.spec[k] == 'OrderedReady') || (k == 'revisionHistoryLimit' && variables.item.spec[k]
+        == 10) || (k == 'persistentVolumeClaimRetentionPolicy' && variables.item.spec[k] == {'whenDeleted':'Retain','whenScaled':'Retain'}))
+        && variables.item.spec.template.all(k, k in ['metadata','spec']) && variables.item.spec.template.metadata.labels
+        == {'app':'openbao-restore-scratch'} && variables.item.spec.template.metadata.annotations == variables.item.metadata.annotations
+        && variables.item.spec.template.metadata.all(k, k in ['labels','annotations'] || (k == 'creationTimestamp'
+        && variables.item.spec.template.metadata[k] == null))
+      message: Scratch controller count, selector and template ownership are fixed.
+    - expression: variables.podCore.all(k, k in variables.pod && variables.pod[k] == variables.podCore[k])
+        && variables.pod.all(k, k in variables.podCore || k in ['containers','volumes'] || (k in variables.podDefaults
+        && variables.pod[k] == variables.podDefaults[k]) || (k == 'serviceAccount' && variables.pod[k]
+        == 'scratch'))
+      message: Scratch Pod identity, security and scheduling are fixed.
+    - expression: variables.pod.containers.size() == 2 && [0,1].all(i, variables.containers[i].all(k,
+        k in ['securityContext','volumeMounts'] || (k in variables.pod.containers[i] && variables.pod.containers[i][k]
+        == variables.containers[i][k])) && variables.pod.containers[i].all(k, k in variables.containers[i]
+        || (k in variables.containerDefaults && variables.pod.containers[i][k] == variables.containerDefaults[k]))
+        && variables.containers[i].securityContext.all(k, k in variables.pod.containers[i].securityContext
+        && variables.pod.containers[i].securityContext[k] == variables.containers[i].securityContext[k])
+        && variables.pod.containers[i].securityContext.all(k, k in variables.containers[i].securityContext
+        || (k == 'privileged' && !variables.pod.containers[i].securityContext.privileged) || (k == 'procMount'
+        && variables.pod.containers[i].securityContext.procMount == 'Default'))) && !has(variables.pod.containers[1].volumeMounts)
+        && variables.pod.containers[0].volumeMounts.size() == 3 && [0,1,2].all(i, variables.containers[0].volumeMounts[i].all(k,
+        k in variables.pod.containers[0].volumeMounts[i] && variables.pod.containers[0].volumeMounts[i][k]
+        == variables.containers[0].volumeMounts[i][k]) && variables.pod.containers[0].volumeMounts[i].all(k,
+        k in variables.containers[0].volumeMounts[i] || (k == 'readOnly' && i == 0 && !variables.pod.containers[0].volumeMounts[i].readOnly)
+        || (k == 'mountPropagation' && variables.pod.containers[0].volumeMounts[i][k] == 'None') || (k
+        == 'recursiveReadOnly' && variables.pod.containers[0].volumeMounts[i][k] == 'Disabled'))) && variables.pod.volumes.size()
+        == 3 && variables.pod.volumes[0] == variables.volumes[0] && variables.pod.volumes[1] == variables.volumes[1]
+        && variables.pod.volumes[2].name == 'config' && variables.pod.volumes[2].all(k, k in ['name','configMap'])
+        && variables.pod.volumes[2].configMap.name == 'scratch-config' && variables.pod.volumes[2].configMap.all(k,
+        k == 'name' || (k == 'defaultMode' && variables.pod.volumes[2].configMap[k] == 420))
+      message: Only pinned server and unmounted runner programs with fixed resources and data/seal/config
+        mounts are admitted.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-openbao-restore-statefulset
+spec:
+  policyName: homelab-test-openbao-restore-statefulset
+  validationActions:
+    - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-openbao-restore-storage
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - ''
+        apiVersions:
+          - v1
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - persistentvolumeclaims
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-openbao-restore'
+  variables:
+    - name: item
+      expression: 'request.operation == ''DELETE'' ? oldObject : object'
+  validations:
+    - expression: request.namespace == 'openbao-restore-test' && request.subResource == '' && request.operation
+        != 'UPDATE' && request.name == 'scratch-data' && variables.item.kind == 'PersistentVolumeClaim'
+        && variables.item.apiVersion == 'v1' && variables.item.metadata.name == 'scratch-data' && variables.item.metadata.namespace
+        == 'openbao-restore-test' && variables.item.metadata.annotations['homelab.supermorphic.com/test-run'].matches('^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$')
+        && variables.item.metadata.annotations.all(k, k == 'homelab.supermorphic.com/test-run' || (request.operation
+        == 'DELETE' && k in ['pv.kubernetes.io/bind-completed','pv.kubernetes.io/bound-by-controller','volume.kubernetes.io/storage-provisioner','volume.beta.kubernetes.io/storage-provisioner','volume.kubernetes.io/selected-node']))
+        && (!has(variables.item.metadata.labels) || variables.item.metadata.labels.size() == 0) && !has(variables.item.metadata.ownerReferences)
+        && (!has(variables.item.metadata.finalizers) || variables.item.metadata.finalizers.size() == 0
+        || (request.operation == 'DELETE' && variables.item.metadata.finalizers == ['kubernetes.io/pvc-protection']))
+        && (request.operation != 'DELETE' || (has(variables.item.metadata.uid) && variables.item.metadata.uid
+        != ''))
+      message: Only the owned scratch claim may be allocated and removed.
+    - expression: variables.item.spec.accessModes == ['ReadWriteOnce'] && variables.item.spec.storageClassName
+        == 'longhorn' && variables.item.spec.resources == {'requests':{'storage':'10Gi'}} && variables.item.spec.all(k,
+        k in ['accessModes','storageClassName','resources'] || (k == 'volumeMode' && variables.item.spec[k]
+        == 'Filesystem') || (request.operation == 'DELETE' && k == 'volumeName' && variables.item.spec[k]
+        == 'pvc-' + variables.item.metadata.uid))
+      message: Scratch storage must be a fresh bounded Longhorn volume, never a clone or existing claim.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-openbao-restore-storage
+spec:
+  policyName: homelab-test-openbao-restore-storage
+  validationActions:
+    - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-openbao-restore-private
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - ''
+        apiVersions:
+          - v1
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - secrets
+          - configmaps
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-openbao-restore'
+  variables:
+    - name: item
+      expression: 'request.operation == ''DELETE'' ? oldObject : object'
+    - name: configPattern
+      expression: '"^disable_mlock = true\nraw_storage_endpoint = true\naudit \"file\" \"homelab\" \\{\n  description
+        = \"Homelab hashed audit output\"\n  options \\{\n    file_path = \"stdout\"\n    log_raw = \"false\"\n    hmac_accessor
+        = \"true\"\n  \\}\n\\}\napi_addr = \"http://127\\.0\\.0\\.1:8200\"\ncluster_addr = \"https://127\\.0\\.0\\.1:8201\"\nlistener
+        \"tcp\" \\{\n  address = \"127\\.0\\.0\\.1:8200\"\n  cluster_address = \"127\\.0\\.0\\.1:8201\"\n  tls_disable
+        = true\n\\}\nstorage \"raft\" \\{\n  path = \"/openbao/data\"\n  node_id = \"scratch\"\n\\}\nseal
+        \"static\" \\{\n  current_key_id = \"[A-Za-z0-9_.-]{1,80}\"\n  current_key = \"file:///scratch\\-seal/key\"\n\\}\n$"'
+  validations:
+    - expression: request.namespace == 'openbao-restore-test' && request.subResource == '' && request.operation
+        != 'UPDATE' && ((request.name == 'scratch-seal' && variables.item.kind == 'Secret') || (request.name
+        == 'scratch-config' && variables.item.kind == 'ConfigMap')) && variables.item.apiVersion == 'v1'
+        && variables.item.metadata.name == request.name && variables.item.metadata.namespace == 'openbao-restore-test'
+        && variables.item.metadata.annotations['homelab.supermorphic.com/test-run'].matches('^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$')
+        && variables.item.metadata.annotations.all(k, k == 'homelab.supermorphic.com/test-run') && (!has(variables.item.metadata.labels)
+        || variables.item.metadata.labels.size() == 0) && !has(variables.item.metadata.ownerReferences)
+        && (!has(variables.item.metadata.finalizers) || variables.item.metadata.finalizers.size() == 0)
+        && (request.operation != 'DELETE' || (has(variables.item.metadata.uid) && variables.item.metadata.uid
+        != '')) && variables.item.immutable && variables.item.all(k, k in ['apiVersion','kind','metadata','immutable','type','data'])
+      message: Only immutable, run-owned scratch private fixtures may be created or removed.
+    - expression: 'variables.item.kind == ''Secret'' ? (variables.item.type == ''Opaque'' && variables.item.data.size()
+        == 1 && ''key'' in variables.item.data && type(variables.item.data.key) == string && variables.item.data.key.size()
+        > 0 && variables.item.data.key.size() <= 65536) : (!has(variables.item.type) && variables.item.data.size()
+        == 1 && variables.item.data[''server.hcl''].matches(variables.configPattern))'
+      message: The seal has one key; configuration is the fixed loopback-only, hashed-audit scratch program.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-openbao-restore-private
+spec:
+  policyName: homelab-test-openbao-restore-private
+  validationActions:
+    - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-openbao-restore-exec
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - ''
+        apiVersions:
+          - v1
+        operations:
+          - CONNECT
+        resources:
+          - pods/exec
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-openbao-restore'
+  variables:
+    - name: bridge
+      expression: '"\nimport http.client, json, sys\ntry:\n    args = json.loads(sys.stdin.buffer.readline(65536))\n    connection
+        = http.client.HTTPConnection(\"127.0.0.1\", 8200, timeout=30)\n    headers = {\"Content-Type\":
+        \"application/json\", \"X-Vault-No-Request-Forwarding\": \"true\"}\n    if args.get(\"token\"):\n        headers[\"X-Vault-Token\"]
+        = args[\"token\"]\n    if \"length\" in args:\n        headers[\"Content-Length\"] = str(args[\"length\"])\n        headers[\"Content-Type\"]
+        = \"application/octet-stream\"\n        body = sys.stdin.buffer\n    else:\n        body = json.dumps(args[\"payload\"]).encode()
+        if args.get(\"payload\") is not None else None\n    connection.request(args[\"method\"], \"/v1/\"
+        + args[\"path\"], body, headers)\n    response = connection.getresponse()\n    data = response.read(1048577)\n    if
+        len(data) > 1048576:\n        raise ValueError()\n    body = json.loads(data) if data and 200
+        <= response.status < 300 else {}\n    if (response.status == 500 and args[\"method\"] == \"GET\"\n            and
+        args[\"path\"] == \"auth/homelab-jwt/config\"\n            and json.loads(data) == {\"errors\":
+        [''1 error occurred:\\n\\t* error initializing \"kubernetes\" provider_config: error reading service
+        account token file: open /var/run/secrets/kubernetes.io/serviceaccount/token: no such file or
+        directory\\n\\n'']}):\n        body = {\"provider_unavailable\": True}\n    if (response.status
+        == 400 and args[\"method\"] == \"POST\"\n            and args[\"path\"] == \"auth/homelab-userpass/login/openbao-operator\"\n            and
+        json.loads(data) == {\"errors\": [\"invalid username or password\"]}):\n        body = {\"authentication_failed\":
+        True}\n    print(json.dumps({\"status\": response.status, \"body\": body}))\nexcept Exception:\n    sys.exit(1)\n"'
+    - name: probe
+      expression: '"\nimport errno, json, socket, sys\ntry:\n    targets = json.load(sys.stdin)\n    with
+        socket.create_connection((\"127.0.0.1\", 8200), timeout=3):\n        pass\n    result = {\"loopback\":
+        True}\n    for group, endpoints in targets.items():\n        denied = bool(endpoints)\n        for
+        address, port in endpoints:\n            try:\n                with socket.create_connection((address,
+        port), timeout=3):\n                    denied = False\n            except OSError as error:\n                #
+        Refusal, DNS failure, and unreachable routes are not proof of\n                # enforcement.
+        Only a timed-out connection meets this oracle.\n                if not isinstance(error, TimeoutError)
+        and error.errno != errno.ETIMEDOUT:\n                    denied = False\n        result[group]
+        = denied\n    print(json.dumps(result))\nexcept Exception:\n    sys.exit(1)\n"'
+  validations:
+    - expression: request.namespace == 'openbao-restore-test' && request.name == 'scratch-0' && request.subResource
+        == 'exec' && object.container == 'runner' && has(object.stdin) && object.stdin && (!has(object.tty)
+        || !object.tty) && object.command in [['python','-c',variables.bridge],['python','-c',variables.probe]]
+      message: Only fixed loopback restore and isolation programs may execute in the unmounted scratch
+        runner.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-openbao-restore-exec
+spec:
+  policyName: homelab-test-openbao-restore-exec
+  validationActions:
+    - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-openbao-restore-pod-delete
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - ''
+        apiVersions:
+          - v1
+        operations:
+          - DELETE
+        resources:
+          - pods
+  matchConditions:
+    - name: dedicated-profile
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-openbao-restore'
+  variables: []
+  validations:
+    - expression: request.namespace == 'openbao-restore-test' && request.subResource == '' && request.name
+        == 'scratch-0' && oldObject.metadata.name == 'scratch-0' && oldObject.metadata.namespace == 'openbao-restore-test'
+        && oldObject.metadata.uid != '' && oldObject.metadata.annotations['homelab.supermorphic.com/test-run'].matches('^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$')
+        && oldObject.metadata.labels.app == 'openbao-restore-scratch' && oldObject.metadata.ownerReferences.size()
+        == 1 && oldObject.metadata.ownerReferences[0].apiVersion == 'apps/v1' && oldObject.metadata.ownerReferences[0].kind
+        == 'StatefulSet' && oldObject.metadata.ownerReferences[0].name == 'scratch' && oldObject.metadata.ownerReferences[0].uid
+        != '' && oldObject.metadata.ownerReferences[0].controller
+      message: Only the current scratch controller Pod may be restarted with backend UID/version preconditions.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-openbao-restore-pod-delete
+spec:
+  policyName: homelab-test-openbao-restore-pod-delete
+  validationActions:
+    - Deny

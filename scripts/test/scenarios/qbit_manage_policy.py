@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import importlib.util
 import json
 import math
 import os
@@ -42,6 +43,15 @@ FIXTURE_URL = "https://webtorrent.io/torrents/sintel.torrent"
 FIXTURE_HASH = "08ada5a7a6183aae1e09d831df6748d566095a10"
 QBM_IMAGE = "ghcr.io/stuffanthings/qbit_manage:v4.10.0"
 NAMESPACE = "media"
+FIXTURE_APP = Path(__file__).resolve().parents[3] / "kubernetes/apps/media/qbit-manage/app"
+FIXTURE_NAME = "qbit-manage-test-helpers-v1"
+FIXTURE_FILES = (
+    "qbm-policy-config.py",
+    "qbm-policy-run.sh",
+    "cz-isolation.yml",
+    "standard-cleanup.yml",
+    "standard-limits.yml",
+)
 
 
 class ScenarioFailure(RuntimeError):
@@ -288,7 +298,7 @@ def validate_production_isolation(config: dict[str, Any]) -> None:
 
 def debug_keep_jobs() -> bool:
     """Operator debug hook. When QBM_E2E_DEBUG_KEEP_JOBS is set, the qbit_manage Jobs
-    run at TRACE level and are preserved (Job + ConfigMap) after the run so the
+    run at TRACE level and are preserved (Job) after the run so the
     operator can use the guarded trace recipe to read the group-matching decision.
     The orchestrator itself never collects application logs
     (test_orchestrator_never_collects_application_logs forbids it); only the operator
@@ -297,16 +307,38 @@ def debug_keep_jobs() -> bool:
     return value.strip().lower() not in ("", "0", "false", "no")
 
 
-def job_manifest(identity: RunIdentity, phase: str, image: str, config_map: str) -> dict[str, Any]:
-    if not re.fullmatch(r"[a-z0-9-]{2,16}", phase):
+def validate_fixed_fixture(config_text: str, fixture: dict[str, Any]) -> None:
+    source = load_policy_yaml((FIXTURE_APP / "config.yml").read_text())
+    if load_policy_yaml(config_text) != source:
+        raise AssertionFailure("live qbit_manage config differs from the reviewed fixture source")
+    expected = {name: (FIXTURE_APP / "test-helpers" / name).read_text() for name in FIXTURE_FILES}
+    if fixture.get("immutable") is not True or fixture.get("data") != expected:
+        raise AssertionFailure(
+            "immutable qbit_manage test helpers differ from the assigned Git source"
+        )
+
+
+def fixed_policy_config(identity: RunIdentity, phase: str) -> dict[str, Any]:
+    spec = importlib.util.spec_from_file_location(
+        "qbm_fixed_fixture", FIXTURE_APP / "test-helpers/qbm-policy-config.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return load_policy_yaml(module.render_policy(identity.run_id, phase))
+
+
+def job_manifest(identity: RunIdentity, phase: str, image: str) -> dict[str, Any]:
+    if phase not in ("cz-apply", "cz-repeat", "private", "limits", "cleanup", "cleanup-repeat"):
         raise ValueError(f"unsafe Job phase: {phase!r}")
-    if not image or not config_map:
-        raise ValueError("Job image and ConfigMap are required")
+    if image != QBM_IMAGE:
+        raise ValueError("Job requires the reviewed qbit_manage image")
     keep = debug_keep_jobs()
     log_level = "TRACE" if keep else "INFO"
     ttl_seconds = 3600 if keep else 600
     name = f"qbm-e2e-{identity.run_id}-{phase}"
     labels = {
+        "homelab-talos/test": "qbit-manage-policy",
+        "homelab-talos/run-id": identity.run_id,
         "homelab-talos/e2e-run": identity.run_id,
         "homelab-talos/e2e-target": "qbit-manage-policy",
     }
@@ -314,22 +346,6 @@ def job_manifest(identity: RunIdentity, phase: str, image: str, config_map: str)
         "allowPrivilegeEscalation": False,
         "capabilities": {"drop": ["ALL"]},
     }
-    # qbit_manage catches its own Failed exceptions and exits zero, which would make
-    # Kubernetes mark a config/auth/command failure Complete. Its writable emptyDir
-    # is fresh for every Job, so translate the current run's failure markers into a
-    # nonzero container exit without the orchestrator collecting application logs.
-    run_script = """\
-python3 qbit_manage.py --run
-log_file=/config/logs/qbit_manage.log
-if [ ! -f "$log_file" ]; then
-  echo "qbit_manage did not create its expected log file" >&2
-  exit 1
-fi
-if grep -Eq 'Exiting scheduled Run\\.|Error executing qBittorrent commands:' "$log_file"; then
-  echo "qbit_manage reported a failed one-shot run" >&2
-  exit 1
-fi
-"""
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -356,16 +372,17 @@ fi
                             "name": "init-config",
                             "image": image,
                             "command": [
-                                "/bin/sh",
-                                "-c",
-                                "cp /config-src/config.yml /config/config.yml",
+                                "python3",
+                                "/helpers/qbm-policy-config.py",
+                                identity.run_id,
+                                phase,
                             ],
                             "securityContext": restricted,
                             "volumeMounts": [
                                 {"name": "config", "mountPath": "/config"},
                                 {
-                                    "name": "config-src",
-                                    "mountPath": "/config-src",
+                                    "name": "helpers",
+                                    "mountPath": "/helpers",
                                     "readOnly": True,
                                 },
                             ],
@@ -375,8 +392,7 @@ fi
                         {
                             "name": "app",
                             "image": image,
-                            "command": ["/bin/sh", "-eu", "-c"],
-                            "args": [run_script],
+                            "command": ["/bin/sh", "-eu", "/helpers/qbm-policy-run.sh"],
                             "env": [
                                 {"name": "QBT_WEB_SERVER", "value": "false"},
                                 {"name": "QBT_CONFIG_DIR", "value": "/config"},
@@ -388,6 +404,7 @@ fi
                             "securityContext": restricted,
                             "volumeMounts": [
                                 {"name": "config", "mountPath": "/config"},
+                                {"name": "helpers", "mountPath": "/helpers", "readOnly": True},
                                 {
                                     "name": "data",
                                     "mountPath": "/data/downloads",
@@ -399,8 +416,11 @@ fi
                     "volumes": [
                         {"name": "config", "emptyDir": {}},
                         {
-                            "name": "config-src",
-                            "configMap": {"name": config_map},
+                            "name": "helpers",
+                            "configMap": {
+                                "name": "qbit-manage-test-helpers-v1",
+                                "defaultMode": 292,
+                            },
                         },
                         {
                             "name": "data",
@@ -481,6 +501,7 @@ class Kubectl:
     def __init__(self, kubeconfig: str, namespace: str = NAMESPACE):
         self.kubeconfig = kubeconfig
         self.namespace = namespace
+        self.owned_jobs: dict[str, dict[str, Any]] = {}
 
     def call(
         self,
@@ -506,8 +527,64 @@ class Kubectl:
         command.extend(["--output", "json"])
         return json.loads(self.call(*command))
 
-    def apply(self, path: Path) -> None:
-        self.call("apply", "-f", str(path), timeout=180)
+    def create(self, path: Path) -> None:
+        manifest = json.loads(path.read_text())
+        name = manifest["metadata"]["name"]
+        if manifest["kind"] != "Job" or manifest["metadata"]["namespace"] != self.namespace:
+            raise AssertionFailure("only exact namespaced test Jobs may be created")
+        if name in self.owned_jobs:
+            raise AssertionFailure("refusing to replace a recorded Job")
+        created = json.loads(self.call("create", "-f", str(path), "-o", "json", timeout=180))
+        metadata = created["metadata"]
+        if (
+            metadata.get("name") != name
+            or metadata.get("namespace") != self.namespace
+            or not metadata.get("uid")
+            or not metadata.get("resourceVersion")
+            or metadata.get("labels") != manifest["metadata"]["labels"]
+        ):
+            raise AssertionFailure("created Job did not return its expected ownership metadata")
+        self.owned_jobs[name] = metadata
+
+    def delete_owned_job(self, name: str) -> None:
+        expected = self.owned_jobs[name]
+        current_text = self.call("get", "job", name, "-o", "json", "--ignore-not-found")
+        if not current_text.strip():
+            del self.owned_jobs[name]
+            return
+        metadata = json.loads(current_text)["metadata"]
+        if metadata.get("uid") != expected["uid"] or metadata.get("labels") != expected["labels"]:
+            raise AssertionFailure("recorded Job ownership changed; refusing deletion")
+        if metadata.get("deletionTimestamp") is None:
+            options = {
+                "apiVersion": "v1",
+                "kind": "DeleteOptions",
+                "propagationPolicy": "Foreground",
+                "preconditions": {
+                    "uid": expected["uid"],
+                    "resourceVersion": metadata["resourceVersion"],
+                },
+            }
+            self.call(
+                "delete",
+                "--raw",
+                f"/apis/batch/v1/namespaces/{self.namespace}/jobs/{name}",
+                "-f",
+                "-",
+                input_text=json.dumps(options),
+                timeout=150,
+            )
+        deadline = time.monotonic() + 120
+        while True:
+            current_text = self.call("get", "job", name, "-o", "json", "--ignore-not-found")
+            if not current_text.strip():
+                break
+            if json.loads(current_text)["metadata"].get("uid") != expected["uid"]:
+                raise AssertionFailure("a different Job appeared during cleanup")
+            if time.monotonic() >= deadline:
+                raise AssertionFailure("owned Job cleanup exceeded its deadline")
+            time.sleep(1)
+        del self.owned_jobs[name]
 
     def exec(
         self,
@@ -527,21 +604,15 @@ class Kubectl:
         return self.call(*command, input_text=input_text, timeout=timeout)
 
     def delete_labeled(self, selector: str) -> None:
-        self.call(
-            "delete",
-            "job,configmap,pod",
-            "--selector",
-            selector,
-            "--ignore-not-found=true",
-            "--wait=true",
-            "--timeout=2m",
-            timeout=150,
-        )
+        for name, metadata in list(self.owned_jobs.items()):
+            if selector != "homelab-talos/e2e-run=" + metadata["labels"]["homelab-talos/e2e-run"]:
+                raise AssertionFailure("cleanup selector differs from the recorded run")
+            self.delete_owned_job(name)
 
     def labeled_names(self, selector: str) -> list[str]:
         output = self.call(
             "get",
-            "job,configmap,pod",
+            "job,pod",
             "--selector",
             selector,
             "--output",
@@ -1070,6 +1141,7 @@ class Scenario:
         atomic_write_text(self.recorder.manifest_path("deployed-config.yml"), config_text)
         self.live_config = load_policy_yaml(config_text)
         validate_production_isolation(self.live_config)
+        validate_fixed_fixture(config_text, self.kube.get_json("configmap", FIXTURE_NAME))
 
         if self.kube.labeled_names(self.identity.resource_selector):
             self.fail("run-labeled Kubernetes resources already exist")
@@ -1316,60 +1388,29 @@ class Scenario:
             self.fail("qbit_manage one-shot Job exceeded its two-minute deadline")
 
     def run_policy_job(self, phase: str, config: dict[str, Any]) -> None:
+        if config != fixed_policy_config(self.identity, phase):
+            self.fail("policy phase differs from its reviewed immutable template")
         config_name = f"qbm-e2e-{self.identity.run_id}-{phase}"
         config_text = dump_policy_yaml(config)
         atomic_write_text(self.recorder.manifest_path(f"{phase}-config.yml"), config_text)
-        labels = {
-            "homelab-talos/e2e-run": self.identity.run_id,
-            "homelab-talos/e2e-target": "qbit-manage-policy",
-        }
-        config_map = {
-            "apiVersion": "v1",
-            "kind": "ConfigMap",
-            "metadata": {
-                "name": config_name,
-                "namespace": NAMESPACE,
-                "labels": labels,
-            },
-            "data": {"config.yml": config_text},
-        }
-        config_path = self.recorder.write_manifest(f"{phase}-configmap.json", config_map)
         job_path = self.recorder.write_manifest(
             f"{phase}-job.json",
-            job_manifest(self.identity, phase, self.qbm_image, config_name),
+            job_manifest(self.identity, phase, self.qbm_image),
         )
         self.ledger.resources_attempted = True
-        self.kube.apply(config_path)
-        self.kube.apply(job_path)
+        self.kube.create(job_path)
         self.wait_for_job(config_name)
         self.recorder.job(phase, config_name)
         if debug_keep_jobs():
             print(
-                f"Debug: preserving Job/ConfigMap {config_name} at TRACE level for "
+                f"Debug: preserving Job {config_name} at TRACE level for "
                 "inspection. Read the group-matching decision with: "
                 "mise exec -- just kube qbit-manage-e2e-trace "
                 f"{self.identity.run_id} {phase}",
                 file=sys.stderr,
             )
             return
-        self.kube.call(
-            "delete",
-            "job",
-            config_name,
-            "--ignore-not-found=true",
-            "--wait=true",
-            "--timeout=2m",
-            timeout=150,
-        )
-        self.kube.call(
-            "delete",
-            "configmap",
-            config_name,
-            "--ignore-not-found=true",
-            "--wait=true",
-            "--timeout=2m",
-            timeout=150,
-        )
+        self.kube.delete_owned_job(config_name)
 
     def run_standard_policy_job(self, phase: str, cleanup: bool) -> None:
         assert self.live_config is not None

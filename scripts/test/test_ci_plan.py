@@ -69,6 +69,22 @@ class ClassificationTests(unittest.TestCase):
                     classify([Change("M", None, path)], self.impact, full=False), FULL
                 )
 
+    def test_scoped_credential_routing_and_policies_select_required_owners(self):
+        for path, expected in (
+            ("scripts/test/access.py", FULL),
+            ("scripts/test/lib/access.sh", FULL),
+            ("scripts/test/run-catalog-suite.sh", FULL),
+            ("tests/fixtures/test-access/fake-uv.sh", FULL),
+            ("kubernetes/apps/kube-system/agent-access/app/test-admission.yaml", FULL),
+            ("scripts/openbao/credentials.py", ("core",)),
+            ("scripts/test/core/test_audit_profile_access.py", ("core",)),
+            ("scripts/test/scenarios/agent_credentials.py", ("core",)),
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    classify([Change("M", None, path)], self.impact, full=False), expected
+                )
+
     def test_rename_and_copy_select_both_owners(self):
         for status in ("R", "R100", "C", "C075"):
             with self.subTest(status=status):

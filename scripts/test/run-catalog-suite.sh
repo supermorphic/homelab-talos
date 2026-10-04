@@ -5,6 +5,7 @@ set -euo pipefail
 source scripts/lib/common.sh
 source scripts/test/lib/catalog.sh
 source scripts/test/lib/results.sh
+source scripts/test/lib/access.sh
 source scripts/lib/lease.sh
 source scripts/lib/disruption-admission.sh
 require_bash
@@ -18,14 +19,31 @@ suite_id="$1"
 shift 2
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
-catalog="${TEST_CATALOG_PATH:-tests/catalog.yaml}"
 results_root="${TEST_RESULTS_ROOT:-.test-results}"
-kubeconfig="${TEST_KUBECONFIG:-.kube/config}"
-entry_json="$(catalog_entry_by_id "$catalog" "$suite_id")"
+kubeconfig=''
+observer_kubeconfig=''
+coordinator_kubeconfig=''
+export -n observer_kubeconfig coordinator_kubeconfig
+test_access_snapshot || exit 1
+entry_json="$(catalog_entry_by_id - "$suite_id" <<<"$TEST_ACCESS_CATALOG_JSON")"
+unset TEST_ACCESS_CATALOG_JSON
 mutates_cluster="$(yq -r '.metadata.mutates_cluster' - <<<"$entry_json")"
 confirmation_type="$(yq -r '.confirmation.type' - <<<"$entry_json")"
 confirmation_variable="$(yq -r '.confirmation.variable // "none"' - <<<"$entry_json")"
 confirmation_expected="$(yq -r '.confirmation.expected // ""' - <<<"$entry_json")"
+
+# Live closeout can extend a mapped test with actual cached-client expiry proof.
+# Never export this intent to nested verifiers or replace the feature assertions.
+scoped_acceptance="${TEST_ACCESS_ACCEPTANCE_CONFIRM:-}"
+unset TEST_ACCESS_ACCEPTANCE_CONFIRM
+if [[ -n "$scoped_acceptance" ]]; then
+  [[ "$scoped_acceptance" == verify:scoped-access:ttl-and-denials &&
+    "$(yq -r '.metadata.source' - <<<"$entry_json")" =~ ^(test|chainsaw|probe|sonobuoy)$ &&
+    "$(yq -r '.access.profile // "null"' - <<<"$entry_json")" != null ]] || {
+    echo 'Scoped client acceptance requires exact intent and a mapped Kubernetes test.' >&2
+    exit 2
+  }
+fi
 
 # This one attended scenario releases its operator holder before proving the
 # coordinator's acquire/release contract. It owns checked Lease sections itself.
@@ -58,11 +76,6 @@ case "$confirmation_type" in
     ;;
 esac
 
-[[ -f "$kubeconfig" ]] || {
-  echo "Missing $kubeconfig; use just kube kubeconfig for scoped suites, or supply the selected suite's explicitly authorized operator credential." >&2
-  exit 1
-}
-
 execution_origin="$(resolve_execution_origin)"
 run_dir="$(create_run_directory "$results_root" "$execution_origin")"
 run_id="$(basename "$run_dir")"
@@ -81,6 +94,29 @@ lease_joined=false
 lease_release_status='not-required'
 disruption_admitted=false
 finalized=false
+backend_pid=''
+
+finalize_catalog_access() {
+  local config_cleanup_failed=false
+  test_access_close || config_cleanup_failed=true
+  test_access_purposes_close || config_cleanup_failed=true
+  if [[ "$config_cleanup_failed" == true ]]; then
+    run_result='broken'
+    cleanup_status='failed'
+    local config_error="$run_dir/diagnostics/config-cleanup.xml"
+    write_result_case_junit "$config_error" "$suite_id" config-cleanup broken 0
+    cp "$run_dir/junit.xml" "$run_dir/diagnostics/pre-config-cleanup-junit.xml"
+    merge_junit_reports "$run_dir/junit.xml" "$suite_id" \
+      "$run_dir/diagnostics/pre-config-cleanup-junit.xml" "$config_error"
+    normalize_native_artifacts "$run_dir" "$run_id"
+    write_evidence_index "$run_dir" "$run_id"
+    write_summary "$run_dir" "$run_id" "$entry_json" "$execution_origin" \
+      "$started_at" "$finished_at" "$duration_seconds" "$run_result" \
+      "$primary_exit_code" "$assertion_status" "${diagnostics_status:-passed}" "$cleanup_status" \
+      "$recovery_status" "$external_dependency_status" "$cluster_name"
+    scripts/test/validate-run.sh "$run_dir"
+  fi
+}
 
 # Invoked indirectly by the EXIT trap below.
 # shellcheck disable=SC2329
@@ -92,7 +128,7 @@ finalize_incomplete_run() {
   set +e
   [[ "$original_exit" -ne 0 ]] || original_exit=1
   if [[ "$lease_acquired" == 'true' ]]; then
-    release_test_lease "$kubeconfig" "$run_id" >/dev/null 2>&1
+    release_test_lease "$coordinator_kubeconfig" "$run_id" >/dev/null 2>&1
     emergency_cleanup='failed'
     lease_acquired=false
   elif [[ "$lease_joined" == 'true' ]]; then
@@ -116,6 +152,16 @@ finalize_incomplete_run() {
     "$original_exit" not-classified failed "$emergency_cleanup" \
     not-required not-applicable unavailable
   scripts/test/validate-run.sh "$run_dir" >/dev/null 2>&1
+  primary_exit_code="$original_exit"
+  finished_at="$emergency_finished"
+  duration_seconds="$emergency_duration"
+  run_result='broken'
+  assertion_status='not-classified'
+  diagnostics_status='failed'
+  recovery_status='not-required'
+  external_dependency_status='not-applicable'
+  cluster_name='unavailable'
+  finalize_catalog_access
   echo "Test coordinator finalized an interrupted run: $run_dir" >&2
 }
 trap finalize_incomplete_run EXIT
@@ -127,6 +173,11 @@ handle_signal() {
     INT) signal_exit_code=130 ;;
     TERM) signal_exit_code=143 ;;
   esac
+  if [[ -n "$backend_pid" ]]; then
+    kill -s "$1" "$backend_pid" 2>/dev/null || true
+    wait "$backend_pid" || true
+    backend_pid=''
+  fi
   exit "$signal_exit_code"
 }
 trap 'handle_signal INT' INT
@@ -136,8 +187,25 @@ write_run_id_output "$run_id"
 # suites create their own canonical runs and must not overwrite the parent's pointer.
 unset TEST_RUN_ID_FILE
 
+test_access_open "$suite_id" "$run_id" || exit 1
+kubeconfig="${TEST_KUBECONFIG:-}"
+test_access_arguments "$@" || exit 1
+set -- "${TEST_ACCESS_ARGUMENTS[@]}"
+
 if [[ "$mutates_cluster" == 'true' && "$scenario_lease" == 'false' ]]; then
   lease_release_status='failed'
+  if [[ "$suite_id" == test.resilience.node-abrupt-loss ]]; then
+    # This null-profile boundary retains only its explicitly supplied operator input.
+    observer_kubeconfig="$kubeconfig"
+    coordinator_kubeconfig="$kubeconfig"
+  else
+    test_access_purpose_open campaign-observer "$run_id" || exit 1
+    observer_kubeconfig="$TEST_ACCESS_PURPOSE_CONFIG"
+    if [[ -z "${TEST_CAMPAIGN_LEASE_HOLDER:-}" ]]; then
+      test_access_purpose_open campaign-coordinator "$run_id" || exit 1
+      coordinator_kubeconfig="$TEST_ACCESS_PURPOSE_CONFIG"
+    fi
+  fi
   if [[ -n "${TEST_CAMPAIGN_LEASE_HOLDER:-}" ]]; then
     if verify_test_lease_holder "$kubeconfig" "$TEST_CAMPAIGN_LEASE_HOLDER"; then
       lease_joined=true
@@ -147,9 +215,9 @@ if [[ "$mutates_cluster" == 'true' && "$scenario_lease" == 'false' ]]; then
       primary_exit_code=1
       run_result='broken'
     fi
-  elif acquire_test_lease "$kubeconfig" "$run_id"; then
+  elif acquire_test_lease "$coordinator_kubeconfig" "$run_id" 5 existing-only; then
     lease_acquired=true
-    start_test_lease_renewal "$kubeconfig" "$run_id" \
+    start_test_lease_renewal "$coordinator_kubeconfig" "$run_id" \
       "$run_dir_abs/diagnostics/lease-renewal-failed"
   else
     write_result_case_junit "$run_dir/junit.xml" "$suite_id" lease-acquisition broken 0
@@ -160,7 +228,7 @@ fi
 
 if [[ "$mutates_cluster" == 'true' &&
   ("$lease_acquired" == 'true' || "$lease_joined" == 'true') ]]; then
-  if assert_established_disruption_admissible "$kubeconfig"; then
+  if assert_established_disruption_admissible "$observer_kubeconfig"; then
     disruption_admitted=true
   else
     write_result_case_junit "$run_dir/junit.xml" "$suite_id" \
@@ -173,7 +241,7 @@ fi
 if [[ "$mutates_cluster" == 'true' && "$disruption_admitted" == 'true' ]]; then
   lease_ready=false
   if [[ "$lease_acquired" == 'true' ]]; then
-    if verify_test_lease_holder "$kubeconfig" "$run_id" &&
+    if verify_test_lease_holder "$coordinator_kubeconfig" "$run_id" &&
       [[ ! -e "$run_dir_abs/diagnostics/lease-renewal-failed" ]]; then
       lease_ready=true
     fi
@@ -201,10 +269,32 @@ fi
 
 if [[ "$mutates_cluster" != 'true' || "$scenario_lease" == 'true' ||
   "$disruption_admitted" == 'true' ]]; then
+  test_access_check "$suite_id" || exit 1
   set +e
-  "$@" 2>&1 | tee "$run_dir/logs/console.log"
-  primary_exit_code="${PIPESTATUS[0]}"
+  # Bash otherwise gives an asynchronous command /dev/null as stdin. Preserve
+  # the caller's input for attended password and recovery prompts.
+  python -m scripts.test.run_bound_backend "$run_dir/logs/console.log" -- "$@" <&0 &
+  backend_pid="$!"
+  wait "$backend_pid"
+  primary_exit_code="$?"
+  backend_pid=''
   set -e
+  if [[ "$primary_exit_code" -eq 0 && "$signal_exit_code" -eq 0 && -n "$scoped_acceptance" ]]; then
+    if [[ -z "$(find "$fragment_dir" -type f -name '*.xml' -print -quit)" ]]; then
+      write_result_case_junit "$fragment_dir/scoped-backend.xml" "$suite_id" command passed "$((EPOCHSECONDS - started_epoch))"
+    fi
+    set +e
+    python -m scripts.test.run_bound_backend "$run_dir/logs/scoped-access.log" -- uv run --locked --no-dev python -m scripts.test.scoped_access_acceptance "$suite_id" "$scoped_acceptance" &
+    backend_pid="$!"
+    wait "$backend_pid"
+    primary_exit_code="$?"
+    backend_pid=''
+    set -e
+  fi
+
+  case "$primary_exit_code" in
+    130|143) signal_exit_code="$primary_exit_code" ;;
+  esac
   if [[ "$signal_exit_code" -ne 0 ]]; then
     primary_exit_code="$signal_exit_code"
   fi
@@ -259,7 +349,7 @@ if [[ "$lease_acquired" == 'true' ]]; then
   lease_release_status='passed'
   [[ ! -f "$run_dir/diagnostics/lease-renewal-failed" ]] ||
     lease_finalization_failed=true
-  release_test_lease "$kubeconfig" "$run_id" ||
+  release_test_lease "$coordinator_kubeconfig" "$run_id" ||
     lease_finalization_failed=true
   lease_acquired=false
 elif [[ "$lease_joined" == 'true' ]]; then
@@ -286,8 +376,11 @@ duration_seconds=$((EPOCHSECONDS - started_epoch))
 cleanup_status="$lease_release_status"
 recovery_status='not-required'
 external_dependency_status='not-applicable'
+diagnostics_status='passed'
 if [[ "$mutates_cluster" == 'true' && -f "$run_dir/recovery.json" ]]; then
   recovery_status="$(recorded_recovery_status "$run_dir")"
+fi
+if [[ -f "$run_dir/cleanup.json" || ( "$mutates_cluster" == 'true' && -f "$run_dir/recovery.json" ) ]]; then
   scenario_cleanup_status="$recovery_status"
   if [[ -f "$run_dir/cleanup.json" ]]; then
     scenario_cleanup_status="$(recorded_phase_status "$run_dir" cleanup)"
@@ -313,6 +406,12 @@ if [[ "$mutates_cluster" == 'true' && -f "$run_dir/recovery.json" ]]; then
       ;;
   esac
 fi
+if [[ -f "$run_dir/diagnostics.json" ]]; then
+  diagnostics_status="$(recorded_phase_status "$run_dir" diagnostics)"
+  if [[ "$diagnostics_status" == 'failed' || "$diagnostics_status" == 'not-classified' ]]; then
+    run_result='broken'
+  fi
+fi
 if [[ -f "$run_dir/external-dependency.json" ]]; then
   external_dependency_status="$(recorded_phase_status "$run_dir" external-dependency)"
   if [[ "$external_dependency_status" == 'failed' ||
@@ -326,9 +425,12 @@ if [[ -f "$run_dir/assertion.json" ]]; then
 fi
 append_lifecycle_junit "$run_dir/junit.xml" "$suite_id" \
   "$external_dependency_status" "$cleanup_status" "$recovery_status" \
-  passed "$run_result"
-cluster_name="$(lease_kubectl "$kubeconfig" config view --minify \
-  --output jsonpath='{.clusters[0].name}' 2>/dev/null || true)"
+  "$diagnostics_status" "$run_result"
+cluster_name=''
+if [[ -n "$kubeconfig" ]]; then
+  cluster_name="$(lease_kubectl "$kubeconfig" config view --minify \
+    --output jsonpath='{.clusters[0].name}' 2>/dev/null || true)"
+fi
 [[ -n "$cluster_name" ]] || cluster_name='unavailable'
 write_environment "$run_dir" "$run_id" "$entry_json" "$execution_origin" \
   "$started_at" "$finished_at" "${TEST_NAMESPACE:-all}" \
@@ -337,9 +439,11 @@ normalize_native_artifacts "$run_dir" "$run_id"
 write_evidence_index "$run_dir" "$run_id"
 write_summary "$run_dir" "$run_id" "$entry_json" "$execution_origin" \
   "$started_at" "$finished_at" "$duration_seconds" "$run_result" \
-  "$primary_exit_code" "$assertion_status" passed "$cleanup_status" \
+  "$primary_exit_code" "$assertion_status" "$diagnostics_status" "$cleanup_status" \
   "$recovery_status" "$external_dependency_status" "$cluster_name"
 scripts/test/validate-run.sh "$run_dir"
+
+finalize_catalog_access
 
 finalized=true
 trap - EXIT INT TERM

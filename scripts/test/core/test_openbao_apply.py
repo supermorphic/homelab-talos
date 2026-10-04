@@ -18,6 +18,8 @@ class StateClient:
         self.responses = json.loads(
             (Path(__file__).parent / "fixtures/openbao-2.7-read-responses.json").read_text()
         )
+        self.responses.update(json.loads(
+            (Path(__file__).parent / "fixtures/openbao-scoped-profile-responses.json").read_text())["responses"])
         self.readbacks = {}
         for spec in self.document["objects"]:
             if spec.kind in {"auth-method", "secret-mount"}:

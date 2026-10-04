@@ -182,12 +182,12 @@ def _exec_contract(server: ThreadingHTTPServer, directory: Path) -> None:
         "  return {'data': {'service_account_name': account, 'service_account_namespace': 'kube-system', "
         "'service_account_token': 'synthetic.' + part + '.synthetic'}}\n"
         "state = {'role_id': 'synthetic-role', 'secret_id': 'synthetic-secret', 'entity_id': 'synthetic-entity', "
-        "'expires_at': now + 7776000, 'cluster': {'schema_version': 1, 'server': issuance.AUDIENCE, "
+        "'expires_at': now + 7776000, 'cluster': {'schema_version': 2, 'server': issuance.AUDIENCE, "
         "'certificate_authority_data': base64.b64encode(b'-----BEGIN CERTIFICATE-----').decode(), "
         "'openbao_server': workstation.ENDPOINT, 'profiles': list(credentials.PROFILES)}}\n"
         "print(json.dumps(credentials.issue_exec_credential(profile, state, client=Broker(), now=now)))\n"
     )
-    profiles = ("observer", "diagnostic", "publisher", "campaign-coordinator")
+    profiles = ("observer", "debugger", "report-publisher", "campaign-coordinator")
     configs = []
     for profile in profiles:
         config = directory / (profile + ".json")

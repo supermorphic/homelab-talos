@@ -14,9 +14,7 @@ scripts/verify/ntfy.sh "$kubeconfig"
 ns='ntfy'
 base_url='https://ntfy.lab.supermorphic.com'
 kc=(kubectl --kubeconfig "$kubeconfig")
-if "${kc[@]}" config get-contexts homelab-diagnostic --no-headers >/dev/null 2>&1; then
-  kc+=(--context homelab-diagnostic)
-fi
+
 
 # Read the already-provisioned producer tokens without printing them. Keep the
 # Authorization header and message body out of the curl process command line.

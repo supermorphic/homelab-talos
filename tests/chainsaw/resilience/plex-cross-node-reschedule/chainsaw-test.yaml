@@ -51,7 +51,7 @@ spec:
             content: >-
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
-              scripts/test/scenarios/plex_cross_node_reschedule.py prepare .kube/config
+              scripts/test/scenarios/plex_cross_node_reschedule.py prepare "${TEST_KUBECONFIG:?}"
     - name: guard-and-cordon-exact-source-node
       try:
         - script:
@@ -63,13 +63,13 @@ spec:
             content: >-
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
-              scripts/test/scenarios/plex_cross_node_reschedule.py cordon .kube/config
+              scripts/test/scenarios/plex_cross_node_reschedule.py cordon "${TEST_KUBECONFIG:?}"
       cleanup:
         - script:
             content: >-
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
-              scripts/test/scenarios/plex_cross_node_reschedule.py cleanup-node .kube/config
+              scripts/test/scenarios/plex_cross_node_reschedule.py cleanup-node "${TEST_KUBECONFIG:?}"
         - wait:
             apiVersion: apps/v1
             kind: Deployment
@@ -94,7 +94,7 @@ spec:
             content: >-
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
-              scripts/test/scenarios/plex_cross_node_reschedule.py cleanup-marker .kube/config
+              scripts/test/scenarios/plex_cross_node_reschedule.py cleanup-marker "${TEST_KUBECONFIG:?}"
     - name: delete-plex-pod-natively
       try:
         - delete:
@@ -132,11 +132,11 @@ spec:
             content: >-
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
-              scripts/test/scenarios/plex_cross_node_reschedule.py observe .kube/config
+              scripts/test/scenarios/plex_cross_node_reschedule.py observe "${TEST_KUBECONFIG:?}"
     - name: construct-persistence-longhorn-and-smb-evidence
       try:
         - script:
             content: >-
               cd "$HOMELAB_REPO_ROOT" &&
               uv run --locked --no-dev python
-              scripts/test/scenarios/plex_cross_node_reschedule.py verify .kube/config
+              scripts/test/scenarios/plex_cross_node_reschedule.py verify "${TEST_KUBECONFIG:?}"

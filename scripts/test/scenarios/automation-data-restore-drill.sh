@@ -7,6 +7,7 @@ source scripts/lib/common.sh
 source scripts/lib/n8n-verification.sh
 # shellcheck source=scripts/test/lib/job.sh
 source scripts/test/lib/job.sh
+source scripts/test/lib/owned-resources.sh
 # shellcheck source=scripts/lib/lease.sh
 source scripts/lib/lease.sh
 # shellcheck source=scripts/test/lib/n8n-restore-command.sh
@@ -34,7 +35,7 @@ run_dir="${HOMELAB_TEST_RUN_DIR:-}"
   exit 1
 }
 [[ -f "$kubeconfig" ]] || {
-  echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
+  echo 'The restore drill requires the selected invocation config.' >&2
   exit 1
 }
 
@@ -65,6 +66,12 @@ k_ad=(kubectl --kubeconfig "$kubeconfig" --namespace "$ad_namespace")
 k_n8n=(kubectl --kubeconfig "$kubeconfig" --namespace "$n8n_namespace")
 k_request=(kubectl --kubeconfig "$kubeconfig" --namespace "$request_namespace")
 k_cluster=(kubectl --kubeconfig "$kubeconfig")
+ledger="$run_dir/diagnostics/automation-data-restore-owned.jsonl"
+[[ ! -e "$ledger" ]] || {
+  echo 'Refusing to overwrite prior restore ownership evidence.' >&2
+  exit 1
+}
+: >"$ledger"
 
 write_phase() {
   local phase="$1" phase_status="$2" reason="$3"
@@ -116,6 +123,11 @@ verify_lease() {
     echo 'The shared state-changing test Lease is absent, expired, or owned by another run.' >&2
     return 1
   }
+}
+
+create_restore_resource() {
+  verify_lease || return 1
+  "${k_cluster[@]}" "$@"
 }
 
 wait_for_restore_job() {
@@ -312,26 +324,28 @@ policy_manifests() {
 }
 
 restore_job_manifest() {
-  local kind="$1" name command namespace role host user secret_name secret_key mounts volumes extra_env backup_configmap_name=''
+  local kind="$1" name command namespace role host user secret_name secret_key mounts volumes extra_env helper_name backup_configmap_name=''
   local selector_name='' selector_value='' selector_env='[]'
   case "$kind" in
     automation-data)
       [[ "$backup_configmap" =~ ^automation-data-postgresql-backup-[a-z0-9]+$ ]] || return 2
-      backup_configmap_name="$backup_configmap"
-      name="$ad_restore_job"; command="$(automation_data_restore_job_command)"
+      backup_configmap_name=automation-data-test-helpers-v1
+      helper_name=automation-data-test-helpers-v1
+      name="$ad_restore_job"; command='/helpers/automation-data-restore.sh'
       namespace="$ad_namespace"; role='ad-restore'; host="$ad_service"
       user='postgres'; secret_name='postgresql-credentials'; secret_key='postgres-superuser-password'
-      mounts='[{"name":"backups","mountPath":"/backups","readOnly":true},{"name":"post-recovery","mountPath":"/post-recovery"},{"name":"scripts","mountPath":"/scripts/backup.sh","subPath":"backup.sh","readOnly":true},{"name":"scripts","mountPath":"/scripts/update-backup-status.sql","subPath":"update-backup-status.sql","readOnly":true},{"name":"tmp","mountPath":"/tmp"}]'
+      mounts='[{"name":"backups","mountPath":"/backups","readOnly":true},{"name":"post-recovery","mountPath":"/post-recovery"},{"name":"scripts","mountPath":"/scripts/backup.sh","subPath":"backup.sh","readOnly":true},{"name":"scripts","mountPath":"/scripts/update-backup-status.sql","subPath":"update-backup-status.sql","readOnly":true},{"name":"tmp","mountPath":"/tmp"},{"name":"helpers","mountPath":"/helpers","readOnly":true}]'
       volumes='[{"name":"backups","persistentVolumeClaim":{"claimName":"automation-data-postgresql-backups","readOnly":true}},{"name":"post-recovery","emptyDir":{}},{"name":"scripts","configMap":{"name":"","defaultMode":365}},{"name":"tmp","emptyDir":{}}]'
       extra_env='[{"name":"BACKUP_DIR","value":"/backups"},{"name":"POST_RECOVERY_BACKUP_DIR","value":"/post-recovery"},{"name":"AUTOMATION_DATA_BACKUP_PASSWORD","valueFrom":{"secretKeyRef":{"name":"postgresql-credentials","key":"backup-password"}}}]'
       selector_name='AUTOMATION_DATA_RESTORE_BUNDLE'
       selector_value="${automation_data_restore_bundle:-}"
       ;;
     n8n)
-      name="$n8n_restore_job"; command="$(n8n_restore_job_command)"
+      helper_name=n8n-test-helpers-v1
+      name="$n8n_restore_job"; command='/helpers/n8n-restore-isolated.sh'
       namespace="$n8n_namespace"; role='n8n-restore'; host="$n8n_service"
       user='n8n'; secret_name='postgresql-credentials'; secret_key='n8n-password'
-      mounts='[{"name":"backups","mountPath":"/backups","readOnly":true},{"name":"tmp","mountPath":"/tmp"}]'
+      mounts='[{"name":"backups","mountPath":"/backups","readOnly":true},{"name":"tmp","mountPath":"/tmp"},{"name":"helpers","mountPath":"/helpers","readOnly":true}]'
       volumes='[{"name":"backups","persistentVolumeClaim":{"claimName":"n8n-postgresql-backups","readOnly":true}},{"name":"tmp","emptyDir":{}}]'
       extra_env='[{"name":"RESTORE_DATABASE","value":"n8n"}]'
       selector_name='N8N_RESTORE_DUMP'
@@ -348,6 +362,7 @@ restore_job_manifest() {
     JOB_COMMAND="$command" PGHOST_VALUE="$host" PGUSER_VALUE="$user" \
     SECRET_NAME="$secret_name" SECRET_KEY="$secret_key" \
     MOUNTS="$mounts" VOLUMES="$volumes" EXTRA_ENV="$extra_env" \
+    HELPER_CONFIGMAP_NAME="$helper_name" \
     BACKUP_CONFIGMAP_NAME="$backup_configmap_name" SELECTOR_ENV="$selector_env" \
     yq --null-input --output-format yaml '
       {
@@ -362,7 +377,7 @@ restore_job_manifest() {
             "securityContext": {"fsGroup": 70, "fsGroupChangePolicy": "OnRootMismatch", "runAsNonRoot": true, "runAsUser": 70, "runAsGroup": 70, "seccompProfile": {"type": "RuntimeDefault"}},
             "containers": [{
               "name": "restore", "image": "postgres:17.11-alpine3.24", "imagePullPolicy": "IfNotPresent",
-              "command": ["/bin/sh", "-ceu"], "args": [strenv(JOB_COMMAND)],
+              "command": ["/bin/sh", "-eu", strenv(JOB_COMMAND)],
               "env": ([
                 {"name": "PGHOST", "value": strenv(PGHOST_VALUE)}, {"name": "PGPORT", "value": "5432"},
                 {"name": "PGUSER", "value": strenv(PGUSER_VALUE)},
@@ -372,7 +387,7 @@ restore_job_manifest() {
               "securityContext": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}, "readOnlyRootFilesystem": true},
               "volumeMounts": (strenv(MOUNTS) | from_json)
             }],
-            "volumes": ((strenv(VOLUMES) | from_json) |
+            "volumes": ((strenv(VOLUMES) | from_json) + [{"name":"helpers","configMap":{"name": strenv(HELPER_CONFIGMAP_NAME)}}] |
               (.[] | select(.name == "scripts") | .configMap.name) =
                 strenv(BACKUP_CONFIGMAP_NAME))
           }
@@ -429,20 +444,7 @@ n8n_application_manifests() {
 }
 
 request_job_manifest() {
-  local request_script
-  request_script="$(cat <<'EOF'
-const endpoint = `http://${process.env.APP_NAME}.automation.svc.cluster.local:5678/webhook/automation-data-canary`;
-const response = await fetch(endpoint, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Platform-Canary': process.env.CANARY_TOKEN}, body: '{}', signal: AbortSignal.timeout(60000)});
-if (!response.ok) throw new Error(`Recovery canary returned HTTP ${response.status}`);
-const body = await response.json();
-const keys = Object.keys(body).sort();
-if (JSON.stringify(keys) !== JSON.stringify(['database','executionId','role','status'])) throw new Error('Unexpected recovery response keys');
-if (body.status !== 'ok' || body.database !== 'automation_data_canary' || body.role !== 'automation_data_canary_runtime' || typeof body.executionId !== 'string' || body.executionId.length === 0) throw new Error('Restored runtime identity mismatch');
-console.log('restored_runtime_credential=authenticated');
-EOF
-)"
   REQUEST_JOB="$request_job" APP_NAME="$n8n_app" RUN_HASH="$run_hash" \
-    REQUEST_SCRIPT="$request_script" \
     yq --null-input --output-format yaml '
       {
         "apiVersion": "batch/v1", "kind": "Job",
@@ -454,8 +456,7 @@ EOF
           "spec": {"automountServiceAccountToken": false, "restartPolicy": "Never", "securityContext": {"runAsNonRoot": true, "seccompProfile": {"type": "RuntimeDefault"}},
             "containers": [{
               "name": "request", "image": "docker.n8n.io/n8nio/n8n:2.36.7", "imagePullPolicy": "IfNotPresent",
-              "command": ["node", "--input-type=module", "--eval"],
-              "args": [strenv(REQUEST_SCRIPT)],
+              "command": ["node", "/helpers/automation-data-restore-request.mjs"],
               "env": [
                 {"name": "APP_NAME", "value": strenv(APP_NAME)},
                 {"name": "CANARY_TOKEN", "valueFrom": {"secretKeyRef": {"name": "n8n-canary", "key": "token"}}},
@@ -463,27 +464,35 @@ EOF
               ],
               "resources": {"requests": {"cpu": "10m", "memory": "32Mi"}, "limits": {"memory": "128Mi"}},
               "securityContext": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}, "readOnlyRootFilesystem": true, "runAsNonRoot": true, "runAsUser": 1000, "runAsGroup": 1000},
-              "volumeMounts": [{"name": "tmp", "mountPath": "/tmp"}]
-            }], "volumes": [{"name": "tmp", "emptyDir": {}}]
+              "volumeMounts": [{"name": "tmp", "mountPath": "/tmp"}, {"name": "helpers", "mountPath": "/helpers", "readOnly": true}]
+            }], "volumes": [{"name": "tmp", "emptyDir": {}}, {"name": "helpers", "configMap": {"name": "n8n-test-request-helpers-v1"}}]
           }
         }}
       }'
 }
 
 cleanup() {
-  local original_exit="$?" cleanup_ok=true
+  local original_exit="$?" cleanup_ok=true kind target_namespace rest target namespace_and_targets
   trap - EXIT INT TERM
   set +e
-  "${k_request[@]}" delete job "$request_job" --ignore-not-found --wait=true --timeout=2m >/dev/null 2>&1 || cleanup_ok=false
-  "${k_n8n[@]}" delete deployment "$n8n_app" --ignore-not-found --wait=true --timeout=5m >/dev/null 2>&1 || cleanup_ok=false
+  test_delete_owned "$ledger" Job "$request_namespace" "$request_job" "${k_request[@]}" || cleanup_ok=false
+  test_delete_owned "$ledger" Deployment "$n8n_namespace" "$n8n_app" "${k_n8n[@]}" || cleanup_ok=false
   for namespace_and_targets in \
     "$ad_namespace job/$ad_restore_job statefulset/$ad_database service/$ad_service ciliumnetworkpolicy/$ad_policy pvc/$ad_data_pvc" \
     "$n8n_namespace job/$n8n_restore_job statefulset/$n8n_database service/$n8n_service service/$n8n_app ciliumnetworkpolicy/$n8n_policy pvc/$n8n_data_pvc" \
     "$request_namespace ciliumnetworkpolicy/$request_policy"; do
     read -r target_namespace rest <<<"$namespace_and_targets"
     for target in $rest; do
-      kubectl --kubeconfig "$kubeconfig" --namespace "$target_namespace" delete "$target" \
-        --ignore-not-found --wait=true --timeout=5m >/dev/null 2>&1 || cleanup_ok=false
+      case "${target%%/*}" in
+        job) kind=Job ;;
+        statefulset) kind=StatefulSet ;;
+        service) kind=Service ;;
+        ciliumnetworkpolicy) kind=CiliumNetworkPolicy ;;
+        pvc) kind=PersistentVolumeClaim ;;
+        *) cleanup_ok=false; continue ;;
+      esac
+      test_delete_owned "$ledger" "$kind" "$target_namespace" "${target#*/}" \
+        kubectl --kubeconfig "$kubeconfig" --namespace "$target_namespace" || cleanup_ok=false
     done
   done
   for namespace_and_targets in \
@@ -500,7 +509,7 @@ cleanup() {
   else
     write_phase cleanup failed 'one or more run-owned restore resources remain'
   fi
-  [[ "$cleanup_ok" == 'true' ]] || exit 1
+  if [[ "$cleanup_ok" != true && "$original_exit" == 0 ]]; then original_exit=1; fi
   exit "$original_exit"
 }
 trap cleanup EXIT
@@ -529,8 +538,8 @@ for namespace_and_targets in \
 done
 
 verify_lease
-policy_manifests | "${k_cluster[@]}" create --filename - >/dev/null
-platform_manifests | "${k_cluster[@]}" create --filename - >/dev/null
+policy_manifests | test_create_owned_stream "$ledger" create_restore_resource
+platform_manifests | test_create_owned_stream "$ledger" create_restore_resource
 "${k_ad[@]}" rollout status "statefulset/$ad_database" --timeout=10m >/dev/null
 "${k_n8n[@]}" rollout status "statefulset/$n8n_database" --timeout=10m >/dev/null
 
@@ -538,7 +547,7 @@ verify_lease
 backup_configmaps_json="$("${k_ad[@]}" get configmaps --output json)"
 backup_configmap="$(resolve_backup_configmap <<<"$backup_configmaps_json")"
 unset backup_configmaps_json
-restore_job_manifest automation-data | "${k_ad[@]}" create --filename - >/dev/null
+restore_job_manifest automation-data | test_create_owned_stream "$ledger" create_restore_resource
 wait_for_restore_job "$ad_restore_job" 1800 5 "${k_ad[@]}"
 ad_restore_output="$("${k_ad[@]}" logs "job/$ad_restore_job" --tail=20)"
 selected_bundle="$(sed -n 's/^selected_bundle=//p' <<<"$ad_restore_output" | tail -n 1)"
@@ -550,7 +559,7 @@ post_recovery_bundle="$(sed -n 's/^post_recovery_bundle=//p' <<<"$ad_restore_out
 }
 
 verify_lease
-restore_job_manifest n8n | "${k_n8n[@]}" create --filename - >/dev/null
+restore_job_manifest n8n | test_create_owned_stream "$ledger" create_restore_resource
 wait_for_restore_job "$n8n_restore_job" 1800 5 "${k_n8n[@]}"
 selected_n8n_dump="$("${k_n8n[@]}" logs "job/$n8n_restore_job" --tail=20 | sed -n 's/^selected_dump=//p' | tail -n 1)"
 [[ "$selected_n8n_dump" =~ ^n8n-postgresql-[0-9]{8}T[0-9]{6}Z\.dump$ ]] || {
@@ -572,7 +581,7 @@ ad_cluster_ip="$("${k_ad[@]}" get service "$ad_service" --output jsonpath='{.spe
 }
 
 verify_lease
-n8n_application_manifests "$ad_cluster_ip" | "${k_n8n[@]}" create --filename - >/dev/null
+n8n_application_manifests "$ad_cluster_ip" | test_create_owned_stream "$ledger" create_restore_resource
 "${k_n8n[@]}" rollout status "deployment/$n8n_app" --timeout=20m >/dev/null
 
 # This drill creates no HTTPRoute. Recheck after Service creation so the restored
@@ -586,7 +595,7 @@ if n8n_routes_target_service "$n8n_namespace" "$n8n_app" \
 fi
 
 verify_lease
-request_job_manifest | "${k_request[@]}" create --filename - >/dev/null
+request_job_manifest | test_create_owned_stream "$ledger" create_restore_resource
 wait_for_job_terminal "$request_job" 600 5 "${k_request[@]}"
 [[ "$("${k_request[@]}" logs "job/$request_job" --tail=1)" == \
   'restored_runtime_credential=authenticated' ]] || {
