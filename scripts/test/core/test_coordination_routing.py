@@ -117,6 +117,32 @@ class CoordinationRoutingTests(unittest.TestCase):
         self.assertNotIn(" create ", (self.root / "lease-calls").read_text())
         self.assertEqual(list((self.root / "private").glob("*/config")), [])
 
+    def test_initial_routing_snapshot_is_required_before_any_authority_install(self):
+        for extra in (
+            {"TEST_FIXTURE_ACCESS_RESOLVE_DRIFT": "true"},
+            {"TEST_ACCESS_EXPECTED_CATALOG_DIGEST": "0" * 64},
+        ):
+            with self.subTest(extra=extra):
+                (self.root / "trace").write_text("")
+                result = subprocess.run(
+                    [
+                        "scripts/test/run-catalog-suite.sh",
+                        "test.cilium-connectivity",
+                        "--",
+                        "true",
+                    ],
+                    cwd=ROOT,
+                    env={**self.environment, **extra},
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                lines = (self.root / "trace").read_text().splitlines()
+                self.assertFalse(any(line.startswith(("prepare ", "purpose ")) for line in lines))
+                self.assertFalse((self.root / "backend-config").exists())
+
     def test_physical_boundary_keeps_explicit_operator_input_without_issuance(self):
         operator = self.root / "operator-config"
         operator.touch()

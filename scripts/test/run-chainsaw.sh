@@ -25,10 +25,11 @@ observer_kubeconfig=''
 coordinator_kubeconfig=''
 export -n observer_kubeconfig coordinator_kubeconfig
 namespace='flux-system'
-catalog="${TEST_CATALOG_PATH:-tests/catalog.yaml}"
 results_root="${TEST_RESULTS_ROOT:-.test-results}"
 
-entry_json="$(catalog_dispatch_entry "$catalog" "$tier" "$target" "$scenario")" || exit "$?"
+test_access_snapshot || exit 1
+entry_json="$(catalog_dispatch_entry - "$tier" "$target" "$scenario" <<<"$TEST_ACCESS_CATALOG_JSON")" || exit "$?"
+unset TEST_ACCESS_CATALOG_JSON
 suite_id="$(yq -r '.metadata.id' - <<<"$entry_json")"
 test_access_resolve "$suite_id" >/dev/null || exit 1
 dispatch_mode="$(yq -r '.dispatch.mode' - <<<"$entry_json")"

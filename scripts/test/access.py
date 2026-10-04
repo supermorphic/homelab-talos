@@ -144,10 +144,17 @@ def resolve_suite_access(repo_root: Path, suite_id: str) -> dict:
     }
 
 
-def prepare_invocation(repo_root: Path, suite_id: str, run_id: str) -> Path | None:
+def prepare_invocation(
+    repo_root: Path, suite_id: str, run_id: str, *, expected_catalog_digest: str | None = None
+) -> Path | None:
     from scripts.openbao import credentials, workstation
 
     declaration = resolve_suite_access(repo_root, suite_id)
+    if (
+        expected_catalog_digest is not None
+        and declaration["catalog_digest"] != expected_catalog_digest
+    ):
+        raise SafeError("invalid-source")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", run_id):
         raise SafeError("invalid-source")
     if declaration["profile"] is None:
@@ -287,8 +294,19 @@ def validate_purpose_invocation(
     return binding
 
 
-def validate_inherited_invocation(repo_root: Path, suite_id: str, config_path: Path) -> dict:
+def validate_inherited_invocation(
+    repo_root: Path,
+    suite_id: str,
+    config_path: Path,
+    *,
+    expected_catalog_digest: str | None = None,
+) -> dict:
     """Retain a checked parent for the same suite or an observational child."""
+    if (
+        expected_catalog_digest is not None
+        and _canonical_catalog(repo_root)[1] != expected_catalog_digest
+    ):
+        raise SafeError("invalid-source")
     parent = validate_invocation(repo_root, config_path)
     if "purpose" in parent or "profile_check" in parent:
         raise SafeError("invalid-source")
@@ -315,16 +333,32 @@ def validate_inherited_invocation(repo_root: Path, suite_id: str, config_path: P
 def main(argv: list[str]) -> int:
     root = Path(__file__).resolve().parents[2]
     try:
-        if len(argv) == 3 and argv[1] == "resolve":
+        if len(argv) == 2 and argv[1] == "snapshot":
+            import json
+
+            catalog, digest = _canonical_catalog(root)
+            print(json.dumps({"catalog": catalog, "catalog_digest": digest}))
+        elif len(argv) == 3 and argv[1] == "resolve":
             import json
 
             print(json.dumps(resolve_suite_access(root, argv[2])))
-        elif len(argv) == 4 and argv[1] == "inherit":
+        elif len(argv) in {4, 5} and argv[1] == "inherit":
             import json
 
-            print(json.dumps(validate_inherited_invocation(root, argv[2], Path(argv[3]))))
-        elif len(argv) == 4 and argv[1] == "prepare":
-            path = prepare_invocation(root, argv[2], argv[3])
+            print(
+                json.dumps(
+                    validate_inherited_invocation(
+                        root,
+                        argv[2],
+                        Path(argv[3]),
+                        expected_catalog_digest=argv[4] if len(argv) == 5 else None,
+                    )
+                )
+            )
+        elif len(argv) in {4, 5} and argv[1] == "prepare":
+            path = prepare_invocation(
+                root, argv[2], argv[3], expected_catalog_digest=argv[4] if len(argv) == 5 else None
+            )
             if path is not None:
                 print(path)
         elif len(argv) == 4 and argv[1] == "profile-check":

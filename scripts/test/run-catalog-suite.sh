@@ -19,14 +19,14 @@ suite_id="$1"
 shift 2
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
-catalog="${TEST_CATALOG_PATH:-tests/catalog.yaml}"
 results_root="${TEST_RESULTS_ROOT:-.test-results}"
 kubeconfig=''
 observer_kubeconfig=''
 coordinator_kubeconfig=''
 export -n observer_kubeconfig coordinator_kubeconfig
-test_access_resolve "$suite_id" >/dev/null || exit 1
-entry_json="$(catalog_entry_by_id "$catalog" "$suite_id")"
+test_access_snapshot || exit 1
+entry_json="$(catalog_entry_by_id - "$suite_id" <<<"$TEST_ACCESS_CATALOG_JSON")"
+unset TEST_ACCESS_CATALOG_JSON
 mutates_cluster="$(yq -r '.metadata.mutates_cluster' - <<<"$entry_json")"
 confirmation_type="$(yq -r '.confirmation.type' - <<<"$entry_json")"
 confirmation_variable="$(yq -r '.confirmation.variable // "none"' - <<<"$entry_json")"

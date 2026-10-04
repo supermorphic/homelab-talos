@@ -14,7 +14,7 @@ while [[ "$#" -gt 0 && "$1" != 'scripts.test.access' ]]; do shift; done
 shift
 printf '%s\n' "$*" >>"$TEST_FIXTURE_ACCESS_TRACE"
 case "$1" in
-  resolve) exec "$TEST_FIXTURE_REAL_UV" "${argv[@]}" ;;
+  resolve|snapshot) exec "$TEST_FIXTURE_REAL_UV" "${argv[@]}" ;;
   prepare)
     config="$TEST_FIXTURE_ACCESS_ROOT/private/$3/config"
     mkdir -p "$(dirname "$config")"

@@ -70,7 +70,7 @@ report_persistence_entry="$(
 [[ "$(yq -r '.confirmation.variable' - <<<"$report_persistence_entry")" == \
   'CLUSTER_CHAOS_CONFIRM' ]]
 
-rg -Fq 'catalog_dispatch_entry "$catalog" "$tier" "$target" "$scenario"' "$runner"
+rg -Fq 'catalog_dispatch_entry - "$tier" "$target" "$scenario"' "$runner"
 rg -Fq 'scripts/test/run-catalog-suite.sh "$suite_id"' "$runner"
 rg -Fq 'scripts/test/run-chainsaw.sh "$tier" "$target"' "$runner"
 if rg -Fq '.test-results/state-changing.lock' "$runner"; then
@@ -84,6 +84,16 @@ mkdir -p "$fixture_root/scripts/test/lib" "$fixture_root/tests"
 cp scripts/test/run-live-suite.sh "$fixture_root/scripts/test/run-live-suite.sh"
 cp scripts/lib/common.sh "$fixture_root/scripts/lib-common.sh"
 cp scripts/test/lib/catalog.sh "$fixture_root/scripts/test/lib/catalog.sh"
+cp scripts/test/lib/access.sh "$fixture_root/scripts/test/lib/access.sh"
+mkdir -p "$fixture_root/bin"
+uv run --locked --no-dev python -m scripts.test.access snapshot > "$fixture_root/catalog-snapshot.json"
+cat >"$fixture_root/bin/uv" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == 'run --locked --no-dev python -m scripts.test.access snapshot' ]]
+cat "${DISPATCH_TEST_SNAPSHOT:?}"
+EOF
+chmod +x "$fixture_root/bin/uv"
 cp tests/catalog.yaml "$fixture_root/tests/catalog.yaml"
 mkdir -p "$fixture_root/scripts/lib"
 mv "$fixture_root/scripts/lib-common.sh" "$fixture_root/scripts/lib/common.sh"
@@ -96,7 +106,8 @@ chmod +x "$fixture_root/scripts/test/run-catalog-suite.sh"
 dispatch_calls="$fixture_root/calls"
 (
   cd "$fixture_root"
-  DISPATCH_TEST_CALLS="$dispatch_calls" \
+  PATH="$fixture_root/bin:$PATH" DISPATCH_TEST_SNAPSHOT="$fixture_root/catalog-snapshot.json" \
+    DISPATCH_TEST_CALLS="$dispatch_calls" \
     scripts/test/run-live-suite.sh resilience node-abrupt-loss nuc2
 )
 [[ "$(<"$dispatch_calls")" == \

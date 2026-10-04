@@ -1,6 +1,9 @@
 """Nested verification retains its parent's authority without selecting another profile."""
 
 import unittest
+from unittest.mock import patch
+
+import yaml
 
 from scripts.openbao.configuration import SafeError
 from scripts.test import access
@@ -50,3 +53,29 @@ class InheritedInvocationTests(unittest.TestCase):
         path.write_text("apiVersion: v1\nkind: Config\ncurrent-context: diagnostic\n")
         with self.assertRaises(SafeError):
             self.inherit("verification.metrics-server", path)
+
+    def test_routing_digest_change_rejects_preparation_before_installing_authority(self):
+        declaration = access.resolve_suite_access(self.repo, "verification.metrics-server")
+        catalog_path = self.repo / "tests/catalog.yaml"
+        catalog = yaml.safe_load(catalog_path.read_text())
+        entry = next(
+            e for e in catalog["suites"] if e["metadata"]["id"] == "verification.metrics-server"
+        )
+        entry["access"]["profile"] = "debugger"
+        catalog_path.write_text(yaml.safe_dump(catalog))
+        with patch("scripts.openbao.credentials.install_invocation_kubeconfig") as install:
+            with self.assertRaises(SafeError):
+                access.prepare_invocation(
+                    self.repo,
+                    "verification.metrics-server",
+                    "run",
+                    expected_catalog_digest=declaration["catalog_digest"],
+                )
+            install.assert_not_called()
+
+    def test_inherited_invocation_rejects_a_different_initial_routing_digest(self):
+        path = access.prepare_invocation(self.repo, "verification.metrics-server", "run")
+        with self.assertRaises(SafeError):
+            access.validate_inherited_invocation(
+                self.repo, "verification.metrics-server", path, expected_catalog_digest="0" * 64
+            )

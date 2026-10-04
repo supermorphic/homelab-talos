@@ -4,6 +4,8 @@
 _TEST_ACCESS_OWNED_PATH=''
 _TEST_ACCESS_CLOSE_STATUS=0
 _TEST_ACCESS_CATALOG_DIGEST=''
+TEST_ACCESS_CATALOG_JSON=''
+export -n _TEST_ACCESS_CATALOG_DIGEST TEST_ACCESS_CATALOG_JSON
 _TEST_ACCESS_PURPOSE_PATHS=()
 _TEST_ACCESS_PURPOSE_CLOSE_STATUS=0
 TEST_ACCESS_PURPOSE_CONFIG=''
@@ -11,6 +13,19 @@ export -n TEST_ACCESS_PURPOSE_CONFIG
 
 test_access_resolve() {
   uv run --locked --no-dev python -m scripts.test.access resolve "$1"
+}
+
+test_access_snapshot() {
+  local snapshot digest
+  snapshot="$(uv run --locked --no-dev python -m scripts.test.access snapshot)" || return 1
+  digest="$(yq -er '.catalog_digest' - <<<"$snapshot")" || return 1
+  [[ -z "${TEST_ACCESS_EXPECTED_CATALOG_DIGEST:-}" || "$TEST_ACCESS_EXPECTED_CATALOG_DIGEST" == "$digest" ]] || {
+    echo 'Catalog changed after initial dispatch selection.' >&2
+    return 1
+  }
+  unset TEST_ACCESS_EXPECTED_CATALOG_DIGEST
+  _TEST_ACCESS_CATALOG_DIGEST="$digest"
+  TEST_ACCESS_CATALOG_JSON="$(yq -o=json -I=0 '.catalog' - <<<"$snapshot")" || return 1
 }
 
 test_access_prerequisites() {
@@ -35,6 +50,10 @@ test_access_prerequisites() {
 test_access_open() {
   local suite_id="$1" run_id="$2" declaration profile config parent
   declaration="$(test_access_resolve "$suite_id")" || return 1
+  if [[ -n "$_TEST_ACCESS_CATALOG_DIGEST" && "$_TEST_ACCESS_CATALOG_DIGEST" != "$(yq -r '.catalog_digest' - <<<"$declaration")" ]]; then
+    echo 'Catalog changed before invocation preparation.' >&2
+    return 1
+  fi
   _TEST_ACCESS_CATALOG_DIGEST="$(yq -r '.catalog_digest' - <<<"$declaration")" || return 1
   profile="$(yq -r '.profile // "null"' - <<<"$declaration")" || return 1
   if [[ "$profile" == 'null' ]]; then
@@ -59,7 +78,7 @@ test_access_open() {
       echo 'Test config does not match its parent invocation.' >&2
       return 1
     }
-    uv run --locked --no-dev python -m scripts.test.access inherit "$suite_id" "$parent" \
+    uv run --locked --no-dev python -m scripts.test.access inherit "$suite_id" "$parent" "$_TEST_ACCESS_CATALOG_DIGEST" \
       >/dev/null || return 1
     config="$parent"
   else
@@ -67,7 +86,7 @@ test_access_open() {
       echo 'Tests select credentials from the catalog; an unbound TEST_KUBECONFIG is not accepted.' >&2
       return 1
     }
-    config="$(uv run --locked --no-dev python -m scripts.test.access prepare "$suite_id" "$run_id")" || return 1
+    config="$(uv run --locked --no-dev python -m scripts.test.access prepare "$suite_id" "$run_id" "$_TEST_ACCESS_CATALOG_DIGEST")" || return 1
     _TEST_ACCESS_OWNED_PATH="$config"
     if ! uv run --locked --no-dev python -m scripts.test.access validate "$config" >/dev/null; then
       test_access_close || true
@@ -88,13 +107,14 @@ test_access_open() {
 
 test_access_check() {
   local declaration
+  declaration="$(test_access_resolve "$1")" || return 1
+  [[ "$(yq -r '.catalog_digest' - <<<"$declaration")" == "$_TEST_ACCESS_CATALOG_DIGEST" ]] || return 1
   if [[ -z "${TEST_ACCESS_CONFIG:-}" ]]; then
-    declaration="$(test_access_resolve "$1")" || return 1
     [[ "$(yq -r '.catalog_digest' - <<<"$declaration")" == "$_TEST_ACCESS_CATALOG_DIGEST" &&
        "$(yq -r '.profile // "null"' - <<<"$declaration")" == null ]]
     return "$?"
   fi
-  uv run --locked --no-dev python -m scripts.test.access inherit "$1" "$TEST_ACCESS_CONFIG" \
+  uv run --locked --no-dev python -m scripts.test.access inherit "$1" "$TEST_ACCESS_CONFIG" "$_TEST_ACCESS_CATALOG_DIGEST" \
     >/dev/null
 }
 
