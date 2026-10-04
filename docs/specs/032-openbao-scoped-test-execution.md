@@ -496,11 +496,15 @@ command prompts privately for the OpenBao password and requires its exact
 source/target confirmation:
 
 ```sh
+OPENBAO_RECOVERY_RECIPIENT="$(mise exec -- yq -er '.sops.age[0].recipient' kubernetes/apps/security/openbao/app/openbao-seal.sops.yaml)" \
 OPENBAO_OPERATOR_KUBECONFIG=/absolute/path/to/operator-kubeconfig \
   OPENBAO_CONFIG_AUTH=userpass mise exec -- just kube openbao-config-apply
 OPENBAO_OPERATOR_KUBECONFIG=/absolute/path/to/operator-kubeconfig \
   mise exec -- just kube openbao-workstation rotate
 ```
+
+The recipient comes from public SOPS metadata; this step does not decrypt the seal
+artifact or read the age private key.
 
 The combined `just bootstrap openbao-agent <absolute-operator-config>` command
 applies configuration and uses `enroll`, so reserve that path for new enrollment.
