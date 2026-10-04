@@ -38,7 +38,7 @@ spec:
     - name: volumes
       expression: '[{"name":dyn("data"),"persistentVolumeClaim":dyn({"claimName":"scratch-data"})},{"name":dyn("seal"),"secret":dyn({"secretName":dyn("scratch-seal"),"defaultMode":dyn(288)})},{"name":dyn("config"),"configMap":dyn({"name":"scratch-config"})}]'
   validations:
-    - expression: request.namespace == 'openbao-restore-test' && request.subResource == '' && request.operation
+    - expression: request.namespace == 'openbao-restore-test' && (!has(request.subResource) || request.subResource == '') && request.operation
         != 'UPDATE' && request.name == 'scratch' && variables.item.kind == 'StatefulSet' && variables.item.apiVersion
         == 'apps/v1' && variables.item.metadata.name == 'scratch' && variables.item.metadata.namespace
         == 'openbao-restore-test' && variables.item.metadata.annotations['homelab.supermorphic.com/test-run'].matches('^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$')
@@ -118,7 +118,7 @@ spec:
     - name: item
       expression: 'request.operation == ''DELETE'' ? oldObject : object'
   validations:
-    - expression: request.namespace == 'openbao-restore-test' && request.subResource == '' && request.operation
+    - expression: request.namespace == 'openbao-restore-test' && (!has(request.subResource) || request.subResource == '') && request.operation
         != 'UPDATE' && request.name == 'scratch-data' && variables.item.kind == 'PersistentVolumeClaim'
         && variables.item.apiVersion == 'v1' && variables.item.metadata.name == 'scratch-data' && variables.item.metadata.namespace
         == 'openbao-restore-test' && variables.item.metadata.annotations['homelab.supermorphic.com/test-run'].matches('^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$')
@@ -179,7 +179,7 @@ spec:
         = true\n\\}\nstorage \"raft\" \\{\n  path = \"/openbao/data\"\n  node_id = \"scratch\"\n\\}\nseal
         \"static\" \\{\n  current_key_id = \"[A-Za-z0-9_.-]{1,80}\"\n  current_key = \"file:///scratch\\-seal/key\"\n\\}\n$"'
   validations:
-    - expression: request.namespace == 'openbao-restore-test' && request.subResource == '' && request.operation
+    - expression: request.namespace == 'openbao-restore-test' && (!has(request.subResource) || request.subResource == '') && request.operation
         != 'UPDATE' && ((request.name == 'scratch-seal' && variables.item.kind == 'Secret') || (request.name
         == 'scratch-config' && variables.item.kind == 'ConfigMap')) && variables.item.apiVersion == 'v1'
         && variables.item.metadata.name == request.name && variables.item.metadata.namespace == 'openbao-restore-test'
@@ -289,7 +289,7 @@ spec:
       expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-openbao-restore'
   variables: []
   validations:
-    - expression: request.namespace == 'openbao-restore-test' && request.subResource == '' && request.name
+    - expression: request.namespace == 'openbao-restore-test' && (!has(request.subResource) || request.subResource == '') && request.name
         == 'scratch-0' && oldObject.metadata.name == 'scratch-0' && oldObject.metadata.namespace == 'openbao-restore-test'
         && oldObject.metadata.uid != '' && oldObject.metadata.annotations['homelab.supermorphic.com/test-run'].matches('^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$')
         && oldObject.metadata.labels.app == 'openbao-restore-scratch' && oldObject.metadata.ownerReferences.size()

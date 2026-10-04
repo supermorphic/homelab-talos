@@ -554,6 +554,13 @@ Both retain the exact permitted field comparisons. Offline checks complement the
 request allow/deny tests and deployed policy type-checking status; custom resources
 and subresources still rely on the deployed status guard for schema checks.
 
+Kubernetes omits empty optional admission request fields. Main-resource checks
+accept either an absent or empty `request.subResource`; cluster-scoped checks
+accept either an absent or empty `request.namespace`. Named namespace and
+subresource checks retain exact comparisons. The dedicated request fixtures
+verify that omitting either or both empty fields preserves every allow/deny
+decision, including forbidden workload shapes and nonempty field values.
+
 For a registered mapped test whose ordinary run is too short, set
 `TEST_ACCESS_ACCEPTANCE_CONFIRM=verify:scoped-access:ttl-and-denials` when invoking
 its existing `mise exec -- just test record <suite-id>` workflow. Retain the suite's

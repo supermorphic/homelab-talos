@@ -99,7 +99,20 @@ class DedicatedFluxMutationTests(unittest.TestCase):
     def admits(self, name, request, obj, old=None):
         from scripts.test.core.test_test_access_manifests import TestAccessPolicyTests
 
-        return TestAccessPolicyTests.admits(self, name, request, obj, old)
+        result = TestAccessPolicyTests.admits(self, name, request, obj, old)
+        # AdmissionRequest omits empty optional fields. Their absence must keep
+        # every positive and negative fixture's allow/deny decision unchanged.
+        empty = [field for field in ("namespace", "subResource") if request.get(field) == ""]
+        for removed in [(field,) for field in empty] + [tuple(empty)]:
+            if not removed:
+                continue
+            omitted = {key: value for key, value in request.items() if key not in removed}
+            self.assertEqual(
+                TestAccessPolicyTests.admits(self, name, omitted, obj, old),
+                result,
+                f"{name}: omitting empty {sorted(removed)} changed admission",
+            )
+        return result
 
     def request(self, group, resource, name):
         return {

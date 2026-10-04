@@ -121,7 +121,7 @@ spec:
       expression: '{"allowPrivilegeEscalation":dyn(false),"readOnlyRootFilesystem":dyn(true),"capabilities":dyn({"drop":["ALL"]})}'
   validations:
     - expression: |-
-        request.subResource == '' &&
+        (!has(request.subResource) || request.subResource == '') &&
         ((variables.issuer && request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-openbao-issuance' && variables.pod.metadata.name.matches('^openbao-issuer-[0-9a-f]{16}$')) ||
         (request.namespace == 'openbao-acceptance' && variables.pod.metadata.name.matches('^openbao-acceptance-[0-9a-f]{16}$'))) &&
         variables.pod.metadata.name == request.name && variables.pod.metadata.namespace == request.namespace &&
