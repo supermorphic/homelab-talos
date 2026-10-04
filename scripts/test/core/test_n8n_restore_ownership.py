@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 
 
-class N8nRestoreOwnershipTests(unittest.TestCase):
+class RestoreBackendFixture:
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -37,7 +37,7 @@ with (root / "calls.jsonl").open("a") as log:
     log.write(json.dumps({"op":op,"args":a}) + "\n")
 state = root / "state.json"
 objects = json.loads(state.read_text()) if state.exists() else {}
-aliases = {"job":"Job","jobs":"Job","deployment":"Deployment","deployments":"Deployment","service":"Service","services":"Service","ciliumnetworkpolicy":"CiliumNetworkPolicy","ciliumnetworkpolicies":"CiliumNetworkPolicy"}
+aliases = {"job":"Job","jobs":"Job","deployment":"Deployment","deployments":"Deployment","service":"Service","services":"Service","ciliumnetworkpolicy":"CiliumNetworkPolicy","ciliumnetworkpolicies":"CiliumNetworkPolicy","statefulset":"StatefulSet","statefulsets":"StatefulSet","pvc":"PersistentVolumeClaim","persistentvolumeclaims":"PersistentVolumeClaim"}
 ns = a[a.index("--namespace")+1] if "--namespace" in a else ""
 if op == "create":
     path = a[a.index("--filename")+1]
@@ -60,6 +60,8 @@ elif op == "get":
         now=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
         holder="another-run" if os.environ.get("RESTORE_TEST_LOSE_LEASE") == "true" and (root / "request-complete").exists() else "fixture-run"
         print(json.dumps({"spec":{"holderIdentity":holder,"renewTime":now,"leaseDurationSeconds":90}}))
+    elif target == "configmaps":
+        print(json.dumps({"items":[{"metadata":{"name":"automation-data-postgresql-backup-fixture"},"data":{"backup.sh":"fixture","update-backup-status.sql":"fixture"}}]}))
     elif target.startswith("httproutes"):
         print('{"items":[]}')
     else:
@@ -70,7 +72,8 @@ elif op == "get":
         if obj is None and os.environ.get("RESTORE_TEST_FOREIGN") == "true" and aliases[resource] == "Job":
             obj={"kind":"Job","metadata":{"name":name,"uid":"foreign","namespace":ns}}
         if obj is not None:
-            if a[a.index("--output")+1] == "name": print(resource+"/"+name)
+            if a[a.index("--output")+1].startswith("jsonpath="): print("192.0.2.45")
+            elif a[a.index("--output")+1] == "name": print(resource+"/"+name)
             else:
                 obj["status"]={"succeeded":1,"conditions":[{"type":"Complete","status":"True"}]}
                 if obj["kind"] == "Job" and name.endswith("-request"):
@@ -89,7 +92,12 @@ elif op == "delete":
     objects.pop(key,None)
     state.write_text(json.dumps(objects))
 elif op == "logs":
-    print("selected_dump=n8n-postgresql-20260101T000000Z.dump")
+    if os.environ.get("RESTORE_TEST_FAMILY") == "full-chain" and a[a.index("logs")+1].endswith("-request"):
+        print("restored_runtime_credential=authenticated")
+    else:
+        print("selected_dump=n8n-postgresql-20260101T000000Z.dump")
+        print("selected_bundle=automation-data-20260101T000000Z")
+        print("post_recovery_bundle=automation-data-20260101T010000Z")
 """
         )
         fake.chmod(0o755)
@@ -117,6 +125,8 @@ elif op == "logs":
     def calls(self):
         return [json.loads(line) for line in (self.root / "calls.jsonl").read_text().splitlines()]
 
+
+class N8nRestoreOwnershipTests(RestoreBackendFixture, unittest.TestCase):
     def test_existing_job_is_never_adopted_or_deleted_on_preflight_failure(self):
         result = self.execute(RESTORE_TEST_FOREIGN="true")
         self.assertNotEqual(result.returncode, 0)

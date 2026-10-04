@@ -6,6 +6,7 @@ source scripts/lib/flux-alerts.sh
 source scripts/lib/network.sh
 # shellcheck source=scripts/test/lib/job.sh
 source scripts/test/lib/job.sh
+source scripts/test/lib/owned-resources.sh
 # shellcheck source=scripts/lib/lease.sh
 source scripts/lib/lease.sh
 require_bash
@@ -37,7 +38,7 @@ provisioning_token="${AUTOMATION_DATA_PROVISIONING_TOKEN:-}"
 kubeconfig="$1"
 run_dir="${HOMELAB_TEST_RUN_DIR:-}"
 [[ -f "$kubeconfig" ]] || {
-  echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
+  echo 'Provisioning acceptance requires the selected invocation config.' >&2
   exit 1
 }
 [[ -n "$run_dir" && -d "$run_dir" ]] || {
@@ -59,6 +60,12 @@ helper_job="automation-data-bundle-$run_hash"
 kc=(kubectl --kubeconfig "$kubeconfig" --namespace "$namespace")
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/automation-data-provisioning.XXXXXX")"
 umask 077
+ledger="$run_dir/diagnostics/automation-data-provisioning-owned.jsonl"
+[[ ! -e "$ledger" ]] || {
+  echo 'Refusing to overwrite prior provisioning ownership evidence.' >&2
+  exit 1
+}
+: >"$ledger"
 
 write_phase() {
   local phase="$1" phase_status="$2" reason="$3"
@@ -91,8 +98,7 @@ cleanup() {
   trap - EXIT INT TERM
   set +e
   for job in "$helper_job" "$backup_job" "$error_job"; do
-    "${kc[@]}" delete job "$job" --ignore-not-found --wait=true --timeout=2m \
-      >/dev/null 2>&1 || cleanup_ok=false
+    test_delete_owned "$ledger" Job "$namespace" "$job" "${kc[@]}" || cleanup_ok=false
   done
   for job in "$helper_job" "$backup_job" "$error_job"; do
     job_absent "$job" >/dev/null 2>&1 || cleanup_ok=false
@@ -104,9 +110,12 @@ cleanup() {
   else
     write_phase cleanup failed 'one or more run-owned Jobs or local temporary files remain'
   fi
+  if [[ "$cleanup_ok" != true && "$original_exit" == 0 ]]; then original_exit=1; fi
   exit "$original_exit"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 workflow_request() {
   local operation="$1" credential="${2:-}" output="$3"
@@ -298,7 +307,7 @@ error_job_manifest() {
 }
 
 verify_lease
-error_job_manifest | "${kc[@]}" create --filename - >/dev/null
+error_job_manifest | test_create_owned_stream "$ledger" "${kc[@]}"
 wait_for_job_terminal "$error_job" 300 2 "${kc[@]}"
 
 query_database_set() {
@@ -360,7 +369,7 @@ backup_job_manifest() { # <client-generated CronJob Job manifest>
 "${kc[@]}" create job "$backup_job" \
   --from=cronjob/automation-data-postgresql-backup --dry-run=client --output yaml >"$temp_dir/backup-job-source.yaml"
 verify_lease
-backup_job_manifest "$temp_dir/backup-job-source.yaml" | "${kc[@]}" create --filename - >/dev/null
+backup_job_manifest "$temp_dir/backup-job-source.yaml" | test_create_owned_stream "$ledger" "${kc[@]}"
 wait_for_job_terminal "$backup_job" 1800 5 "${kc[@]}"
 
 backup_timestamp_after=''
@@ -463,7 +472,7 @@ helper_job_manifest() {
 }
 
 verify_lease
-helper_job_manifest | "${kc[@]}" create --filename - >/dev/null
+helper_job_manifest | test_create_owned_stream "$ledger" "${kc[@]}"
 if ! wait_for_job_terminal "$helper_job" 300 2 "${kc[@]}" >/dev/null 2>&1; then
   # Only relay the helper's fixed diagnostic tokens; never arbitrary Pod output.
   "${kc[@]}" logs "job/$helper_job" --tail=20 --limit-bytes=4096 2>/dev/null |

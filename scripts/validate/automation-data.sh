@@ -153,7 +153,7 @@ provisioning_contract="$(yq -o=json -I=0 '
   }
 ' "$catalog")"
 [[ "$provisioning_contract" == \
-  '{"mutates":true,"owner":"human","confirmation":{"type":"exact","variable":"AUTOMATION_DATA_PROVISIONING_CONFIRM","expected":"test:automation-data:provisioning"},"command":"AUTOMATION_DATA_PROVISIONING_CONFIRM=test:automation-data:provisioning mise exec -- just kube automation-data-provisioning-test","implementation":"scripts/test/scenarios/automation-data-provisioning.sh","dispatch":{"mode":"direct","runtime":"bash","path":"scripts/test/scenarios/automation-data-provisioning.sh","args":[".kube/config"],"selector":null}}' ]] ||
+  '{"mutates":true,"owner":"human","confirmation":{"type":"exact","variable":"AUTOMATION_DATA_PROVISIONING_CONFIRM","expected":"test:automation-data:provisioning"},"command":"AUTOMATION_DATA_PROVISIONING_CONFIRM=test:automation-data:provisioning mise exec -- just kube automation-data-provisioning-test","implementation":"scripts/test/scenarios/automation-data-provisioning.sh","dispatch":{"mode":"direct","runtime":"bash","path":"scripts/test/scenarios/automation-data-provisioning.sh","args":["@test-kubeconfig@"],"selector":null}}' ]] ||
   fail 'the attended automation-data provisioning catalog contract is missing or unsafe'
 
 restore_contract="$(yq -o=json -I=0 '
@@ -168,7 +168,7 @@ restore_contract="$(yq -o=json -I=0 '
   }
 ' "$catalog")"
 [[ "$restore_contract" == \
-  '{"mutates":true,"owner":"shared","confirmation":{"type":"exact","variable":"AUTOMATION_DATA_RESTORE_CONFIRM","expected":"restore:automation-data:full-chain"},"command":"AUTOMATION_DATA_RESTORE_CONFIRM=restore:automation-data:full-chain mise exec -- just kube automation-data-restore-drill","implementation":"scripts/test/scenarios/automation-data-restore-drill.sh","dispatch":{"mode":"direct","runtime":"bash","path":"scripts/test/scenarios/automation-data-restore-drill.sh","args":[".kube/config"],"selector":null}}' ]] ||
+  '{"mutates":true,"owner":"shared","confirmation":{"type":"exact","variable":"AUTOMATION_DATA_RESTORE_CONFIRM","expected":"restore:automation-data:full-chain"},"command":"AUTOMATION_DATA_RESTORE_CONFIRM=restore:automation-data:full-chain mise exec -- just kube automation-data-restore-drill","implementation":"scripts/test/scenarios/automation-data-restore-drill.sh","dispatch":{"mode":"direct","runtime":"bash","path":"scripts/test/scenarios/automation-data-restore-drill.sh","args":["@test-kubeconfig@"],"selector":null}}' ]] ||
   fail 'the attended automation-data restore catalog contract is missing or unsafe'
 
 verifier='scripts/verify/automation-data.sh'
