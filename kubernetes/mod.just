@@ -640,8 +640,15 @@ _flux-canary-test-raw: flux-verify
     }
     old_uid="$(yq -r '.metadata.uid' - <<<"$canary_json")"
     [[ -n "$old_uid" ]]
-    kubectl --kubeconfig "$kubeconfig" --namespace flux-system delete secret flux-canary \
-      --wait=true
+    source scripts/lib/lease.sh
+    verify_test_lease_holder "$kubeconfig" "${TEST_CAMPAIGN_LEASE_HOLDER:-${HOMELAB_DISRUPTION_LEASE_HOLDER:-}}" || {
+      echo 'Flux canary recreation requires the current test Lease holder.' >&2
+      exit 1
+    }
+    delete_options="$(jq -ce '{apiVersion:"v1",kind:"DeleteOptions",propagationPolicy:"Foreground",preconditions:{uid:.metadata.uid,resourceVersion:.metadata.resourceVersion}}' <<<"$canary_json")"
+    kubectl --kubeconfig "$kubeconfig" --namespace flux-system delete \
+      --raw /api/v1/namespaces/flux-system/secrets/flux-canary --filename - \
+      <<<"$delete_options" >/dev/null
     flux reconcile kustomization flux-canary \
       --namespace flux-system \
       --with-source \

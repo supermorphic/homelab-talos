@@ -4,6 +4,7 @@ set -euo pipefail
 source scripts/lib/common.sh
 source scripts/lib/network.sh
 source scripts/lib/flux-alerts.sh
+source scripts/test/lib/owned-resources.sh
 require_bash
 
 [[ "$#" -eq 1 ]] || {
@@ -27,6 +28,7 @@ umask 077
 manifest="$temp_dir/kustomization.yaml"
 run_dir="${HOMELAB_TEST_RUN_DIR:-}"
 created=false
+ledger="$temp_dir/owned-resources.jsonl"
 firing_title="Flux Kustomization $namespace/$test_name is failing to reconcile"
 resolved_title="Resolved: $firing_title"
 
@@ -54,8 +56,8 @@ run_owned_kustomization_absent() {
 }
 
 delete_run_owned_kustomization() {
-  kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" \
-    delete kustomization "$test_name" --wait=true --timeout=2m >/dev/null || return 1
+  test_delete_owned "$ledger" Kustomization "$namespace" "$test_name" \
+    kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" || return 1
   run_owned_kustomization_absent || return 1
   created=false
 }
@@ -77,15 +79,15 @@ cleanup() {
     write_phase cleanup failed 'the run-owned Kustomization or local temporary files could not be confirmed absent'
     echo 'Flux alert delivery cleanup failed; inspect the run-owned Kustomization before another run.' >&2
   fi
-  if [[ "$cleanup_ok" != 'true' ]]; then
-    return 1
-  fi
-  return "$original_exit"
+  if [[ "$cleanup_ok" != true && "$original_exit" == 0 ]]; then original_exit=1; fi
+  exit "$original_exit"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 [[ -f "$kubeconfig" ]] || {
-  echo "Missing $kubeconfig; run mise exec -- just talos kubeconfig first." >&2
+  echo 'Flux alert delivery requires the selected invocation config.' >&2
   exit 1
 }
 [[ -z "$run_dir" || -d "$run_dir" ]] || {
@@ -339,8 +341,8 @@ yq --null-input \
    .spec.sourceRef.name = strenv(source_name)' \
   >"$manifest"
 
-kubectl --kubeconfig "$kubeconfig" create --filename "$manifest" >/dev/null
 created=true
+test_create_owned "$ledger" "$manifest" kubectl --kubeconfig "$kubeconfig"
 echo "Created isolated $namespace/$test_name with a deliberately nonexistent source."
 
 wait_for_query_gt 'the failed test Kustomization metric' "$alert_metric_query" 0 36 5 \
