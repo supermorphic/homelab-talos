@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -75,24 +76,35 @@ class RecipeRoutingTests(unittest.TestCase):
                 self.assertNotIn(".kube/config", output)
 
     def test_attended_bootstrap_ends_operator_credentials_before_canonical_test(self):
-        output = subprocess.check_output(
-            [
-                "just",
-                "--dry-run",
-                "bootstrap",
-                "openbao-agent",
-                "/synthetic/operator-config",
-                "test",
-            ],
-            cwd=ROOT,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        reset = "unset OPENBAO_OPERATOR_KUBECONFIG TEST_KUBECONFIG TEST_ACCESS_CONFIG KUBECONFIG TALOSCONFIG"
-        self.assertIn(reset, output)
-        self.assertLess(
-            output.index(reset), output.index("just test record test.agent-credentials")
-        )
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            config = directory / "operator-config"
+            config.write_text("synthetic fixture only")
+            script = subprocess.check_output(
+                ["just", "--dry-run", "bootstrap", "openbao-agent", str(config), "test"],
+                cwd=ROOT,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            launcher = directory / "just"
+            launcher.write_text(
+                "#!/usr/bin/env bash\nset -euo pipefail\n"
+                '[[ "$*" == "test record test.agent-credentials" ]]\n'
+                "for name in OPENBAO_OPERATOR_KUBECONFIG TEST_KUBECONFIG TEST_ACCESS_CONFIG KUBECONFIG TALOSCONFIG; do\n"
+                '  [[ -z "${!name+x}" ]] || exit 7\n'
+                "done\necho CANONICAL_CHILD_WITHOUT_OPERATOR_CREDENTIALS\n"
+            )
+            launcher.chmod(0o700)
+            result = subprocess.run(
+                ["bash", "-c", script],
+                cwd=ROOT,
+                env={**os.environ, "PATH": str(directory) + os.pathsep + os.environ["PATH"]},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("CANONICAL_CHILD_WITHOUT_OPERATOR_CREDENTIALS", result.stdout)
 
     def test_chainsaw_script_branches_do_not_select_another_credential(self):
         def scripts(value):
