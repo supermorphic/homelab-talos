@@ -232,6 +232,18 @@ contracts:
       - tests/fixtures/openbao/restore/serviceaccount.yaml
       - tests/fixtures/openbao/restore/statefulset.yaml
       - tests/prometheus/openbao_test.yaml
+      - kubernetes/apps/security/openbao/restore-test/ciliumnetworkpolicy.yaml
+      - kubernetes/apps/security/openbao/restore-test/kustomization.yaml
+      - kubernetes/apps/security/openbao/restore-test/namespace.yaml
+      - kubernetes/apps/security/openbao/restore-test/serviceaccount.yaml
+      - scripts/test/core/fixtures/openbao-scoped-profile-responses.json
+      - scripts/test/core/test_openbao_invocations.py
+      - scripts/test/core/test_openbao_module_imports.py
+      - scripts/test/core/test_openbao_profile_activation.py
+      - scripts/test/core/test_openbao_restore_access.py
+      - scripts/test/core/test_openbao_verifier_routing.py
+      - scripts/test/core/test_scoped_openbao_inputs.py
+      - tests/fixtures/openbao/restore/server.hcl
     required_tests:
       - catalog:validation.openbao
       - python:scripts/test/core/test_openbao_apply.py

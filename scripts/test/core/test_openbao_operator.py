@@ -57,13 +57,16 @@ raise SystemExit(7 if sys.argv[-1] == os.getenv("FAIL_STEP") else 0)
             ["kube", "openbao-config-apply"], ["kube", "openbao-workstation", "enroll"],
             ["test", "record", "test.agent-credentials"],
         ])
-        for call in calls:
+        for call in calls[:-1]:
             self.assertEqual(call["env"]["OPENBAO_OPERATOR_KUBECONFIG"], str(self.config))
             self.assertEqual(call["env"]["TEST_KUBECONFIG"], str(self.config))
             self.assertEqual(call["env"]["KUBECONFIG"], str(self.config))
             self.assertEqual(call["env"]["OPENBAO_CONFIG_AUTH"], "userpass")
             self.assertIsNone(call["env"]["OPENBAO_CONFIG_CONFIRM"])
             self.assertRegex(call["env"]["OPENBAO_RECOVERY_RECIPIENT"], r"^age1[a-z0-9]{58}$")
+
+        for key in ("OPENBAO_OPERATOR_KUBECONFIG", "TEST_KUBECONFIG", "KUBECONFIG"):
+            self.assertIsNone(calls[-1]["env"][key])
 
     def test_setup_stops_after_failed_apply_or_enrollment(self):
         for step, count in (("openbao-config-apply", 1), ("enroll", 2)):
@@ -111,9 +114,6 @@ raise SystemExit(7 if sys.argv[-1] == os.getenv("FAIL_STEP") else 0)
                 self.assertEqual(main(args), 1)
             self.assertIn("OPENBAO_OPERATOR_KUBECONFIG", error.getvalue())
             self.assertIn("bootstrap openbao-agent", error.getvalue())
-        result, _ = self.run_recipe("kube", "agent-credentials-test")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("OPENBAO_OPERATOR_KUBECONFIG", result.stderr)
 
     def test_missing_recipient_explains_setup_before_cluster_access(self):
         error = io.StringIO()
