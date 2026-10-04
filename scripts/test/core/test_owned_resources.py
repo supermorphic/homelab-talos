@@ -95,6 +95,16 @@ esac
             (self.directory / "commands").read_text(),
         )
 
+    def test_cleanup_refuses_a_live_object_without_a_resource_version(self):
+        current = json.loads(self.state.read_text())
+        del current["metadata"]["resourceVersion"]
+        self.state.write_text(json.dumps(current))
+        result = self.run_shell(
+            'source "$1"; test_create_owned "$2" "$3" "$4"; test_delete_owned "$2" Pod media synthetic-probe "$4"'
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.log.exists())
+
     def test_registered_disruption_deletes_only_the_observed_pod_uid(self):
         result = self.run_shell(
             'source "$1"; test_delete_pod_instance synthetic-owned media synthetic-probe "$4"'

@@ -6,7 +6,8 @@ test_create_owned() { # <ledger> <one-object-json-or-yaml> <kubectl-command...>
   local ledger="$1" manifest="$2" created record expected
   shift 2
   expected="$(yq -o=json -I=0 '{"apiVersion": .apiVersion, "kind": .kind,
-    "metadata": {"name": .metadata.name, "namespace": .metadata.namespace, "labels": .metadata.labels}}' "$manifest")" || return 1
+    "metadata": {"name": .metadata.name, "namespace": .metadata.namespace,
+      "labels": .metadata.labels, "annotations": .metadata.annotations}}' "$manifest")" || return 1
   if [[ -f "$ledger" ]]; then
     jq -se --argjson expected "$expected" '
       [.[] | select(.kind == $expected.kind and .metadata.name == $expected.metadata.name and
@@ -21,10 +22,18 @@ test_create_owned() { # <ledger> <one-object-json-or-yaml> <kubectl-command...>
     select(.apiVersion == $expected.apiVersion and .kind == $expected.kind and
       .metadata.name == $expected.metadata.name and
       .metadata.namespace == $expected.metadata.namespace and
-      .metadata.labels == $expected.metadata.labels and
+      (if .kind == "Namespace" then
+        .metadata.annotations == $expected.metadata.annotations and
+        .metadata.labels["kubernetes.io/metadata.name"] == .metadata.name and
+        (.metadata.labels as $labels | $expected.metadata.labels | to_entries |
+          all(.[]; $labels[.key] == .value)) and
+        (.metadata.labels | keys - ($expected.metadata.labels | keys) == ["kubernetes.io/metadata.name"])
+      else .metadata.labels == $expected.metadata.labels end) and
       (.metadata.uid | type == "string" and length > 0) and
       (.metadata.resourceVersion | type == "string" and length > 0)) |
-    {apiVersion, kind, metadata: (.metadata | {name, namespace, uid, labels})}
+    .kind as $kind |
+    {apiVersion, kind, metadata: (.metadata | {name, namespace, uid, labels} +
+      (if $kind == "Namespace" then {annotations} else {} end))}
   ' <<<"$created")" || {
     echo 'Created test resource did not return its expected ownership metadata.' >&2
     return 1
@@ -59,15 +68,17 @@ test_delete_owned() { # <ledger> <kind> <namespace> <name> <kubectl-command...>
   shift 4
   local record current uid options prefix resource deadline
   [[ -f "$ledger" ]] || return 0
-  [[ "$namespace" =~ ^[a-z0-9][a-z0-9-]*$ && "$name" =~ ^[a-z0-9][a-z0-9.-]*$ ]] || return 2
+  [[ "$namespace" =~ ^[a-z0-9][a-z0-9-]*$ || ( "$kind" == Namespace && -z "$namespace" ) ]] || return 2
+  [[ "$name" =~ ^[a-z0-9][a-z0-9.-]*$ ]] || return 2
   record="$(jq -sc --arg kind "$kind" --arg ns "$namespace" --arg name "$name" '
-    [.[] | select(.kind == $kind and .metadata.namespace == $ns and .metadata.name == $name)] |
+    [.[] | select(.kind == $kind and (.metadata.namespace // "") == $ns and .metadata.name == $name)] |
     if length > 1 then error("ambiguous recorded ownership") else (.[0] // null) end
   ' "$ledger")" || return 1
   # An unrecorded name never grants authority to adopt a live object.
   [[ "$record" != null ]] || return 0
   uid="$(jq -er '.metadata.uid' <<<"$record")" || return 1
   case "$kind" in
+    Namespace) prefix='/api/v1'; resource=namespaces ;;
     Pod) prefix='/api/v1'; resource=pods ;;
     Service) prefix='/api/v1'; resource=services ;;
     PersistentVolumeClaim) prefix='/api/v1'; resource=persistentvolumeclaims ;;
@@ -85,7 +96,10 @@ test_delete_owned() { # <ledger> <kind> <namespace> <name> <kubectl-command...>
   jq -e --argjson expected "$record" '
     .kind == $expected.kind and .metadata.name == $expected.metadata.name and
     .metadata.namespace == $expected.metadata.namespace and
-    .metadata.uid == $expected.metadata.uid and .metadata.labels == $expected.metadata.labels
+    .metadata.uid == $expected.metadata.uid and .metadata.labels == $expected.metadata.labels and
+    (.metadata.resourceVersion | type == "string" and length > 0) and
+    (if .kind == "Namespace" then .metadata.annotations["homelab.supermorphic.com/test-run"] ==
+      $expected.metadata.annotations["homelab.supermorphic.com/test-run"] else true end)
   ' <<<"$current" >/dev/null || {
     echo 'Recorded test resource ownership changed; refusing deletion.' >&2
     return 1
@@ -93,7 +107,9 @@ test_delete_owned() { # <ledger> <kind> <namespace> <name> <kubectl-command...>
   if jq -e '.metadata.deletionTimestamp == null' <<<"$current" >/dev/null; then
     options="$(jq -ce '{apiVersion:"v1",kind:"DeleteOptions",propagationPolicy:"Foreground",
       preconditions:{uid:.metadata.uid,resourceVersion:.metadata.resourceVersion}}' <<<"$current")" || return 1
-    "$@" delete --raw "$prefix/namespaces/$namespace/$resource/$name" --filename - \
+    local endpoint="$prefix/namespaces/$namespace/$resource/$name"
+    [[ "$kind" != Namespace ]] || endpoint="$prefix/namespaces/$name"
+    "$@" delete --raw "$endpoint" --filename - \
       <<<"$options" >/dev/null || return 1
   fi
   deadline=$((SECONDS + 300))

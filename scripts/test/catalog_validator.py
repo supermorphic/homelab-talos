@@ -1138,34 +1138,7 @@ class CatalogValidator:
         violations = verification_access_violations(self.catalog)
         if violations:
             fail("Verifier access contract violations:\n" + "\n".join(violations) + "\n")
-        self.validate_diagnostic_contexts()
         self.validate_scoped_rbac_source()
-
-    def validate_diagnostic_contexts(self) -> None:
-        # Retain this narrow static guard until every diagnostic verifier has a
-        # credential-layout fixture. The context name is an external identity
-        # contract; the guard is not proof of runtime routing.
-        for entry in self.suites:
-            suite_id = shell_text(entry.get("metadata", {}).get("id"))
-            if (
-                not suite_id.startswith("verification.")
-                or entry.get("access", {}).get("profile") != "debugger"
-                or suite_id == "verification.agent-access"
-            ):
-                continue
-            implementation = shell_text(entry.get("runner", {}).get("implementation"))
-            content = (REPO_ROOT / implementation).read_text(encoding="utf-8")
-            if not all(
-                marker in content
-                for marker in (
-                    "config get-contexts homelab-diagnostic",
-                    "--context homelab-diagnostic",
-                )
-            ):
-                fail(
-                    f"Diagnostic verifier {suite_id} must select homelab-diagnostic "
-                    "conditionally.\n"
-                )
 
     def validate_scoped_rbac_source(self) -> None:
         path = REPO_ROOT / "kubernetes/apps/kube-system/agent-access/app/rbac.yaml"

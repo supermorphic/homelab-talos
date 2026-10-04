@@ -32,6 +32,7 @@ tar -czf "$archive" -C "$fixture_root/archive" .
 calls="$fixture_root/sonobuoy-calls"
 private_root="$fixture_root/private"
 
+for mode in quick certified; do
 FAKE_SONOBUOY_ARCHIVE="$archive" \
 FAKE_SONOBUOY_CALLS="$calls" \
 TEST_SONOBUOY_BIN=tests/fixtures/result-coordinator/fake-sonobuoy.sh \
@@ -39,11 +40,16 @@ TEST_KUBECTL_BIN=tests/fixtures/result-coordinator/fake-kubectl.sh \
 TEST_SONOBUOY_PRIVATE_ROOT="$private_root" \
 HOMELAB_TEST_RUN_DIR="$run_dir" \
 TEST_RESULT_FRAGMENT_DIR="$fragment_dir" \
-  scripts/test/run-sonobuoy.sh quick "$fixture_root/kubeconfig" >/dev/null
+  scripts/test/run-sonobuoy.sh "$mode" "$fixture_root/kubeconfig" >/dev/null
+done
 
 rg -q --fixed-strings \
   "run --mode quick --plugin e2e --timeout 900 --wait=20 --kubeconfig $fixture_root/kubeconfig " \
   "$calls"
+rg -q --fixed-strings \
+  "run --mode certified-conformance --plugin e2e --timeout 10800 --wait=190 --kubeconfig $fixture_root/kubeconfig " \
+  "$calls"
+[[ "$(rg -Fc "delete --wait --kubeconfig $fixture_root/kubeconfig " "$calls")" == 2 ]]
 [[ -f "$run_dir/diagnostics/sonobuoy/summary.txt" ]]
 [[ -f "$run_dir/diagnostics/sonobuoy/e2e-summary.txt" ]]
 [[ ! -e "$run_dir/diagnostics/sonobuoy/sonobuoy-results.tar.gz" ]]

@@ -1043,20 +1043,6 @@ def access_boundary_contract(root: Path, canonical: dict[str, Any]) -> None:
     else:
         raise AssertionError("dynamic executable helper variable was accepted")
 
-    def diagnostic_without_context(data: dict[str, Any]) -> None:
-        suite(data, "verification.homepage")["runner"]["implementation"] = (
-            "scripts/verify/metrics-server.sh"
-        )
-
-    expect_rejection(
-        root,
-        canonical,
-        "diagnostic-context-contract",
-        diagnostic_without_context,
-        "Diagnostic verifier verification.homepage must select homelab-diagnostic "
-        "conditionally.\n",
-    )
-
     def campaign_rbac_drift(data: dict[str, Any]) -> None:
         data["campaigns"]["scoped-verification"]["access"]["required_read_rules"][
             "cilium.io"

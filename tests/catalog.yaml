@@ -582,7 +582,7 @@ suites:
     runner: {command: "mise exec -- just kube metrics-server-verify", implementation: scripts/verify/metrics-server.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.cilium, source: verification, framework: bash, suite: platform, tier: verification, target: cilium, scenario: null, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: shared}
-    access: {profile: debugger, prerequisites: []}
+    access: {profile: debugger, prerequisites: [talos-reader]}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube cilium-verify", implementation: scripts/verify/cilium.sh}
     native_results: {strategy: wrapper-junit}
@@ -592,12 +592,12 @@ suites:
     runner: {command: "mise exec -- just kube openbao-verify", implementation: scripts/verify/openbao.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.flux, source: verification, framework: bash, suite: platform, tier: verification, target: flux, scenario: null, scope: cluster, intent: acceptance, mutates_cluster: false, execution_owner: shared}
-    access: {profile: observer, prerequisites: []}
+    access: {profile: observer, prerequisites: [talos-reader]}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube flux-verify", implementation: scripts/verify/flux.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.foundation, source: verification, framework: bash, suite: platform, tier: verification, target: foundation, scenario: null, scope: system, intent: acceptance, mutates_cluster: false, execution_owner: shared}
-    access: {profile: observer, prerequisites: []}
+    access: {profile: observer, prerequisites: [talos-reader]}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube foundation-verify", implementation: scripts/verify/foundation.sh}
     native_results: {strategy: wrapper-junit}
@@ -773,7 +773,7 @@ suites:
     native_results: {strategy: wrapper-junit}
 
   - metadata: {id: test.cilium-connectivity, source: test, framework: bash, suite: platform, tier: integration, target: cilium, scenario: connectivity, scope: network, intent: feature, mutates_cluster: true, execution_owner: shared}
-    access: {profile: test-cilium-connectivity, prerequisites: []}
+    access: {profile: test-cilium-connectivity, prerequisites: [talos-reader]}
     confirmation: {type: exact, variable: CILIUM_CONNECTIVITY_CONFIRM, expected: "test:cilium-connectivity"}
     runner: {command: "CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity mise exec -- just kube cilium-connectivity-test", implementation: scripts/test/scenarios/cilium-connectivity.sh}
     native_results: {strategy: wrapper-junit}
@@ -783,7 +783,7 @@ suites:
     runner: {command: "STORAGE_PROVISIONING_CONFIRM=test:storage-provisioning mise exec -- just kube storage-provisioning-test", implementation: scripts/test/scenarios/storage-provisioning.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: test.flux-canary, source: test, framework: just, suite: platform, tier: integration, target: flux, scenario: canary-recreation, scope: cluster, intent: feature, mutates_cluster: true, execution_owner: shared}
-    access: {profile: test-runner, prerequisites: []}
+    access: {profile: test-runner, prerequisites: [talos-reader]}
     confirmation: {type: exact, variable: FLUX_CANARY_CONFIRM, expected: "recreate:flux-system:flux-canary"}
     runner: {command: "FLUX_CANARY_CONFIRM=recreate:flux-system:flux-canary mise exec -- just kube flux-canary-test", implementation: kubernetes/mod.just}
     native_results: {strategy: wrapper-junit}
@@ -867,7 +867,7 @@ suites:
     runner: {command: "NTFY_PUBLISH_TEST_CONFIRM=test:ntfy:publish:media-critical-homelab mise exec -- just kube ntfy-publish-test", implementation: scripts/test/scenarios/ntfy-publish.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: test.flux-restart, source: test, framework: just, suite: platform, tier: resilience, target: flux, scenario: controller-restart, scope: cluster, intent: resilience, mutates_cluster: true, execution_owner: shared}
-    access: {profile: test-flux-restart, prerequisites: []}
+    access: {profile: test-flux-restart, prerequisites: [talos-reader]}
     confirmation: {type: exact, variable: FLUX_RESTART_CONFIRM, expected: "restart:flux-system:controllers"}
     runner: {command: "FLUX_RESTART_CONFIRM=restart:flux-system:controllers mise exec -- just kube flux-restart", implementation: kubernetes/mod.just}
     native_results: {strategy: wrapper-junit}

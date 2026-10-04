@@ -12,11 +12,6 @@ require_bash
 kubeconfig="$1"
 values_file="$2"
 kc=(kubectl --kubeconfig "$kubeconfig")
-cilium_context_args=()
-if "${kc[@]}" config get-contexts homelab-diagnostic --no-headers >/dev/null 2>&1; then
-  kc+=(--context homelab-diagnostic)
-  cilium_context_args=(--context homelab-diagnostic)
-fi
 expected_names=$'nuc1\nnuc2\nnuc3'
 temp_dir="$(mktemp -d /tmp/homelab-talos-cilium-verify.XXXXXX)"
 trap 'rm -rf -- "$temp_dir"' EXIT
@@ -32,7 +27,7 @@ assert_equal() {
 }
 
 [[ -f "$kubeconfig" ]] || {
-  echo "Missing $kubeconfig; run just kube kubeconfig." >&2
+  echo "Missing selected invocation config: $kubeconfig." >&2
   exit 1
 }
 api_server="$("${kc[@]}" config view --minify --output jsonpath='{.clusters[0].cluster.server}')"
@@ -107,14 +102,12 @@ assert_empty "$cilium_envoy" 'The standalone Cilium Envoy DaemonSet must remain 
 cilium status \
   --kubeconfig "$kubeconfig" \
   --namespace kube-system \
-  "${cilium_context_args[@]}" \
   --wait \
   --wait-duration 10m
 
 cilium_status_json="$(cilium status \
   --kubeconfig "$kubeconfig" \
   --namespace kube-system \
-  "${cilium_context_args[@]}" \
   --output json)"
 assert_equal 'Hubble Relay Cilium status desired/ready/available/unavailable' '1 1 1 0' \
   "$(yq -r '.pod_state."hubble-relay" | [.Desired, .Ready, .Available, .Unavailable] | join(" ")' - <<<"$cilium_status_json")"

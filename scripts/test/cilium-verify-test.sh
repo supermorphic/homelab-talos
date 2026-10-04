@@ -19,13 +19,9 @@ if [[ " $* " == *' config get-contexts homelab-diagnostic --no-headers '* ]]; th
   [[ "$FAKE_LAYOUT" == named ]]
   exit
 fi
-if [[ "$FAKE_LAYOUT" == named && " $* " != *' --context homelab-diagnostic '* ]]; then
-  echo 'named layout omitted the diagnostic context' >&2
+if [[ " $* " == *' --context '* ]]; then
+  echo 'Verifier changed the selected invocation context.' >&2
   exit 65
-fi
-if [[ "$FAKE_LAYOUT" == admin && " $* " == *' --context '* ]]; then
-  echo 'admin layout unexpectedly selected a context' >&2
-  exit 66
 fi
 
 case " $* " in
@@ -63,11 +59,7 @@ cat >"$fixture/bin/cilium" <<'EOF'
 set -euo pipefail
 printf '%q ' "$@" >>"$FAKE_CALL_LOG"
 printf '\n' >>"$FAKE_CALL_LOG"
-if [[ "$FAKE_LAYOUT" == named ]]; then
-  [[ " $* " == *' --context homelab-diagnostic '* ]]
-else
-  [[ " $* " != *' --context '* ]]
-fi
+[[ " $* " != *' --context '* ]]
 if [[ " $* " == *' --output json '* ]]; then
   printf '%s\n' '{"pod_state":{"hubble-relay":{"Desired":1,"Ready":1,"Available":1,"Unavailable":0}},"cilium_status":[{"hubble":{"state":"Ok"}}],"errors":{"hubble-relay":{"hubble-relay":{"Errors":[],"Warnings":[]}}}}'
 fi
@@ -96,7 +88,10 @@ run_layout() {
 }
 
 named_log="$(run_layout named)"
-rg -q -- 'status .*--context homelab-diagnostic' "$named_log"
+if rg -q -- 'config get-contexts|--context' "$named_log"; then
+  echo 'Verifier changed or searched invocation contexts.' >&2
+  exit 1
+fi
 admin_log="$(run_layout admin)"
 if rg -q -- '--context' "$admin_log"; then
   echo 'Cilium admin fallback unexpectedly selected a named context.' >&2

@@ -5,7 +5,7 @@ set working-directory := ".."
 cilium_chart := "oci://quay.io/cilium/charts/cilium"
 cilium_values := "kubernetes/apps/kube-system/cilium/app/values.yaml"
 cilium_app := "kubernetes/apps/kube-system/cilium/app"
-talosconfig := ".talos/config"
+talosconfig := env("TALOSCONFIG", ".talos/config")
 kubeconfig := env("TEST_KUBECONFIG", ".kube/config")
 test_kubeconfig := "@test-kubeconfig@"
 git_url := "https://forgejo.infra.supermorphic.com/supermorphic/homelab-talos.git"
@@ -581,32 +581,35 @@ _flux-restart-raw: require-bash
     kubeconfig='{{kubeconfig}}'
     expected_confirmation='restart:flux-system:controllers'
     [[ -f "$kubeconfig" ]] || {
-      echo "Missing $kubeconfig; this operator workflow requires an explicitly authorized kubeconfig (just talos kubeconfig in the operator checkout)." >&2
+      echo "Missing selected invocation config: $kubeconfig." >&2
       exit 1
     }
-
-    flux check --kubeconfig "$kubeconfig"
 
     [[ "${FLUX_RESTART_CONFIRM:-}" == "$expected_confirmation" ]] || {
       echo 'Refusing to restart the Flux controllers.' >&2
       echo "Set FLUX_RESTART_CONFIRM='$expected_confirmation' and rerun." >&2
       exit 1
     }
-
-    controllers="$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get deployments \
-      --selector app.kubernetes.io/part-of=flux --output name)"
-    [[ -n "$controllers" ]] || {
-      echo 'Refusing restart: no Flux controller deployments found.' >&2
-      exit 1
-    }
-    echo 'Restarting Flux controllers:'
-    printf '  %s\n' $controllers
-    kubectl --kubeconfig "$kubeconfig" --namespace flux-system rollout restart $controllers
-    while IFS= read -r deployment; do
-      kubectl --kubeconfig "$kubeconfig" --namespace flux-system rollout status "$deployment" --timeout=5m
-    done <<<"$controllers"
+    source scripts/lib/lease.sh
+    flux check --kubeconfig "$kubeconfig"
+    for deployment in source-controller kustomize-controller helm-controller notification-controller; do
+      current="$(kubectl --kubeconfig "$kubeconfig" --namespace flux-system get deployment "$deployment" --output json)"
+      jq -e --arg name "$deployment" '.kind == "Deployment" and .metadata.name == $name and
+        (.metadata.uid | type == "string" and length > 0) and
+        (.metadata.resourceVersion | type == "string" and length > 0)' <<<"$current" >/dev/null
+      timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      patch="$(jq -ce --arg timestamp "$timestamp" '[
+        {op:"test",path:"/metadata/uid",value:.metadata.uid},
+        {op:"test",path:"/metadata/resourceVersion",value:.metadata.resourceVersion},
+        {op:"add",path:"/spec/template/metadata/annotations",value:((.spec.template.metadata.annotations // {}) + {"kubectl.kubernetes.io/restartedAt":$timestamp})}
+      ]' <<<"$current")"
+      verify_test_lease_holder "$kubeconfig" "${TEST_CAMPAIGN_LEASE_HOLDER:-${HOMELAB_DISRUPTION_LEASE_HOLDER:-}}"
+      kubectl --kubeconfig "$kubeconfig" --namespace flux-system patch deployment "$deployment" --type=json --patch "$patch" >/dev/null
+      kubectl --kubeconfig "$kubeconfig" --namespace flux-system rollout status "deployment/$deployment" --timeout=5m
+    done
 
     flux check --kubeconfig "$kubeconfig"
+    verify_test_lease_holder "$kubeconfig" "${TEST_CAMPAIGN_LEASE_HOLDER:-${HOMELAB_DISRUPTION_LEASE_HOLDER:-}}"
     flux reconcile kustomization cluster-apps \
       --namespace flux-system \
       --with-source \
