@@ -37,7 +37,7 @@ token="${N8N_CANARY_TOKEN:-}"
   exit 1
 }
 [[ -f "$kubeconfig" ]] || {
-  echo 'Persistence testing requires the selected invocation config.' >&2
+  echo "Missing selected invocation config: $kubeconfig." >&2
   exit 1
 }
 

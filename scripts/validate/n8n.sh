@@ -644,17 +644,19 @@ kubeconform -strict -summary -ignore-missing-schemas \
 kustomize build "$base/n8n/app" >"$temp_dir/n8n-fixtures.yaml"
 yq ea -r 'select(.kind == "ConfigMap" and .metadata.name == "n8n-test-helpers-v1") |
   .data."n8n-restore-drop.sh"' "$temp_dir/n8n-fixtures.yaml" >"$temp_dir/restore-drop-program.sh"
-[[ "$(yq -r '.spec.template.spec.containers[0].command | join(",")' \
+if [[ "$(yq -r '.spec.template.spec.containers[0].command | join(",")' \
     "$temp_dir/restore-drop-job.yaml")" == '/bin/sh,-eu,/helpers/n8n-restore-drop.sh' && \
   "$(yq -r '.spec.template.spec.volumes[0].configMap.name' \
     "$temp_dir/restore-drop-job.yaml")" == 'n8n-test-helpers-v1' && \
   "$(yq ea -r 'select(.kind == "ConfigMap" and .metadata.name == "n8n-test-helpers-v1") |
     .immutable' "$temp_dir/n8n-fixtures.yaml")" == 'true' ]] && \
   rg -Fq 'SELECT count(*) FROM pg_database WHERE datname = current_setting' \
-  "$temp_dir/restore-drop-program.sh" || {
+  "$temp_dir/restore-drop-program.sh"; then
+  :
+else
   echo 'Rendered n8n restore cleanup does not prove temporary database absence through the catalog.' >&2
   exit 1
-}
+fi
 # shellcheck disable=SC2016 # These are exact commands rendered into the helper Jobs.
 [[ "$(yq -r '.spec.template.spec.volumes[0].persistentVolumeClaim.claimName' \
     "$temp_dir/persistence-write.yaml")" == 'n8n-data' && \
