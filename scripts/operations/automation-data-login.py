@@ -35,7 +35,7 @@ from automation_data_client import (
     validate_service_profile,
     write_private_file_exclusive,
 )
-from automation_data_inventory import DiscoveryRequest, build_inventory, resolve
+from automation_data_inventory import DiscoveryRequest, build_inventory, resolve, timestamp
 
 WEBHOOK = "https://n8n.lab.supermorphic.com/webhook/automation-data-provision"
 DOMAIN = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
@@ -77,7 +77,7 @@ def send_request(payload: dict) -> dict:
         # readback. Preserve their response within the original 20-second operation
         # budget plus readback and margin; observational validation stays shorter.
         timeout = 60 if payload.get("operation") in {
-            "login-register", "login-activate", "login-rotate", "login-complete"
+            "login-register", "login-activate", "login-rotate", "login-complete", "rotate"
         } else 20
         with WEBHOOK_OPENER.open(request, timeout=timeout) as response:
             content = response.read(65537)
@@ -295,6 +295,155 @@ def require_deployed_enrollment_sources() -> None:
     )
 
 
+def require_deployed_recovery_sources() -> None:
+    repository = Path(__file__).resolve().parents[2]
+    script = (
+        "source scripts/lib/rollout.sh; require_deployed_source "
+        "'automation-data migrator recovery' "
+        "scripts/operations/automation-data-login.py scripts/lib/automation_data_access.py "
+        "scripts/lib/automation_data_client.py scripts/lib/automation_data_inventory.py "
+        "kubernetes/apps/automation/n8n/app/workflows/automation-data-provisioner.json"
+    )
+    subprocess.run(["bash", "-c", script], cwd=repository, check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def recovery_identity(config, domain: str, *, interrupted: bool = False) -> dict:
+    request = DiscoveryRequest("resolve", domain, "migration")
+    inventory = build_inventory(fetch_observations(config, request))
+    matches = [item for item in inventory.items
+               if item["family"] == "migration" and item.get("domain") == domain]
+    if len(matches) != 1:
+        raise PrivateFileError("recovery_identity_unavailable")
+    item = matches[0]
+    role = item["evidence"].get("role")
+    credential = item["evidence"].get("credential")
+    states = {"ready", "rotating", "error"} if interrupted else {"ready"}
+    if (not item["complete"] or item["discrepancies"] or item.get("state") not in states
+            or item.get("database") != domain or item.get("role") != f"{domain}_migrator"
+            or not role or role.get("login") is not True
+            or any(role.get(key) is not False for key in
+                   ["superuser", "createDb", "createRole", "inherit", "replication", "bypassRls"])
+            or not credential or credential.get("type") != "postgres"
+            or credential.get("id") != item.get("credentialId")
+            or credential.get("name") != f"automation-data/{domain}/migrator"):
+        raise PrivateFileError("recovery_identity_not_ready")
+    marker = credential.get("updatedAt")
+    timestamp(marker)
+    return {"domain": domain, "role": item["role"], "credentialId": item["credentialId"],
+            "credentialUpdatedAt": marker, "state": item["state"]}
+
+
+def install_migrator_profile(directory: Path, operation: dict, identity: dict) -> None:
+    """Install only absent files or identical files from an interrupted installation."""
+    passfile = directory / "credential.pgpass"
+    service_name = f"automation_data_{operation['domain']}_migrator"
+    service = (f"[{service_name}]\nhost=127.0.0.1\nport={operation['localPort']}\n"
+               f"dbname={operation['domain']}\nuser={operation['role']}\n"
+               f"passfile={passfile}\nsslmode=disable\n").encode()
+    binding = {"domain": operation["domain"], "database": operation["domain"],
+               "role": operation["role"], "credentialId": identity["credentialId"],
+               "credentialUpdatedAt": identity["credentialUpdatedAt"],
+               "service": service_name, "localPort": operation["localPort"]}
+    files = {"credential.pgpass": safe_path(directory / "pending" / "candidate.pgpass").read_bytes(),
+             "service.conf": service,
+             "binding.json": (json.dumps(binding, sort_keys=True) + "\n").encode()}
+    for name, data in files.items():
+        selected = directory / name
+        if selected.exists() or selected.is_symlink():
+            if safe_path(selected).read_bytes() != data:
+                raise PrivateFileError("existing_migrator_profile_conflict")
+        else:
+            write_private_file_exclusive(selected, data)
+
+
+def recover_migrator(domain: str) -> None:
+    confirmation("recover", domain, "migrator")
+    require_deployed_recovery_sources()
+    config = load_access_config()
+    # Configuration validation owns all ancestor checks and the outside-checkout boundary.
+    root = safe_path(config.migrator_profile_root, directory=True)
+    directory = validate_private_directory(root / domain, create=True)
+    safe_path(directory, directory=True)
+    fsync_directory(root)
+    port = local_port()
+    with operation_lock(directory):
+        pending = read_pending(directory)
+        identity = recovery_identity(config, domain, interrupted=pending is not None)
+        if pending is None:
+            if any((directory / name).exists() or (directory / name).is_symlink()
+                   for name in ["service.conf", "credential.pgpass", "binding.json"]):
+                raise PrivateFileError("existing_migrator_profile_requires_enrollment")
+            pending_dir = validate_private_directory(directory / "pending", create=True)
+            password = secrets.token_urlsafe(48)
+            operation = {"domain": domain, "operation": "recover-migrator",
+                         "role": identity["role"], "localPort": port, "localPhase": "prepared",
+                         "expectedCredentialId": identity["credentialId"],
+                         "expectedCredentialUpdatedAt": identity["credentialUpdatedAt"]}
+            write_private_file_exclusive(pending_dir / "candidate.pgpass",
+                f"127.0.0.1:{port}:{domain}:{identity['role']}:{password}\n".encode())
+            write_private_file_exclusive(pending_dir / "operation.json",
+                (json.dumps(operation, sort_keys=True) + "\n").encode())
+            fsync_directory(directory)
+        else:
+            operation, password = pending
+            if (set(operation) != {"domain", "operation", "role", "localPort", "localPhase",
+                                    "expectedCredentialId", "expectedCredentialUpdatedAt"}
+                    or operation["domain"] != domain or operation["operation"] != "recover-migrator"
+                    or operation["role"] != identity["role"] or operation["localPort"] != port
+                    or operation["expectedCredentialId"] != identity["credentialId"]
+                    or operation["localPhase"] not in {"prepared", "submitted", "acknowledged"}):
+                raise PrivateFileError("pending_migrator_target_changed")
+            timestamp(operation["expectedCredentialUpdatedAt"])
+            expected = f"127.0.0.1:{port}:{domain}:{identity['role']}:{password}\n".encode()
+            if safe_path(directory / "pending" / "candidate.pgpass").read_bytes() != expected:
+                raise PrivateFileError("pending_migrator_target_changed")
+        kubeconfig = os.environ.get("AUTOMATION_DATA_KUBECONFIG")
+        with private_database_tunnel(Path(kubeconfig) if kubeconfig else None, port):
+            changed = identity["credentialUpdatedAt"] != operation["expectedCredentialUpdatedAt"]
+            completed = False
+            if changed or operation["localPhase"] == "acknowledged":
+                # A changed remote marker can belong to our lost response or another actor.
+                # Only the retained password authenticating permits reconciliation.
+                authenticate_candidate(port, domain, identity["role"], password)
+                if recovery_identity(config, domain, interrupted=True) != identity:
+                    raise PrivateFileError("recovery_identity_changed")
+                completed = identity["state"] == "ready"
+                operation["expectedCredentialUpdatedAt"] = identity["credentialUpdatedAt"]
+                update_phase(directory, operation, "acknowledged" if completed else "prepared")
+            if not completed:
+                if recovery_identity(config, domain, interrupted=True) != identity:
+                    raise PrivateFileError("recovery_identity_changed")
+                result = send_request({"domain": domain, "operation": "rotate", "credential": "migrator",
+                                       "password": password,
+                                       "expectedCredentialId": operation["expectedCredentialId"],
+                                       "expectedCredentialUpdatedAt": operation["expectedCredentialUpdatedAt"]})
+                if (result.get("domain") != domain or result.get("operation") != "rotate"
+                        or result.get("state") != "ready"
+                        or result.get("migratorCredentialId") != identity["credentialId"]):
+                    raise RequestError("recovery_response_mismatch")
+                update_phase(directory, operation, "submitted")
+                authenticate_candidate(port, domain, identity["role"], password)
+                current = recovery_identity(config, domain)
+                if (current["credentialId"] != identity["credentialId"]
+                        or current["credentialUpdatedAt"] != result.get("migratorCredentialUpdatedAt")):
+                    raise PrivateFileError("recovery_identity_changed")
+                identity = current
+                operation["expectedCredentialUpdatedAt"] = current["credentialUpdatedAt"]
+                update_phase(directory, operation, "acknowledged")
+            if recovery_identity(config, domain) != identity:
+                raise PrivateFileError("recovery_identity_changed")
+            install_migrator_profile(directory, operation, identity)
+            # Keep pending material if a concurrent change makes the newly installed profile stale.
+            if recovery_identity(config, domain) != identity:
+                raise PrivateFileError("recovery_identity_changed")
+            clear_completed_pending(directory)
+            print(json.dumps({"domain": domain, "role": identity["role"], "recovered": True,
+                              "credentialId": identity["credentialId"],
+                              "serviceFile": str(directory / "service.conf"),
+                              "service": f"automation_data_{domain}_migrator"}))
+
+
 def enroll_migrator(domain: str) -> None:
     """Operator-only binding of an already installed private profile; never export from n8n."""
     confirmation("enroll", domain, "migrator")
@@ -483,7 +632,7 @@ def execute(action: str, domain: str, application: str, schema: str | None = Non
 
 def main(argv: list[str]) -> int:
     try:
-        if len(argv) == 2 and argv[0] == "enroll-migrator":
+        if len(argv) == 2 and argv[0] in {"enroll-migrator", "recover-migrator"}:
             domain = argv[1]
             if not DOMAIN.fullmatch(domain) or domain in {
                 "postgres",
@@ -492,7 +641,10 @@ def main(argv: list[str]) -> int:
                 "automation_data_control",
             }:
                 raise ValueError("invalid_domain")
-            enroll_migrator(domain)
+            if argv[0] == "recover-migrator":
+                recover_migrator(domain)
+            else:
+                enroll_migrator(domain)
             return 0
         if len(argv) not in (3, 4):
             raise ValueError("invalid_arguments")

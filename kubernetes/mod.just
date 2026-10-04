@@ -148,6 +148,10 @@ automation-data-credentials *args: require-bash
 automation-data-login-enroll-migrator domain: require-bash
     @uv run --locked python scripts/operations/automation-data-login.py enroll-migrator {{quote(domain)}}
 
+# Explicit recovery of a missing protected migrator profile; retains interrupted candidates.
+automation-data-login-recover-migrator domain: require-bash
+    @uv run --locked python scripts/operations/automation-data-login.py recover-migrator {{quote(domain)}}
+
 # Apply reviewed control functions to initialized PostgreSQL after a fresh backup.
 # Operator-run; deactivate provisioning and drain executions before confirmation.
 automation-data-control-migrate: require-bash

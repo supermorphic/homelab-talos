@@ -63,7 +63,8 @@ allowed_fields_match = re.search(r"allowedFields\s*=\s*new Set\(\[([^]]+)\]\)", 
 require(allowed_fields_match is not None, "Normalize Request must declare its request fields.")
 allowed_fields = re.findall(r"['\"]([^'\"]+)['\"]", allowed_fields_match.group(1))
 require(allowed_fields == ["domain", "operation", "credential", "application", "schema",
-                           "operationId", "expectedGeneration", "credentialGeneration", "password"],
+                           "operationId", "expectedGeneration", "credentialGeneration", "password",
+                           "expectedCredentialId", "expectedCredentialUpdatedAt"],
         "The request field set is not exact.")
 for literal in ("domain", "operation", "credential", "provision", "reconcile", "rotate", "validate"):
     require(re.search(rf"['\"]{literal}['\"]", normalize_code), f"Normalize Request must declare {literal!r}.")

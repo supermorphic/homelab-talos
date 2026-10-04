@@ -385,5 +385,209 @@ class MigratorEnrollmentTest(unittest.TestCase):
         self.assertFalse((self.directory / "binding.json").exists())
 
 
+
+class MigratorRecoveryTest(unittest.TestCase):
+    setUp = MigratorEnrollmentTest.setUp
+    write = MigratorEnrollmentTest.write
+
+    def prepare(self):
+        self.service.unlink()
+        self.passfile.unlink()
+        self.requests = []
+        self.fail_request = False
+        self.authenticated = []
+        os.environ["AUTOMATION_DATA_LOGIN_RECOVER_CONFIRM"] = "recover:automation-data:sample:migrator"
+        guard = mock.patch.object(command, "require_deployed_recovery_sources", create=True)
+        guard.start()
+        self.addCleanup(guard.stop)
+
+        def request(payload):
+            self.requests.append(payload.copy())
+            pending = self.directory / "pending"
+            self.assertEqual(stat.S_IMODE((pending / "candidate.pgpass").stat().st_mode), 0o600)
+            self.assertNotIn(payload["password"], (pending / "operation.json").read_text())
+            if self.fail_request:
+                raise command.RequestError("synthetic failure")
+            self.password = payload["password"]
+            marker = "2026-10-02T00:00:00+00:00"
+            self.raw["platform"]["objects"][0]["migratorUpdatedAt"] = marker
+            credential = next(x for x in self.raw["n8n"]["objects"] if x["id"] == "fixture-migrator")
+            credential["updatedAt"] = marker
+            return {"ok": True, "domain": "sample", "operation": "rotate", "state": "ready",
+                    "migratorCredentialId": "fixture-migrator", "migratorCredentialUpdatedAt": marker}
+
+        def authenticate(port, domain, role, password):
+            self.assertEqual((port, domain, role), (15432, "sample", "sample_migrator"))
+            self.assertEqual(password, self.password)
+            self.authenticated.append(password)
+
+        for patched in [mock.patch.object(command, "send_request", side_effect=request),
+                        mock.patch.object(command, "authenticate_candidate", side_effect=authenticate)]:
+            patched.start()
+            self.addCleanup(patched.stop)
+
+    def invoke_recovery(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            result = command.main(["recover-migrator", "sample"])
+        for request in self.requests:
+            self.assertNotIn(request["password"], output.getvalue())
+        return result, output.getvalue()
+
+    def test_recovery_retains_authenticates_and_installs_fixed_profile(self):
+        self.prepare()
+        result, output = self.invoke_recovery()
+        self.assertEqual(result, 0, output)
+        self.assertEqual(len(self.authenticated), 1)
+        self.assertIn("sample_migrator", self.passfile.read_text())
+        self.assertIn(self.requests[0]["password"], self.passfile.read_text())
+        binding = json.loads((self.directory / "binding.json").read_text())
+        self.assertEqual(binding["credentialId"], "fixture-migrator")
+        self.assertFalse((self.directory / "pending").exists())
+        self.assertEqual(stat.S_IMODE(self.service.stat().st_mode), 0o600)
+
+    def test_ambiguous_failure_retries_same_password(self):
+        self.prepare()
+        self.fail_request = True
+        self.assertEqual(self.invoke_recovery()[0], 1)
+        first = self.requests[0].copy()
+        self.assertFalse(self.service.exists())
+        self.fail_request = False
+        result, output = self.invoke_recovery()
+        self.assertEqual(result, 0, output)
+        self.assertEqual(self.requests[1], first)
+
+    def test_missing_candidate_does_not_generate_or_mutate_again(self):
+        self.prepare()
+        self.fail_request = True
+        self.invoke_recovery()
+        (self.directory / "pending" / "candidate.pgpass").unlink()
+        self.fail_request = False
+        self.assertEqual(self.invoke_recovery()[0], 1)
+        self.assertEqual(len(self.requests), 1)
+
+    def test_auth_failure_retains_candidate_and_prevents_profile_install(self):
+        self.prepare()
+        with mock.patch.object(command, "authenticate_candidate", side_effect=ValueError("wrong identity")):
+            self.assertEqual(self.invoke_recovery()[0], 1)
+        self.assertTrue((self.directory / "pending" / "candidate.pgpass").exists())
+        self.assertFalse(self.service.exists())
+        self.assertFalse((self.directory / "binding.json").exists())
+
+    def test_completed_remote_rotation_is_reconciled_without_repeating_mutation(self):
+        self.prepare()
+        with mock.patch.object(command, "authenticate_candidate", side_effect=ValueError("interrupted read")):
+            self.assertEqual(self.invoke_recovery()[0], 1)
+        result, output = self.invoke_recovery()
+        self.assertEqual(result, 0, output)
+        self.assertEqual(len(self.requests), 1)
+
+    def test_metadata_change_during_authentication_prevents_binding(self):
+        self.prepare()
+        original = command.authenticate_candidate
+        def changed(*args):
+            original(*args)
+            self.raw["platform"]["objects"][0]["migratorCredentialId"] = "replacement-fixture"
+        with mock.patch.object(command, "authenticate_candidate", side_effect=changed):
+            self.assertEqual(self.invoke_recovery()[0], 1)
+        self.assertFalse(self.service.exists())
+
+    def test_changed_marker_with_wrong_candidate_stops_before_retry(self):
+        self.prepare()
+        self.fail_request = True
+        self.invoke_recovery()
+        marker = "2026-10-03T00:00:00+00:00"
+        self.raw["platform"]["objects"][0]["migratorUpdatedAt"] = marker
+        next(x for x in self.raw["n8n"]["objects"] if x["id"] == "fixture-migrator")["updatedAt"] = marker
+        with mock.patch.object(command, "authenticate_candidate", side_effect=ValueError("candidate no longer current")):
+            self.assertEqual(self.invoke_recovery()[0], 1)
+        self.assertEqual(len(self.requests), 1)
+        self.assertFalse(self.service.exists())
+
+    def test_partial_remote_rotation_retries_retained_candidate(self):
+        self.prepare()
+        with mock.patch.object(command, "authenticate_candidate", side_effect=ValueError("interrupted")):
+            self.assertEqual(self.invoke_recovery()[0], 1)
+        self.raw["platform"]["objects"][0]["state"] = "error"
+        first = self.requests[0]["password"]
+        original = command.send_request
+        def complete(payload):
+            self.raw["platform"]["objects"][0]["state"] = "ready"
+            return original(payload)
+        with mock.patch.object(command, "send_request", side_effect=complete):
+            result, output = self.invoke_recovery()
+        self.assertEqual(result, 0, output)
+        self.assertEqual(len(self.requests), 2)
+        self.assertEqual(self.requests[1]["password"], first)
+
+    def test_partial_local_installation_retries_without_rotation(self):
+        self.prepare()
+        original = command.write_private_file_exclusive
+        def interrupt(path, data):
+            if Path(path) == self.service:
+                raise client.PrivateFileError("interrupted installation")
+            return original(path, data)
+        with mock.patch.object(command, "write_private_file_exclusive", side_effect=interrupt):
+            self.assertEqual(self.invoke_recovery()[0], 1)
+        self.assertTrue(self.passfile.exists())
+        self.assertFalse(self.service.exists())
+        result, output = self.invoke_recovery()
+        self.assertEqual(result, 0, output)
+        self.assertEqual(len(self.requests), 1)
+
+    def test_symlink_pending_material_is_rejected(self):
+        self.prepare()
+        self.fail_request = True
+        self.invoke_recovery()
+        pending = self.directory / "pending" / "candidate.pgpass"
+        saved = self.directory / "saved"
+        pending.rename(saved)
+        pending.symlink_to(saved)
+        self.assertEqual(self.invoke_recovery()[0], 1)
+        self.assertEqual(len(self.requests), 1)
+        self.assertFalse(self.service.exists())
+
+    def test_candidate_directory_entries_are_durable_before_mutation(self):
+        self.prepare()
+        self.directory.rmdir()
+        flushed = set()
+        pending_parent_flushed = []
+        original_fsync = os.fsync
+        original_send = command.send_request
+        def fsync(descriptor):
+            info = os.fstat(descriptor)
+            if stat.S_ISDIR(info.st_mode):
+                flushed.add((info.st_dev, info.st_ino))
+                if (self.directory / "pending").exists():
+                    parent = self.directory.stat()
+                    if (info.st_dev, info.st_ino) == (parent.st_dev, parent.st_ino):
+                        pending_parent_flushed.append(True)
+            original_fsync(descriptor)
+        def send(payload):
+            self.assertTrue(pending_parent_flushed)
+            for path in [self.root, self.directory, self.directory / "pending"]:
+                info = path.stat()
+                self.assertIn((info.st_dev, info.st_ino), flushed)
+            return original_send(payload)
+        with mock.patch.object(os, "fsync", side_effect=fsync), \
+                mock.patch.object(command, "send_request", side_effect=send):
+            result, output = self.invoke_recovery()
+        self.assertEqual(result, 0, output)
+
+    def test_confirmation_precedes_requests(self):
+        self.prepare()
+        os.environ["AUTOMATION_DATA_LOGIN_RECOVER_CONFIRM"] = "wrong"
+        self.assertEqual(self.invoke_recovery()[0], 1)
+        self.assertEqual(self.requests, [])
+
+    def test_existing_unbound_files_are_preserved(self):
+        self.prepare()
+        self.service.write_text("existing profile\n")
+        self.service.chmod(0o600)
+        self.assertEqual(self.invoke_recovery()[0], 1)
+        self.assertEqual(self.service.read_text(), "existing profile\n")
+        self.assertEqual(self.requests, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -46,3 +46,40 @@ assert.equal(graph.settings.saveDataSuccessExecution, 'none');
 assert.equal(graph.settings.saveDataErrorExecution, 'none');
 assert.equal(graph.settings.saveExecutionProgress, false);
 console.log('Application login workflow boundary tests passed.');
+
+// A retained password is accepted only for explicitly identified migrator recovery.
+const recovery = {domain: 'sample', operation: 'rotate', credential: 'migrator',
+  password: 'synthetic-candidate-password-at-least-32-chars',
+  expectedCredentialId: 'fixture-migrator', expectedCredentialUpdatedAt: '2026-01-01T00:00:00Z'};
+assert.deepEqual(invoke('Normalize Request', recovery), recovery);
+for (const invalid of [
+  {...recovery, credential: 'runtime'}, {...recovery, operation: 'provision'},
+  {...recovery, expectedCredentialId: undefined}, {...recovery, password: 'short'},
+  {...recovery, expectedCredentialUpdatedAt: 'not-a-date'},
+]) assert.throws(() => invoke('Normalize Request', invalid));
+const credentials = [
+  {id: 'fixture-migrator', name: 'automation-data/sample/migrator', type: 'postgres', updatedAt: '2026-01-01T00:00:00Z'},
+  {id: 'fixture-runtime', name: 'automation-data/sample/runtime', type: 'postgres', updatedAt: '2026-01-01T00:00:00Z'},
+];
+const prepare = request => new Function('$', '$input', nodes.get('Prepare Rotation').parameters.jsCode)(
+  () => ({first: () => ({json: request})}), {all: () => [{json: {data: credentials}}]})[0].json;
+assert.equal(prepare(recovery).password, recovery.password);
+const retained = new Function('$json', nodes.get('Use Retained Rotation Password').parameters.jsCode)(prepare(recovery))[0].json;
+assert.equal(retained.rotationPassword, recovery.password);
+const credentialWrite = new Function('$json', '$', nodes.get('Prepare Rotation Credential Write').parameters.jsCode)(
+  {result: {credentialId: 'fixture-migrator'}}, () => ({first: () => ({json: retained})}))[0].json;
+assert.deepEqual(credentialWrite, {credentialId: 'fixture-migrator', password: recovery.password});
+assert.throws(() => prepare({...recovery, expectedCredentialId: 'replacement'}));
+assert.throws(() => prepare({...recovery, expectedCredentialUpdatedAt: '2026-01-02T00:00:00Z'}));
+assert.equal(graph.connections['Prepare Rotation'].main[0][0].node, 'Select Rotation Password');
+assert.equal(graph.connections['Use Retained Rotation Password'].main[0][0].node, 'Use Rotation Password');
+assert.equal(graph.connections['Use Rotation Password'].main[0][0].node, 'Rotate Domain Credential');
+assert.deepEqual(invoke('Normalize Request', {domain: 'sample', operation: 'rotate', credential: 'runtime'}),
+  {domain: 'sample', operation: 'rotate', credential: 'runtime'});
+console.log('Migrator recovery workflow boundary tests passed.');
+
+// Preparation and random rotation failures must still produce bounded error responses.
+for (const name of ['Prepare Rotation', 'Generate Rotation Password']) {
+  assert.equal(nodes.get(name).onError, 'continueErrorOutput');
+  assert.equal(graph.connections[name].main[1][0].node, 'Prepare Error Response');
+}

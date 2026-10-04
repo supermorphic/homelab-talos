@@ -899,9 +899,43 @@ is allowed. See the [named access grant](031-openbao-agent-credential-profiles.m
 Connectivity alone does not authorize consumer queries, writes, or migrations.
 
 Migration uses an explicitly selected, operator-retained migrator profile. Missing
-credentials require separately authorized recovery through the existing domain rotation
-lifecycle, preserving the n8n binding and arranging protected delivery. Onboarding never
-retrieves that credential from n8n or rotates it automatically.
+credentials require separately authorized recovery through the domain rotation lifecycle.
+Onboarding never retrieves that credential from n8n or rotates it automatically.
+
+For a missing local migrator profile, publish the current provisioning workflow with its
+existing credential bindings and disabled execution-data persistence. Require the matching
+merged platform sources and a current validated backup. Use the task's scoped debugger
+kubeconfig and the operator-retained provisioning webhook authentication. Do not extract
+that authentication or the migrator credential from n8n. Then run:
+
+```bash
+AUTOMATION_DATA_LOGIN_RECOVER_CONFIRM='recover:automation-data:DOMAIN:migrator' \
+  mise exec -- just kube automation-data-login-recover-migrator DOMAIN
+mise exec -- just kube automation-data-credentials resolve DOMAIN migration
+```
+
+The command creates a protected local candidate before requesting rotation. It accepts
+only the existing migrator identity, verifies the credential ID and update marker, retains
+the existing n8n credential and bindings, and authenticates the candidate before installing
+the fixed connection profile. The provisioning workflow accepts a caller-retained password
+only for explicitly identified migrator recovery. Ordinary runtime and domain rotations
+retain their existing password-generation behavior. No role, schema, or grant is added.
+The resolver must return `ready` before using the migrated consumer's connection recipe.
+
+After an interruption, repeat the same confirmed command with the same port and profile
+root. It reuses the retained candidate. A completed remote rotation is reconciled through
+candidate authentication and fresh metadata without another rotation. An incomplete remote
+rotation can retry with that candidate, preserving the existing convergent lifecycle.
+Changed identities, unsafe paths, unavailable metadata, or missing candidate material stop
+recovery. Preserve the protected pending directory for investigation rather than deleting it
+or silently generating another password. Existing unbound service or passfiles require
+explicit enrollment or operator reconciliation; recovery does not overwrite them.
+
+The workflow's metadata check and the database/n8n updates are not one distributed
+transaction. Coordinate recovery with other domain credential operations. Concurrent marker
+changes stop installation or leave retained material for reconciliation. Native acceptance
+must prove recovery, resolver readiness, and fixed-session authentication against the
+published workflow. Offline checks do not establish live recovery or a consumer migration.
 
 ### Verification and rollout
 
