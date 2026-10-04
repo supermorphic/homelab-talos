@@ -29,7 +29,7 @@ spec:
     expression: '''kubectl.kubernetes.io/restartedAt'''
   validations:
   - expression: |-
-      request.namespace == 'flux-system' && request.subResource == '' &&
+      request.namespace == 'flux-system' && (!has(request.subResource) || request.subResource == '') &&
       request.name in ['source-controller', 'kustomize-controller', 'helm-controller', 'notification-controller'] &&
       dyn(object).metadata.name == request.name && dyn(object).metadata.namespace == request.namespace &&
       dyn(object).all(k, k in ['metadata', 'spec'] || (k in dyn(oldObject) && dyn(object)[k] == dyn(oldObject)[k])) &&
@@ -95,7 +95,7 @@ spec:
     expression: '''reconcile.fluxcd.io/requestedAt'''
   validations:
   - expression: |-
-      request.namespace == 'flux-system' && request.subResource == '' && (
+      request.namespace == 'flux-system' && (!has(request.subResource) || request.subResource == '') && (
         (request.resource.group == 'source.toolkit.fluxcd.io' && request.resource.resource == 'gitrepositories' && request.name == 'flux-system') ||
         (request.resource.group == 'kustomize.toolkit.fluxcd.io' && request.resource.resource == 'kustomizations' && request.name in ['flux-canary', 'cluster-apps'])) &&
       object.metadata.name == oldObject.metadata.name && object.metadata.namespace == oldObject.metadata.namespace && object.spec == oldObject.spec && (has(object.metadata.labels) == has(oldObject.metadata.labels)) && (!has(object.metadata.labels) || object.metadata.labels == oldObject.metadata.labels) && (has(object.metadata.ownerReferences) == has(oldObject.metadata.ownerReferences)) && (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences == oldObject.metadata.ownerReferences) && (has(object.metadata.finalizers) == has(oldObject.metadata.finalizers)) && (!has(object.metadata.finalizers) || object.metadata.finalizers == oldObject.metadata.finalizers) && (has(object.metadata.generateName) == has(oldObject.metadata.generateName)) && (!has(object.metadata.generateName) || object.metadata.generateName == oldObject.metadata.generateName)
