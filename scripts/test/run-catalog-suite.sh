@@ -32,6 +32,19 @@ confirmation_type="$(yq -r '.confirmation.type' - <<<"$entry_json")"
 confirmation_variable="$(yq -r '.confirmation.variable // "none"' - <<<"$entry_json")"
 confirmation_expected="$(yq -r '.confirmation.expected // ""' - <<<"$entry_json")"
 
+# Live closeout can extend a mapped test with actual cached-client expiry proof.
+# Never export this intent to nested verifiers or replace the feature assertions.
+scoped_acceptance="${TEST_ACCESS_ACCEPTANCE_CONFIRM:-}"
+unset TEST_ACCESS_ACCEPTANCE_CONFIRM
+if [[ -n "$scoped_acceptance" ]]; then
+  [[ "$scoped_acceptance" == verify:scoped-access:ttl-and-denials &&
+    "$(yq -r '.metadata.source' - <<<"$entry_json")" =~ ^(test|conformance)$ &&
+    "$(yq -r '.access.profile // "null"' - <<<"$entry_json")" != null ]] || {
+    echo 'Scoped client acceptance requires exact intent and a mapped Kubernetes test.' >&2
+    exit 2
+  }
+fi
+
 # This one attended scenario releases its operator holder before proving the
 # coordinator's acquire/release contract. It owns checked Lease sections itself.
 scenario_lease=false
@@ -266,6 +279,19 @@ if [[ "$mutates_cluster" != 'true' || "$scenario_lease" == 'true' ||
   primary_exit_code="$?"
   backend_pid=''
   set -e
+  if [[ "$primary_exit_code" -eq 0 && "$signal_exit_code" -eq 0 && -n "$scoped_acceptance" ]]; then
+    if [[ -z "$(find "$fragment_dir" -type f -name '*.xml' -print -quit)" ]]; then
+      write_result_case_junit "$fragment_dir/scoped-backend.xml" "$suite_id" command passed "$((EPOCHSECONDS - started_epoch))"
+    fi
+    set +e
+    python -m scripts.test.run_bound_backend "$run_dir/logs/scoped-access.log" -- uv run --locked --no-dev python -m scripts.test.scoped_access_acceptance "$suite_id" "$scoped_acceptance" &
+    backend_pid="$!"
+    wait "$backend_pid"
+    primary_exit_code="$?"
+    backend_pid=''
+    set -e
+  fi
+
   case "$primary_exit_code" in
     130|143) signal_exit_code="$primary_exit_code" ;;
   esac

@@ -361,3 +361,61 @@ agent_typed_exit="$?"
 set -e
 printf 'Typed agent dispatch authority rejection: %s\n' "$agent_typed_exit"
 [[ "$agent_typed_exit" -eq 1 ]]
+
+# An exact opted-in proof adds evidence after a successful original backend.
+# Original failures retain their exit and do not run the additional proof.
+for variant in passed proof-failed primary-failed; do
+  : >"$TEST_FIXTURE_ACCESS_TRACE"
+  primary_code=0
+  proof_failure=false
+  expected=0
+  case "$variant" in
+  proof-failed)
+    proof_failure=true
+    expected=7
+    ;;
+  primary-failed)
+    primary_code=9
+    expected=9
+    ;;
+  esac
+  set +e
+  # Expand in the selected backend, not this wrapper.
+  # shellcheck disable=SC2016
+  TEST_ACCESS_ACCEPTANCE_CONFIRM=verify:scoped-access:ttl-and-denials \
+    TEST_FIXTURE_ACCEPTANCE_FAIL="$proof_failure" \
+    CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity \
+    CAMPAIGN_TEST_LEASE_STATE="$lease_state" \
+    TEST_LEASE_KUBECTL="$repo_root/tests/fixtures/campaign/fake-lease-kubectl.sh" \
+    DISRUPTION_KUBECTL="$repo_root/tests/fixtures/disruption-admission/fake-kubectl.sh" \
+    DISRUPTION_TEST_NODES="$healthy_nodes" \
+    TEST_CAMPAIGN_LEASE_HOLDER=campaign:fixture \
+    TEST_RESULTS_ROOT="$fixture_root/acceptance-$variant" TEST_KUBECONFIG='' \
+    scripts/test/run-catalog-suite.sh test.cilium-connectivity -- \
+    bash -c '[[ -z "${TEST_ACCESS_ACCEPTANCE_CONFIRM:-}" ]]; exit "$1"' _ "$primary_code" >/dev/null 2>&1
+  observed="$?"
+  set -e
+  [[ "$observed" -eq "$expected" ]]
+  mapfile -t proof_runs < <(find "$fixture_root/acceptance-$variant" -mindepth 1 -maxdepth 1 -type d)
+  [[ "${#proof_runs[@]}" -eq 1 ]]
+  if [[ "$variant" == primary-failed ]]; then
+    if rg -q '^acceptance ' "$TEST_FIXTURE_ACCESS_TRACE"; then exit 1; fi
+  else
+    rg -Fxq 'acceptance test.cilium-connectivity' "$TEST_FIXTURE_ACCESS_TRACE"
+    rg -q 'name="scoped-client-refresh-and-boundary"' "${proof_runs[0]}/junit.xml"
+    rg -q 'name="command"' "${proof_runs[0]}/junit.xml"
+  fi
+done
+for variant in wrong-intent observational; do
+  : >"$TEST_FIXTURE_ACCESS_TRACE"
+  intent=verify:scoped-access:ttl-and-denials
+  [[ "$variant" != wrong-intent ]] || intent=unconfirmed
+  set +e
+  TEST_ACCESS_ACCEPTANCE_CONFIRM="$intent" TEST_KUBECONFIG='' \
+    scripts/test/run-catalog-suite.sh verification.metrics-server -- true >/dev/null 2>&1
+  observed="$?"
+  set -e
+  [[ "$observed" -eq 2 ]]
+  if rg -q 'prepare|acceptance' "$TEST_FIXTURE_ACCESS_TRACE"; then exit 1; fi
+done
+echo 'Scoped acceptance intent, primary result and JUnit integration checks passed.'

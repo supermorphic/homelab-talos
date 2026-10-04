@@ -2,6 +2,20 @@
 # Replace private credential installation only; canonical catalog reads stay real.
 set -euo pipefail
 argv=("$@")
+if [[ " $* " == *' scripts.test.scoped_access_acceptance '* ]]; then
+  [[ -z "${TEST_ACCESS_ACCEPTANCE_CONFIRM:-}" && "$TEST_KUBECONFIG" == "$TEST_FIXTURE_ACCESS_ROOT/private/"* ]]
+  printf '%s\n' "acceptance ${argv[-2]}" >>"$TEST_FIXTURE_ACCESS_TRACE"
+  "$TEST_FIXTURE_REAL_UV" run --locked --no-dev python - "$TEST_RESULT_FRAGMENT_DIR/scoped-access.xml" "${argv[-2]}" <<'PYTHON'
+import os, sys, xml.etree.ElementTree as E
+root = E.Element('testsuites')
+suite = E.SubElement(root, 'testsuite', name=sys.argv[2])
+case = E.SubElement(suite, 'testcase', name='scoped-client-refresh-and-boundary')
+if os.getenv('TEST_FIXTURE_ACCEPTANCE_FAIL') == 'true': E.SubElement(case, 'failure')
+E.ElementTree(root).write(sys.argv[1])
+PYTHON
+  [[ "${TEST_FIXTURE_ACCEPTANCE_FAIL:-}" != true ]] || exit 7
+  exit
+fi
 while [[ "$#" -gt 0 && "$1" != scripts.test.access ]]; do shift; done
 [[ "$#" -gt 0 ]] || exec "$TEST_FIXTURE_REAL_UV" "${argv[@]}"
 shift

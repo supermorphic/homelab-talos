@@ -287,6 +287,7 @@ if group_selected core; then
 		scripts/test/repository_shell_validation.py scripts/test/test_repository_shell_validation.py
 		scripts/test/ci_plan.py scripts/test/test_ci_plan.py
 		scripts/test/ci_publish.py scripts/test/test_ci_publish.py
+		scripts/test/access.py scripts/test/scoped_access_acceptance.py
 		scripts/test/ci_reconcile.py scripts/test/test_ci_reconcile.py
 		scripts/test/test_repository_secret_scan.py
 		scripts/test/core/test_public_webhook_routes.py

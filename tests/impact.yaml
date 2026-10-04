@@ -56,6 +56,7 @@ full_paths:
   - scripts/test/run-native-junit-validator*
   - scripts/test/run-probe*
   - scripts/test/validate-*
+  - scripts/test/scoped_access_acceptance.py
   - scripts/test/run_bound_backend.py
   - scripts/test/test-access-bridge-test.sh
   - scripts/test/lib/owned-resources.sh
