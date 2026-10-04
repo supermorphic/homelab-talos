@@ -735,6 +735,14 @@ suites:
     confirmation: {type: exact, variable: FLUX_CANARY_CONFIRM, expected: "recreate:flux-system:flux-canary"}
     runner: {command: "FLUX_CANARY_CONFIRM=recreate:flux-system:flux-canary mise exec -- just kube flux-canary-test", implementation: kubernetes/mod.just}
     native_results: {strategy: wrapper-junit}
+  # Standalone, operator-held reading key and private before/after baseline.
+  # Application/cluster requests are read-only; the replacement happens via Git.
+  - metadata: {id: test.komga-acceptance, source: test, framework: python, suite: media, tier: integration, target: komga, scenario: library-and-state, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
+    access: {tier: observer}
+    confirmation: {type: exact, variable: KOMGA_ACCEPTANCE_CONFIRM, expected: "verify:media:komga:library-and-state"}
+    runner: {command: "KOMGA_ACCEPTANCE_CONFIRM=verify:media:komga:library-and-state mise exec -- just kube komga-acceptance", implementation: scripts/test/scenarios/komga_acceptance.py}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: direct, runtime: uv-python, path: scripts/test/scenarios/komga_acceptance.py, args: [verify, .kube/config], selector: null}
   - metadata: {id: test.n8n-restore-drill, source: test, framework: bash, suite: platform, tier: integration, target: n8n-restore-drill, scenario: temporary-database, scope: system, intent: resilience, mutates_cluster: true, execution_owner: human}
     confirmation: {type: exact, variable: N8N_RESTORE_DRILL_CONFIRM, expected: "restore:n8n-postgresql:temporary"}
     runner: {command: "N8N_RESTORE_DRILL_CONFIRM=restore:n8n-postgresql:temporary mise exec -- just kube n8n-restore-drill", implementation: scripts/test/scenarios/n8n-restore-drill.sh}

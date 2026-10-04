@@ -511,11 +511,17 @@ complete issue 527; native and integrated acceptance remain pending:
    data, tokens or private library paths beyond the shared contract belong in
    public evidence.
 
-There is no registered automated comic/client or Komga rescheduling test yet.
-Keep attended outcomes private until a scoped fixture and execution contract can
-be registered in the existing test catalog and retained through `just test record`.
-Offline validation and this observational verifier cannot substitute for those
-gates.
+Acceptance combines read-only application and cluster observations with attended
+native-client and acquisition checks. Durability evidence compares non-empty
+account, collection and progress state before and after an authorized Git-managed
+pod replacement on the retained config volume. The baseline must precede that
+replacement.
+
+Acceptance credentials remain with the operator. Retained evidence contains
+sanitized outcomes and the client version and integration type. Plaintext
+credentials, private comic content and private account/state data must not enter
+Git or public reports. Offline validation and deployment readiness cannot
+substitute for native reading, integrated acquisition or recovery acceptance.
 
 For recovery, retain the healthy config claim. If it is lost, use the
 [platform storage recovery procedure](010-talos-flux-platform.md) to restore a
