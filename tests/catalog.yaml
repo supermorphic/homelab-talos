@@ -617,7 +617,7 @@ suites:
     runner: {command: "mise exec -- just kube nocodb-verify", implementation: scripts/verify/nocodb.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.storage, source: verification, framework: bash, suite: platform, tier: verification, target: storage, scenario: null, scope: storage, intent: acceptance, mutates_cluster: false, execution_owner: shared}
-    access: {profile: observer, prerequisites: []}
+    access: {profile: observer, prerequisites: [talos-reader]}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube storage-verify", implementation: scripts/verify/storage.sh}
     native_results: {strategy: wrapper-junit}
@@ -707,7 +707,7 @@ suites:
     runner: {command: "mise exec -- just kube qbit-manage-verify", implementation: scripts/verify/qbit-manage.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.monitoring, source: verification, framework: bash, suite: platform, tier: verification, target: monitoring, scenario: null, scope: system, intent: acceptance, mutates_cluster: false, execution_owner: shared}
-    access: {profile: observer, prerequisites: []}
+    access: {profile: observer, prerequisites: [talos-reader]}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube monitoring-verify", implementation: scripts/verify/monitoring.sh}
     native_results: {strategy: wrapper-junit}
@@ -722,7 +722,7 @@ suites:
     runner: {command: "mise exec -- just kube security-alerts-verify", implementation: scripts/verify/security-alerts.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.gatus, source: verification, framework: bash, suite: platform, tier: verification, target: gatus, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: shared}
-    access: {profile: observer, prerequisites: []}
+    access: {profile: observer, prerequisites: [talos-reader]}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube gatus-verify", implementation: scripts/verify/gatus.sh}
     native_results: {strategy: wrapper-junit}
@@ -737,32 +737,32 @@ suites:
     runner: {command: "mise exec -- just kube test-reports-verify", implementation: scripts/verify/test-reports.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.homepage, source: verification, framework: bash, suite: platform, tier: verification, target: homepage, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: shared}
-    access: {profile: debugger, prerequisites: []}
+    access: {profile: debugger, prerequisites: [talos-reader]}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube homepage-verify", implementation: scripts/verify/homepage.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.trivy, source: verification, framework: bash, suite: platform, tier: verification, target: trivy, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: shared}
-    access: {profile: observer, prerequisites: []}
+    access: {profile: observer, prerequisites: [talos-reader]}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube trivy-verify", implementation: scripts/verify/trivy.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.tailscale-operator, source: verification, framework: bash, suite: platform, tier: verification, target: tailscale-operator, scenario: null, scope: network, intent: acceptance, mutates_cluster: false, execution_owner: shared}
-    access: {profile: observer, prerequisites: []}
+    access: {profile: observer, prerequisites: [talos-reader]}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube tailscale-operator-verify", implementation: scripts/verify/tailscale-operator.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.tailscale-subnet-router, source: verification, framework: bash, suite: platform, tier: verification, target: tailscale-subnet-router, scenario: null, scope: network, intent: acceptance, mutates_cluster: false, execution_owner: shared}
-    access: {profile: observer, prerequisites: []}
+    access: {profile: observer, prerequisites: [talos-reader]}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube tailscale-subnet-router-verify", implementation: scripts/verify/tailscale-subnet-router.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.ntfy, source: verification, framework: bash, suite: platform, tier: verification, target: ntfy, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: shared}
-    access: {profile: debugger, prerequisites: []}
+    access: {profile: debugger, prerequisites: [talos-reader]}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube ntfy-verify", implementation: scripts/verify/ntfy.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.alertmanager-ntfy, source: verification, framework: bash, suite: platform, tier: verification, target: alertmanager-ntfy, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: shared}
-    access: {profile: observer, prerequisites: []}
+    access: {profile: observer, prerequisites: [talos-reader]}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube alertmanager-ntfy-verify", implementation: scripts/verify/alertmanager-ntfy.sh}
     native_results: {strategy: wrapper-junit}
