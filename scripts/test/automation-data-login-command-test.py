@@ -457,6 +457,40 @@ class MigratorRecoveryTest(unittest.TestCase):
         self.assertEqual(result, 0, output)
         self.assertEqual(self.requests[1], first)
 
+    def test_equivalent_response_timestamp_installs_ready_profile(self):
+        self.prepare()
+        original = command.send_request
+
+        def respond(payload):
+            result = original(payload)
+            credential = next(x for x in self.raw["n8n"]["objects"]
+                              if x["id"] == "fixture-migrator")
+            credential["updatedAt"] = "2026-10-02T00:00:00.000Z"
+            return result
+
+        with mock.patch.object(command, "send_request", side_effect=respond):
+            result, output = self.invoke_recovery()
+        self.assertEqual(result, 0, output)
+        self.assertTrue(self.service.exists())
+        self.assertFalse((self.directory / "pending").exists())
+        binding = json.loads((self.directory / "binding.json").read_text())
+        self.assertEqual(binding["credentialUpdatedAt"], "2026-10-02T00:00:00.000Z")
+
+    def test_different_response_timestamp_prevents_installation(self):
+        self.prepare()
+        original = command.send_request
+
+        def respond(payload):
+            result = original(payload)
+            result["migratorCredentialUpdatedAt"] = "2026-10-02T00:00:00.001Z"
+            return result
+
+        with mock.patch.object(command, "send_request", side_effect=respond):
+            self.assertEqual(self.invoke_recovery()[0], 1)
+        self.assertFalse(self.service.exists())
+        self.assertFalse((self.directory / "binding.json").exists())
+        self.assertTrue((self.directory / "pending" / "candidate.pgpass").exists())
+
     def test_missing_candidate_does_not_generate_or_mutate_again(self):
         self.prepare()
         self.fail_request = True

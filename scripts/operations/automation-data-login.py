@@ -426,7 +426,8 @@ def recover_migrator(domain: str) -> None:
                 authenticate_candidate(port, domain, identity["role"], password)
                 current = recovery_identity(config, domain)
                 if (current["credentialId"] != identity["credentialId"]
-                        or current["credentialUpdatedAt"] != result.get("migratorCredentialUpdatedAt")):
+                        or timestamp(current["credentialUpdatedAt"])
+                        != timestamp(result.get("migratorCredentialUpdatedAt"))):
                     raise PrivateFileError("recovery_identity_changed")
                 identity = current
                 operation["expectedCredentialUpdatedAt"] = current["credentialUpdatedAt"]
