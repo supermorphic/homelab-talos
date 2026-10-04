@@ -596,6 +596,23 @@ while retaining the original backend's evidence.
 These checks supplement the required actual native Cilium, Sonobuoy and campaign
 lifetime checks. Their implementation and offline fixtures are not live evidence.
 
+Quick Sonobuoy usually finishes before one token lifetime. A successful quick
+result plus the `kubectl` extension alone does not prove native Sonobuoy refresh.
+With the same opt-in acceptance guard, the canonical quick backend generates its
+normal native manifest and adds one fixed 695-second init container to the E2E
+plugin Pod. It uses the existing pinned Python probe image and a sleep command.
+All E2E commands, environment, selection, permissions and other resources remain
+unchanged. Sonobuoy's own `run --wait` process continues making authenticated API
+status requests across expiry. The quick aggregator timeout becomes 1595 seconds
+and CLI wait becomes 32 minutes, preserving the original execution time budgets
+after the delay. Default quick and certified commands remain unchanged.
+
+After native completion, retain the original E2E JUnit and require at least
+695 seconds in that same native command. Record this check in the existing
+Sonobuoy diagnostics and JUnit fragments. A premature completion fails acceptance
+while preserving E2E results and performing normal cleanup. The later `kubectl`
+extension still proves original-bearer rejection and authenticated refresh.
+
 After deployment and separate authorization, retain canonical live evidence for:
 
 - Every dedicated profile, including both Sonobuoy modes and actual client refresh

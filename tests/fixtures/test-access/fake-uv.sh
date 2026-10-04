@@ -4,6 +4,26 @@ set -euo pipefail
 argv=("$@")
 if [[ " $* " == *' scripts.test.scoped_access_acceptance '* ]]; then
   [[ -z "${TEST_ACCESS_ACCEPTANCE_CONFIRM:-}" && "$TEST_KUBECONFIG" == "$TEST_FIXTURE_ACCESS_ROOT/private/"* ]]
+  if [[ "${argv[-1]}" == native-sonobuoy-manifest ]]; then
+    printf '%s\n' native-sonobuoy-manifest >>"$TEST_FIXTURE_ACCESS_TRACE"
+    exec "$TEST_FIXTURE_REAL_UV" run --locked --no-dev python -c \
+      'import sys; from scripts.test.scoped_access_acceptance import sonobuoy_native_manifest; print(sonobuoy_native_manifest(sys.stdin.read()), end="")'
+  elif [[ "${argv[-3]}" == native-sonobuoy-window ]]; then
+    printf '%s\n' native-sonobuoy-window >>"$TEST_FIXTURE_ACCESS_TRACE"
+    exec "$TEST_FIXTURE_REAL_UV" run --locked --no-dev python - "${argv[-2]}" "${argv[-1]}" <<'PYTHON'
+import json, os, sys
+from pathlib import Path
+from scripts.test.scoped_access_acceptance import sonobuoy_native_window
+from scripts.test import junit_report
+result = sonobuoy_native_window(int(sys.argv[1]), int(sys.argv[2]))
+root = Path(os.environ['HOMELAB_TEST_RUN_DIR'])
+junit_report.write_case(root / 'diagnostics/fragments/sonobuoy-native-client.xml',
+    'conformance.quick', 'native-sonobuoy-client-refresh',
+    'passed' if result['status'] == 'pass' else 'failed', str(result['elapsed_seconds']))
+print(json.dumps(result))
+sys.exit(0 if result['status'] == 'pass' else 1)
+PYTHON
+  fi
   printf '%s\n' "acceptance ${argv[-2]}" >>"$TEST_FIXTURE_ACCESS_TRACE"
   "$TEST_FIXTURE_REAL_UV" run --locked --no-dev python - "$TEST_RESULT_FRAGMENT_DIR/scoped-access.xml" "${argv[-2]}" <<'PYTHON'
 import os, sys, xml.etree.ElementTree as E

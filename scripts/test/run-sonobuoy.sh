@@ -7,14 +7,16 @@ set -euo pipefail
 
 source scripts/test/lib/results.sh
 
-[[ "$#" -eq 2 ]] || {
-  echo 'Usage: run-sonobuoy.sh <quick|certified> <kubeconfig>' >&2
+[[ "$#" -eq 2 || ( "$#" -eq 3 && "$1" == quick && "$3" == --native-client-lifetime ) ]] || {
+  echo 'Usage: run-sonobuoy.sh <quick|certified> <kubeconfig> [--native-client-lifetime]' >&2
   exit 2
 }
 mode="$1"
 kubeconfig="$2"
 sonobuoy_bin="${TEST_SONOBUOY_BIN:-sonobuoy}"
 kubectl_bin="${TEST_KUBECTL_BIN:-kubectl}"
+native_lifetime=false
+[[ "$#" != 3 ]] || native_lifetime=true
 case "$mode" in
   quick)
     sono_mode='quick'
@@ -125,6 +127,20 @@ finalize_on_exit() {
 }
 trap finalize_on_exit EXIT
 
+run_arguments=(run --mode "$sono_mode" --plugin e2e
+  --timeout "$aggregator_timeout_seconds" --wait="$cli_wait_minutes" --kubeconfig "$kubeconfig")
+if [[ "$native_lifetime" == true ]]; then
+  # Add the 695-second expiry window to the original quick-mode time budgets.
+  if ! "$sonobuoy_bin" gen --mode quick --plugin e2e --show-default-podspec \
+    --timeout 1595 --kubeconfig "$kubeconfig" >"$workspace/quick-native.yaml" ||
+    ! uv run --locked --no-dev python -m scripts.test.scoped_access_acceptance \
+      native-sonobuoy-manifest <"$workspace/quick-native.yaml" >"$workspace/quick-lifetime.yaml"; then
+    record_harness_error native-lifetime-setup
+    exit 2
+  fi
+  run_arguments=(run --file "$workspace/quick-lifetime.yaml" --wait=32 --kubeconfig "$kubeconfig")
+fi
+
 if "$kubectl_bin" --kubeconfig "$kubeconfig" \
   get namespace sonobuoy >/dev/null 2>&1; then
   echo 'A sonobuoy namespace already exists; delete the prior run before starting another.' >&2
@@ -134,14 +150,11 @@ fi
 
 echo "Running Sonobuoy: $label (mode=$sono_mode)."
 cleanup_required=true
+native_started_epoch="$EPOCHSECONDS"
 set +e
-"$sonobuoy_bin" run \
-  --mode "$sono_mode" \
-  --plugin e2e \
-  --timeout "$aggregator_timeout_seconds" \
-  --wait="$cli_wait_minutes" \
-  --kubeconfig "$kubeconfig"
+"$sonobuoy_bin" "${run_arguments[@]}"
 run_exit="$?"
+native_finished_epoch="$EPOCHSECONDS"
 set -e
 if [[ "$run_exit" -ne 0 ]]; then
   retrieve_results || true
@@ -197,12 +210,22 @@ failed="$(printf '%s\n' "$plugin_results" |
   exit 2
 }
 
+native_lifetime_exit=0
+if [[ "$failed" == 0 && "$native_lifetime" == true ]]; then
+  uv run --locked --no-dev python -m scripts.test.scoped_access_acceptance \
+    native-sonobuoy-window "$native_started_epoch" "$native_finished_epoch" || native_lifetime_exit="$?"
+fi
+
 if ! cleanup_sonobuoy; then
   exit 2
 fi
 if [[ "$failed" -ne 0 ]]; then
   echo "Sonobuoy e2e reported failures ($failed); see $sonobuoy_dir." >&2
   exit 1
+fi
+if [[ "$native_lifetime_exit" -ne 0 ]]; then
+  echo 'Native Sonobuoy client lifetime acceptance failed; E2E evidence is retained.' >&2
+  exit "$native_lifetime_exit"
 fi
 rm -rf -- "$workspace"
 trap - EXIT

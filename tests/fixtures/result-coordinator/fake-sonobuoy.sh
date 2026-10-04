@@ -7,6 +7,9 @@ set -euo pipefail
   printf '\n' >>"$FAKE_SONOBUOY_CALLS"
 
 case "$1" in
+  gen)
+    cat "${FAKE_SONOBUOY_MANIFEST:?}"
+    ;;
   run|delete)
     exit 0
     ;;

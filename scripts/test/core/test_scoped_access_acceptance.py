@@ -1,15 +1,231 @@
 """Actual client, expired bearer and dry-run denial are separate acceptance controls."""
 
+import copy
 import io
 import json
+import subprocess
+import tarfile
 import tempfile
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
+import yaml
+
 from scripts.openbao.configuration import SafeError
 from scripts.test import scoped_access_acceptance as acceptance
+
+
+class NativeSonobuoyLifetimeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # An explicit version makes this native generation cluster-independent.
+        # The nonexistent config prevents any use of ambient credentials.
+        cls.source = subprocess.run(
+            [
+                "sonobuoy",
+                "gen",
+                "--mode",
+                "quick",
+                "--plugin",
+                "e2e",
+                "--show-default-podspec",
+                "--kubernetes-version",
+                "v1.35.6",
+                "--kubeconfig",
+                str(acceptance.ROOT / ".tmp/synthetic-no-kubeconfig"),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+
+    def test_native_delay_preserves_all_e2e_and_resource_fields(self):
+        before = [d for d in yaml.safe_load_all(self.source) if d]
+        after = list(yaml.safe_load_all(acceptance.sonobuoy_native_manifest(self.source)))
+        expected = copy.deepcopy(before)
+        plugins = next(
+            d
+            for d in expected
+            if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "sonobuoy-plugins-cm"
+        )
+        plugin = yaml.safe_load(plugins["data"]["plugin-0.yaml"])
+        hold = plugin["podSpec"].setdefault("initContainers", [])
+        hold.append(
+            {
+                "name": "scoped-client-lifetime",
+                "image": "python:3.13.14-slim@sha256:9662417aace5ae7b8e2609cce472b72a8958e134ba372808abe9cc1a0c0125e6",
+                "command": ["python", "-c", "import time; time.sleep(695)"],
+                "resources": {
+                    "requests": {"cpu": "1m", "memory": "16Mi"},
+                    "limits": {"cpu": "100m", "memory": "64Mi"},
+                },
+                "securityContext": {
+                    "runAsNonRoot": True,
+                    "runAsUser": 65532,
+                    "allowPrivilegeEscalation": False,
+                    "readOnlyRootFilesystem": True,
+                    "capabilities": {"drop": ["ALL"]},
+                    "seccompProfile": {"type": "RuntimeDefault"},
+                },
+            }
+        )
+        plugins["data"]["plugin-0.yaml"] = yaml.safe_dump(plugin, sort_keys=False)
+        # Compare parsed embedded YAML, not the emitter's whitespace choices.
+        for documents in (expected, after):
+            item = next(
+                d
+                for d in documents
+                if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "sonobuoy-plugins-cm"
+            )
+            item["data"]["plugin-0.yaml"] = yaml.safe_load(item["data"]["plugin-0.yaml"])
+        self.assertEqual(after, expected)
+
+    def test_changed_focus_existing_delay_and_duplicate_plugins_are_rejected(self):
+        for mutation in ("focus", "init", "duplicate"):
+            documents = [d for d in yaml.safe_load_all(self.source) if d]
+            plugins = next(
+                d
+                for d in documents
+                if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "sonobuoy-plugins-cm"
+            )
+            plugin = yaml.safe_load(plugins["data"]["plugin-0.yaml"])
+            if mutation == "focus":
+                next(e for e in plugin["spec"]["env"] if e["name"] == "E2E_FOCUS")["value"] = (
+                    "other"
+                )
+            elif mutation == "init":
+                plugin["podSpec"]["initContainers"] = [{"name": "other"}]
+            else:
+                documents.append(copy.deepcopy(plugins))
+            plugins["data"]["plugin-0.yaml"] = yaml.safe_dump(plugin)
+            with self.subTest(mutation=mutation), self.assertRaises(SafeError):
+                acceptance.sonobuoy_native_manifest(yaml.safe_dump_all(documents))
+
+    def test_native_runtime_must_cross_expiry_allowance(self):
+        for elapsed, status in ((0, "fail"), (694, "fail"), (695, "pass"), (800, "pass")):
+            with self.subTest(elapsed=elapsed):
+                result = acceptance.sonobuoy_native_window(1000, 1000 + elapsed)
+                self.assertEqual(
+                    result, {"status": status, "elapsed_seconds": elapsed, "minimum_seconds": 695}
+                )
+        for start, finish in ((-1, 800), (1000, 999), (True, 1000), (1000, "1700")):
+            with self.subTest(start=start, finish=finish), self.assertRaises(SafeError):
+                acceptance.sonobuoy_native_window(start, finish)
+
+    def test_native_subcommands_require_the_quick_binding_and_redact_input_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for profile, suite, source, phase in (
+                ("test-runner", "conformance.quick", self.source, "native-sonobuoy-window"),
+                (
+                    "test-conformance",
+                    "conformance.certified",
+                    self.source,
+                    "native-sonobuoy-window",
+                ),
+                (
+                    "test-conformance",
+                    "conformance.quick",
+                    "data: ['synthetic-private-value",
+                    "native-sonobuoy-manifest",
+                ),
+            ):
+                output = io.StringIO()
+                with (
+                    patch.object(
+                        acceptance.access, "suite_inputs", return_value=(root / "config", root)
+                    ),
+                    patch.object(
+                        acceptance.access,
+                        "validate_invocation",
+                        return_value={"profile": profile, "suite_id": suite},
+                    ),
+                    patch("sys.stdin", io.StringIO(source)),
+                    patch("sys.stdout", output),
+                ):
+                    argv = ["acceptance", phase]
+                    if phase.endswith("window"):
+                        argv += ["1000", "1700"]
+                    self.assertEqual(acceptance.main(argv), 1)
+                self.assertEqual(json.loads(output.getvalue())["status"], "fail")
+                self.assertNotIn("synthetic-private-value", output.getvalue())
+
+
+class NativeConformanceRoutingTests(unittest.TestCase):
+    setUpClass = classmethod(NativeSonobuoyLifetimeTests.setUpClass.__func__)
+
+    def setUp(self):
+        from scripts.test.core.test_coordination_routing import CoordinationRoutingTests
+
+        CoordinationRoutingTests.setUp(self)
+        manifest = self.root / "native-quick.yaml"
+        manifest.write_text(self.source)
+        report = self.root / "junit.xml"
+        report.write_text(
+            '<testsuite name="e2e"><testcase name="native-quick-assertion"/></testsuite>'
+        )
+        archive = self.root / "native.tar.gz"
+        with tarfile.open(archive, "w:gz") as output:
+            output.add(report, arcname="plugins/e2e/results/global/junit.xml")
+        self.calls = self.root / "sonobuoy-calls"
+        self.environment.update(
+            {
+                "FAKE_SONOBUOY_MANIFEST": str(manifest),
+                "FAKE_SONOBUOY_ARCHIVE": str(archive),
+                "FAKE_SONOBUOY_CALLS": str(self.calls),
+                "TEST_SONOBUOY_BIN": str(
+                    acceptance.ROOT / "tests/fixtures/result-coordinator/fake-sonobuoy.sh"
+                ),
+                "TEST_KUBECTL_BIN": str(
+                    acceptance.ROOT / "tests/fixtures/result-coordinator/fake-kubectl.sh"
+                ),
+                "TEST_SONOBUOY_PRIVATE_ROOT": str(self.root / "private-native-results"),
+            }
+        )
+
+    def execute(self, mode="quick", acceptance_enabled=False):
+        environment = {**self.environment, "MODE": mode}
+        if acceptance_enabled:
+            environment["TEST_ACCESS_ACCEPTANCE_CONFIRM"] = acceptance.CONFIRMATION
+        return subprocess.run(
+            ["scripts/test/run-conformance.sh"],
+            cwd=acceptance.ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+
+    def test_fast_native_success_cannot_pass_lifetime_acceptance(self):
+        result = self.execute(acceptance_enabled=True)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        run_dir = next((self.root / "results").iterdir())
+        import xml.etree.ElementTree as ET
+
+        cases = {
+            case.get("name"): case
+            for case in ET.parse(run_dir / "junit.xml").getroot().iter("testcase")
+        }
+        self.assertIsNone(cases["native-quick-assertion"].find("failure"))
+        self.assertIsNotNone(cases["native-sonobuoy-client-refresh"].find("failure"))
+        self.assertIn("run --file", self.calls.read_text())
+        self.assertNotIn("acceptance conformance.quick", (self.root / "trace").read_text())
+        self.assertEqual(list((self.root / "private").glob("*/config")), [])
+
+    def test_default_quick_and_certified_keep_their_original_native_commands(self):
+        for mode, enabled in (("quick", False), ("certified", True)):
+            with self.subTest(mode=mode):
+                result = self.execute(mode=mode, acceptance_enabled=enabled)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = self.calls.read_text()
+        self.assertIn("run --mode quick --plugin e2e --timeout 900 --wait=20", calls)
+        self.assertIn(
+            "run --mode certified-conformance --plugin e2e --timeout 10800 --wait=190", calls
+        )
+        self.assertNotIn("gen ", calls)
 
 
 class Clock:

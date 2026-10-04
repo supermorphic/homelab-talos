@@ -192,6 +192,15 @@ kubeconfig="${TEST_KUBECONFIG:-}"
 test_access_arguments "$@" || exit 1
 set -- "${TEST_ACCESS_ARGUMENTS[@]}"
 
+if [[ "$suite_id" == conformance.quick && -n "$scoped_acceptance" ]]; then
+  [[ "$#" == 3 && "$1" == scripts/test/run-sonobuoy.sh && "$2" == quick &&
+    "$3" == "$kubeconfig" ]] || {
+    echo 'Native quick lifetime acceptance requires its canonical Sonobuoy backend.' >&2
+    exit 2
+  }
+  set -- "$@" --native-client-lifetime
+fi
+
 if [[ "$mutates_cluster" == 'true' && "$scenario_lease" == 'false' ]]; then
   lease_release_status='failed'
   if [[ "$suite_id" == test.resilience.node-abrupt-loss ]]; then
