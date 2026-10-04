@@ -6,6 +6,7 @@ groups:
   ci-framework: {execution: ci-framework, always: false}
 full_groups: [core, observability, automation, ci-framework]
 full_paths:
+  - .gitleaks.toml
   - .github/**
   - .just/bootstrap.just
   - .just/repository.just
