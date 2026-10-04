@@ -40,14 +40,14 @@ spec:
         && variables.item.metadata.annotations.all(k, k == 'homelab.supermorphic.com/test-run' || (k ==
         'clustermesh.cilium.io/global' && variables.item.metadata.annotations[k] == 'true'))
       message: Fixture identity, privileged connectivity mode and checked run ownership are mandatory.
-    - expression: 'request.operation == ''UPDATE'' ? (oldObject.metadata.annotations[''homelab.supermorphic.com/test-run'']
-        == object.metadata.annotations[''homelab.supermorphic.com/test-run''] && oldObject.metadata.annotations.all(k,
-        k in object.metadata.annotations && object.metadata.annotations[k] == oldObject.metadata.annotations[k])
-        && object.metadata.labels == oldObject.metadata.labels && object.metadata.all(k, k in [''resourceVersion'',''managedFields'',''annotations'']
-        || (k in oldObject.metadata && object.metadata[k] == oldObject.metadata[k])) && oldObject.metadata.all(k,
-        k in [''resourceVersion'',''managedFields'',''annotations''] || (k in object.metadata && object.metadata[k]
-        == oldObject.metadata[k])) && object.all(k, k == ''metadata'' || (k in oldObject && object[k]
-        == oldObject[k])) && oldObject.all(k, k == ''metadata'' || (k in object && object[k] == oldObject[k])))
+    - expression: 'request.operation == ''UPDATE'' ? (dyn(oldObject).metadata.annotations[''homelab.supermorphic.com/test-run'']
+        == dyn(object).metadata.annotations[''homelab.supermorphic.com/test-run''] && dyn(oldObject).metadata.annotations.all(k,
+        k in dyn(object).metadata.annotations && dyn(object).metadata.annotations[k] == dyn(oldObject).metadata.annotations[k])
+        && dyn(object).metadata.labels == dyn(oldObject).metadata.labels && dyn(object).metadata.all(k, k in [''resourceVersion'',''managedFields'',''annotations'']
+        || (k in dyn(oldObject).metadata && dyn(object).metadata[k] == dyn(oldObject).metadata[k])) && dyn(oldObject).metadata.all(k,
+        k in [''resourceVersion'',''managedFields'',''annotations''] || (k in dyn(object).metadata && dyn(object).metadata[k]
+        == dyn(oldObject).metadata[k])) && dyn(object).all(k, k == ''metadata'' || (k in dyn(oldObject) && dyn(object)[k]
+        == dyn(oldObject)[k])) && dyn(oldObject).all(k, k == ''metadata'' || (k in dyn(object) && dyn(object)[k] == dyn(oldObject)[k])))
         : true'
       message: The pinned client may only add its global-namespace annotation; existing namespace identity
         and specification remain unchanged.

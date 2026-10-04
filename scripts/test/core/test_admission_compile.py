@@ -47,6 +47,33 @@ class AdmissionCompileTests(unittest.TestCase):
                 if doc and doc.get("kind") == "ValidatingAdmissionPolicy"
             )
         self.assertGreater(len(policies), 0)
+        fixture = json.loads((ROOT / "scripts/test/cel/kubernetes-schema.json").read_text())
+        resource_types = {
+            (item["group"], item["version"], item["resource"]) for item in fixture["resources"]
+        }
+        parameter_types = {
+            (item["group"], item["version"], item["kind"]) for item in fixture["resources"]
+        }
+        # These CRD schemas are checked by the deployed status guard. Require an
+        # explicit decision for new groups instead of silently skipping a type.
+        custom_groups = {
+            "cilium.io",
+            "kustomize.toolkit.fluxcd.io",
+            "policy.networking.k8s.io",
+            "source.toolkit.fluxcd.io",
+        }
+        for policy in policies:
+            for rule in policy["spec"]["matchConstraints"]["resourceRules"]:
+                for group in rule["apiGroups"]:
+                    if group in custom_groups or "*" in group:
+                        continue
+                    for version in rule["apiVersions"]:
+                        for resource in rule["resources"]:
+                            if "*" not in version + resource and "/" not in resource:
+                                self.assertIn((group, version, resource), resource_types)
+            if param := policy["spec"].get("paramKind"):
+                group, _, version = param["apiVersion"].rpartition("/")
+                self.assertIn((group, version, param["kind"]), parameter_types)
         result = self.compile(policies)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -60,6 +87,36 @@ class AdmissionCompileTests(unittest.TestCase):
         self.assertEqual(
             re.findall(r"version\.MajorMinor\((\d+), (\d+)\)", compiler), [("1", minor)]
         )
+        fixture = json.loads((ROOT / "scripts/test/cel/kubernetes-schema.json").read_text())
+        self.assertIn(f"/v1.{minor}.{patch}/", fixture["source"])
+
+    def test_schema_checker_rejects_iteration_over_typed_resources(self):
+        for group, resource in (("", "namespaces"), ("", "nodes"), ("apps", "deployments")):
+            with self.subTest(resource=resource):
+                policy = {
+                    "metadata": {"name": "schema-negative-control"},
+                    "spec": {
+                        "matchConstraints": {
+                            "resourceRules": [
+                                {
+                                    "apiGroups": [group],
+                                    "apiVersions": ["v1"],
+                                    "resources": [resource],
+                                    "operations": ["UPDATE"],
+                                }
+                            ]
+                        },
+                        "validations": [{"expression": "object.metadata.all(k, true)"}],
+                    },
+                }
+                result = self.compile([policy])
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("cannot be range of a comprehension", result.stderr)
+                policy["spec"]["validations"][0]["expression"] = (
+                    "dyn(object).metadata.all(k, true)"
+                )
+                result = self.compile([policy])
+                self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_compiler_enforces_homogeneous_literals_and_variable_types(self):
         for expression in (

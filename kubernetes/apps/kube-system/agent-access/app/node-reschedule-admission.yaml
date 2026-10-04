@@ -21,14 +21,14 @@ spec:
   validations:
     - expression: |-
         request.namespace == '' && request.subResource == '' &&
-        request.name in ['nuc1', 'nuc2', 'nuc3'] && object.metadata.name == request.name &&
-        object.all(k, k in ['metadata', 'spec'] || (k in oldObject && object[k] == oldObject[k])) &&
-        oldObject.all(k, k in ['metadata', 'spec'] || k in object) &&
-        object.metadata.all(k, k in ['resourceVersion', 'managedFields'] || (k in oldObject.metadata && object.metadata[k] == oldObject.metadata[k])) &&
-        oldObject.metadata.all(k, k in ['resourceVersion', 'managedFields'] || k in object.metadata) &&
-        (!has(object.spec.unschedulable) || type(object.spec.unschedulable) == bool) &&
-        object.spec.all(k, k == 'unschedulable' || (k in oldObject.spec && object.spec[k] == oldObject.spec[k])) &&
-        oldObject.spec.all(k, k == 'unschedulable' || k in object.spec)
+        request.name in ['nuc1', 'nuc2', 'nuc3'] && dyn(object).metadata.name == request.name &&
+        dyn(object).all(k, k in ['metadata', 'spec'] || (k in dyn(oldObject) && dyn(object)[k] == dyn(oldObject)[k])) &&
+        dyn(oldObject).all(k, k in ['metadata', 'spec'] || k in dyn(object)) &&
+        dyn(object).metadata.all(k, k in ['resourceVersion', 'managedFields'] || (k in dyn(oldObject).metadata && dyn(object).metadata[k] == dyn(oldObject).metadata[k])) &&
+        dyn(oldObject).metadata.all(k, k in ['resourceVersion', 'managedFields'] || k in dyn(object).metadata) &&
+        (!has(dyn(object).spec.unschedulable) || type(dyn(object).spec.unschedulable) == bool) &&
+        dyn(object).spec.all(k, k == 'unschedulable' || (k in dyn(oldObject).spec && dyn(object).spec[k] == dyn(oldObject).spec[k])) &&
+        dyn(oldObject).spec.all(k, k == 'unschedulable' || k in dyn(object).spec)
       message: Only the three named Nodes scheduling flag may change; preserve all other Node state.
 ---
 apiVersion: admissionregistration.k8s.io/v1
