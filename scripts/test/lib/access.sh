@@ -13,6 +13,25 @@ test_access_resolve() {
   uv run --locked --no-dev python -m scripts.test.access resolve "$1"
 }
 
+test_access_prerequisites() {
+  local declaration="$1" root reader info
+  if [[ "$(yq -r '[.prerequisites[] | select(. == "talos-reader")] | length' - <<<"$declaration")" != 0 ]]; then
+    root="$(git rev-parse --show-toplevel)" || return 1
+    reader="$root/.talos/config"
+    if [[ ! -f "$reader" ]]; then
+      mise exec -- just talos readerconfig || return 1
+    fi
+    info="$(talosctl config info --talosconfig "$reader" --output json)" || return 1
+    [[ "$(yq -r '[(.roles // .Roles // .certificate.roles // .identity.roles // [])[]] | sort | join(",")' - <<<"$info")" == os:reader ]] || {
+      echo 'The declared Talos reader prerequisite requires exactly os:reader.' >&2
+      return 1
+    }
+    export TALOSCONFIG="$reader"
+  elif [[ "$(yq -r '[.prerequisites[] | select(. == "talos-operator")] | length' - <<<"$declaration")" == 0 ]]; then
+    export TALOSCONFIG=''
+  fi
+}
+
 test_access_open() {
   local suite_id="$1" run_id="$2" declaration profile config parent
   declaration="$(test_access_resolve "$suite_id")" || return 1
@@ -27,10 +46,12 @@ test_access_open() {
         return 1
       }
       export TEST_KUBECONFIG="$config" KUBECONFIG="$config" TEST_ACCESS_CONFIG=''
-      return 0
+      test_access_prerequisites "$declaration"
+      return "$?"
     fi
     export TEST_KUBECONFIG='' TEST_ACCESS_CONFIG='' KUBECONFIG=/dev/null
-    return 0
+    test_access_prerequisites "$declaration"
+    return "$?"
   fi
   parent="${TEST_ACCESS_CONFIG:-}"
   if [[ -n "$parent" ]]; then
@@ -59,6 +80,10 @@ test_access_open() {
     return 1
   }
   export TEST_KUBECONFIG="$config" TEST_ACCESS_CONFIG="$config" KUBECONFIG="$config"
+  if ! test_access_prerequisites "$declaration"; then
+    test_access_close || true
+    return 1
+  fi
 }
 
 test_access_check() {

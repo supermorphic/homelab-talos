@@ -110,7 +110,7 @@ spec:
   validations:
     - expression: >-
         (!has(object.tty) || !object.tty) &&
-        ((request.name.matches('^(qbit-manage|sonarr|qbittorrent|plex)-[a-z0-9]{5,10}-[a-z0-9]{5}$') &&
+        ((request.name.matches('^(qbit-manage|sonarr|qbittorrent|plex|mylar3)-[a-z0-9]{5,10}-[a-z0-9]{5}$') &&
           object.container == 'app') ||
          (request.name.matches('^qbittorrent-[a-z0-9]{5,10}-[a-z0-9]{5}$') && object.container == 'gluetun') ||
          (request.name.matches('^plex-policy-(control|selected)-[0-9]{10}-[0-9]+$') &&
@@ -770,7 +770,7 @@ spec:
     - name: deployment
       expression: >-
         (request.namespace == 'automation' && variables.app == 'n8n') ||
-        (request.namespace == 'media' && variables.app == 'qbittorrent') ||
+        (request.namespace == 'media' && variables.app in ['qbittorrent', 'mylar3']) ||
         (request.namespace == 'portainer' && variables.app == 'portainer') ||
         (request.namespace == 'test-reports' && variables.app == 'test-reports')
   validations:

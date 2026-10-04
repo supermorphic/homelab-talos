@@ -790,7 +790,7 @@ suites:
   # Standalone, operator-held reading key and private before/after baseline.
   # Application/cluster requests are read-only; the replacement happens via Git.
   - metadata: {id: test.komga-acceptance, source: test, framework: python, suite: media, tier: integration, target: komga, scenario: library-and-state, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: human}
-    access: {profile: observer, prerequisites: []}
+    access: {profile: observer, prerequisites: [application-credential]}
     confirmation: {type: exact, variable: KOMGA_ACCEPTANCE_CONFIRM, expected: "verify:media:komga:library-and-state"}
     runner: {command: "KOMGA_ACCEPTANCE_CONFIRM=verify:media:komga:library-and-state mise exec -- just kube komga-acceptance", implementation: scripts/test/scenarios/komga_acceptance.py}
     native_results: {strategy: wrapper-junit}

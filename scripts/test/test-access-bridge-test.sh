@@ -44,6 +44,37 @@ export TEST_FIXTURE_ACCESS_TRACE="$fixture_root/trace"
 export TEST_FIXTURE_ACCESS_ROOT="$fixture_root"
 export PATH="$fixture_root/bin:$PATH"
 
+real_git="$(command -v git)"
+export TEST_FIXTURE_REAL_GIT="$real_git"
+cat >"$fixture_root/bin/git" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == 'rev-parse --show-toplevel' ]]; then
+  printf '%s\n' "$TEST_FIXTURE_ACCESS_ROOT"
+else
+  exec "$TEST_FIXTURE_REAL_GIT" "$@"
+fi
+STUB
+cat >"$fixture_root/bin/mise" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == 'exec -- just talos readerconfig' ]] || exit 64
+printf '%s\n' 'reader-bootstrap' >> "$TEST_FIXTURE_ACCESS_TRACE"
+mkdir -p "$TEST_FIXTURE_ACCESS_ROOT/.talos"
+printf '%s\n' 'synthetic-reader' > "$TEST_FIXTURE_ACCESS_ROOT/.talos/config"
+STUB
+cat >"$fixture_root/bin/talosctl" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == "config info --talosconfig $TEST_FIXTURE_ACCESS_ROOT/.talos/config --output json" ]] || exit 64
+[[ "${TEST_FIXTURE_READER_ROLE:-os:reader}" == os:reader ]] || {
+  printf '%s\n' '{"roles":["os:admin"]}'
+  exit
+}
+printf '%s\n' '{"roles":["os:reader"]}'
+STUB
+chmod +x "$fixture_root/bin/git" "$fixture_root/bin/mise" "$fixture_root/bin/talosctl"
+
 # Independent purposes never replace the selected suite or borrow its config.
 TEST_KUBECONFIG=/synthetic/selected-suite TEST_ACCESS_CONFIG=/synthetic/selected-suite \
   bash -e -c 'source scripts/test/lib/access.sh
@@ -71,8 +102,8 @@ TEST_FIXTURE_PURPOSE_CHECK_FAIL=true \
 : >"$fixture_root/trace"
 
 # Null-profile execution does not read enrollment or prepare a config.
-KUBECONFIG=/synthetic/ambient-admin TEST_KUBECONFIG=/synthetic/explicit-admin \
-  bash -e -c 'source scripts/test/lib/access.sh; test_access_open validation.openbao offline-run; [[ -z "$TEST_KUBECONFIG" && "$KUBECONFIG" == /dev/null ]]; test_access_close'
+TALOSCONFIG=/synthetic/ambient-talos KUBECONFIG=/synthetic/ambient-admin TEST_KUBECONFIG=/synthetic/explicit-admin \
+  bash -e -c 'source scripts/test/lib/access.sh; test_access_open validation.openbao offline-run; [[ -z "$TEST_KUBECONFIG" && "$KUBECONFIG" == /dev/null && -z "$TALOSCONFIG" ]]; test_access_close'
 [[ "$(<"$fixture_root/trace")" == 'resolve validation.openbao' ]]
 
 # The declared physical/Talos boundary remains an explicit operator workflow.
@@ -89,10 +120,20 @@ NODE_OPERATOR_KUBECONFIG="$fixture_root/operator-config" TEST_KUBECONFIG='' \
 
 # A direct invocation ignores ambient KUBECONFIG and exports only its own config.
 : >"$fixture_root/trace"
-KUBECONFIG=/synthetic/ambient-admin TEST_KUBECONFIG='' TEST_ACCESS_CONFIG='' \
-  bash -e -c 'source scripts/test/lib/access.sh; test_access_open verification.flux direct-run; [[ "$TEST_KUBECONFIG" == "$TEST_FIXTURE_ACCESS_ROOT/private/direct-run/config" && "$KUBECONFIG" == "$TEST_KUBECONFIG" && "$TEST_ACCESS_CONFIG" == "$TEST_KUBECONFIG" ]]; test_access_arguments true @test-kubeconfig@; [[ "${TEST_ACCESS_ARGUMENTS[1]}" == "$TEST_KUBECONFIG" ]]; test_access_close'
+TALOSCONFIG=/synthetic/ambient-talos KUBECONFIG=/synthetic/ambient-admin TEST_KUBECONFIG='' TEST_ACCESS_CONFIG='' \
+  bash -e -c 'source scripts/test/lib/access.sh; test_access_open verification.flux direct-run; [[ "$TEST_KUBECONFIG" == "$TEST_FIXTURE_ACCESS_ROOT/private/direct-run/config" && "$KUBECONFIG" == "$TEST_KUBECONFIG" && "$TEST_ACCESS_CONFIG" == "$TEST_KUBECONFIG" && "$TALOSCONFIG" == "$TEST_FIXTURE_ACCESS_ROOT/.talos/config" ]]; test_access_arguments true @test-kubeconfig@; [[ "${TEST_ACCESS_ARGUMENTS[1]}" == "$TEST_KUBECONFIG" ]]; test_access_close'
 [[ ! -f "$fixture_root/private/direct-run/config" ]]
 [[ "$(tail -n 1 "$fixture_root/trace")" == "remove $fixture_root/private/direct-run/config" ]]
+
+# A substituted admin role is rejected and the newly prepared config is removed.
+TEST_FIXTURE_READER_ROLE=os:admin TEST_ACCESS_CONFIG='' TEST_KUBECONFIG=''   bash -e -c 'source scripts/test/lib/access.sh
+    if test_access_open verification.flux bad-reader; then exit 1; fi
+    [[ ! -f "$TEST_FIXTURE_ACCESS_ROOT/private/bad-reader/config" ]]' >/dev/null 2>&1
+# No reader workflow or ambient Talos credential reaches an undeclared backend.
+TALOSCONFIG=/synthetic/ambient-talos TEST_ACCESS_CONFIG='' TEST_KUBECONFIG=''   bash -e -c 'source scripts/test/lib/access.sh
+    test_access_open verification.metrics-server no-reader
+    [[ -z "$TALOSCONFIG" ]]
+    test_access_close'
 
 # Explicit unbound config and fixture catalog fail before preparing credentials.
 for variant in explicit fixture; do

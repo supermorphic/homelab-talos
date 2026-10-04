@@ -49,6 +49,14 @@ class AccessContractTests(unittest.TestCase):
         self.assertEqual(entry["metadata"]["execution_owner"], "human")
         self.assertEqual(entry["confirmation"]["expected"], "test:automation-data:provisioning")
 
+    def test_new_komga_acceptance_declares_attended_application_key(self):
+        entry = self.entry("test.komga-acceptance")
+        self.assertEqual(
+            entry["access"], {"profile": "observer", "prerequisites": ["application-credential"]}
+        )
+        self.assertEqual(entry["metadata"]["execution_owner"], "human")
+        self.validate(entry)
+
     def test_dedicated_binding_is_exact(self):
         cases = {
             "test.flux-restart": "test-flux-restart",

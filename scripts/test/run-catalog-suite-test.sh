@@ -11,6 +11,25 @@ export TEST_FIXTURE_ACCESS_TRACE="$fixture_root/access-trace"
 export TEST_FIXTURE_ACCESS_ROOT="$fixture_root"
 cp tests/fixtures/test-access/fake-uv.sh "$fixture_root/bin/uv"
 cp tests/fixtures/result-coordinator/fake-kubectl.sh "$fixture_root/bin/kubectl"
+real_mise="$(command -v mise)"
+export TEST_FIXTURE_REAL_MISE="$real_mise"
+cat >"$fixture_root/bin/mise" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == 'exec -- just talos readerconfig' ]]; then
+  printf '%s\n' 'reader-bootstrap' >>"$TEST_FIXTURE_ACCESS_TRACE"
+  exit
+fi
+exec "$TEST_FIXTURE_REAL_MISE" "$@"
+STUB
+cat >"$fixture_root/bin/talosctl" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1 $2" == 'config info' && "$3" == --talosconfig && "$5 $6" == '--output json' ]] || exit 64
+[[ "$4" == "$(git rev-parse --show-toplevel)/.talos/config" ]] || exit 65
+printf '%s\n' '{"roles":["os:reader"]}'
+STUB
+chmod +x "$fixture_root/bin/mise" "$fixture_root/bin/talosctl"
 export PATH="$fixture_root/bin:$PATH"
 touch "$fixture_root/kubeconfig"
 run_id_file="$fixture_root/passed.run-id"

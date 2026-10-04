@@ -479,6 +479,30 @@ class TestAccessPolicyTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertFalse(allowed(bad, req))
 
+    def test_attended_mylar_inspection_uses_only_its_registered_app_runtime(self):
+        options = {
+            "container": "app",
+            "command": ["python3", "-c", "synthetic-read-only-probe"],
+            "stdin": True,
+            "tty": False,
+        }
+        request = self.request("pods", "media", "CONNECT", "mylar3-1234567890-abcde")
+        request["subResource"] = "exec"
+        policy = "homelab-test-media-runtime"
+        self.assertTrue(self.admits(policy, request, options))
+        for name, container, tty in (
+            ("unrelated-1234567890-abcde", "app", False),
+            ("mylar3-1234567890-abcde", "other", False),
+            ("mylar3-1234567890-abcde", "app", True),
+        ):
+            self.assertFalse(
+                self.admits(
+                    policy,
+                    {**request, "name": name},
+                    {**options, "container": container, "tty": tty},
+                )
+            )
+
     def test_gluetun_access_is_confined_to_registered_qbittorrent_runtime(self):
         options = {
             "container": "gluetun",
@@ -2805,6 +2829,7 @@ class TestAccessPolicyTests(unittest.TestCase):
     def test_disruption_deletes_only_registered_controller_pods(self):
         cases = (
             ("automation", "n8n", "ReplicaSet", "n8n-123abc", "n8n-123abc-abc12"),
+            ("media", "mylar3", "ReplicaSet", "mylar3-123abc", "mylar3-123abc-abc12"),
             ("automation", "n8n-postgresql", "StatefulSet", "n8n-postgresql", "n8n-postgresql-0"),
             (
                 "media",
