@@ -3230,4 +3230,6 @@ openbao-agent operator_kubeconfig start="apply" run_id="":
     if [[ "$start" == recover ]]; then
       uv run --locked --no-dev python -m scripts.test.scenarios.agent_credentials recover "$run_id"
     fi
+    # Operator setup/recovery ends here. Canonical tests select their own access.
+    unset OPENBAO_OPERATOR_KUBECONFIG TEST_KUBECONFIG TEST_ACCESS_CONFIG KUBECONFIG TALOSCONFIG
     just test record test.agent-credentials

@@ -74,6 +74,26 @@ class RecipeRoutingTests(unittest.TestCase):
                 self.assertIn(selected, output)
                 self.assertNotIn(".kube/config", output)
 
+    def test_attended_bootstrap_ends_operator_credentials_before_canonical_test(self):
+        output = subprocess.check_output(
+            [
+                "just",
+                "--dry-run",
+                "bootstrap",
+                "openbao-agent",
+                "/synthetic/operator-config",
+                "test",
+            ],
+            cwd=ROOT,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        reset = "unset OPENBAO_OPERATOR_KUBECONFIG TEST_KUBECONFIG TEST_ACCESS_CONFIG KUBECONFIG TALOSCONFIG"
+        self.assertIn(reset, output)
+        self.assertLess(
+            output.index(reset), output.index("just test record test.agent-credentials")
+        )
+
     def test_chainsaw_script_branches_do_not_select_another_credential(self):
         def scripts(value):
             if isinstance(value, dict):
