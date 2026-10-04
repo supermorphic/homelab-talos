@@ -2,12 +2,14 @@
 
 ## Status and scope
 
-Approved design for [issue 451](https://github.com/supermorphic/homelab-talos/issues/451),
+Approved design for [issue 451](https://forgejo.infra.supermorphic.com/supermorphic/homelab-talos/issues/451),
 2026-10-02. Approval includes the dedicated test profiles and the credential
 distinctions below, while retaining attended steps for sensitive OpenBao operator
-or recovery credentials. The operator requested an implementation plan and a stop
-before implementation. Deployment and live acceptance remain separately gated.
-No implementation or live acceptance is claimed by this document.
+or recovery credentials. The operator subsequently authorized native implementation.
+The feature branch implements catalog routing, isolated exec configs, RBAC and
+admission fixtures, campaign separation, and the acceptance extension described
+below. Deployment and live acceptance remain separately gated. Offline checks
+establish source behavior; they do not establish live admission or client refresh.
 
 This extends the deployed [credential broker](030-openbao-kubernetes-credential-broker.md)
 and [workstation authentication](031-openbao-agent-credential-profiles.md).
@@ -57,7 +59,7 @@ An existing broader credential is never a fallback.
 
 ## Catalog contract
 
-Advance the catalog schema for an explicit `access` declaration on every suite:
+Catalog schema version 3 requires an explicit `access` declaration on every suite:
 
 ```yaml
 access:
@@ -283,17 +285,34 @@ not be described as unchanged after privileged test profiles are introduced.
 
 ## Automatic Kubernetes credentials and attended OpenBao credentials
 
-The proposed `test-openbao-*` profiles are Kubernetes test identities. OpenBao
+The `test-openbao-*` profiles are Kubernetes test identities. OpenBao
 issues their short-lived Kubernetes tokens through the workstation credential
 helper. These tokens authorize the declared Kubernetes operations; they do not
 replace an OpenBao operator password or recovery material.
 
-| Test | Proposed automatic access through OpenBao-issued Kubernetes credentials | Inputs that remain person-supplied |
+| Test | Automatic access through OpenBao-issued Kubernetes credentials | Inputs that remain person-supplied |
 | --- | --- | --- |
 | `test.openbao-issuance` | Acceptance workloads and the dedicated issuer-boundary test. See the separate issuer authority decision below. | No OpenBao operator password is used by the current test. Retain its exact execution confirmation and source checks. |
 | `test.openbao-ha` | Named member eviction, acceptance workload, and named member tunnels. | Retained OpenBao operator password for authenticated OpenBao operations. |
 | `test.openbao-restore-drill` | Isolated scratch resources, storage checks, and scratch runtime access. | Snapshot and matching recovery metadata, matching static seal key, and the operator password retained with the snapshot. |
 | `test.agent-credentials` | Observer reads and named member tunnels for workstation lifecycle acceptance. | Retained OpenBao operator password for creating, rotating, and revoking the test's OpenBao workstation identities. |
+
+Issuance's real ordinary-debugger denial control additionally requires an
+explicit `OPENBAO_DIAGNOSTIC_KUBECONFIG`. Install the separate base config with
+`mise exec -- just kube kubeconfig debugger`, then supply its absolute path.
+The test checks its actual identity and cluster before using it for the existing
+OpenBao exec denial assertions. It cannot issue an unbound debugger child.
+The server issuer credential remains inside the issuer workload.
+
+The restore drill uses Git-created `openbao-restore-test` isolation: Namespace,
+tokenless scratch ServiceAccount, deny-all network policy, and a RoleBinding for
+the dedicated test driver. The scratch workload gets no Kubernetes authority.
+The test checks these objects and retains their UIDs before requesting sensitive
+inputs. It creates only its bounded StatefulSet, PVC, Secret and ConfigMap;
+cleanup deletes individual owned resources with fresh UID/resourceVersion checks.
+It preserves the Namespace and Git baseline, then verifies empty scratch state
+and removal of its observed storage objects. Retained failed-run cleanup remains
+an attended, explicitly confirmed operator command.
 
 All rows retain their required confirmations and preconditions. A person supplies
 the sensitive OpenBao inputs through the existing attended workflow; automatic
@@ -320,7 +339,7 @@ issuance does not create or replace those application passwords.
 The OpenBao server's own Kubernetes **issuer credential** is a third, distinct
 credential. It is not a workstation test token and must not be distributed in a
 workstation kubeconfig. Ordinary diagnostic credentials continue to exclude
-OpenBao exec and port-forward access. The proposed dedicated profiles introduce
+OpenBao exec and port-forward access. The dedicated profiles introduce
 test-specific exceptions to that access boundary.
 
 In particular, `test.openbao-issuance` exercises the actual issuer identity.
@@ -443,6 +462,27 @@ defaulting to observer. Explicit base-profile requests produce their own config
 without rewriting another active invocation. Dedicated test credentials are
 selected through canonical catalog dispatch, not a general profile override.
 Request Talos reader credentials separately, only for suites that need them.
+The dispatcher prepares the assigned `.talos/config` with
+`mise exec -- just talos readerconfig` when required and checks exactly `os:reader`.
+It clears undeclared ambient Talos input. The physical-loss workflow retains its
+explicit operator boundary.
+
+The guarded configuration command is `mise exec -- just kube openbao-config-apply`.
+Attended enrollment uses `mise exec -- just kube openbao-workstation enroll` with
+an explicitly supplied `OPENBAO_OPERATOR_KUBECONFIG`. Both keep their existing
+source, target, hidden-password and exact-confirmation checks. The combined
+`just bootstrap openbao-agent <absolute-operator-config>` workflow can sequence
+configuration, enrollment and lifecycle acceptance when each action is authorized.
+It ends operator credential inputs before invoking the canonical recorded test.
+Do not use a failed test's operator recovery command as an automatic retry.
+
+After enrollment, install separate base configs with
+`mise exec -- just kube kubeconfig <profile>` for `observer`, `debugger`,
+`test-runner`, `report-publisher`, and `campaign-coordinator` as needed. Observer
+uses `.kube/config`; other current base profiles use `.kube/<profile>.config`.
+An invocation remains separate under `.kube/invocations/`. Enrollment schema 1
+supports only finite legacy base routes; current invocation and dedicated issuance
+require the attended schema 2 enrollment. No metadata file is edited by hand.
 
 Changes to the cluster still require the repository's feature-branch, hosted
 validation and explicit merge authorization. Design approval is not merge approval,
@@ -464,6 +504,37 @@ accounts, forbidden volumes/Secret references, changed executable fixtures,
 broader network selectors, unauthorized Flux fields, Node writes, RBAC changes,
 and attempts to choose dedicated profiles through unrelated suites. Policy-source
 inspection and `auth can-i` alone do not prove admission behavior.
+
+For a registered mapped test whose ordinary run is too short, set
+`TEST_ACCESS_ACCEPTANCE_CONFIRM=verify:scoped-access:ttl-and-denials` when invoking
+its existing `mise exec -- just test record <suite-id>` workflow. Retain the suite's
+own confirmation and attended prerequisites. This option is accepted only for
+catalog test, Chainsaw, probe and Sonobuoy families with a declared Kubernetes
+profile. Verification and null-profile workflows reject it. The option is removed
+from the backend environment so nested verifiers cannot request the extension.
+
+The original backend must pass first. Its assertions and JUnit evidence remain.
+The extension then keeps one real pinned `kubectl proxy` client alive using the
+same bound config. It checks the Kubernetes-reported identity before and after
+600 seconds plus skew and API-expiry allowance (about 695 seconds total).
+A separate original bearer remains only in memory and must receive API 401 after
+expiry; a new authenticated reply from the same cached client proves refresh.
+An open stream or surviving process alone is insufficient.
+
+All non-administrator profiles must also receive API 403 for an unrelated
+server-dry-run Secret create. Write-capable profiles separately require a denial
+that names their validating admission policy for a forbidden dry-run request:
+Flux replica change, Node label change, foreign Cilium Namespace, unrelated probe
+Pod, or wrong restore ConfigMap. JSON patches use fresh observed UID and
+resourceVersion tests. Protocol errors and RBAC-only denials cannot pass the
+admission assertion. Conformance keeps its approved administrator exception and
+proves expiry/refresh without claiming a narrowed write boundary. The extension
+creates no persistent API object and writes only fixed labels/classifications into
+the existing diagnostics and JUnit artifacts. A failed extension fails the run
+while retaining the original backend's evidence.
+
+These checks supplement the required actual native Cilium, Sonobuoy and campaign
+lifetime checks. Their implementation and offline fixtures are not live evidence.
 
 After deployment and separate authorization, retain canonical live evidence for:
 
@@ -487,11 +558,12 @@ issue open until the full runnable catalog and required live acceptance are prov
 
 ## Catalog mapping at the audited baseline
 
-The source audit used commit `5fe5c44d65`: 134 entries, of which 47 are offline and
-87 are listed below. All 47 offline entries receive `profile: null`. The table
-specifies intended Kubernetes profiles; prerequisite and execution ownership
-metadata remain separate as described above. New optional variants are additional
-entries, not a change to the default scenario's authority.
+The implementation audit includes Forgejo `main` at `e04de75a4a`: 143 entries,
+of which 49 are offline validation and 94 are listed below. All offline validation
+entries receive `profile: null`; the two host-local tests and physical-loss test
+also retain null profiles. The table specifies Kubernetes profiles; prerequisite
+and execution ownership metadata remain separate. Optional variants are separate
+entries and do not change the default scenario's authority.
 
 | Catalog entry | Profile |
 | --- | --- |
@@ -529,6 +601,8 @@ entries, not a change to the default scenario's authority.
 | `verification.tailscale-subnet-router` | observer |
 | `verification.ntfy` | debugger |
 | `verification.alertmanager-ntfy` | observer |
+| `verification.mylar3` | observer |
+| `verification.komga` | observer |
 | `verification.agent-access` | observer; explicit base-profile checks |
 | `test.cilium-connectivity` | test-cilium-connectivity |
 | `test.storage-provisioning` | test-runner |
@@ -582,6 +656,11 @@ entries, not a change to the default scenario's authority.
 | `test.openbao-issuance` | test-openbao-issuance |
 | `test.openbao-ha` | test-openbao-ha |
 | `test.agent-credentials` | test-openbao-lifecycle |
+| `test.mylar3-integrity` | debugger |
+| `test.mylar3-acceptance` | test-runner |
+| `test.komga-acceptance` | observer; attended application credential |
+| `test.nocodb-access-source-pair` | debugger; attended application credential |
+| `test.nocodb-restore-drill-extension` | test-runner; attended application credential |
 
 ## Primary references
 
