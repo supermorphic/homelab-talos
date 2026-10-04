@@ -76,7 +76,8 @@ class ConnectTest(unittest.TestCase):
             argv = spawn.call_args.args[0]
             self.assertEqual(argv[-5:], ["port-forward", "--address", "127.0.0.1",
                                          "pod/automation-data-postgresql-0", "15432:5432"])
-            self.assertIn("homelab-diagnostic", argv)
+            self.assertNotIn("--context", argv)
+            self.assertEqual(argv[1:3], ["--kubeconfig", str(self.config)])
             self.assertIn("automation-data", argv)
             self.assertTrue(process.terminated)
 
@@ -114,13 +115,32 @@ class ConnectTest(unittest.TestCase):
             **{k: v for k, v in local.items() if k != "cluster"}, "schema_version": 1,
             "cluster_digest": guards.digest(local["cluster"]),
         })
-        config = credentials.install_kubeconfig(repo, auth)
+        config = credentials.install_kubeconfig(repo, auth, "diagnostic")
         with mock.patch.object(client, "__file__", str(repo / "scripts/lib/automation_data_client.py")), \
                 mock.patch.object(workstation, "DIRECTORY", auth):
             self.assertEqual(client.scoped_kubeconfig(config), config)
             changed = json.loads(config.read_text())
             changed["users"][0]["user"]["exec"]["command"] = "/unapproved/plugin"
             config.write_text(json.dumps(changed))
+            with self.assertRaises(client.PrivateTunnelUnavailable):
+                client.scoped_kubeconfig(config)
+
+    def test_invocation_config_requires_debugger_and_unchanged_binding(self):
+        from scripts.test import access as test_access
+        from scripts.test.core import test_openbao_invocations as fixtures
+
+        fixtures.InvocationTests.setUp(self)
+        with mock.patch.object(client, "__file__", str(self.repo / "scripts/lib/automation_data_client.py")):
+            config = test_access.prepare_invocation(self.repo, "test.nocodb-access-source-pair", "fixture")
+            self.assertEqual(client.scoped_kubeconfig(config), config)
+            for suite in ("test.storage-provisioning", "verification.nocodb"):
+                other = test_access.prepare_invocation(self.repo, suite, "fixture")
+                with self.subTest(suite=suite), self.assertRaises(client.PrivateTunnelUnavailable):
+                    client.scoped_kubeconfig(other)
+            binding = config.parent / "binding.json"
+            changed = json.loads(binding.read_text())
+            changed["suite_id"] = "test.storage-provisioning"
+            binding.write_text(json.dumps(changed))
             with self.assertRaises(client.PrivateTunnelUnavailable):
                 client.scoped_kubeconfig(config)
 

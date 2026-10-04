@@ -12,9 +12,7 @@ kubeconfig="$1"
 ns='homepage'
 gateway_ip="$HOMELAB_GATEWAY_VIP"
 kc=(kubectl --kubeconfig "$kubeconfig")
-if "${kc[@]}" config get-contexts homelab-diagnostic --no-headers >/dev/null 2>&1; then
-  kc+=(--context homelab-diagnostic)
-fi
+
 
 [[ "$("${kc[@]}" --namespace flux-system get kustomization homepage --output jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == 'True' ]] || { echo 'Homepage Kustomization is not Ready.' >&2; exit 1; }
 "${kc[@]}" --namespace "$ns" rollout status deployment/homepage --timeout=5m

@@ -7,7 +7,7 @@ source scripts/lib/network.sh
   echo 'Usage: mylar3.sh <kubeconfig>' >&2
   exit 2
 }
-kc=(kubectl --kubeconfig "$1" --context homelab-observer)
+kc=(kubectl --kubeconfig "$1")
 fail() {
   echo "Mylar3 verification failed: $*" >&2
   exit 1

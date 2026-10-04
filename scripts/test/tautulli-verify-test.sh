@@ -12,6 +12,7 @@ cat >"$fixture/bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
+[[ " $* " != *' --context '* ]] || exit 65
 printf '%q ' "$@" >>"$FAKE_CALL_LOG"
 printf '\n' >>"$FAKE_CALL_LOG"
 
@@ -61,6 +62,7 @@ cat >"$fixture/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
+[[ " $* " != *' --context '* ]] || exit 65
 printf '%q ' "$@" >>"$FAKE_CALL_LOG"
 printf '\n' >>"$FAKE_CALL_LOG"
 
@@ -159,7 +161,10 @@ run_layout_expect_failure() {
 }
 
 named_log="$(run_layout named)"
-rg -q -- '--context homelab-diagnostic' "$named_log"
+if rg -q -- '--context' "$named_log"; then
+  echo 'Verification switched away from the supplied config.' >&2
+  exit 1
+fi
 rg -q -- 'exec deployment/tautulli --container app -- curl' "$named_log"
 rg -q -- 'http://tautulli.media.svc.cluster.local:8181/status' "$named_log"
 rg -F -q -- 'https://prometheus.lab.supermorphic.com/api/v1/query' "$named_log"
@@ -172,7 +177,7 @@ fi
 
 admin_log="$(run_layout admin)"
 if rg -q -- '--context' "$admin_log"; then
-  echo 'Admin fallback unexpectedly selected a scoped context.' >&2
+  echo 'Verification switched away from the supplied config.' >&2
   exit 1
 fi
 rg -q -- 'exec deployment/tautulli --container app -- curl' "$admin_log"

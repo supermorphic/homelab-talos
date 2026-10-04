@@ -26,12 +26,10 @@ set -euo pipefail
 
 printf '%s\n' "$*" >>"$FAKE_KUBECTL_LOG"
 
-if [[ "${FAKE_DIAGNOSTIC_CONTEXT:-false}" == 'true' &&
-      " $* " != *' config get-contexts homelab-diagnostic '* &&
-      " $* " != *' --context homelab-diagnostic '* ]]; then
-  echo "Missing diagnostic context: $*" >&2
+[[ " $* " != *' --context '* ]] || {
+  echo 'The selected test config must not switch contexts.' >&2
   exit 65
-fi
+}
 
 case " $* " in
   *' config get-contexts homelab-diagnostic '*)
@@ -262,10 +260,10 @@ fi
 rg -q 'Refusing' "$output"
 [[ ! -s "$kubectl_log" ]]
 
-echo '3. Available diagnostic credentials are selected for every cluster operation.'
+echo '3. Every cluster operation retains the selected invocation config.'
 if ! FAKE_DIAGNOSTIC_CONTEXT=true \
   PLEX_NETWORK_POLICY_CONFIRM='test:plex-network-policy' run_scenario; then
-  echo 'Scenario did not select the available homelab-diagnostic context.' >&2
+  echo 'Scenario switched away from the selected invocation config.' >&2
   cat "$output" >&2
   exit 1
 fi
