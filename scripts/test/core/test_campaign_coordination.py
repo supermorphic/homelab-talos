@@ -82,6 +82,13 @@ class CampaignCoordinationTests(unittest.TestCase):
         self.assertNotIn(" create ", (self.root / "lease-calls").read_text())
 
     def test_suite_without_talos_prerequisite_ignores_ambient_talos_access(self):
+        result = self.execute(
+            "verification.metrics-server", TALOSCONFIG="/synthetic/ambient/talos-operator"
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.manifest()["runs"][0]["result"], "passed")
+
+    def test_suite_with_reader_prerequisite_ignores_ambient_operator_access(self):
         result = self.execute(TALOSCONFIG="/synthetic/ambient/talos-operator")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.manifest()["runs"][0]["result"], "passed")

@@ -19,12 +19,6 @@ set -euo pipefail
 [[ -z "${TEST_ACCESS_PURPOSE_CONFIG+x}" && -z "${observer_kubeconfig+x}" &&
    -z "${coordinator_kubeconfig+x}" ]]
 target="$5"
-if [[ "$target" != acceptance-agent ]]; then
-  [[ -z "${TALOSCONFIG:-}" ]] || {
-    echo 'Campaign passed Talos access without a declared prerequisite.' >&2
-    exit 2
-  }
-fi
 case "$target" in
   pass)
     suite_id='verification.metrics-server'
@@ -98,6 +92,21 @@ case "$target" in
   *)
     echo "Unknown fixture target: $target" >&2
     exit 2
+    ;;
+esac
+
+case "$suite_id" in
+  verification.cilium|test.cilium-connectivity|test.agent-credentials)
+    [[ "${TALOSCONFIG:-}" == "$CAMPAIGN_TEST_REPO_ROOT/.talos/config" ]] || {
+      echo 'Campaign did not select its declared Talos reader path.' >&2
+      exit 2
+    }
+    ;;
+  *)
+    [[ -z "${TALOSCONFIG:-}" ]] || {
+      echo 'Campaign passed Talos access without a declared prerequisite.' >&2
+      exit 2
+    }
     ;;
 esac
 
