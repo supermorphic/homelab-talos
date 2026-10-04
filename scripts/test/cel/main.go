@@ -86,10 +86,21 @@ func main() {
 		os.Exit(1)
 	}
 	failed := false
+	checker, err := schemaChecker()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	for _, policy := range policies {
 		if err := compile(policy); err != nil {
 			fmt.Fprintf(os.Stderr, "%s: %s\n", policy.Name, err)
 			failed = true
+		}
+		if policy.Spec.MatchConstraints != nil {
+			for _, warning := range checker.Check(&policy) {
+				fmt.Fprintf(os.Stderr, "%s: %s: %s\n", policy.Name, warning.FieldRef, warning.Warning)
+				failed = true
+			}
 		}
 	}
 	if failed {
