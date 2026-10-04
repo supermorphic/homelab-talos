@@ -278,9 +278,17 @@ Cilium policy limits traffic by workload role:
   data planes;
 - the n8n metrics port accepts only Prometheus scraping;
 - PostgreSQL accepts database traffic only from n8n, SQL Exporter, and the backup job;
-- n8n egress permits cluster DNS, PostgreSQL, and Internet HTTPS endpoints;
+- n8n egress permits cluster DNS, PostgreSQL, and Internet HTTPS endpoints, plus
+  TCP 443 to the addresses learned for the exact name `forgejo.infra.supermorphic.com`;
+- Cilium observes n8n's cluster DNS requests to track the Forgejo destination as its
+  address changes. DNS queries remain unrestricted; the Forgejo exception has no
+  wildcard and does not alter the general private-range exclusions. The exception also
+  requires `forgejo.infra.supermorphic.com` as the TLS server name (SNI), using Cilium's
+  existing L7 proxy to restrict TLS handshakes at a shared HTTPS address without
+  decrypting application traffic. Verified HTTPS and repository-scoped read-only
+  credentials remain application requirements;
 - n8n cannot initiate connections to unrelated cluster Services or private network
-  ranges;
+  destinations;
 - the backup job can reach PostgreSQL and cluster DNS but has no general Internet egress;
   and
 - SQL Exporter can reach PostgreSQL and accepts metrics scrapes only from Prometheus.

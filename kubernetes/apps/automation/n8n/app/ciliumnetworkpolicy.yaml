@@ -48,6 +48,17 @@ spec:
               protocol: UDP
             - port: "53"
               protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toFQDNs:
+        - matchName: forgejo.infra.supermorphic.com
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+          serverNames:
+            - forgejo.infra.supermorphic.com
     - toEndpoints:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: automation
