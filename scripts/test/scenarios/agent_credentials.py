@@ -94,6 +94,15 @@ class BrokerScope:
     def read(self, path, *, list_request=False):
         return self.client.read(path, token=self.client.token, list_request=list_request)
 
+    def public_route(self, route=None):
+        """Make public-route assertions observe preceding operator writes."""
+        if route is None:
+            route = BaoClient(workstation.ENDPOINT)
+        index = getattr(self.client, "consistency_index", None)
+        if index is not None:
+            route.require_consistency(index)
+        return route
+
     def ids(self, actor):
         try:
             data = self.read(actor["path"] + "/secret-id", list_request=True)["data"]
@@ -220,7 +229,7 @@ class BrokerScope:
         credentials.issue_exec_credential(
             "observer",
             {**local, "cluster": metadata},
-            client=BaoClient(workstation.ENDPOINT),
+            client=self.public_route(),
             now=time.time(),
         )
         workstation.write_private(actor["directory"] / "workstation.json", local)
@@ -884,7 +893,7 @@ trap - EXIT
 
 
 def revocation(scope, actor, other):
-    route = BaoClient(workstation.ENDPOINT)
+    route = scope.public_route()
     local = credentials.load_workstation(actor["directory"])
     auth = route.post(
         workstation.LOGIN_PATH, {"role_id": local["role_id"], "secret_id": local["secret_id"]}
@@ -905,6 +914,7 @@ def revocation(scope, actor, other):
         identity="system:serviceaccount:kube-system:homelab-observer",
     )
     scope.disable(actor)
+    scope.public_route(route)
     if time.monotonic() - started >= 50:
         raise SafeError("timeout")
     for profile in access.resolve_suite_access(ROOT, "test.agent-credentials")["profile_checks"]:
@@ -918,6 +928,7 @@ def revocation(scope, actor, other):
     if time.monotonic() - started >= 50:
         raise SafeError("timeout")
     scope.destroy_ids(actor)
+    scope.public_route(route)
     try:
         route.post(
             workstation.LOGIN_PATH, {"role_id": local["role_id"], "secret_id": local["secret_id"]}
@@ -992,7 +1003,7 @@ def main():
                     old = credentials.load_workstation(b["directory"])
                     scope.rotate(b, metadata)
                     try:
-                        BaoClient(workstation.ENDPOINT).post(
+                        scope.public_route().post(
                             workstation.LOGIN_PATH,
                             {"role_id": old["role_id"], "secret_id": old["secret_id"]},
                         )
