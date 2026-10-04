@@ -218,9 +218,12 @@ def campaign_exclusions() -> set[str]:
         )
     )
     # The empty restore fixture is independent of production OpenBao readiness.
-    openbao_units = [unit for unit in openbao_units
-                     if not isinstance(unit, dict)
-                     or unit.get("metadata", {}).get("name") != "openbao-restore-test"]
+    openbao_units = [
+        unit
+        for unit in openbao_units
+        if not isinstance(unit, dict)
+        or unit.get("metadata", {}).get("name") != "openbao-restore-test"
+    ]
     expected = {
         "openbao-prerequisites",
         "openbao",
