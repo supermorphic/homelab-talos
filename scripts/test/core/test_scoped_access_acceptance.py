@@ -151,6 +151,36 @@ class ScopedAccessAcceptanceTests(unittest.TestCase):
 
 
 class LiveClientRequestTests(unittest.TestCase):
+    def test_registered_test_families_are_eligible_but_verification_is_not(self):
+        for source in ("test", "chainsaw", "probe", "sonobuoy", "verification"):
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as temp:
+                with (
+                    patch.object(
+                        acceptance.access,
+                        "suite_inputs",
+                        return_value=(Path("/synthetic/config"), Path(temp)),
+                    ),
+                    patch.object(
+                        acceptance.access,
+                        "_canonical_entry",
+                        return_value=({"metadata": {"source": source}}, None),
+                    ),
+                    patch.object(
+                        acceptance.access,
+                        "validate_invocation",
+                        return_value={"profile": "test-conformance"},
+                    ),
+                    patch.object(acceptance.guards, "source_revision", return_value="a" * 40),
+                    patch.object(acceptance, "install_interrupt_handlers"),
+                    patch.object(acceptance, "prove") as prove,
+                    patch("sys.stdout", new_callable=io.StringIO),
+                ):
+                    status = acceptance.main(
+                        ["acceptance", "conformance.quick", acceptance.CONFIRMATION]
+                    )
+                self.assertEqual(status, 1 if source == "verification" else 0)
+                self.assertEqual(prove.call_count, 0 if source == "verification" else 1)
+
     def test_unexpected_transport_message_does_not_enter_evidence(self):
         with tempfile.TemporaryDirectory() as temp:
             run_dir = Path(temp)

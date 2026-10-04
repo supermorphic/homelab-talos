@@ -372,7 +372,7 @@ def main(argv):
         entry, _ = access._canonical_entry(ROOT, suite)
         binding = access.validate_invocation(ROOT, config)
         if (
-            entry["metadata"]["source"] not in {"test", "conformance"}
+            entry["metadata"]["source"] not in {"test", "chainsaw", "probe", "sonobuoy"}
             or binding["profile"] is None
         ):
             raise SafeError("invalid-source")

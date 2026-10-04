@@ -38,7 +38,7 @@ scoped_acceptance="${TEST_ACCESS_ACCEPTANCE_CONFIRM:-}"
 unset TEST_ACCESS_ACCEPTANCE_CONFIRM
 if [[ -n "$scoped_acceptance" ]]; then
   [[ "$scoped_acceptance" == verify:scoped-access:ttl-and-denials &&
-    "$(yq -r '.metadata.source' - <<<"$entry_json")" =~ ^(test|conformance)$ &&
+    "$(yq -r '.metadata.source' - <<<"$entry_json")" =~ ^(test|chainsaw|probe|sonobuoy)$ &&
     "$(yq -r '.access.profile // "null"' - <<<"$entry_json")" != null ]] || {
     echo 'Scoped client acceptance requires exact intent and a mapped Kubernetes test.' >&2
     exit 2

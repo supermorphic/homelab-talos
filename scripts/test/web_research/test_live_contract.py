@@ -148,16 +148,14 @@ class LiveTargetSelectionTests(unittest.TestCase):
                     deployed, {"items": replica_sets}, {"items": pods}
                 )
 
-    def test_exec_is_fixed_to_diagnostic_n8n_main_node_stdin(self):
-        command = live_contract.exec_command(Path(".kube/config"), "n8n-abc-123")
+    def test_exec_retains_selected_config_and_fixed_n8n_main_node_stdin(self):
+        command = live_contract.exec_command(Path("/synthetic/invocations/config"), "n8n-abc-123")
         self.assertEqual(
             command,
             [
                 "kubectl",
                 "--kubeconfig",
-                ".kube/config",
-                "--context",
-                "homelab-diagnostic",
+                "/synthetic/invocations/config",
                 "--namespace",
                 "automation",
                 "--request-timeout=9m",
@@ -171,15 +169,13 @@ class LiveTargetSelectionTests(unittest.TestCase):
             ],
         )
 
-    def test_cluster_reads_are_fixed_to_observer_context(self):
+    def test_cluster_reads_retain_selected_config(self):
         self.assertEqual(
-            live_contract.read_command(Path(".kube/config"), "deployment", "n8n"),
+            live_contract.read_command(Path("/synthetic/invocations/config"), "deployment", "n8n"),
             [
                 "kubectl",
                 "--kubeconfig",
-                ".kube/config",
-                "--context",
-                "homelab-observer",
+                "/synthetic/invocations/config",
                 "--namespace",
                 "automation",
                 "--request-timeout=20s",
@@ -242,7 +238,7 @@ class LiveExecutionTests(unittest.TestCase):
     def test_rechecks_owned_target_then_runs_one_fixed_stdin_program(self):
         kubectl = FakeKubectl()
         records = live_contract.execute(
-            Path(".kube/config"), "fixed-node-program", invoke=kubectl
+            Path("/synthetic/invocations/config"), "fixed-node-program", invoke=kubectl
         )
         self.assertEqual([record["phase"] for record in records], list(live_contract.PHASES))
         self.assertEqual(kubectl.pod_reads, 2)
@@ -253,7 +249,7 @@ class LiveExecutionTests(unittest.TestCase):
         replacement["metadata"]["name"] = "n8n-def-456"
         kubectl = FakeKubectl(replacement_pod=replacement)
         with self.assertRaises(live_contract.ContractFailure):
-            live_contract.execute(Path(".kube/config"), "fixed-node-program", invoke=kubectl)
+            live_contract.execute(Path("/synthetic/invocations/config"), "fixed-node-program", invoke=kubectl)
         self.assertEqual(kubectl.exec_inputs, [])
 
 

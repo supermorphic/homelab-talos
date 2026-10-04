@@ -770,7 +770,7 @@ komga-acceptance-baseline:
 
 # Read-only final acceptance after a normal Git-managed pod replacement.
 komga-acceptance:
-    @scripts/test/run-catalog-suite.sh test.komga-acceptance -- uv run --locked python -m scripts.test.scenarios.komga_acceptance verify __HOMELAB_TEST_KUBECONFIG__
+    @scripts/test/run-catalog-suite.sh test.komga-acceptance -- uv run --locked python -m scripts.test.scenarios.komga_acceptance verify {{quote(test_kubeconfig)}}
 
 # Validate Mylar3 chart output and its shared-media integration invariants offline.
 mylar3-validate: require-bash
@@ -1268,9 +1268,8 @@ openbao-config-apply: require-bash
 openbao-backup-retrieve: require-bash
     @uv run --locked python -m scripts.openbao.backup_retrieve
 
-# Attended isolated snapshot restore; explicit operator identity, exact per-run confirmation.
+# Attended isolated snapshot restore with its selected test identity and exact confirmation.
 openbao-restore-drill: require-bash
-    @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}"
     @scripts/test/run-catalog-suite.sh test.openbao-restore-drill -- uv run --locked python -m scripts.test.scenarios.openbao_restore
 
 # Attended cleanup retry for one retained isolated restore run; no evidence rewriting.
@@ -1279,12 +1278,10 @@ openbao-restore-cleanup run_id: require-bash
 
 # Attended real API issuance, denial, and actual expiration acceptance.
 openbao-issuance-test: require-bash
-    @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}"
     @scripts/test/run-catalog-suite.sh test.openbao-issuance -- uv run --locked python -m scripts.test.scenarios.openbao_issuance
 
 # Attended sequential follower and leader eviction under the catalog disruption Lease.
 openbao-ha-test: require-bash
-    @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}"
     @scripts/test/run-catalog-suite.sh test.openbao-ha -- uv run --locked python -m scripts.test.scenarios.openbao_ha
 
 # Attended standby-first replacement after a reviewed Git image update and fresh snapshot.
@@ -1312,5 +1309,4 @@ kubeconfig profile="observer": require-bash
 
 # Attended profile/caller acceptance with isolated temporary workstation identities.
 agent-credentials-test: require-bash
-    @test -n "${OPENBAO_OPERATOR_KUBECONFIG:-}" || { echo 'Set OPENBAO_OPERATOR_KUBECONFIG to an absolute operator kubeconfig path, or use just bootstrap openbao-agent <path> test.' >&2; exit 1; }
     @scripts/test/run-catalog-suite.sh test.agent-credentials -- uv run --locked python -m scripts.test.scenarios.agent_credentials

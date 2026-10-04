@@ -44,6 +44,20 @@ class RecipeRoutingTests(unittest.TestCase):
             checked += 1
         self.assertGreater(checked, 20)
 
+    def test_komga_uses_registered_placeholder_and_openbao_tests_need_no_admin_config(self):
+        recipes = json.loads(
+            subprocess.check_output(["just", "--dump", "--dump-format", "json"], cwd=ROOT)
+        )["modules"]["kube"]["recipes"]
+        self.assertIn("['variable', 'test_kubeconfig']", repr(recipes["komga-acceptance"]["body"]))
+        for name in (
+            "openbao-restore-drill",
+            "openbao-issuance-test",
+            "openbao-ha-test",
+            "agent-credentials-test",
+        ):
+            with self.subTest(recipe=name):
+                self.assertNotIn("OPENBAO_OPERATOR_KUBECONFIG", repr(recipes[name]["body"]))
+
     def test_nested_just_backends_receive_selected_invocation_config(self):
         selected = "/synthetic/private/invocation/config"
         for name in ("_flux-restart-raw", "_flux-canary-test-raw"):
