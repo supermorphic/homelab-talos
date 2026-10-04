@@ -369,9 +369,31 @@ approved indexer and agree its cleanup scope before downloading:
    authorized fixture resources; verify library survival before removing its
    download-side name when that removal is authorized.
 
-No registered automated Mylar acquisition/reschedule test exists yet. Keep attended
-outcomes private until an authorized fixture and scoped execution contract can be
-registered through the existing catalog and retained with `just test record`.
+The registered `test.mylar3-acceptance` suite checks an already imported fixture's
+hardlink identity, archive integrity and Downloaded database record, then replaces
+the Mylar pod and repeats those checks against the retained config volume. It does
+not acquire a release or prove scheduled import, client recheck, reader rendering,
+login/integration preservation, or backup restoration; those gates remain attended.
+
+Supply `MYLAR_ACCEPTANCE_FIXTURE` as the path to a private JSON object containing
+`download_path`, `library_path` and a string `issue_id`. Both paths must identify the
+same imported comic under the comics download and library roots. For an independent
+integrity check without pod replacement, bootstrap scoped credentials with
+`mise exec -- just kube kubeconfig`, then run
+`mise exec -- just test record test.mylar3-integrity`. Keep the observer current
+context required by recording; the suite selects diagnostic access explicitly.
+It checks both files and the database read-only, retaining only
+sanitized results. The fixture is supplied explicitly and is not part of the
+general verification campaign.
+
+Use the registered replacement suite through
+`mise exec -- just test record test.mylar3-acceptance` with
+`MYLAR_ACCEPTANCE_CONFIRM=test:mylar3-acceptance` and an explicitly authorized
+`KUBECONFIG`. Recording passes that credential to the suite as `TEST_KUBECONFIG`.
+This attended mutation requires pod exec/delete, the test Lease,
+and deployment, storage and Node inspection; observer credentials are insufficient.
+Run it from an execution context permitted by the recording workflow. The suite
+preserves the fixture and claims and retains only sanitized integrity outcomes.
 Do not publish comic payloads, titles, hashes, tracker URLs, credentials or runtime
 config exports. Issue 526 remains open until its live gates and canonical evidence
 requirements pass.

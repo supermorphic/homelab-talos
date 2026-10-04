@@ -67,6 +67,9 @@ CI_HARNESS_GROUPS = (
     ("ci-framework", "ci-framework"),
 )
 STANDALONE_SUITES = {
+    # An attended comic fixture is required; this must never join broad campaigns.
+    "test.mylar3-acceptance",
+    "test.mylar3-integrity",
     # Requires retained operator seal/password input and an exact selected snapshot.
     "test.openbao-restore-drill",
     # Attended issuance/eviction acceptance requires explicit operator authority.
