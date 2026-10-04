@@ -131,6 +131,11 @@ class OperatorClient:
     def set_token(self, token):
         self.token = token
 
+    @property
+    def consistency_index(self):
+        peer = self.clients.get(self.active)
+        return peer.consistency_index if peer is not None else None
+
     def peer(self, name):
         tunnel = self.tunnels.get(name)
         if tunnel is not None and (tunnel.process is None or tunnel.process.poll() is not None):

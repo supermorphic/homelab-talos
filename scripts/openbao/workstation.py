@@ -387,6 +387,9 @@ def run(action, slot, *, directory, client, kubeconfig, confirm, now=None):
         write_private(record_path, record)
         # Validate through the public route that normal callers will use.
         route = getattr(client, "workstation_client", client)
+        index = getattr(client, "consistency_index", None)
+        if index is not None:
+            route.require_consistency(index)
         response = route.post(
             LOGIN_PATH, {"role_id": role_id, "secret_id": secret["secret_id"]}, token=None
         )

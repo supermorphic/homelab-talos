@@ -174,6 +174,26 @@ class WorkstationTest(unittest.TestCase):
         for p in self.directory.iterdir():
             self.assertEqual(p.stat().st_mode & 0o777, 0o600)
 
+    def test_rotation_hands_creation_index_to_public_route_before_login(self):
+        self.run_action("enroll")
+        self.client.consistency_index = "synthetic-secret-index"
+        client = self.client
+
+        class PublicRoute:
+            required_index = None
+
+            def require_consistency(self, index):
+                self.required_index = index
+
+            def post(self, path, payload, *, token=None):
+                if path == workstation.LOGIN_PATH and self.required_index != client.consistency_index:
+                    raise SafeError("stale-state")
+                return client.post(path, payload, token=token)
+
+        self.client.workstation_client = PublicRoute()
+        self.assertEqual(self.run_action("rotate")["status"], "pass")
+        self.assertEqual(len(self.client.secrets), 1)
+
     def test_existing_foreign_role_alias_cannot_be_adopted(self):
         self.client.foreign_alias = True
         with self.assertRaises(SafeError):

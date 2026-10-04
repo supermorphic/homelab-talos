@@ -44,6 +44,7 @@ class BaoClient:
                 or not 0 < timeout <= 30 or not 0 < max_bytes <= 4_194_304):
             raise SafeError('invalid-source')
         self.base_url = base_url.rstrip('/')
+        self.consistency_index = None
         self.timeout = timeout
         self.max_bytes = max_bytes
         self.ssl_context = ssl_context or ssl.create_default_context()
@@ -52,6 +53,13 @@ class BaoClient:
         self._open = opener or urllib.request.build_opener(
             urllib.request.ProxyHandler({}),
             urllib.request.HTTPSHandler(context=self.ssl_context), _NoRedirect()).open
+
+    def require_consistency(self, index):
+        """Carry opaque OpenBao storage state across a verified client handoff."""
+        if (not isinstance(index, str) or not 0 < len(index) <= 4096
+                or any(not 32 <= ord(character) < 127 for character in index)):
+            raise MalformedResponse('invalid-response')
+        self.consistency_index = index
 
     def read(self, path: str, *, token: str | None = None, list_request: bool = False) -> object:
         return self._request('LIST' if list_request else 'GET', path, None, token)
@@ -70,6 +78,9 @@ class BaoClient:
             raise SafeError('invalid-source')
         url = f'{self.base_url}/v1/{path}'
         headers = {'Accept': 'application/json'}
+        if self.consistency_index is not None:
+            headers['X-Vault-Index'] = self.consistency_index
+            headers['X-Vault-Inconsistent'] = 'forward-active-node'
         if body is not None:
             headers['Content-Type'] = 'application/json'
         if token is not None:
@@ -97,6 +108,9 @@ class BaoClient:
                 data = response.read(self.max_bytes + 1)
                 if len(data) > self.max_bytes:
                     raise MalformedResponse('invalid-response')
+                index = response.headers.get('X-Vault-Index')
+                if index is not None:
+                    self.require_consistency(index)
                 if method in {'POST', 'DELETE'} and response.status == 204 and not data:
                     return {}
                 try:
