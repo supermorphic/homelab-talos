@@ -24,6 +24,7 @@ class AcceptanceGuardTests(unittest.TestCase):
         self.addCleanup(directory_patch.stop)
         self.client = Mock()
         self.client.token = "OPERATOR_MARKER"
+        self.client.consistency_index = None
         self.approved = {"source_revision": "a" * 40, "cluster_uid": "synthetic-cluster"}
         self.scope = scenario.BrokerScope(
             Path("/synthetic/operator"),
@@ -39,6 +40,82 @@ class AcceptanceGuardTests(unittest.TestCase):
         self.assertNotEqual(actor["role"], "agent-workstation")
         with self.assertRaises(SafeError):
             self.scope.actor("production")
+
+    def test_rotation_validation_observes_creation_before_installation_and_retirement(self):
+        actor = self.scope.actor("a")
+        actor.update(role_id="synthetic-role", entity_id="synthetic-entity")
+        scenario.workstation.ensure_private_directory(actor["directory"])
+        local = actor["directory"] / "workstation.json"
+        scenario.workstation.write_private(local, {"secret_id": "synthetic-old"})
+        events = []
+
+        def post(path, payload):
+            if path.endswith("/secret-id"):
+                self.client.consistency_index = "synthetic-created-index"
+                events.append("create")
+                return {"data": {"secret_id": "synthetic-new", "secret_id_accessor": "new",
+                                 "secret_id_ttl": 7776000, "secret_id_num_uses": 0}}
+            self.assertEqual(payload, {"secret_id_accessor": "old"})
+            self.assertEqual(scenario.workstation.read_private(local)["secret_id"], "synthetic-new")
+            events.append("retire")
+
+        def validate(profile, state, *, client, now):
+            if client.consistency_index != self.client.consistency_index:
+                raise SafeError("stale-state")
+            self.assertEqual(scenario.workstation.read_private(local)["secret_id"], "synthetic-old")
+            events.append("validate")
+
+        with (patch.object(self.scope, "owned_entity"),
+              patch.object(self.scope, "ids", side_effect=[["old"], ["new"]]),
+              patch.object(self.scope, "post", side_effect=post),
+              patch.object(scenario.credentials, "issue_exec_credential", side_effect=validate)):
+            self.scope.rotate(actor, {"synthetic": "metadata"})
+        self.assertEqual(events, ["create", "validate", "retire"])
+
+    def test_revocation_checks_observe_disable_and_destroy_writes(self):
+        self.client.consistency_index = "synthetic-created-index"
+        route = Mock()
+        route.consistency_index = None
+        route.require_consistency.side_effect = lambda index: setattr(route, "consistency_index", index)
+        disabled = False
+        destroyed = False
+        local = {"role_id": "synthetic-role", "entity_id": "synthetic-entity", "secret_id": "synthetic"}
+        auth = {"client_token": "synthetic-session", "entity_id": "synthetic-entity",
+                "policies": ["agent-profiles"], "token_policies": ["agent-profiles"],
+                "lease_duration": 60, "token_type": "service"}
+
+        def post(path, payload, **kwargs):
+            current = route.consistency_index == self.client.consistency_index
+            if path == scenario.workstation.LOGIN_PATH:
+                if destroyed and current:
+                    raise scenario.AmbiguousWrite(http_status=400)
+                return {"auth": auth}
+            if disabled and current:
+                raise scenario.AmbiguousWrite(http_status=403)
+            return {"data": {"service_account_name": "homelab-observer",
+                             "service_account_namespace": "kube-system",
+                             "service_account_token": "synthetic-token"}}
+
+        def disable(actor):
+            nonlocal disabled
+            disabled = True
+            self.client.consistency_index = "synthetic-disabled-index"
+
+        def destroy(actor):
+            nonlocal destroyed
+            destroyed = True
+            self.client.consistency_index = "synthetic-destroyed-index"
+
+        route.post.side_effect = post
+        with (patch.object(scenario, "BaoClient", return_value=route),
+              patch.object(scenario.credentials, "load_workstation", return_value=local),
+              patch.object(scenario.credentials, "issue_exec_credential") as unaffected,
+              patch.object(scenario.issuance, "token_claims"),
+              patch.object(self.scope, "disable", side_effect=disable),
+              patch.object(self.scope, "destroy_ids", side_effect=destroy)):
+            scenario.revocation(self.scope, {"directory": self.directory}, {"directory": self.directory})
+        self.assertEqual(route.consistency_index, "synthetic-destroyed-index")
+        unaffected.assert_called_once()
 
     def test_cleanup_refuses_foreign_entity_without_mutation(self):
         actor = self.scope.actor("a")
