@@ -511,57 +511,17 @@ complete issue 527; native and integrated acceptance remain pending:
    data, tokens or private library paths beyond the shared contract belong in
    public evidence.
 
-The operator-run `test.komga-acceptance` workflow retains these outcomes without
-giving the agent an application key or a cluster write identity. Its application
-and cluster calls are read-only. Panels and the Mylar acquisition flow remain
-explicitly attended outcomes; they are not inferred from API connectivity.
+Acceptance combines read-only application and cluster observations with attended
+native-client and acquisition checks. Durability evidence compares non-empty
+account, collection and progress state before and after an authorized Git-managed
+pod replacement on the retained config volume. The baseline must precede that
+replacement.
 
-Use an operator-owned non-linked checkout for capture and final recording; linked
-worktree record sessions exclude human-owned suites. Keep the same private inputs
-in that checkout while moving from the reviewed feature branch to deployed main.
-Run `mise exec -- just kube kubeconfig` there for observer access.
-Run `mise exec -- just kube komga-acceptance-fixture` to create synthetic CBZ pages,
-ComicInfo.xml, Mylar series metadata and the private outcome template under `.tmp`.
-Place the generated `content` directory in the shared comic library through the
-attended NAS path, then scan it. Keep an operator-authorized CBR as the second
-format sample. Using the reading account, create an unfinished progress marker
-in the Komga web reader and a collection containing either sample's series. Fill
-the template's IDs from their Komga URLs and the independently inspected CBR page
-count. Keep its mode `0600`, leave unproven
-attended outcomes false, and do not put credentials in the template.
-
-Privately export that reading account's `KOMGA_API_KEY`. Before the separately
-authorized Git change that replaces the pod, capture its existing non-empty state:
-
-```sh
-KOMGA_ACCEPTANCE_CONFIRM=capture:media:komga:library-and-state \
-  mise exec -- just kube komga-acceptance-baseline
-```
-
-The private baseline remains under `.tmp`; capture does not claim acceptance and
-does not overwrite an existing baseline. Pause reading with the seeded account
-until the comparison finishes. After the reviewed Git change has reconciled,
-repeat the library scan and complete the attended template. Confirm repeat scanning
-preserves the seeded identity/progress, then run from clean deployed main. Select
-the existing campaign-coordinator profile for recording's named Lease; application
-checks still explicitly use the observer and publication uses the report publisher:
-
-```sh
-mise exec -- just kube kubeconfig campaign-coordinator
-KOMGA_ACCEPTANCE_CONFIRM=verify:media:komga:library-and-state \
-  mise exec -- just test record test.komga-acceptance
-unset KOMGA_API_KEY
-```
-
-The workflow requires a different ready pod on the same config claim/volume,
-unchanged account/collection/book/progress state, supported CBZ/CBR analysis and
-first/last page responses, the synthetic metadata and page bytes, a completed
-backup, and the declared attended outcomes. It publishes only sanitized check
-results and the Panels version. Private inputs, baseline identifiers, state
-digests, comic payloads and the API key must not enter retained evidence. Capture
-a fresh baseline for another recovery test; do not reuse a completed test's
-baseline. Offline validation and the deployment verifier cannot substitute for
-these acceptance gates.
+Acceptance credentials remain with the operator. Retained evidence contains
+sanitized outcomes and the client version and integration type. Plaintext
+credentials, private comic content and private account/state data must not enter
+Git or public reports. Offline validation and deployment readiness cannot
+substitute for native reading, integrated acquisition or recovery acceptance.
 
 For recovery, retain the healthy config claim. If it is lost, use the
 [platform storage recovery procedure](010-talos-flux-platform.md) to restore a
