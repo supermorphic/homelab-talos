@@ -40,6 +40,19 @@ confirmation_variable="$(yq -r '.confirmation.variable // "none"' - <<<"$entry_j
 diagnostics_only=false
 [[ "$dispatch_mode" == 'diagnostics' ]] && diagnostics_only=true
 
+# Keep closeout intent out of native/nested backends and reject non-test dispatch.
+scoped_acceptance="${TEST_ACCESS_ACCEPTANCE_CONFIRM:-}"
+unset TEST_ACCESS_ACCEPTANCE_CONFIRM
+if [[ -n "$scoped_acceptance" ]]; then
+  [[ "$scoped_acceptance" == verify:scoped-access:ttl-and-denials &&
+    "$diagnostics_only" == false &&
+    "$(yq -r '.metadata.source' - <<<"$entry_json")" == chainsaw &&
+    "$(yq -r '.access.profile // "null"' - <<<"$entry_json")" != null ]] || {
+    echo 'Scoped client acceptance requires exact intent and a mapped Kubernetes test.' >&2
+    exit 2
+  }
+fi
+
 case "$confirmation_variable" in
   CLUSTER_E2E_CONFIRM) scripts/test/safety/require-e2e-confirmation.sh "$target" ;;
   CLUSTER_CHAOS_CONFIRM) scripts/test/safety/require-chaos-confirmation.sh "$target" ;;
@@ -314,6 +327,46 @@ else
   assertion_status='not-classified'
 fi
 
+# Retain the original native assertions before appending optional credential proof.
+if [[ -f "$run_dir/junit.xml" ]]; then
+  cp "$run_dir/junit.xml" "$run_dir/diagnostics/chainsaw-junit.xml"
+fi
+if [[ "$primary_exit_code" -eq 0 && "$junit_status" == valid && -n "$scoped_acceptance" ]]; then
+  fragment_dir="$run_dir_abs/diagnostics/fragments"
+  mkdir -p "$fragment_dir"
+  acceptance_fragment="$fragment_dir/scoped-access.xml"
+  set +e
+  TEST_RESULT_FRAGMENT_DIR="$fragment_dir" \
+    python -m scripts.test.run_bound_backend "$run_dir/logs/scoped-access.log" -- \
+    uv run --locked --no-dev python -m scripts.test.scoped_access_acceptance \
+    "$suite_id" "$scoped_acceptance" &
+  backend_pid="$!"
+  wait "$backend_pid"
+  acceptance_exit_code="$?"
+  backend_pid=''
+  set -e
+  if ! acceptance_counts="$(read_junit_counts "$acceptance_fragment")"; then
+    write_result_case_junit "$acceptance_fragment" "$suite_id" \
+      scoped-client-refresh-and-boundary broken 0
+  else
+    read -r _acceptance_tests acceptance_failures acceptance_errors _acceptance_skipped _acceptance_passed \
+      <<<"$acceptance_counts"
+    if [[ "$acceptance_exit_code" -ne 0 && "$acceptance_failures" -eq 0 && "$acceptance_errors" -eq 0 ]]; then
+      write_result_case_junit "$acceptance_fragment" "$suite_id" \
+        scoped-client-refresh-and-boundary broken 0
+    fi
+  fi
+  merge_junit_reports "$run_dir/junit.xml" "$suite_id" \
+    "$run_dir/diagnostics/chainsaw-junit.xml" "$acceptance_fragment"
+  counts="$(read_junit_counts "$run_dir/junit.xml")"
+  read -r _report_tests report_failures report_errors _report_skipped _report_passed <<<"$counts"
+  if [[ "$report_errors" -gt 0 ]]; then
+    junit_status='errors'
+  elif [[ "$report_failures" -gt 0 ]]; then
+    junit_status='failures'
+  fi
+fi
+
 set +e
 scripts/test/diagnostics/collect.sh "$kubeconfig" "$run_dir/diagnostics" "$namespace"
 diagnostics_exit_code="$?"
@@ -368,7 +421,6 @@ run_result="$(classify_run_result "$primary_exit_code" "$junit_status" \
 if [[ "$external_dependency_status" == 'failed' ]]; then
   run_result='broken'
 fi
-cp "$run_dir/junit.xml" "$run_dir/diagnostics/chainsaw-junit.xml"
 suite_id="$(yq -r '.metadata.id' - <<<"$entry_json")"
 append_lifecycle_junit "$run_dir/junit.xml" "$suite_id" \
   "$external_dependency_status" "$cleanup_status" "$recovery_status" \

@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -29,6 +30,7 @@ if [[ "$1" == version ]]; then echo 'Version: synthetic'; exit 0; fi
    "$TEST_KUBECONFIG" == "$KUBECONFIG" &&
    "$TEST_KUBECONFIG" == "$TEST_ACCESS_CONFIG" && -f "$TEST_KUBECONFIG" ]]
 printf '%s\\n' "$TEST_KUBECONFIG" >"$TEST_FIXTURE_ACCESS_ROOT/backend-config"
+printf '%s' "${TEST_ACCESS_ACCEPTANCE_CONFIRM:-}" >"$TEST_FIXTURE_ACCESS_ROOT/backend-intent"
 report=''
 while [[ "$#" -gt 0 ]]; do
   if [[ "$1" == --report-path ]]; then report="$2"; shift; fi
@@ -36,6 +38,10 @@ while [[ "$#" -gt 0 ]]; do
 done
 [[ -n "$report" ]]
 printf '%s\\n' '<testsuite name="native" tests="1" failures="0" errors="0" skipped="0"><testcase name="assertion"/></testsuite>' >"$report/junit.xml"
+if [[ "${TEST_FIXTURE_CHAINSAW_FAIL:-}" == true ]]; then
+  printf '%s\\n' '<testsuite name="native" tests="1" failures="1" errors="0" skipped="0"><testcase name="assertion"><failure/></testcase></testsuite>' >"$report/junit.xml"
+  exit 7
+fi
 if [[ "${TEST_FIXTURE_CHAINSAW_SIGNAL:-}" == true ]]; then
   trap '[[ -f "$TEST_KUBECONFIG" ]]; touch "$TEST_FIXTURE_ACCESS_ROOT/backend-cleaned"; exit 0' INT TERM
   kill -TERM "$PPID"
@@ -85,6 +91,61 @@ fi
         trace = (self.root / "trace").read_text().splitlines()
         self.assertEqual(sum(line.startswith("prepare ") for line in trace), 1)
         self.assertEqual(sum(line.startswith("remove ") for line in trace), 1)
+
+    def test_scoped_acceptance_keeps_native_result_and_selected_config(self):
+        result = self.execute(
+            TEST_ACCESS_ACCEPTANCE_CONFIRM="verify:scoped-access:ttl-and-denials"
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"acceptance {SUITE}", (self.root / "trace").read_text())
+        self.assertEqual((self.root / "backend-intent").read_text(), "")
+        run_dir = next((self.root / "results").iterdir())
+        junit = ET.parse(run_dir / "junit.xml").getroot()
+        names = {case.get("name") for case in junit.iter("testcase")}
+        self.assertIn("assertion", names)
+        self.assertIn("scoped-client-refresh-and-boundary", names)
+        native = ET.parse(run_dir / "diagnostics/chainsaw-junit.xml").getroot()
+        self.assertEqual([case.get("name") for case in native.iter("testcase")], ["assertion"])
+        self.assertEqual(self.summary()["result"], "passed")
+        self.assertEqual(list((self.root / "private").glob("*/config")), [])
+
+    def test_scoped_acceptance_failure_preserves_native_success(self):
+        result = self.execute(
+            TEST_ACCESS_ACCEPTANCE_CONFIRM="verify:scoped-access:ttl-and-denials",
+            TEST_FIXTURE_ACCEPTANCE_FAIL="true",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        summary = self.summary()
+        self.assertEqual(summary["result"], "failed")
+        self.assertEqual(summary["phases"]["primary"]["exit_code"], 0)
+        self.assertEqual(summary["phases"]["assertion"]["status"], "passed")
+        run_dir = next((self.root / "results").iterdir())
+        junit = ET.parse(run_dir / "junit.xml").getroot()
+        case = junit.find(".//testcase[@name='scoped-client-refresh-and-boundary']")
+        self.assertIsNotNone(case)
+        self.assertIsNotNone(case.find("failure"))
+        self.assertEqual(list((self.root / "private").glob("*/config")), [])
+
+    def test_failed_native_backend_skips_scoped_acceptance(self):
+        result = self.execute(
+            TEST_ACCESS_ACCEPTANCE_CONFIRM="verify:scoped-access:ttl-and-denials",
+            TEST_FIXTURE_CHAINSAW_FAIL="true",
+        )
+        self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+        self.assertNotIn("acceptance ", (self.root / "trace").read_text())
+        self.assertEqual((self.root / "backend-intent").read_text(), "")
+        self.assertEqual(self.summary()["phases"]["primary"]["exit_code"], 7)
+
+    def test_scoped_acceptance_rejects_wrong_intent_and_diagnostics_before_issuance(self):
+        for arguments, intent in (
+            (["smoke", "cluster", "flux-ready"], "yes"),
+            (["diagnostics", "cluster"], "verify:scoped-access:ttl-and-denials"),
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.execute(arguments=arguments, TEST_ACCESS_ACCEPTANCE_CONFIRM=intent)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertFalse((self.root / "backend-config").exists())
+                self.assertEqual(list((self.root / "private").glob("*/config")), [])
 
     def test_unbound_and_fixture_catalog_inputs_are_rejected_before_backend(self):
         config = self.root / "unbound"
