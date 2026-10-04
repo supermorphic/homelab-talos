@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "$*" == 'exec -- just talos readerconfig' ]]; then
+  [[ "${TALOSCONFIG:-}" == "$CAMPAIGN_TEST_REPO_ROOT/.talos/config" ]]
+  exit
+fi
+
 [[ -z "${TEST_CAMPAIGN_CONFIRM+x}" ]] || {
   echo 'Campaign confirmation leaked into a child suite.' >&2
   exit 2

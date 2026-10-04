@@ -770,7 +770,7 @@ komga-acceptance-baseline:
 
 # Read-only final acceptance after a normal Git-managed pod replacement.
 komga-acceptance:
-    @scripts/test/run-catalog-suite.sh test.komga-acceptance -- uv run --locked python -m scripts.test.scenarios.komga_acceptance verify {{quote(kubeconfig)}}
+    @scripts/test/run-catalog-suite.sh test.komga-acceptance -- uv run --locked python -m scripts.test.scenarios.komga_acceptance verify __HOMELAB_TEST_KUBECONFIG__
 
 # Validate Mylar3 chart output and its shared-media integration invariants offline.
 mylar3-validate: require-bash

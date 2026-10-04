@@ -193,7 +193,8 @@ class ApplicationTests(unittest.TestCase):
         )
         self.assertEqual(selected["metadata"]["execution_owner"], "human")
         self.assertFalse(selected["metadata"]["mutates_cluster"])
-        self.assertEqual(selected["access"]["tier"], "observer")
+        self.assertEqual(selected["access"]["profile"], "observer")
+        self.assertEqual(selected["access"]["prerequisites"], ["application-credential"])
         self.assertIn("test.komga-acceptance", catalog_validator.STANDALONE_SUITES)
         for campaign in catalog["campaigns"].values():
             self.assertNotIn("test.komga-acceptance", campaign.get("members", []))
@@ -278,6 +279,19 @@ class PersistenceAndAttendanceTests(unittest.TestCase):
 
 
 class BoundaryTests(unittest.TestCase):
+    def test_cluster_read_uses_selected_config_without_context_switching(self):
+        from types import SimpleNamespace
+
+        selected = Path("/synthetic/invocations/run/config")
+        with patch.object(
+            subject.subprocess, "run", return_value=SimpleNamespace(stdout='{"items": []}')
+        ) as run:
+            self.assertEqual(subject.kube_json(selected, "media", "pods"), {"items": []})
+        self.assertEqual(
+            run.call_args.args[0],
+            ["kubectl", "--kubeconfig", str(selected), "-n", "media", "get", "pods", "-o", "json"],
+        )
+
     def test_api_uses_get_and_never_follows_a_redirect_with_the_key(self):
         api = subject.Api("synthetic-test-token")
         response = Mock()
@@ -385,7 +399,9 @@ class BoundaryTests(unittest.TestCase):
         }
 
         def observe():
-            return subject.observe(subject.ROOT / ".kube/config", need_backup=True)
+            return subject.observe(
+                subject.ROOT / ".kube/invocations/synthetic/config", need_backup=True
+            )
 
         with patch.object(
             subject, "kube_json", side_effect=lambda kc, ns, *args: documents[args[0]]

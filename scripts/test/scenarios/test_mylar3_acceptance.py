@@ -194,11 +194,11 @@ class IntegritySafety(unittest.TestCase):
             self.acceptance.verify_integrity()
         probe.assert_not_called()
 
-    def test_integrity_selects_diagnostic_before_authority_check(self):
+    def test_integrity_retains_selected_config_before_authority_check(self):
         def require_exec():
             self.assertEqual(
                 self.acceptance.base,
-                ["kubectl", "--kubeconfig", "synthetic-config", "--context", "homelab-diagnostic"],
+                ["kubectl", "--kubeconfig", "synthetic-config"],
             )
             raise ScenarioFailure("synthetic denial")
 

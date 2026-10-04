@@ -340,8 +340,6 @@ def kube_json(kubeconfig, namespace, *args):
         "kubectl",
         "--kubeconfig",
         str(kubeconfig),
-        "--context",
-        "homelab-observer",
         "-n",
         namespace,
         "get",
@@ -359,10 +357,6 @@ def kube_json(kubeconfig, namespace, *args):
 
 
 def observe(kubeconfig, *, need_backup):
-    require(
-        kubeconfig.resolve() == ROOT / ".kube/config",
-        "Use the assigned worktree observer credential.",
-    )
     pods = kube_json(kubeconfig, "media", "pods", "-l", "app.kubernetes.io/name=komga")["items"]
     require(len(pods) == 1, "Wait for the single Komga pod to finish rolling out.")
     pod = pods[0]
@@ -475,6 +469,17 @@ def main():
             == f"{args.action}:media:komga:library-and-state",
             "Set the exact Komga acceptance execution-intent confirmation.",
         )
+        kubeconfig = Path(args.path)
+        if args.action == "verify":
+            from scripts.test import access
+
+            selected, _ = access.suite_inputs(ROOT, "test.komga-acceptance")
+            require(kubeconfig == selected, "Use the selected Komga test invocation.")
+        else:
+            require(
+                kubeconfig.resolve() == ROOT / ".kube/config",
+                "Use the assigned worktree observer credential.",
+            )
         fixture_path = private_path(
             os.getenv("KOMGA_ACCEPTANCE_FIXTURE", ".tmp/komga-acceptance/fixture.json")
         )
@@ -483,7 +488,6 @@ def main():
         )
         data = read_private(fixture_path)
         validate_fixture(data)
-        kubeconfig = Path(args.path)
         current = observe(kubeconfig, need_backup=args.action == "verify")
         state = application_state(Api(os.getenv("KOMGA_API_KEY")), data)
         require(
