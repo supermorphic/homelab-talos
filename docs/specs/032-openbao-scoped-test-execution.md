@@ -543,6 +543,13 @@ broader network selectors, unauthorized Flux fields, Node writes, RBAC changes,
 and attempts to choose dedicated profiles through unrelated suites. Policy-source
 inspection and `auth can-i` alone do not prove admission behavior.
 
+The core offline suite also compiles the rendered admission expressions with the
+Kubernetes 1.35 CEL compiler, pinned to the cluster's Kubernetes patch version.
+This catches static type errors that the Python CEL request evaluator does not
+check. Mixed-type map and list literals use `dyn()` on their values while retaining
+exact equality against the permitted fixture shapes. Compiler checks complement
+the request allow/deny tests and deployed policy type-checking status.
+
 For a registered mapped test whose ordinary run is too short, set
 `TEST_ACCESS_ACCEPTANCE_CONFIRM=verify:scoped-access:ttl-and-denials` when invoking
 its existing `mise exec -- just test record <suite-id>` workflow. Retain the suite's

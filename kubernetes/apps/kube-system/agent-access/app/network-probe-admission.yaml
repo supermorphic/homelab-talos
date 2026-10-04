@@ -30,7 +30,7 @@ spec:
     - expression: >-
         request.operation != 'UPDATE' && request.namespace == 'media' &&
         variables.run.matches('^[0-9a-f]{12}$') &&
-        variables.reference.metadata.labels == {'homelab-talos/test': 'vpn-wan-reference', 'homelab-talos/run-id': variables.run} &&
+        variables.reference.metadata.labels == {'homelab-talos/test': dyn('vpn-wan-reference'), 'homelab-talos/run-id': dyn(variables.run)} &&
         !has(variables.reference.metadata.ownerReferences) && !has(variables.reference.metadata.annotations) &&
         (!has(variables.reference.metadata.finalizers) || variables.reference.metadata.finalizers.size() == 0) &&
         variables.pod.activeDeadlineSeconds == 60 && variables.pod.restartPolicy == 'Never' &&

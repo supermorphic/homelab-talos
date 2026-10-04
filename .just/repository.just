@@ -11,6 +11,7 @@ tools:
 versions: toolchain-validate
     @bash --version | head -n 1
     @python3 --version
+    @go version
     @bats --version
     @shfmt --version
     @talosctl version --client --short

@@ -29,8 +29,8 @@ spec:
     - name: labels
       expression: >-
         variables.backup ?
-          {'app.kubernetes.io/name': 'automation-data-postgresql-backup', 'homelab-talos/test': 'automation-data-provisioning', 'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'backup'} :
-          {'app.kubernetes.io/name': 'automation-data-postgresql-backup', 'homelab-talos/test': 'automation-data-provisioning', 'homelab-talos/run-id': variables.run}
+          {'app.kubernetes.io/name': dyn('automation-data-postgresql-backup'), 'homelab-talos/test': dyn('automation-data-provisioning'), 'homelab-talos/run-id': dyn(variables.run), 'homelab-talos/role': dyn('backup')} :
+          {'app.kubernetes.io/name': dyn('automation-data-postgresql-backup'), 'homelab-talos/test': dyn('automation-data-provisioning'), 'homelab-talos/run-id': dyn(variables.run)}
     - name: values
       expression: >-
         variables.bundle ? {} : variables.backup ?
@@ -71,7 +71,7 @@ spec:
         variables.container.name == (variables.backup ? 'backup' : variables.bundle ? 'validate-bundle' : 'record-error') &&
         variables.container.image == 'postgres:17.11-alpine3.24' &&
         variables.container.command == (variables.backup ? ['/scripts/backup.sh'] :
-          ['/bin/sh', '-eu', '/helpers/' + (variables.bundle ? 'automation-data-bundle.sh' : 'provision-error.sh')]) &&
+          [dyn('/bin/sh'), dyn('-eu'), dyn('/helpers/' + (variables.bundle ? 'automation-data-bundle.sh' : 'provision-error.sh'))]) &&
         !has(variables.container.args) &&
         (!has(variables.container.securityContext.runAsUser) || variables.container.securityContext.runAsUser == 70) &&
         (!has(variables.container.securityContext.runAsGroup) || variables.container.securityContext.runAsGroup == 70) &&

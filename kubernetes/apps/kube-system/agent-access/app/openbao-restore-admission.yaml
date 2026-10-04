@@ -23,20 +23,20 @@ spec:
     - name: item
       expression: 'request.operation == ''DELETE'' ? oldObject : object'
     - name: core
-      expression: '{"serviceName":"scratch","replicas":1,"updateStrategy":{"type":"OnDelete"},"selector":{"matchLabels":{"app":"openbao-restore-scratch"}}}'
+      expression: '{"serviceName":dyn("scratch"),"replicas":dyn(1),"updateStrategy":dyn({"type":"OnDelete"}),"selector":dyn({"matchLabels":{"app":"openbao-restore-scratch"}})}'
     - name: pod
       expression: variables.item.spec.template.spec
     - name: podCore
-      expression: '{"serviceAccountName":"scratch","automountServiceAccountToken":false,"enableServiceLinks":false,"securityContext":{"runAsNonRoot":true,"runAsUser":100,"runAsGroup":1000,"fsGroup":1000,"seccompProfile":{"type":"RuntimeDefault"}}}'
+      expression: '{"serviceAccountName":dyn("scratch"),"automountServiceAccountToken":dyn(false),"enableServiceLinks":dyn(false),"securityContext":dyn({"runAsNonRoot":dyn(true),"runAsUser":dyn(100),"runAsGroup":dyn(1000),"fsGroup":dyn(1000),"seccompProfile":dyn({"type":"RuntimeDefault"})})}'
     - name: podDefaults
-      expression: '{"dnsPolicy":"ClusterFirst","schedulerName":"default-scheduler","restartPolicy":"Always","terminationGracePeriodSeconds":30,"hostNetwork":false,"hostPID":false,"hostIPC":false,"initContainers":[],"ephemeralContainers":[],"tolerations":[]}'
+      expression: '{"dnsPolicy":dyn("ClusterFirst"),"schedulerName":dyn("default-scheduler"),"restartPolicy":dyn("Always"),"terminationGracePeriodSeconds":dyn(30),"hostNetwork":dyn(false),"hostPID":dyn(false),"hostIPC":dyn(false),"initContainers":dyn([]),"ephemeralContainers":dyn([]),"tolerations":dyn([])}'
     - name: containers
-      expression: '[{"name":"server","image":"quay.io/openbao/openbao:2.7.0@sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315","command":["bao","server","-config=/scratch-config/server.hcl"],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}},"resources":{"requests":{"cpu":"100m","memory":"256Mi"},"limits":{"cpu":"1","memory":"1Gi"}},"volumeMounts":[{"name":"data","mountPath":"/openbao/data"},{"name":"seal","mountPath":"/scratch-seal","readOnly":true},{"name":"config","mountPath":"/scratch-config","readOnly":true}]},{"name":"runner","image":"python:3.13.14-slim@sha256:9662417aace5ae7b8e2609cce472b72a8958e134ba372808abe9cc1a0c0125e6","command":["python","-c","import
-        time; time.sleep(86400)"],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true},"resources":{"requests":{"cpu":"25m","memory":"32Mi"},"limits":{"cpu":"250m","memory":"128Mi"}}}]'
+      expression: '[{"name":dyn("server"),"image":dyn("quay.io/openbao/openbao:2.7.0@sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315"),"command":dyn(["bao","server","-config=/scratch-config/server.hcl"]),"securityContext":dyn({"allowPrivilegeEscalation":dyn(false),"capabilities":dyn({"drop":["ALL"]})}),"resources":dyn({"requests":{"cpu":"100m","memory":"256Mi"},"limits":{"cpu":"1","memory":"1Gi"}}),"volumeMounts":dyn([dyn({"name":"data","mountPath":"/openbao/data"}),dyn({"name":dyn("seal"),"mountPath":dyn("/scratch-seal"),"readOnly":dyn(true)}),dyn({"name":dyn("config"),"mountPath":dyn("/scratch-config"),"readOnly":dyn(true)})])},{"name":dyn("runner"),"image":dyn("python:3.13.14-slim@sha256:9662417aace5ae7b8e2609cce472b72a8958e134ba372808abe9cc1a0c0125e6"),"command":dyn(["python","-c","import
+        time; time.sleep(86400)"]),"securityContext":dyn({"allowPrivilegeEscalation":dyn(false),"capabilities":dyn({"drop":["ALL"]}),"readOnlyRootFilesystem":dyn(true)}),"resources":dyn({"requests":{"cpu":"25m","memory":"32Mi"},"limits":{"cpu":"250m","memory":"128Mi"}})}]'
     - name: containerDefaults
-      expression: '{"imagePullPolicy":"IfNotPresent","terminationMessagePath":"/dev/termination-log","terminationMessagePolicy":"File","stdin":false,"stdinOnce":false,"tty":false}'
+      expression: '{"imagePullPolicy":dyn("IfNotPresent"),"terminationMessagePath":dyn("/dev/termination-log"),"terminationMessagePolicy":dyn("File"),"stdin":dyn(false),"stdinOnce":dyn(false),"tty":dyn(false)}'
     - name: volumes
-      expression: '[{"name":"data","persistentVolumeClaim":{"claimName":"scratch-data"}},{"name":"seal","secret":{"secretName":"scratch-seal","defaultMode":288}},{"name":"config","configMap":{"name":"scratch-config"}}]'
+      expression: '[{"name":dyn("data"),"persistentVolumeClaim":dyn({"claimName":"scratch-data"})},{"name":dyn("seal"),"secret":dyn({"secretName":dyn("scratch-seal"),"defaultMode":dyn(288)})},{"name":dyn("config"),"configMap":dyn({"name":"scratch-config"})}]'
   validations:
     - expression: request.namespace == 'openbao-restore-test' && request.subResource == '' && request.operation
         != 'UPDATE' && request.name == 'scratch' && variables.item.kind == 'StatefulSet' && variables.item.apiVersion
@@ -255,7 +255,7 @@ spec:
   validations:
     - expression: request.namespace == 'openbao-restore-test' && request.name == 'scratch-0' && request.subResource
         == 'exec' && object.container == 'runner' && has(object.stdin) && object.stdin && (!has(object.tty)
-        || !object.tty) && object.command in [['python','-c',variables.bridge],['python','-c',variables.probe]]
+        || !object.tty) && object.command in [[dyn('python'),dyn('-c'),dyn(variables.bridge)],[dyn('python'),dyn('-c'),dyn(variables.probe)]]
       message: Only fixed loopback restore and isolation programs may execute in the unmounted scratch
         runner.
 ---

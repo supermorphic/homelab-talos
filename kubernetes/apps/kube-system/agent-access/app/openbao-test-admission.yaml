@@ -105,20 +105,20 @@ spec:
     - name: issuer
       expression: request.namespace == 'openbao'
     - name: core
-      expression: 'variables.issuer ? {"restartPolicy":"Never","activeDeadlineSeconds":1800,"automountServiceAccountToken":false,"enableServiceLinks":false,"serviceAccountName":"openbao","securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"},"fsGroup":65532}}
-        : {"restartPolicy":"Never","activeDeadlineSeconds":1800,"automountServiceAccountToken":false,"enableServiceLinks":false,"serviceAccountName":"openbao-acceptance","securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}}}'
+      expression: 'variables.issuer ? {"restartPolicy":dyn("Never"),"activeDeadlineSeconds":dyn(1800),"automountServiceAccountToken":dyn(false),"enableServiceLinks":dyn(false),"serviceAccountName":dyn("openbao"),"securityContext":dyn({"runAsNonRoot":dyn(true),"runAsUser":dyn(65532),"seccompProfile":dyn({"type":"RuntimeDefault"}),"fsGroup":dyn(65532)})}
+        : {"restartPolicy":dyn("Never"),"activeDeadlineSeconds":dyn(1800),"automountServiceAccountToken":dyn(false),"enableServiceLinks":dyn(false),"serviceAccountName":dyn("openbao-acceptance"),"securityContext":dyn({"runAsNonRoot":dyn(true),"runAsUser":dyn(65532),"seccompProfile":dyn({"type":"RuntimeDefault"})})}'
     - name: container
-      expression: '{"name":"probe","image":"python:3.13.14-slim@sha256:9662417aace5ae7b8e2609cce472b72a8958e134ba372808abe9cc1a0c0125e6","command":["python","-c","import
-        time; time.sleep(1800)"],"resources":{"requests":{"cpu":"10m","memory":"32Mi"},"limits":{"cpu":"200m","memory":"128Mi"}}}'
+      expression: '{"name":dyn("probe"),"image":dyn("python:3.13.14-slim@sha256:9662417aace5ae7b8e2609cce472b72a8958e134ba372808abe9cc1a0c0125e6"),"command":dyn(["python","-c","import
+        time; time.sleep(1800)"]),"resources":dyn({"requests":{"cpu":"10m","memory":"32Mi"},"limits":{"cpu":"200m","memory":"128Mi"}})}'
     - name: sources
-      expression: 'variables.issuer ? [{"secret":{"name":"openbao-issuer-token-v1","items":[{"key":"token","path":"token"}]}},{"configMap":{"name":"kube-root-ca.crt","items":[{"key":"ca.crt","path":"ca.crt"}]}}]
-        : [{"serviceAccountToken":{"path":"token","expirationSeconds":600,"audience":"openbao-kubernetes-broker"}},{"configMap":{"name":"kube-root-ca.crt","items":[{"key":"ca.crt","path":"ca.crt"}]}}]'
+      expression: 'variables.issuer ? [{"secret":{"name":dyn("openbao-issuer-token-v1"),"items":dyn([{"key":"token","path":"token"}])}},{"configMap":{"name":dyn("kube-root-ca.crt"),"items":dyn([{"key":"ca.crt","path":"ca.crt"}])}}]
+        : [{"serviceAccountToken":{"path":dyn("token"),"expirationSeconds":dyn(600),"audience":dyn("openbao-kubernetes-broker")}},{"configMap":{"name":dyn("kube-root-ca.crt"),"items":dyn([{"key":"ca.crt","path":"ca.crt"}])}}]'
     - name: defaults
-      expression: '{"dnsPolicy":"ClusterFirst","schedulerName":"default-scheduler","terminationGracePeriodSeconds":30,"priority":0,"preemptionPolicy":"PreemptLowerPriority","hostNetwork":false,"hostPID":false,"hostIPC":false,"shareProcessNamespace":false,"hostUsers":true,"setHostnameAsFQDN":false,"initContainers":[],"ephemeralContainers":[]}'
+      expression: '{"dnsPolicy":dyn("ClusterFirst"),"schedulerName":dyn("default-scheduler"),"terminationGracePeriodSeconds":dyn(30),"priority":dyn(0),"preemptionPolicy":dyn("PreemptLowerPriority"),"hostNetwork":dyn(false),"hostPID":dyn(false),"hostIPC":dyn(false),"shareProcessNamespace":dyn(false),"hostUsers":dyn(true),"setHostnameAsFQDN":dyn(false),"initContainers":dyn([]),"ephemeralContainers":dyn([])}'
     - name: containerDefaults
-      expression: '{"imagePullPolicy":"IfNotPresent","terminationMessagePath":"/dev/termination-log","terminationMessagePolicy":"File","stdin":false,"stdinOnce":false,"tty":false}'
+      expression: '{"imagePullPolicy":dyn("IfNotPresent"),"terminationMessagePath":dyn("/dev/termination-log"),"terminationMessagePolicy":dyn("File"),"stdin":dyn(false),"stdinOnce":dyn(false),"tty":dyn(false)}'
     - name: security
-      expression: '{"allowPrivilegeEscalation":false,"readOnlyRootFilesystem":true,"capabilities":{"drop":["ALL"]}}'
+      expression: '{"allowPrivilegeEscalation":dyn(false),"readOnlyRootFilesystem":dyn(true),"capabilities":dyn({"drop":["ALL"]})}'
   validations:
     - expression: |-
         request.subResource == '' &&
@@ -137,8 +137,8 @@ spec:
         (!has(variables.pod.spec.serviceAccount) || variables.pod.spec.serviceAccount == variables.core.serviceAccountName) &&
         (!has(variables.pod.spec.nodeName) || variables.pod.spec.nodeName == '' || (request.operation in ['UPDATE','DELETE'] && type(variables.pod.spec.nodeName) == string && variables.pod.spec.nodeName != '')) &&
         (!has(variables.pod.spec.tolerations) || (variables.pod.spec.tolerations.size() <= 2 && variables.pod.spec.tolerations.all(t, t in [
-        {'key':'node.kubernetes.io/not-ready','operator':'Exists','effect':'NoExecute','tolerationSeconds':300},
-        {'key':'node.kubernetes.io/unreachable','operator':'Exists','effect':'NoExecute','tolerationSeconds':300}])))
+        {'key':dyn('node.kubernetes.io/not-ready'),'operator':dyn('Exists'),'effect':dyn('NoExecute'),'tolerationSeconds':dyn(300)},
+        {'key':dyn('node.kubernetes.io/unreachable'),'operator':dyn('Exists'),'effect':dyn('NoExecute'),'tolerationSeconds':dyn(300)}])))
       message: Probe workload identity, scheduling, lifetime and Pod security settings are fixed.
     - expression: |-
         variables.pod.spec.containers.size() == 1 &&
@@ -220,8 +220,8 @@ spec:
         request.subResource == 'exec' && object.container == 'probe' && (!has(object.tty) || !object.tty) &&
         ((request.namespace == 'openbao' && request.name.matches('^openbao-issuer-[0-9a-f]{16}$') && request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-openbao-issuance') ||
         (request.namespace == 'openbao-acceptance' && request.name.matches('^openbao-acceptance-[0-9a-f]{16}$'))) &&
-        ((object.command == ['python','-c',variables.bridge] && has(object.stdin) && object.stdin) ||
-        (request.namespace == 'openbao' && object.command == ['python','-c',variables.claims,'openbao-issuer-token-v1'] && (!has(object.stdin) || !object.stdin)))
+        ((object.command == [dyn('python'),dyn('-c'),dyn(variables.bridge)] && has(object.stdin) && object.stdin) ||
+        (request.namespace == 'openbao' && object.command == [dyn('python'),dyn('-c'),dyn(variables.claims),dyn('openbao-issuer-token-v1')] && (!has(object.stdin) || !object.stdin)))
       message: Probe exec admits only the canonical API bridge or issuer-claim program on registered probe
         Pods; issuer bytes remain inside the probe.
 ---

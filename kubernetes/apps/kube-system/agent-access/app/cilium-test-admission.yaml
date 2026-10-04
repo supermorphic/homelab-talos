@@ -227,18 +227,19 @@ spec:
       message: Only canonical named cluster-wide connectivity fixtures without extra ownership or runtime
         fields are permitted.
     - expression: '(request.name == "allow-egress-specific-namespace-ccnp" && variables.item.spec == {"endpointSelector":
-        {"matchLabels": {"io.kubernetes.pod.namespace": "cilium-test-ccnp1", "kind": "ccnp"}}, "egress":
-        [{"toEndpoints": [{"matchLabels": {"io.kubernetes.pod.namespace": "cilium-test-ccnp2"}}]}]}) ||
+        dyn({"matchLabels": {"io.kubernetes.pod.namespace": "cilium-test-ccnp1", "kind": "ccnp"}}), "egress":
+        dyn([{"toEndpoints": [{"matchLabels": {"io.kubernetes.pod.namespace": "cilium-test-ccnp2"}}]}])}) ||
         (request.name == "allow-ingress-specific-namespace-ccnp" && variables.item.spec == {"endpointSelector":
-        {"matchLabels": {"io.kubernetes.pod.namespace": "cilium-test-ccnp1", "kind": "ccnp"}}, "ingress":
-        [{"fromEndpoints": [{"matchLabels": {"io.kubernetes.pod.namespace": "cilium-test-ccnp2"}}]}]})
-        || (request.name == "host-firewall-egress" && variables.item.spec == {"nodeSelector": {}, "egress":
-        [{"toEntities": ["health", "kube-apiserver", "remote-node", "world"]}, {"toEndpoints": [{"matchExpressions":
-        [{"key": "name", "operator": "NotIn", "values": ["echo-other-node"]}, {"key": "io.cilium.k8s.policy.cluster",
-        "operator": "Exists"}]}]}]}) || (request.name == "host-firewall-ingress" && variables.item.spec
-        == {"nodeSelector": {}, "ingress": [{"fromEntities": ["health", "kube-apiserver", "remote-node",
-        "world"]}, {"fromEndpoints": [{"matchExpressions": [{"key": "name", "operator": "NotIn", "values":
-        ["client"]}, {"key": "io.cilium.k8s.policy.cluster", "operator": "Exists"}]}]}]})'
+        dyn({"matchLabels": {"io.kubernetes.pod.namespace": "cilium-test-ccnp1", "kind": "ccnp"}}), "ingress":
+        dyn([{"fromEndpoints": [{"matchLabels": {"io.kubernetes.pod.namespace": "cilium-test-ccnp2"}}]}])})
+        || (request.name == "host-firewall-egress" && variables.item.spec == {"nodeSelector": dyn({}), "egress":
+        dyn([dyn({"toEntities": ["health", "kube-apiserver", "remote-node", "world"]}), dyn({"toEndpoints":
+        [{"matchExpressions": [dyn({"key": dyn("name"), "operator": dyn("NotIn"), "values": dyn(["echo-other-node"])}),
+        dyn({"key": "io.cilium.k8s.policy.cluster", "operator": "Exists"})]}]})])}) || (request.name == "host-firewall-ingress"
+        && variables.item.spec == {"nodeSelector": dyn({}), "ingress": dyn([dyn({"fromEntities": ["health",
+        "kube-apiserver", "remote-node", "world"]}), dyn({"fromEndpoints": [{"matchExpressions": [dyn({"key":
+        dyn("name"), "operator": dyn("NotIn"), "values": dyn(["client"])}), dyn({"key": "io.cilium.k8s.policy.cluster",
+        "operator": "Exists"})]}]})])})'
       message: Keep the complete pinned connectivity policy specification; host firewall fixtures are
         an explicit dedicated exception.
     - expression: 'request.operation == ''UPDATE'' ? object.metadata.uid == oldObject.metadata.uid : true'
@@ -433,19 +434,18 @@ spec:
     - expression: 'variables.item.kind in [''Deployment'',''DaemonSet''] ? (variables.item.spec.template.metadata.labels.name
         == request.name && variables.item.spec.selector.matchLabels.name == request.name && (variables.item.kind
         == ''Deployment'' ? variables.pod.serviceAccountName == request.name : (!has(variables.pod.serviceAccountName)
-        || variables.pod.serviceAccountName == '''' || variables.pod.serviceAccountName == ''default''))
-        && (!has(variables.pod.initContainers) || variables.pod.initContainers.size() == 0) && (!has(variables.pod.ephemeralContainers)
-        || variables.pod.ephemeralContainers.size() == 0) && variables.pod.containers.size() in [1,2]
-        && variables.pod.containers.all(c, c.name in [request.name,''dns-test-server''] && c.image in
-        ["quay.io/cilium/alpine-curl:v1.10.0@sha256:913e8c9f3d960dde03882defa0edd3a919d529c2eb167caa7f54194528bde364",
+        || variables.pod.serviceAccountName == '''' || variables.pod.serviceAccountName == ''default'')) &&
+        (!has(variables.pod.initContainers) || variables.pod.initContainers.size() == 0) && (!has(variables.pod.ephemeralContainers)
+        || variables.pod.ephemeralContainers.size() == 0) && variables.pod.containers.size() in [1,2] && variables.pod.containers.all(c,
+        c.name in [dyn(request.name),dyn(''dns-test-server'')] && c.image in ["quay.io/cilium/alpine-curl:v1.10.0@sha256:913e8c9f3d960dde03882defa0edd3a919d529c2eb167caa7f54194528bde364",
         "quay.io/cilium/json-mock:v1.4.1@sha256:6a66df90808a39c02e7a9d58af7bf0e54d8f8b7d4bc528f48c891969a7049195",
         "registry.k8s.io/coredns/coredns:v1.14.4@sha256:3e98f280fd601b37411c5fb7075fd9f337833c480f1644970b727ae0af067782",
         "quay.io/frrouting/frr:10.6.1@sha256:813497af103e972600f6161012b3bf2a2a1c5ea10d09cd1eacd74f1dc510a57b",
         "docker.io/alpine/socat:1.8.1.3@sha256:d85531a29ef5ba99dfb4717485c239307e2902d522a1bc010992a2728c92cfad",
         "gcr.io/k8s-staging-gateway-api/echo-advanced:v20251204-v1.4.1"] && (!has(c.envFrom) || c.envFrom.size()
-        == 0) && (!has(c.env) || c.env.all(e, !has(e.valueFrom)))) && (!has(variables.pod.volumes) ||
-        variables.pod.volumes.all(v, has(v.configMap) && v.configMap.name in [''coredns-configmap'',''frr-config'']
-        && v.all(k, k in [''name'',''configMap''])))) : true'
+        == 0) && (!has(c.env) || c.env.all(e, !has(e.valueFrom)))) && (!has(variables.pod.volumes) || variables.pod.volumes.all(v,
+        has(v.configMap) && v.configMap.name in [''coredns-configmap'',''frr-config''] && v.all(k, k in [''name'',''configMap'']))))
+        : true'
       message: Canonical privileged fixture workloads retain their own unbound account, pinned images
         and test ConfigMap mounts; no other Secret or host-volume inputs.
     - expression: 'variables.item.kind == ''ServiceAccount'' ? ((!has(variables.item.secrets) || variables.item.secrets.size()
@@ -512,22 +512,23 @@ spec:
     - name: item
       expression: 'request.operation == ''DELETE'' ? oldObject : object'
     - name: expected
-      expression: '{"client-egress-to-fqdns-proxy-one.one.one.one": {"kind": "CiliumClusterwideEnvoyConfig",
-        "spec": {"resources": [{"@type": "type.googleapis.com/envoy.config.listener.v3.Listener", "name":
-        "proxy-one.one.one.one-listener", "filter_chains": [{"filter_chain_match": {"destination_port":
-        80}, "filters": [{"name": "envoy.filters.network.tcp_proxy", "typed_config": {"@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
-        "stat_prefix": "test-listener", "cluster": "proxy-one.one.one.one-cluster"}}]}]}, {"@type": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
+      expression: '{"client-egress-to-fqdns-proxy-one.one.one.one": {"kind": dyn("CiliumClusterwideEnvoyConfig"),
+        "spec": dyn({"resources": [dyn({"@type": dyn("type.googleapis.com/envoy.config.listener.v3.Listener"),
+        "name": dyn("proxy-one.one.one.one-listener"), "filter_chains": dyn([{"filter_chain_match": dyn({"destination_port":
+        80}), "filters": dyn([{"name": dyn("envoy.filters.network.tcp_proxy"), "typed_config": dyn({"@type":
+        "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy", "stat_prefix": "test-listener",
+        "cluster": "proxy-one.one.one.one-cluster"})}])}])}), dyn({"@type": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
         "connectTimeout": "55s", "name": "proxy-one.one.one.one-cluster", "type": "ORIGINAL_DST", "lb_policy":
-        "CLUSTER_PROVIDED"}]}}, "echo-ingress-from-client-tiered-wildcard-pass-l7": {"kind": "ClusterNetworkPolicy",
-        "spec": {"tier": "Admin", "priority": 0, "subject": {"pods": {"namespaceSelector": {"matchLabels":
-        {"kubernetes.io/metadata.name": "cilium-test-1"}}, "podSelector": {"matchLabels": {"kind": "echo"}}}},
-        "ingress": [{"action": "Accept", "from": [{"pods": {"podSelector": {"matchExpressions": [{"key":
-        "reserved:host", "operator": "Exists"}]}}}]}, {"action": "Accept", "from": [{"pods": {"podSelector":
-        {}}}], "protocols": [{"udp": {"destinationPort": {"number": 53}}}, {"tcp": {"destinationPort":
-        {"number": 53}}}]}, {"action": "Pass", "from": [{"pods": {"namespaceSelector": {"matchLabels":
-        {"kubernetes.io/metadata.name": "cilium-test-1"}}, "podSelector": {"matchLabels": {"name": "client"},
-        "matchExpressions": [{"key": "io.cilium.k8s.policy.cluster", "operator": "Exists"}]}}}]}, {"action":
-        "Deny", "from": [{"namespaces": {}}]}]}}}'
+        "CLUSTER_PROVIDED"})]})}, "echo-ingress-from-client-tiered-wildcard-pass-l7": {"kind": dyn("ClusterNetworkPolicy"),
+        "spec": dyn({"tier": dyn("Admin"), "priority": dyn(0), "subject": dyn({"pods": {"namespaceSelector":
+        {"matchLabels": {"kubernetes.io/metadata.name": "cilium-test-1"}}, "podSelector": {"matchLabels": {"kind":
+        "echo"}}}}), "ingress": dyn([{"action": dyn("Accept"), "from": dyn([{"pods": {"podSelector": {"matchExpressions":
+        [{"key": "reserved:host", "operator": "Exists"}]}}}])}, {"action": dyn("Accept"), "from": dyn([{"pods":
+        {"podSelector": {}}}]), "protocols": dyn([{"udp": {"destinationPort": {"number": 53}}}, {"tcp": {"destinationPort":
+        {"number": 53}}}])}, {"action": dyn("Pass"), "from": dyn([{"pods": {"namespaceSelector": dyn({"matchLabels":
+        {"kubernetes.io/metadata.name": "cilium-test-1"}}), "podSelector": dyn({"matchLabels": dyn({"name":
+        "client"}), "matchExpressions": dyn([{"key": "io.cilium.k8s.policy.cluster", "operator": "Exists"}])})}}])},
+        {"action": dyn("Deny"), "from": dyn([{"namespaces": {}}])}])})}}'
   validations:
     - expression: request.namespace == '' && request.subResource == '' && variables.item.metadata.name
         == request.name && (!has(variables.item.metadata.namespace) || variables.item.metadata.namespace
@@ -593,8 +594,8 @@ spec:
         || variables.item.metadata.finalizers.size() == 0) && (request.operation == 'CREATE' || (has(variables.item.metadata.uid)
         && variables.item.metadata.uid != ''))
       message: Only new or checked deletion of the registered fixture binding is permitted.
-    - expression: 'variables.item.roleRef == {''apiGroup'':''rbac.authorization.k8s.io'',''kind'':''ClusterRole'',''name'':
-        request.namespace == ''cilium-test-1'' ? ''homelab-test-cilium-fixtures-1'' : ''homelab-test-cilium-fixtures-ccnp''}
+    - expression: 'variables.item.roleRef == {''apiGroup'':dyn(''rbac.authorization.k8s.io''),''kind'':dyn(''ClusterRole''),''name'':
+        dyn(request.namespace == ''cilium-test-1'' ? ''homelab-test-cilium-fixtures-1'' : ''homelab-test-cilium-fixtures-ccnp'')}
         && variables.item.subjects == [{''kind'':''ServiceAccount'',''name'':''homelab-test-cilium-connectivity'',''namespace'':''kube-system''}]'
       message: Bind only the namespace-specific fixed fixture role to the dedicated connectivity account.
     - expression: variables.item.metadata.annotations.size() == 1 && variables.item.metadata.annotations['homelab.supermorphic.com/test-run'].matches('^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$')
