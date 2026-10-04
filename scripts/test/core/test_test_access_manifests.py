@@ -414,6 +414,10 @@ class TestAccessPolicyTests(unittest.TestCase):
         )
         self.assertTrue(allowed(pod))
         self.assertTrue(allowed(None, {**request, "operation": "DELETE"}, pod))
+        scheduled = copy.deepcopy(pod)
+        scheduled["spec"]["nodeName"] = "synthetic-node"
+        self.assertTrue(allowed(None, {**request, "operation": "DELETE"}, scheduled))
+        self.assertFalse(allowed(scheduled))
         self.assertFalse(allowed(pod, {**request, "operation": "UPDATE"}, pod))
         for field in (
             "name",
@@ -1208,6 +1212,11 @@ class TestAccessPolicyTests(unittest.TestCase):
                 "homelab-test-nocodb-applications",
             ):
                 self.assertTrue(self.admits(policy, {**req, "operation": "DELETE"}, None, obj))
+                reconciled = copy.deepcopy(obj)
+                reconciled["metadata"]["annotations"] = {"deployment.kubernetes.io/revision": "3"}
+                self.assertTrue(
+                    self.admits(policy, {**req, "operation": "DELETE"}, None, reconciled)
+                )
                 self.assertFalse(
                     self.admits(
                         "homelab-test-nocodb-applications"
@@ -2969,6 +2978,13 @@ class TestAccessPolicyTests(unittest.TestCase):
             )
 
         self.assertTrue(allowed(obj))
+        reconciled = copy.deepcopy(obj)
+        reconciled["metadata"]["annotations"] = {"deployment.kubernetes.io/revision": "1"}
+        deletion = {**req, "operation": "DELETE"}
+        self.assertTrue(self.admits("homelab-test-workload-security", deletion, None, reconciled))
+        self.assertFalse(allowed(reconciled))
+        reconciled["metadata"]["annotations"]["synthetic/unapproved"] = "value"
+        self.assertFalse(self.admits("homelab-test-workload-security", deletion, None, reconciled))
         for change in (
             "database",
             "secret",

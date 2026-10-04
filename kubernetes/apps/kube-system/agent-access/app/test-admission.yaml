@@ -833,7 +833,12 @@ spec:
     - expression: >-
         ((variables.workload.metadata.labels['homelab-talos/test'] == 'automation-data-provisioning' &&
           variables.workload.metadata.name == 'automation-data-backup-' + variables.workload.metadata.labels['homelab-talos/run-id']) ||
-          (!has(variables.workload.metadata.ownerReferences) && !has(variables.workload.metadata.annotations))) &&
+          (!has(variables.workload.metadata.ownerReferences) &&
+           (!has(variables.workload.metadata.annotations) ||
+            (request.operation == 'DELETE' && request.resource.resource == 'deployments' &&
+             variables.workload.metadata.annotations.size() == 1 &&
+             'deployment.kubernetes.io/revision' in variables.workload.metadata.annotations &&
+             variables.workload.metadata.annotations['deployment.kubernetes.io/revision'].matches('^[0-9]+$'))))) &&
         (!has(variables.workload.metadata.finalizers) || variables.workload.metadata.finalizers.size() == 0) &&
         !has(variables.workload.spec.template.metadata.annotations) &&
         !has(variables.workload.spec.template.metadata.ownerReferences) &&

@@ -42,7 +42,8 @@ spec:
         (!has(variables.pod.hostPID) || !variables.pod.hostPID) && (!has(variables.pod.hostIPC) || !variables.pod.hostIPC) &&
         !has(variables.pod.hostAliases) && !has(variables.pod.dnsConfig) &&
         (!has(variables.pod.dnsPolicy) || variables.pod.dnsPolicy == 'ClusterFirst') &&
-        !has(variables.pod.nodeName) && !has(variables.pod.nodeSelector) && !has(variables.pod.affinity) &&
+        (request.operation == 'DELETE' || !has(variables.pod.nodeName)) &&
+        !has(variables.pod.nodeSelector) && !has(variables.pod.affinity) &&
         !has(variables.pod.imagePullSecrets) && !has(variables.pod.priorityClassName) &&
         !has(variables.pod.runtimeClassName) && !has(variables.pod.resourceClaims) &&
         !has(variables.pod.readinessGates) && !has(variables.pod.schedulingGates) &&
