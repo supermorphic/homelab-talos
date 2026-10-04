@@ -30,6 +30,59 @@ class Response:
 
 
 class ClientTest(unittest.TestCase):
+    def test_creation_index_prevents_stale_login_and_session_reads(self):
+        seen = []
+
+        def open_request(request, timeout):
+            headers = {k.lower(): v for k, v in request.header_items()}
+            seen.append(headers)
+            expected = [None, "synthetic-secret-index", "synthetic-session-index"]
+            position = len(seen) - 1
+            if position and (
+                headers.get("x-vault-index") != expected[position]
+                or headers.get("x-vault-inconsistent") != "forward-active-node"
+            ):
+                raise urllib.error.HTTPError(request.full_url, 400, "stale state", {}, None)
+            response = Response(url=request.full_url)
+            if position < 2:
+                response.headers["X-Vault-Index"] = expected[position + 1]
+            return response
+
+        client = BaoClient("https://openbao.example", opener=open_request)
+        client.post("auth/homelab-approle/role/fixture/secret-id", {})
+        client.post("auth/homelab-approle/login", {})
+        client.post("auth/token/revoke-self", {}, token="synthetic-session")
+        self.assertEqual(len(seen), 3)
+        self.assertEqual(client.consistency_index, "synthetic-session-index")
+
+    def test_creation_index_can_be_handed_to_the_public_validation_client(self):
+        def create(request, timeout):
+            response = Response(url=request.full_url)
+            response.headers["X-Vault-Index"] = "synthetic-secret-index"
+            return response
+
+        writer = BaoClient("https://openbao.example", opener=create)
+        writer.post("auth/homelab-approle/role/fixture/secret-id", {})
+        seen = []
+
+        def login(request, timeout):
+            seen.append({k.lower(): v for k, v in request.header_items()})
+            return Response(url=request.full_url)
+
+        route = BaoClient("https://openbao.example", opener=login)
+        route.require_consistency(writer.consistency_index)
+        route.post("auth/homelab-approle/login", {})
+        self.assertEqual(seen[0]["x-vault-index"], "synthetic-secret-index")
+        self.assertEqual(seen[0]["x-vault-inconsistent"], "forward-active-node")
+        self.assertNotIn("x-vault-token", seen[0])
+
+    def test_consistency_indices_reject_unbounded_or_invalid_headers(self):
+        for index in ("", "x" * 4097, "bad\r\nInjected: value", "non-ascii-\u2603", 1):
+            with self.subTest(index_type=type(index).__name__):
+                client = BaoClient("https://openbao.example")
+                with self.assertRaises(MalformedResponse):
+                    client.require_consistency(index)
+
     def test_delete_is_one_bounded_mutation_without_blind_retry(self):
         seen = []
         def open_request(request, timeout):

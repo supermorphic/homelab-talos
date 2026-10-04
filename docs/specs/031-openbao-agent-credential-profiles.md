@@ -133,6 +133,14 @@ issuance or revocation writes blindly. Report fixed sanitized errors; a failed
 cleanup does not produce a successful credential response. An orphaned login
 token is bounded by its 60-second explicit maximum.
 
+The HTTP client carries OpenBao's opaque `X-Vault-Index` response value into
+subsequent requests with `X-Vault-Inconsistent: forward-active-node`. This prevents
+a read-enabled standby from validating newly created credentials against stale
+state. Workstation enrollment and rotation also pass the SecretID creation index
+from the operator client to the client that validates the public route. Login,
+issuance and cleanup keep this consistency requirement without retrying ambiguous
+writes. See [OpenBao consistency](https://openbao.org/docs/concepts/consistency/).
+
 The plugin does not renew sessions, run in the background, or share a login-token
 cache. The [AppRole API](https://openbao.org/docs/api/auth/approle/) defines the
 SecretID and token lifetime controls. The pinned API response and actual lifetime
