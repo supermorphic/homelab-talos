@@ -575,7 +575,11 @@ server-dry-run Secret create. Write-capable profiles separately require a denial
 that names their validating admission policy for a forbidden dry-run request:
 Flux replica change, Node label change, foreign Cilium Namespace, unrelated probe
 Pod, or wrong restore ConfigMap. JSON patches use fresh observed UID and
-resourceVersion tests. Protocol errors and RBAC-only denials cannot pass the
+resourceVersion tests. Admission may return `Invalid` with HTTP 422 (Kubernetes'
+default validation reason) or `Forbidden` with HTTP 403. The assertion requires
+the exact policy, binding and intended validation message. Pod probes provide
+the fields read by the policy so a missing-field evaluation error cannot pass.
+Protocol errors, unrelated schema errors and RBAC-only denials cannot pass the
 admission assertion. Conformance keeps its approved administrator exception and
 proves expiry/refresh without claiming a narrowed write boundary. The extension
 creates no persistent API object and writes only fixed labels/classifications into
