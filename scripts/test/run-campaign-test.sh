@@ -31,6 +31,8 @@ export TEST_FIXTURE_REAL_UV
 export TEST_FIXTURE_ACCESS_ROOT="$fixture"
 export TEST_FIXTURE_ACCESS_TRACE="$fixture/access-trace"
 cp tests/fixtures/test-access/fake-uv.sh "$fixture/bin/uv"
+cp tests/fixtures/test-access/fake-talosctl.sh "$fixture/bin/talosctl"
+export TEST_FIXTURE_TALOS_ROOT="$repo_root"
 cp tests/fixtures/result-coordinator/fake-kubectl.sh "$fixture/bin/kubectl"
 export PATH="$fixture/bin:$PATH"
 ln -s "$repo_root/tests/fixtures/campaign/fake-mise.sh" "$fixture/bin/mise"

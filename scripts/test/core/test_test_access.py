@@ -40,6 +40,25 @@ class AccessContractTests(unittest.TestCase):
                 with self.assertRaises(catalog_validator.ValidationFailure):
                     self.validate(entry)
 
+    def test_foundation_callers_can_inherit_without_adding_undeclared_talos_access(self):
+        access = self.router()
+        for suite in (
+            "verification.storage", "verification.monitoring", "verification.gatus",
+            "verification.homepage", "verification.trivy", "verification.tailscale-operator",
+            "verification.tailscale-subnet-router", "verification.ntfy", "verification.alertmanager-ntfy",
+        ):
+            with self.subTest(suite=suite):
+                declaration = access.resolve_suite_access(ROOT, suite)
+                parent = {**declaration, "run_id": "synthetic-run"}
+                with patch.object(access, "validate_invocation", return_value=parent):
+                    self.assertEqual(
+                        access.validate_inherited_invocation(ROOT, "verification.foundation", Path("/synthetic/config")),
+                        parent,
+                    )
+                parent = {**parent, "prerequisites": []}
+                with patch.object(access, "validate_invocation", return_value=parent), self.assertRaises(SafeError):
+                    access.validate_inherited_invocation(ROOT, "verification.foundation", Path("/synthetic/config"))
+
     def test_provisioning_keeps_person_supplied_webhook_credentials(self):
         entry = self.entry("test.automation-data-provisioning")
         self.assertEqual(

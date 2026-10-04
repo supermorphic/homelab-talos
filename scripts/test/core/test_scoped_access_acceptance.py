@@ -57,7 +57,10 @@ class API:
         return self.denial_status, {
             "reason": "Forbidden",
             "code": self.denial_status,
-            "message": 'ValidatingAdmissionPolicy "homelab-test-flux-restart" denied request',
+            "message": "deployments.apps \"source-controller\" is forbidden: "
+            "ValidatingAdmissionPolicy 'homelab-test-flux-restart' with binding "
+            "'homelab-test-flux-restart' denied request: Only the four Flux controller "
+            "templates may restart; preserve their workloads, metadata and status.",
         }
 
     def expired(self):
@@ -149,8 +152,73 @@ class ScopedAccessAcceptanceTests(unittest.TestCase):
         ):
             acceptance.prove(self.api, "test-flux-restart", self.checkpoint, [], clock=self.clock)
 
+    def test_named_policy_denial_accepts_kubernetes_default_invalid_reason(self):
+        response = self.api.admission_denial("test-flux-restart")[1]
+        response.update(reason="Invalid", code=422)
+        with patch.object(self.api, "admission_denial", return_value=(422, response)):
+            phases = []
+            acceptance.prove(self.api, "test-flux-restart", self.checkpoint, phases, clock=self.clock)
+        self.assertIn("server-dry-run-admission-denied", phases)
+        self.assertEqual(phases[-1], "client-refreshed-and-boundary-denied")
+
+    def test_invalid_response_requires_exact_policy_binding_and_intended_message(self):
+        message = self.api.admission_denial("test-flux-restart")[1]["message"]
+        for changed in (
+            message.replace("with binding 'homelab-test-flux-restart'", "with binding 'other'"),
+            message.replace("ValidatingAdmissionPolicy 'homelab-test-flux-restart'", "ValidatingAdmissionPolicy 'other'"),
+            message.split("denied request:")[0] + "denied request: expression resulted in error: no such key: labels",
+            "unrelated schema validation failed: homelab-test-flux-restart",
+            message + " expression resulted in error: no such key: labels",
+        ):
+            with self.subTest(message=changed):
+                for status, reason in ((422, "Invalid"), (403, "Forbidden")):
+                    self.assertFalse(acceptance.admission_forbidden(
+                        (status, {"reason": reason, "code": status, "message": changed}),
+                        "test-flux-restart",
+                    ))
+        for status, reason, code in ((400, "BadRequest", 400), (403, "Invalid", 403), (422, "Forbidden", 422), (422, "Invalid", 403)):
+            with self.subTest(status=status, reason=reason, code=code):
+                self.assertFalse(acceptance.admission_forbidden(
+                    (status, {"reason": reason, "code": code, "message": message}), "test-flux-restart"
+                ))
+
 
 class LiveClientRequestTests(unittest.TestCase):
+    def test_openbao_denial_keeps_complete_probe_shape_and_changes_only_parent_name(self):
+        for profile, namespace, account in (
+            ("test-openbao-issuance", "openbao", "openbao"),
+            ("test-openbao-ha", "openbao-acceptance", "openbao-acceptance"),
+        ):
+            with self.subTest(profile=profile):
+                client = acceptance.LiveClient(Path("/synthetic/config"), lambda: None)
+                client.proxy_url = "http://127.0.0.1:12345"
+                with patch.object(client, "request", return_value=(422, {})) as request:
+                    client.admission_denial(profile)
+                payload = request.call_args.kwargs["payload"]
+                self.assertEqual(payload["metadata"]["name"], "homelab-scoped-denial-probe")
+                self.assertEqual(payload["metadata"]["namespace"], namespace)
+                self.assertEqual(payload["metadata"]["labels"], {"app.kubernetes.io/name": "openbao-acceptance"})
+                self.assertEqual(payload["metadata"]["annotations"], {"homelab.supermorphic.com/test-run": "scoped-denial-probe"})
+                spec = payload["spec"]
+                self.assertEqual(spec["serviceAccountName"], account)
+                self.assertEqual(spec["activeDeadlineSeconds"], 1800)
+                self.assertFalse(spec["automountServiceAccountToken"])
+                self.assertEqual(spec["securityContext"]["seccompProfile"], {"type": "RuntimeDefault"})
+                self.assertEqual(spec["containers"][0]["volumeMounts"], [{"name": "identity", "mountPath": "/identity", "readOnly": True}])
+                self.assertEqual(spec["volumes"][0]["name"], "identity")
+                self.assertEqual(len(spec["volumes"][0]["projected"]["sources"]), 2)
+                self.assertTrue(request.call_args.args[1].endswith("?dryRun=All"))
+
+    def test_runner_probe_supplies_policy_run_label_without_claiming_an_allowed_name(self):
+        client = acceptance.LiveClient(Path("/synthetic/config"), lambda: None)
+        client.proxy_url = "http://127.0.0.1:12345"
+        with patch.object(client, "request", return_value=(422, {})) as request:
+            client.admission_denial("test-runner")
+        payload = request.call_args.kwargs["payload"]
+        self.assertRegex(payload["metadata"]["labels"]["homelab-talos/run-id"], r"^[0-9]{10}-[0-9]+$")
+        self.assertEqual(payload["metadata"]["name"], "homelab-scoped-denial-probe")
+        self.assertTrue(request.call_args.args[1].endswith("?dryRun=All"))
+
     def test_registered_test_families_are_eligible_but_verification_is_not(self):
         for source in ("test", "chainsaw", "probe", "sonobuoy", "verification"):
             with self.subTest(source=source), tempfile.TemporaryDirectory() as temp:

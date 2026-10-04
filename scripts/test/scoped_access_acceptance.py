@@ -37,6 +37,15 @@ ADMISSION_PROFILES = {
     "test-openbao-ha": "homelab-test-openbao-probe-pods",
     "test-openbao-restore": "homelab-test-openbao-restore-private",
 }
+ADMISSION_MESSAGES = {
+    "test-runner": "Only bounded run-owned Plex control and selected probes may be created or deleted.",
+    "test-flux-restart": "Only the four Flux controller templates may restart; preserve their workloads, metadata and status.",
+    "test-cilium-connectivity": "Only the three registered connectivity fixture namespaces may be allocated, updated or removed.",
+    "test-node-reschedule": "Only the three named Nodes scheduling flag may change; preserve all other Node state.",
+    "test-openbao-issuance": "Only the registered acceptance and issuer probe parents, with stable ownership and specification, are admitted.",
+    "test-openbao-ha": "Only the registered acceptance and issuer probe parents, with stable ownership and specification, are admitted.",
+    "test-openbao-restore": "Only immutable, run-owned scratch private fixtures may be created or removed.",
+}
 
 
 def forbidden(response):
@@ -45,13 +54,20 @@ def forbidden(response):
 
 
 def admission_forbidden(response, profile):
-    # RBAC Forbidden cannot establish that the admission policy was reached.
+    # Kubernetes defaults validation denials to Invalid/422. Require the exact
+    # policy, binding and intended validation message; CEL errors and unrelated
+    # schema/RBAC failures cannot establish the intended admission boundary.
+    status, body = response
     message = response[1].get("message", "")
+    policy = ADMISSION_PROFILES[profile]
     return (
-        forbidden(response)
+        (status, body.get("reason"), body.get("code"))
+        in {(403, "Forbidden", 403), (422, "Invalid", 422)}
         and isinstance(message, str)
-        and "ValidatingAdmissionPolicy" in message
-        and ADMISSION_PROFILES[profile] in message
+        and message.endswith(
+            f"ValidatingAdmissionPolicy '{policy}' with binding '{policy}' "
+            f"denied request: {ADMISSION_MESSAGES[profile]}"
+        )
     )
 
 
@@ -341,19 +357,30 @@ class LiveClient:
         }.get(profile)
         if namespace is None:
             raise SafeError("invalid-source")
-        return self.request(
-            self.proxy_url,
-            f"/api/v1/namespaces/{namespace}/pods?dryRun=All",
-            payload={
+        if profile in {"test-openbao-issuance", "test-openbao-ha"}:
+            from scripts.test.scenarios.openbao_issuance import pod_document
+
+            payload = pod_document("scoped-denial-probe", profile == "test-openbao-issuance")
+            payload["metadata"]["name"] = "homelab-scoped-denial-probe"
+        else:
+            payload = {
                 "apiVersion": "v1",
                 "kind": "Pod",
-                "metadata": {"name": "homelab-scoped-denial-probe", "namespace": namespace},
+                "metadata": {
+                    "name": "homelab-scoped-denial-probe",
+                    "namespace": namespace,
+                    "labels": {"homelab-talos/run-id": "1700000000-1"},
+                },
                 "spec": {
                     "restartPolicy": "Never",
                     "automountServiceAccountToken": False,
                     "containers": [{"name": "probe", "image": "registry.k8s.io/pause:3.10"}],
                 },
-            },
+            }
+        return self.request(
+            self.proxy_url,
+            f"/api/v1/namespaces/{namespace}/pods?dryRun=All",
+            payload=payload,
         )
 
     def expired(self):

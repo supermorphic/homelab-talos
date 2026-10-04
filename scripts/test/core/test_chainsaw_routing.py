@@ -21,6 +21,8 @@ class ChainsawRoutingTests(unittest.TestCase):
         binary_dir = self.root / "bin"
         binary_dir.mkdir()
         shutil.copy2(ROOT / "tests/fixtures/test-access/fake-uv.sh", binary_dir / "uv")
+        shutil.copy2(ROOT / "tests/fixtures/test-access/fake-mise.sh", binary_dir / "mise")
+        shutil.copy2(ROOT / "tests/fixtures/test-access/fake-talosctl.sh", binary_dir / "talosctl")
         (binary_dir / "kubectl").write_text("#!/usr/bin/env bash\nexit 0\n")
         (binary_dir / "chainsaw").write_text(
             """#!/usr/bin/env bash
@@ -57,6 +59,7 @@ fi
             "TEST_FIXTURE_REAL_UV": shutil.which("uv"),
             "TEST_FIXTURE_ACCESS_TRACE": str(self.root / "trace"),
             "TEST_FIXTURE_ACCESS_ROOT": str(self.root),
+            "TEST_FIXTURE_TALOS_ROOT": str(ROOT),
             "TEST_FIXTURE_ACCESS_FINALIZATION_ROOT": str(self.root / "results"),
             "TEST_RESULTS_ROOT": str(self.root / "results"),
             "TEST_KUBECONFIG": "",
@@ -76,6 +79,32 @@ fi
             timeout=15,
             check=False,
         )
+
+    def test_missing_reader_prerequisite_is_fully_synthetic_and_still_rejects_operator_role(self):
+        prerequisite_root = self.root / "prerequisite-root"
+        prerequisite_root.mkdir()
+        git = self.root / "bin/git"
+        git.write_text(
+            '#!/usr/bin/env bash\nset -euo pipefail\n'
+            '[[ "$*" == "rev-parse --show-toplevel" ]] || exit 2\n'
+            'printf "%s\\n" "$TEST_FIXTURE_TALOS_ROOT"\n'
+        )
+        git.chmod(0o755)
+        for role, expected in (("os:reader", 0), ("os:operator", 1)):
+            with self.subTest(role=role):
+                result = subprocess.run(
+                    ["bash", "-c", ('set -euo pipefail; source scripts/test/lib/access.sh; '
+                     'test_access_prerequisites \'{"prerequisites":["talos-reader"]}\'; '
+                     '[[ "$TALOSCONFIG" == "$TEST_FIXTURE_TALOS_ROOT/.talos/config" ]]')],
+                    cwd=ROOT,
+                    env={**self.environment, "TEST_FIXTURE_TALOS_ROOT": str(prerequisite_root),
+                         "TEST_FIXTURE_TALOS_ROLE": role, "TALOSCONFIG": "/synthetic/operator"},
+                    capture_output=True, text=True, timeout=10, check=False,
+                )
+                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                self.assertFalse((prerequisite_root / ".talos/config").exists())
+        self.assertEqual((self.root / "trace").read_text().splitlines(),
+                         ["talos-reader-bootstrap", "talos-reader-bootstrap"])
 
     def summary(self):
         paths = list((self.root / "results").glob("*/summary.json"))
