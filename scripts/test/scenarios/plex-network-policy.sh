@@ -26,7 +26,10 @@ image='ghcr.io/home-operations/plex:1.43.3.10828@sha256:0c0b6899339503af17cb190b
 temp_dir="$(mktemp -d /tmp/homelab-talos-plex-network-policy.XXXXXX)"
 kc=(kubectl --kubeconfig "$kubeconfig")
 created=false
-owned_ledger="${HOMELAB_TEST_RUN_DIR:-$temp_dir}/owned-resources.jsonl"
+owned_ledger="$temp_dir/owned-resources.jsonl"
+if [[ -n "${HOMELAB_TEST_RUN_DIR:-}" ]]; then
+  owned_ledger="$HOMELAB_TEST_RUN_DIR/diagnostics/owned-resources.jsonl"
+fi
 
 cleanup() {
   local cleanup_ok=true pod
