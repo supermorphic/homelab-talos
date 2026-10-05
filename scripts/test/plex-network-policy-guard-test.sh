@@ -269,7 +269,12 @@ if ! FAKE_DIAGNOSTIC_CONTEXT=true \
 fi
 
 echo '4. Happy path: control proves each target, the selected pod is denied, and the verifier runs last.'
-if ! PLEX_NETWORK_POLICY_CONFIRM='test:plex-network-policy' run_scenario; then
+canonical="$fixture/canonical"
+mkdir -p "$canonical/logs" "$canonical/diagnostics"
+touch "$canonical/environment.json" "$canonical/evidence.json" \
+  "$canonical/junit.xml" "$canonical/summary.json"
+if ! HOMELAB_TEST_RUN_DIR="$canonical" \
+  PLEX_NETWORK_POLICY_CONFIRM='test:plex-network-policy' run_scenario; then
   echo 'Happy-path scenario run failed.' >&2
   cat "$output" >&2
   exit 1
@@ -311,6 +316,23 @@ verify_line="$(line_number ' get kustomization plex ')"
 [[ "$verify_line" -gt "$ingress_line" ]]
 [[ "$(line_number ' delete --raw ')" -gt "$verify_line" ]]
 assert_cleanup_ran
+
+echo '4a. Recorded ownership evidence preserves the canonical six-entry structure.'
+expected_root=$'diagnostics\nenvironment.json\nevidence.json\njunit.xml\nlogs\nsummary.json'
+actual_root="$(find "$canonical" -mindepth 1 -maxdepth 1 -exec basename {} \; | LC_ALL=C sort)"
+[[ "$actual_root" == "$expected_root" ]] || {
+  echo 'Plex scenario added an unsupported canonical run-root entry.' >&2
+  diff -u <(printf '%s\n' "$expected_root") <(printf '%s\n' "$actual_root") >&2 || true
+  exit 1
+}
+# Use the real evidence indexer so retained ownership records must be discoverable.
+source scripts/test/lib/results.sh
+write_evidence_index "$canonical" fixture-run
+ledger_path="$(jq -er '.artifacts | select(length == 1) | .[0].path' "$canonical/evidence.json")"
+[[ "$ledger_path" == diagnostics/* ]]
+jq -se 'length == 2 and all(.[]; .kind == "Pod" and
+  .metadata.namespace == "media" and (.metadata.uid | length > 0))' \
+  "$canonical/$ledger_path" >/dev/null
 
 echo '5. A control target failure stops the run before any selected-pod probe.'
 if FAKE_CONTROL_OK=false PLEX_NETWORK_POLICY_CONFIRM='test:plex-network-policy' run_scenario; then
