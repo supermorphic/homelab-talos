@@ -266,6 +266,10 @@ checksum manifest uses byte ordering of complete relative paths on both the publ
 and installer, so archive integrity checks do not depend on host locale or programming
 language path-ordering conventions.
 
+The serving container has a bounded memory limit shared by Caddy, publication
+subprocesses, and filesystem cache. This budget includes the staged archive and
+complete generated native reports, including Sonobuoy results.
+
 The server's retained Longhorn `ReadWriteOnce` claim is mounted by a one-replica `Recreate`
 Deployment, and Flux prune protection prevents Kustomization removal from implicitly
 authorizing archive deletion.
