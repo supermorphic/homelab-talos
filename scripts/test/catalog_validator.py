@@ -71,6 +71,10 @@ CI_HARNESS_GROUPS = (
     ("ci-framework", "ci-framework"),
 )
 STANDALONE_SUITES = {
+    # Real credential lifetime proof is infrequent acceptance, not a periodic suite.
+    "test.credential-issuer.cilium",
+    "test.credential-issuer.openbao-ha",
+    "test.credential-issuer.openbao-restore",
     # An attended comic fixture is required; this must never join broad campaigns.
     "test.mylar3-acceptance",
     "test.mylar3-integrity",

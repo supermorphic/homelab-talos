@@ -4,8 +4,17 @@ source scripts/lib/common.sh
 source scripts/lib/lease.sh
 source scripts/test/lib/owned-resources.sh
 require_bash
-[[ "$#" -eq 1 ]] || { echo 'Usage: cilium-connectivity.sh <kubeconfig>' >&2; exit 2; }
+[[ "$#" -eq 1 || ( "$#" -eq 2 && "$2" == credential-issuer ) ]] || { echo 'Usage: cilium-connectivity.sh <kubeconfig> [credential-issuer]' >&2; exit 2; }
 kubeconfig="$1"
+issuer_slice=false
+selection=(--test '!no-unexpected-packet-drops')
+console=(cat)
+if [[ "${2:-}" == credential-issuer ]]; then
+  selection_json="$(uv run --locked --no-dev python -m scripts.test.scenarios.credential_issuer cilium-arguments)"
+  mapfile -t selection < <(jq -r '.[]' <<<"$selection_json")
+  issuer_slice=true
+  console=(tee "${HOMELAB_TEST_RUN_DIR:?}/diagnostics/cilium-credential-issuer.log")
+fi
 [[ -f "$kubeconfig" ]] || { echo "Missing selected invocation config: $kubeconfig." >&2; exit 1; }
 [[ "${CILIUM_CONNECTIVITY_CONFIRM:-}" == test:cilium-connectivity ]] || {
   echo "Refusing state-changing Cilium connectivity test; set CILIUM_CONNECTIVITY_CONFIRM='test:cilium-connectivity' after reviewing its cleanup scope." >&2
@@ -93,6 +102,7 @@ for namespace in "${namespaces[@]}"; do
   test_create_owned "$ledger" "$diagnostic_dir/binding.json" "${kc[@]}" --namespace "$namespace"
 done
 echo "Connectivity-test diagnostics, if required, will remain in $diagnostic_dir."
+native_started="$EPOCHSECONDS"
 if cilium connectivity test \
   --kubeconfig "$kubeconfig" \
   --namespace kube-system \
@@ -102,10 +112,13 @@ if cilium connectivity test \
   --ip-families ipv4 \
   --hubble=false \
   --flow-validation disabled \
-  --test '!no-unexpected-packet-drops' \
+  "${selection[@]}" \
   --timeout 45m \
   --sysdump-output-filename "$diagnostic_dir/cilium-sysdump-<ts>" 2>&1 | \
-  sed -E 's/(containerID=)[[:xdigit:]]{64}([[:space:]]|$)/\1[redacted]\2/g'; then
+  sed -E 's/(containerID=)[[:xdigit:]]{64}([[:space:]]|$)/\1[redacted]\2/g' | "${console[@]}"; then
+  if [[ "$issuer_slice" == true ]]; then
+    uv run --locked --no-dev python -m scripts.test.scenarios.credential_issuer cilium-result "$((EPOCHSECONDS - native_started))"
+  fi
   echo 'Cilium connectivity assertions passed; removing owned fixtures and checking postflight.'
 else
   primary="$?"

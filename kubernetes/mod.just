@@ -454,6 +454,17 @@ cilium-verify: require-bash
 cilium-connectivity-test: require-bash
     @scripts/test/run-catalog-suite.sh test.cilium-connectivity -- scripts/test/scenarios/cilium-connectivity.sh {{quote(test_kubeconfig)}}
 
+# Issuer acceptance uses fixed native cases and actual credential expiry proof.
+cilium-credential-issuer-test: require-bash
+    @TEST_ACCESS_ACCEPTANCE_CONFIRM=verify:scoped-access:ttl-and-denials scripts/test/run-catalog-suite.sh test.credential-issuer.cilium -- scripts/test/scenarios/cilium-connectivity.sh {{quote(test_kubeconfig)}} credential-issuer
+
+# Dry-run profile proof; full HA and restore retain their attended inputs.
+credential-issuer-test target: require-bash
+    #!/usr/bin/env bash
+    target={{quote(target)}}
+    [[ "$target" == openbao-ha || "$target" == openbao-restore ]] || { echo 'Select openbao-ha or openbao-restore.' >&2; exit 2; }
+    TEST_ACCESS_ACCEPTANCE_CONFIRM=verify:scoped-access:ttl-and-denials scripts/test/run-catalog-suite.sh "test.credential-issuer.$target" -- uv run --locked --no-dev python -m scripts.test.scenarios.credential_issuer "$target"
+
 # Validate the complete local Flux source and pinned OCI render without mutating the cluster.
 flux-validate: require-bash
     @scripts/validate/flux.sh
