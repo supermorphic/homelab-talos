@@ -21,7 +21,23 @@ case " $* " in
 *' get secret flux-system-forgejo '*) cat "$FLUX_TEST_ROOT/secret.json" ;;
 *' apply --kustomize kubernetes/flux/clusters/prod/flux-system '*) echo apply >>"$FLUX_TEST_ROOT/calls" ;;
 *' get gitrepository '*) cat "$FLUX_TEST_ROOT/source.json" ;;
-*' get kustomizations '*) cat "$FLUX_TEST_ROOT/kustomizations.json" ;;
+*' get kustomizations '*)
+  if [[ "${FLUX_TEST_WAIT:-false}" == true ]]; then
+    [[ " $* " == *" --kubeconfig $FLUX_TEST_ROOT/kubeconfig "* && " $* " == *' --request-timeout='* ]]
+    count_file="$FLUX_TEST_ROOT/application-reads"
+    reads=1
+    [[ ! -f "$count_file" ]] || reads=$(( $(<"$count_file") + 1 ))
+    printf '%s\n' "$reads" >"$count_file"
+    [[ "${FLUX_TEST_WAIT_API_ERROR:-false}" != true ]] || exit 1
+    if [[ "${FLUX_TEST_WAIT_LATE:-false}" == true ]]; then
+      echo 301 >"$FLUX_TEST_ROOT/clock"
+    fi
+    if [[ "${FLUX_TEST_WAIT_RECOVER:-false}" == true && "$reads" == 1 ]]; then
+      yq -o=json '(.items[] | select(.metadata.name == "example-app") | .status.conditions[0].status) = "False"' "$FLUX_TEST_ROOT/kustomizations.json"
+      exit
+    fi
+  fi
+  cat "$FLUX_TEST_ROOT/kustomizations.json" ;;
 *' get kustomization '*)
   for name in flux-system cluster-apps cilium flux-canary; do
     if [[ " $* " == *" get kustomization $name "* ]]; then
@@ -155,3 +171,71 @@ if FLUX_TEST_MISSING_CONTROLLER=true FLUX_TEST_MISSING_OWNERSHIP=true "$real_jus
 	exit 1
 fi
 echo 'Flux missing-controller recovery preflight tests passed.'
+
+# Exercise the actual test-owned convergence wait. Only this offline fixture
+# replaces the clock; the production helper has no synthetic-time setting.
+cat >"$fixture_root/bin/date" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == '-u +%s' ]]
+cat "$FLUX_TEST_ROOT/clock"
+EOF
+cat >"$fixture_root/bin/sleep" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == 5 ]]
+advance="$1"
+[[ "${FLUX_TEST_WAIT_TIMEOUT:-false}" != true ]] || advance=300
+echo "$(( $(<"$FLUX_TEST_ROOT/clock") + advance ))" >"$FLUX_TEST_ROOT/clock"
+EOF
+chmod +x "$fixture_root/bin/date" "$fixture_root/bin/sleep"
+export FLUX_TEST_WAIT=true
+
+reset_wait_fixture() {
+  reset_fixture
+  echo 0 >"$fixture_root/clock"
+  rm -f "$fixture_root/application-reads"
+}
+expect_wait_failure() {
+  if bash scripts/test/scenarios/flux-restart-wait.sh "$fixture_root/kubeconfig" >"$fixture_root/output" 2>&1; then
+    echo "Flux restart wait incorrectly accepted $1." >&2
+    exit 1
+  fi
+  [[ "$(<"$fixture_root/application-reads")" == 1 ]]
+}
+
+reset_wait_fixture
+FLUX_TEST_WAIT_RECOVER=true bash scripts/test/scenarios/flux-restart-wait.sh "$fixture_root/kubeconfig"
+[[ "$(<"$fixture_root/application-reads")" == 2 && "$(<"$fixture_root/clock")" == 5 ]]
+for mutation in \
+  '(.items[] | select(.metadata.name == "example-app") | .status.lastAppliedRevision) = "main@sha1:old"' \
+  '(.items[] | select(.metadata.name == "example-app") | .status.observedGeneration) = 1' \
+  '(.items[] | select(.metadata.name == "example-app") | .status.conditions[0].observedGeneration) = 1' \
+  '(.items[] | select(.metadata.name == "example-app") | .status.conditions[0].status) = "False"'; do
+  reset_wait_fixture
+  yq -i "$mutation" "$fixture_root/kustomizations.json"
+  FLUX_TEST_WAIT_TIMEOUT=true expect_wait_failure "$mutation"
+  rg -q 'within five minutes' "$fixture_root/output"
+  [[ "$(<"$fixture_root/clock")" == 300 ]]
+done
+for snapshot in '{"items":[]}' '{"items":{}}' 'invalid-json'; do
+  reset_wait_fixture
+  printf '%s\n' "$snapshot" >"$fixture_root/kustomizations.json"
+  expect_wait_failure "$snapshot"
+  [[ "$(<"$fixture_root/clock")" == 0 ]]
+done
+reset_wait_fixture
+yq -i '.items[].spec.sourceRef.name = "other-source"' "$fixture_root/kustomizations.json"
+expect_wait_failure 'no active consumers of the required source'
+reset_wait_fixture
+FLUX_TEST_WAIT_API_ERROR=true expect_wait_failure 'API failure'
+[[ "$(<"$fixture_root/clock")" == 0 ]]
+reset_wait_fixture
+FLUX_TEST_WAIT_LATE=true expect_wait_failure 'positive response after the deadline'
+rg -q 'within five minutes' "$fixture_root/output"
+reset_wait_fixture
+yq -i '(.items[] | select(.metadata.name == "example-app") | .spec.suspend) = true |
+  (.items[] | select(.metadata.name == "example-app") | .status.conditions[0].status) = "False"' "$fixture_root/kustomizations.json"
+bash scripts/test/scenarios/flux-restart-wait.sh "$fixture_root/kubeconfig"
+[[ "$(<"$fixture_root/application-reads")" == 1 ]]
+echo 'Flux restart application convergence tests passed.'

@@ -243,7 +243,7 @@ issued through the same OpenBao interface; none is a default or an error fallbac
 
 | Profile | Catalog binding | Required distinction |
 | --- | --- | --- |
-| `test-flux-restart` | `test.flux-restart` | Restart the four named Flux controller Deployments and request named source/application reconciliation. Restrict patch shape to the intended restart/reconcile fields. |
+| `test-flux-restart` | `test.flux-restart` | Restart the four named Flux controller Deployments and request named source/application reconciliation. Restrict patch shape to the intended restart/reconcile fields. Wait up to five minutes for all active source consumers to report their current generation and main revision before the unchanged final Flux verifier. |
 | `test-cilium-connectivity` | `test.cilium-connectivity` | Canonical privileged connectivity workloads, test namespace/account lifecycle, cluster policy fixtures, Cilium runtime access, and canonical failure diagnostics. |
 | `test-node-reschedule` | `chainsaw.resilience.plex-cross-node-reschedule` | Named cluster Node scheduling changes plus the required Plex/media disruption and storage observations. No unrelated Node-field changes. |
 | `test-conformance` | `conformance.quick`, `conformance.certified` | Exceptional Kubernetes administrator authority required by the current Sonobuoy/conformance workload and RBAC lifecycle. Both modes share the profile. |

@@ -616,6 +616,7 @@ _flux-restart-raw: require-bash
       --kubeconfig "$kubeconfig" \
       --timeout 10m
 
+    bash scripts/test/scenarios/flux-restart-wait.sh "$kubeconfig"
     just kube flux-verify
     echo 'Flux controllers restarted; controllers are healthy and reconciliation resumed.'
 
