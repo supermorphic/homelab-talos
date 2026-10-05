@@ -579,8 +579,12 @@ and subresources still rely on the deployed status guard for schema checks.
 
 Kubernetes omits empty optional admission request fields. Main-resource checks
 accept either an absent or empty `request.subResource`; cluster-scoped checks
-accept either an absent or empty `request.namespace`. Named namespace and
-subresource checks retain exact comparisons. The dedicated request fixtures
+accept either an absent or empty `request.namespace`. Namespace resources are
+an exception: Kubernetes puts the target Namespace name in its admission
+attributes for creation, updates, and deletion. Their dedicated connectivity
+policy requires `request.namespace == request.name` and retains the three
+registered fixture names. Named namespace and subresource checks retain exact
+comparisons. The dedicated request fixtures
 verify that omitting either or both empty fields preserves every allow/deny
 decision, including forbidden workload shapes and nonempty field values.
 
