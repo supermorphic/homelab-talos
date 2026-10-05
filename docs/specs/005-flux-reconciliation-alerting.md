@@ -91,6 +91,18 @@ health, presence of all five resource kinds, rule health, Alertmanager connectiv
 the expected ntfy receiver and route. Live acceptance observed all five kinds and
 healthy inactive rules after adding the required CRD-discovery permission.
 
+Scoped diagnostics query the API server's authorization review endpoint for the
+exporter ServiceAccount and its standard groups, without impersonating it. Raw
+exporter metrics use GET through the named monitoring Service's `http` proxy
+port. Observer and debugger receive these separate observation grants through
+Git; mutation and publication identities do not inherit them. The current
+Service exposes no configuration telemetry port. If Flux series are absent,
+the raw metric stage fails and supplemental telemetry is limited to metrics
+available through the same named Service. It never retries through a Pod proxy
+or another port. Live validation after deployment must prove the complete
+native diagnostic and denial of unrelated Service proxy and impersonation
+requests with the selected observer credential.
+
 The implemented confirmation-guarded firing-and-resolved scenario creates a run-owned
 Flux Kustomization with a deliberately missing source. It is designed to exercise the
 real path from Flux resource failure through `gotk_resource_info`, the production

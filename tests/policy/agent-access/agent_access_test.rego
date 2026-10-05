@@ -95,89 +95,102 @@ read_rules := [{
 	resources := read_requirements[api_group]
 ]
 
-valid_fixture_base := [
-	service_account("homelab-campaign-coordinator"),
-	role("homelab-campaign-coordinator", "flux-system", [{
-		"apiGroups": ["coordination.k8s.io"], "resources": ["leases"],
-		"resourceNames": ["homelab-test-run-lock"], "verbs": ["get", "update"],
-	}]),
-	role_binding("homelab-campaign-coordinator", "flux-system", "homelab-campaign-coordinator", "kube-system", "homelab-campaign-coordinator"),
-	role("openbao-agent-tokenrequest", "kube-system", [{
-		"apiGroups": [""], "resources": ["serviceaccounts/token"],
-		"resourceNames": ["homelab-observer", "homelab-diagnostic", "homelab-report-publisher", "homelab-campaign-coordinator", "homelab-test-runner", "homelab-test-flux-restart", "homelab-test-cilium-connectivity", "homelab-test-node-reschedule", "homelab-test-conformance", "homelab-test-openbao-issuance", "homelab-test-openbao-ha", "homelab-test-openbao-restore", "homelab-test-openbao-lifecycle"],
-		"verbs": ["create"],
-	}]),
-	role_binding("openbao-agent-tokenrequest", "kube-system", "openbao", "openbao", "openbao-agent-tokenrequest"),
-	lease("homelab-test-run-lock", "flux-system"),
-	service_account("homelab-observer"),
-	service_account("homelab-diagnostic"),
-	service_account("homelab-report-publisher"),
-	cluster_role_binding("homelab-observer-view", ["homelab-observer"], "view"),
-	cluster_role_binding("homelab-diagnostic-view", ["homelab-diagnostic"], "view"),
-	cluster_role("homelab-observer-extra", array.concat(
-		[
-			{"apiGroups": [""], "resources": ["pods/log"], "verbs": ["get"]},
-			{"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch"]},
-		],
-		read_rules,
-	)),
-	cluster_role_binding(
-		"homelab-observer-extra",
-		["homelab-observer", "homelab-diagnostic"],
-		"homelab-observer-extra",
-	),
-	cluster_role("homelab-diagnostic-exec", [{"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["create"]}]),
-	cluster_role("homelab-diagnostic-portforward", [{"apiGroups": [""], "resources": ["pods/portforward"], "verbs": ["create"]}]),
-	role("homelab-report-publisher-test-reports", "test-reports", [
-		{
-			"apiGroups": ["apps"],
-			"resources": ["deployments"],
-			"resourceNames": ["test-reports"],
-			"verbs": ["get", "list", "watch"],
-		},
-		{"apiGroups": [""], "resources": ["pods"], "verbs": ["get", "list"]},
-		{"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["create"]},
-	]),
-	role_binding(
-		"homelab-report-publisher-test-reports",
-		"test-reports",
-		"homelab-report-publisher",
-		"kube-system",
-		"homelab-report-publisher-test-reports",
-	),
-	role("homelab-report-publisher-flux-system", "flux-system", [
-		{
-			"apiGroups": ["source.toolkit.fluxcd.io"],
-			"resources": ["gitrepositories"],
-			"resourceNames": ["flux-system"],
-			"verbs": ["get"],
-		},
-		{
-			"apiGroups": ["coordination.k8s.io"],
-			"resources": ["leases"],
-			"resourceNames": ["homelab-test-report-publish-lock"],
-			"verbs": ["get", "update"],
-		},
-	]),
-	role_binding(
-		"homelab-report-publisher-flux-system",
-		"flux-system",
-		"homelab-report-publisher",
-		"kube-system",
-		"homelab-report-publisher-flux-system",
-	),
-	role("homelab-automation-data-connect", "automation-data", [{
-		"apiGroups": [""],
-		"resources": ["pods/portforward"],
-		"resourceNames": ["automation-data-postgresql-0"],
-		"verbs": ["create"],
-	}]),
-	role_binding(
-		"homelab-automation-data-connect", "automation-data",
-		"homelab-diagnostic", "kube-system", "homelab-automation-data-connect",
-	),
-	lease("homelab-test-report-publish-lock", "flux-system"),
+flux_observation_fixture := [
+	cluster_role("homelab-flux-observation-authorize", [{"apiGroups": ["authorization.k8s.io"], "resources": ["subjectaccessreviews"], "verbs": ["create"]}]),
+	cluster_role_binding("homelab-flux-observation-authorize", ["homelab-observer", "homelab-diagnostic"], "homelab-flux-observation-authorize"),
+	role("homelab-flux-observation-metrics", "monitoring", [{"apiGroups": [""], "resources": ["services/proxy"], "resourceNames": ["kube-prometheus-stack-kube-state-metrics:http"], "verbs": ["get"]}]),
+	object.union(role_binding("homelab-flux-observation-metrics", "monitoring", "homelab-observer", "kube-system", "homelab-flux-observation-metrics"), {"subjects": [
+		{"kind": "ServiceAccount", "name": "homelab-observer", "namespace": "kube-system"},
+		{"kind": "ServiceAccount", "name": "homelab-diagnostic", "namespace": "kube-system"},
+	]}),
 ]
+
+valid_fixture_base := array.concat(
+	[
+		service_account("homelab-campaign-coordinator"),
+		role("homelab-campaign-coordinator", "flux-system", [{
+			"apiGroups": ["coordination.k8s.io"], "resources": ["leases"],
+			"resourceNames": ["homelab-test-run-lock"], "verbs": ["get", "update"],
+		}]),
+		role_binding("homelab-campaign-coordinator", "flux-system", "homelab-campaign-coordinator", "kube-system", "homelab-campaign-coordinator"),
+		role("openbao-agent-tokenrequest", "kube-system", [{
+			"apiGroups": [""], "resources": ["serviceaccounts/token"],
+			"resourceNames": ["homelab-observer", "homelab-diagnostic", "homelab-report-publisher", "homelab-campaign-coordinator", "homelab-test-runner", "homelab-test-flux-restart", "homelab-test-cilium-connectivity", "homelab-test-node-reschedule", "homelab-test-conformance", "homelab-test-openbao-issuance", "homelab-test-openbao-ha", "homelab-test-openbao-restore", "homelab-test-openbao-lifecycle"],
+			"verbs": ["create"],
+		}]),
+		role_binding("openbao-agent-tokenrequest", "kube-system", "openbao", "openbao", "openbao-agent-tokenrequest"),
+		lease("homelab-test-run-lock", "flux-system"),
+		service_account("homelab-observer"),
+		service_account("homelab-diagnostic"),
+		service_account("homelab-report-publisher"),
+		cluster_role_binding("homelab-observer-view", ["homelab-observer"], "view"),
+		cluster_role_binding("homelab-diagnostic-view", ["homelab-diagnostic"], "view"),
+		cluster_role("homelab-observer-extra", array.concat(
+			[
+				{"apiGroups": [""], "resources": ["pods/log"], "verbs": ["get"]},
+				{"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch"]},
+			],
+			read_rules,
+		)),
+		cluster_role_binding(
+			"homelab-observer-extra",
+			["homelab-observer", "homelab-diagnostic"],
+			"homelab-observer-extra",
+		),
+		cluster_role("homelab-diagnostic-exec", [{"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["create"]}]),
+		cluster_role("homelab-diagnostic-portforward", [{"apiGroups": [""], "resources": ["pods/portforward"], "verbs": ["create"]}]),
+		role("homelab-report-publisher-test-reports", "test-reports", [
+			{
+				"apiGroups": ["apps"],
+				"resources": ["deployments"],
+				"resourceNames": ["test-reports"],
+				"verbs": ["get", "list", "watch"],
+			},
+			{"apiGroups": [""], "resources": ["pods"], "verbs": ["get", "list"]},
+			{"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["create"]},
+		]),
+		role_binding(
+			"homelab-report-publisher-test-reports",
+			"test-reports",
+			"homelab-report-publisher",
+			"kube-system",
+			"homelab-report-publisher-test-reports",
+		),
+		role("homelab-report-publisher-flux-system", "flux-system", [
+			{
+				"apiGroups": ["source.toolkit.fluxcd.io"],
+				"resources": ["gitrepositories"],
+				"resourceNames": ["flux-system"],
+				"verbs": ["get"],
+			},
+			{
+				"apiGroups": ["coordination.k8s.io"],
+				"resources": ["leases"],
+				"resourceNames": ["homelab-test-report-publish-lock"],
+				"verbs": ["get", "update"],
+			},
+		]),
+		role_binding(
+			"homelab-report-publisher-flux-system",
+			"flux-system",
+			"homelab-report-publisher",
+			"kube-system",
+			"homelab-report-publisher-flux-system",
+		),
+		role("homelab-automation-data-connect", "automation-data", [{
+			"apiGroups": [""],
+			"resources": ["pods/portforward"],
+			"resourceNames": ["automation-data-postgresql-0"],
+			"verbs": ["create"],
+		}]),
+		role_binding(
+			"homelab-automation-data-connect", "automation-data",
+			"homelab-diagnostic", "kube-system", "homelab-automation-data-connect",
+		),
+		lease("homelab-test-report-publish-lock", "flux-system"),
+	],
+	flux_observation_fixture,
+)
 
 diagnostic_test_namespaces := {
 	"exec": ["kube-system", "media", "homepage", "ntfy", "automation"],
@@ -256,6 +269,63 @@ message |
 test_complete_valid_fixture_has_zero_denials if {
 	messages := deny with input as valid_fixture
 	count(messages) == 0
+}
+
+test_flux_observation_reviews_cannot_gain_other_authority if {
+	every resource in ["subjectrulesreviews", "secrets", "serviceaccounts/token", "pods/proxy"] {
+		fixture := [document_with_rule(document, "homelab-flux-observation-authorize", {"apiGroups": ["authorization.k8s.io"], "resources": [resource], "verbs": ["create"]}) | some document in flux_observation_fixture]
+		deny["Flux observation must grant only authorization review queries"] with input as fixture
+	}
+}
+
+test_flux_observation_metrics_cannot_gain_other_authority if {
+	every rule in [
+		{"apiGroups": [""], "resources": ["services/proxy"], "verbs": ["get"]},
+		{"apiGroups": [""], "resources": ["services/proxy"], "resourceNames": ["unrelated:http"], "verbs": ["get"]},
+		{"apiGroups": [""], "resources": ["services/proxy"], "resourceNames": ["kube-prometheus-stack-kube-state-metrics:8081"], "verbs": ["get"]},
+		{"apiGroups": [""], "resources": ["services/proxy"], "resourceNames": ["kube-prometheus-stack-kube-state-metrics:http"], "verbs": ["create"]},
+		{"apiGroups": [""], "resources": ["pods/proxy"], "verbs": ["get"]},
+		{"apiGroups": [""], "resources": ["serviceaccounts"], "verbs": ["impersonate"]},
+	] {
+		fixture := [document_with_rule(document, "homelab-flux-observation-metrics", rule) | some document in flux_observation_fixture]
+		deny["agent Role homelab-flux-observation-metrics must match its exact named grant"] with input as fixture
+	}
+}
+
+test_flux_observation_bindings_reject_other_identities_and_aliases if {
+	every subject in ["homelab-test-runner", "homelab-report-publisher", "homelab-campaign-coordinator"] {
+		fixture := array.concat(flux_observation_fixture, [cluster_role_binding("homelab-observer-view", [subject], "homelab-flux-observation-authorize")])
+		deny["Flux observation binding has unexpected authority"] with input as fixture
+	}
+}
+
+test_flux_observation_metrics_requires_monitoring if {
+	fixture := [object.union(document, {"metadata": object.union(document.metadata, {"namespace": "media"})}) |
+		some document in flux_observation_fixture
+		document.metadata.name == "homelab-flux-observation-metrics"
+	]
+	unrelated := [document | some document in flux_observation_fixture; document.metadata.name != "homelab-flux-observation-metrics"]
+	deny["agent Role homelab-flux-observation-metrics must match its exact named grant"] with input as array.concat(unrelated, fixture)
+}
+
+test_flux_observation_authorization_binding_requires_exact_reference if {
+	fixture := [object.union(document, {"roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "view"}}) |
+		some document in flux_observation_fixture
+		document.kind == "ClusterRoleBinding"
+	]
+	deny["Flux authorization observation must bind only observer and debugger once"] with input as fixture
+}
+
+test_flux_observation_authorization_binding_cannot_be_missing if {
+	deny["Flux authorization observation must bind only observer and debugger once"] with input as []
+}
+
+test_flux_observation_review_role_cannot_aggregate_to_view if {
+	fixture := [object.union(document, {"metadata": object.union(document.metadata, {"labels": {"rbac.authorization.k8s.io/aggregate-to-view": "true"}})}) |
+		some document in flux_observation_fixture
+		document.kind == "ClusterRole"
+	]
+	deny["Flux observation must grant only authorization review queries"] with input as fixture
 }
 
 test_connection_role_must_be_named_and_fixed if {

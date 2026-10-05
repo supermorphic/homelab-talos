@@ -237,6 +237,59 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
+  name: homelab-flux-observation-authorize
+rules:
+  - apiGroups: [authorization.k8s.io]
+    resources: [subjectaccessreviews]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-flux-observation-authorize
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homelab-flux-observation-authorize
+subjects:
+  - kind: ServiceAccount
+    name: homelab-observer
+    namespace: kube-system
+  - kind: ServiceAccount
+    name: homelab-diagnostic
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-flux-observation-metrics
+  namespace: monitoring
+rules:
+  - apiGroups: [""]
+    resources: [services/proxy]
+    resourceNames: ["kube-prometheus-stack-kube-state-metrics:http"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-flux-observation-metrics
+  namespace: monitoring
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-flux-observation-metrics
+subjects:
+  - kind: ServiceAccount
+    name: homelab-observer
+    namespace: kube-system
+  - kind: ServiceAccount
+    name: homelab-diagnostic
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
   name: homelab-diagnostic-exec
 rules:
   - apiGroups: [""]
