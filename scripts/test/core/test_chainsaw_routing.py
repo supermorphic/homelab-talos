@@ -106,6 +106,11 @@ fi
         self.assertEqual((self.root / "trace").read_text().splitlines(),
                          ["talos-reader-bootstrap", "talos-reader-bootstrap"])
 
+    def test_campaign_missing_reader_prerequisite_is_fully_synthetic(self):
+        shutil.copy2(ROOT / "tests/fixtures/campaign/fake-mise.sh", self.root / "bin/mise")
+        self.environment["CAMPAIGN_TEST_REPO_ROOT"] = str(ROOT)
+        self.test_missing_reader_prerequisite_is_fully_synthetic_and_still_rejects_operator_role()
+
     def summary(self):
         paths = list((self.root / "results").glob("*/summary.json"))
         self.assertEqual(len(paths), 1)

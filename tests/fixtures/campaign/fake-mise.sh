@@ -2,8 +2,7 @@
 set -euo pipefail
 
 if [[ "$*" == 'exec -- just talos readerconfig' ]]; then
-  [[ "${TALOSCONFIG:-}" == "$CAMPAIGN_TEST_REPO_ROOT/.talos/config" ]]
-  exit
+  exec "${CAMPAIGN_TEST_REPO_ROOT:?}/tests/fixtures/test-access/fake-mise.sh" "$@"
 fi
 
 [[ -z "${TEST_CAMPAIGN_CONFIRM+x}" ]] || {

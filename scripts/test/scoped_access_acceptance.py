@@ -18,6 +18,8 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
+import yaml
+
 from scripts.openbao import credentials, guards, issuance
 from scripts.openbao.configuration import SafeError
 from scripts.test import access, junit_report
@@ -27,6 +29,96 @@ ROOT = Path(__file__).resolve().parents[2]
 CONFIRMATION = "verify:scoped-access:ttl-and-denials"
 SELF_REVIEW = "/apis/authentication.k8s.io/v1/selfsubjectreviews"
 NODES = "/api/v1/nodes?limit=1"
+NATIVE_SONOBUOY_SECONDS = 600 + issuance.SKEW + issuance.API_EXPIRY_LEEWAY + 5
+
+
+def sonobuoy_native_manifest(source):
+    """Keep the native quick client polling without changing the E2E program."""
+    from scripts.test.scenarios.openbao_issuance import IMAGE
+
+    documents = [doc for doc in yaml.safe_load_all(source) if doc]
+    plugins = [
+        doc
+        for doc in documents
+        if doc.get("kind") == "ConfigMap"
+        and doc.get("metadata", {}).get("name") == "sonobuoy-plugins-cm"
+    ]
+    if len(plugins) != 1 or set(plugins[0].get("data", {})) != {"plugin-0.yaml"}:
+        raise SafeError("invalid-source")
+    plugin = yaml.safe_load(plugins[0]["data"]["plugin-0.yaml"])
+    if (
+        plugin.get("sonobuoy-config")
+        != {"driver": "Job", "plugin-name": "e2e", "result-format": "junit"}
+        or [entry for entry in plugin["spec"]["env"] if entry["name"] == "E2E_FOCUS"]
+        != [{"name": "E2E_FOCUS", "value": "Pods should be submitted and removed"}]
+        or plugin["podSpec"].get("initContainers")
+    ):
+        raise SafeError("invalid-source")
+    plugin["podSpec"]["initContainers"] = [
+        {
+            "name": "scoped-client-lifetime",
+            "image": IMAGE,
+            "command": ["python", "-c", f"import time; time.sleep({NATIVE_SONOBUOY_SECONDS})"],
+            "resources": {
+                "requests": {"cpu": "1m", "memory": "16Mi"},
+                "limits": {"cpu": "100m", "memory": "64Mi"},
+            },
+            "securityContext": {
+                "runAsNonRoot": True,
+                "runAsUser": 65532,
+                "allowPrivilegeEscalation": False,
+                "readOnlyRootFilesystem": True,
+                "capabilities": {"drop": ["ALL"]},
+                "seccompProfile": {"type": "RuntimeDefault"},
+            },
+        }
+    ]
+    plugins[0]["data"]["plugin-0.yaml"] = yaml.safe_dump(plugin, sort_keys=False)
+    return yaml.safe_dump_all(documents, sort_keys=False)
+
+
+def sonobuoy_native_window(start, finish):
+    if type(start) is not int or type(finish) is not int or start < 0 or finish < start:
+        raise SafeError("invalid-source")
+    elapsed = finish - start
+    return {
+        "status": "pass" if elapsed >= NATIVE_SONOBUOY_SECONDS else "fail",
+        "elapsed_seconds": elapsed,
+        "minimum_seconds": NATIVE_SONOBUOY_SECONDS,
+    }
+
+
+def native_sonobuoy_main(argv):
+    result = {"status": "fail"}
+    run_dir = None
+    phase = argv[1]
+    try:
+        config, run_dir = access.suite_inputs(ROOT, "conformance.quick")
+        binding = access.validate_invocation(ROOT, config)
+        if binding["profile"] != "test-conformance" or binding["suite_id"] != "conformance.quick":
+            raise SafeError("invalid-source")
+        if phase == "native-sonobuoy-manifest" and len(argv) == 2:
+            print(sonobuoy_native_manifest(sys.stdin.read()), end="")
+            return 0
+        if phase != "native-sonobuoy-window" or len(argv) != 4:
+            raise SafeError("invalid-source")
+        result = sonobuoy_native_window(int(argv[2]), int(argv[3]))
+    except BaseException as error:  # noqa: BLE001 -- Never expose adapter/source bodies.
+        result["classification"] = (
+            str(error) if isinstance(error, SafeError) else "invalid-response"
+        )
+    if phase == "native-sonobuoy-window" and run_dir is not None:
+        atomic_write_json(run_dir / "diagnostics/sonobuoy/native-client-lifetime.json", result)
+        junit_report.write_case(
+            run_dir / "diagnostics/fragments/sonobuoy-native-client.xml",
+            "conformance.quick",
+            "native-sonobuoy-client-refresh",
+            "passed" if result["status"] == "pass" else "failed",
+            str(result.get("elapsed_seconds", 0)),
+        )
+    print(json.dumps(result, sort_keys=True))
+    return 0 if result["status"] == "pass" else 1
+
 
 ADMISSION_PROFILES = {
     "test-runner": "homelab-test-probe-pods",
@@ -388,6 +480,8 @@ class LiveClient:
 
 
 def main(argv):
+    if len(argv) > 1 and argv[1] in {"native-sonobuoy-manifest", "native-sonobuoy-window"}:
+        return native_sonobuoy_main(argv)
     result = {"status": "fail", "phases": []}
     run_dir = None
     started = time.monotonic()
