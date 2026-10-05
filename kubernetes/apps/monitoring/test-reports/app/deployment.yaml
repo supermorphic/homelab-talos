@@ -91,7 +91,8 @@ spec:
               cpu: 10m
               memory: 32Mi
             limits:
-              memory: 128Mi
+              # Includes publication subprocesses and full native report file cache.
+              memory: 512Mi
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
