@@ -18,8 +18,13 @@ class StateClient:
         self.responses = json.loads(
             (Path(__file__).parent / "fixtures/openbao-2.7-read-responses.json").read_text()
         )
-        self.responses.update(json.loads(
-            (Path(__file__).parent / "fixtures/openbao-scoped-profile-responses.json").read_text())["responses"])
+        self.responses.update(
+            json.loads(
+                (
+                    Path(__file__).parent / "fixtures/openbao-scoped-profile-responses.json"
+                ).read_text()
+            )["responses"]
+        )
         self.readbacks = {}
         for spec in self.document["objects"]:
             if spec.kind in {"auth-method", "secret-mount"}:
@@ -36,6 +41,8 @@ class StateClient:
         self.state[("jwt-config", "homelab-jwt")] = copy.deepcopy(self.jwt_readback)
         self.writes = []
         self.ignore_writes = False
+        self.deletes = []
+        self.ignore_deletes = False
         self.audit = {
             "homelab/": {
                 "type": "file",
@@ -63,6 +70,8 @@ class StateClient:
         for spec in self.document["objects"]:
             if path == spec.path:
                 return copy.deepcopy(self.state.get((spec.kind, spec.name)))
+        if path.startswith("kubernetes/roles/"):
+            return copy.deepcopy(self.state.get(("issuance-role", path.rsplit("/", 1)[1])))
         raise AssertionError(path)
 
     def post(self, path, payload, token=None):
@@ -71,7 +80,8 @@ class StateClient:
             for spec in self.document["objects"]:
                 if path == spec.path.rstrip("/"):
                     self.state[(spec.kind, spec.name)] = {
-                        **copy.deepcopy(self.readbacks[(spec.kind, spec.name)]), **payload,
+                        **copy.deepcopy(self.readbacks[(spec.kind, spec.name)]),
+                        **payload,
                     }
                     if spec.kind == "jwt-config":
                         self.state[(spec.kind, spec.name)] = {
@@ -83,8 +93,98 @@ class StateClient:
                     )
         return {"data": {"claimed": "success"}}
 
+    def delete(self, path, token=None):
+        self.deletes.append(path)
+        if not self.ignore_deletes:
+            self.state.pop(("issuance-role", path.rsplit("/", 1)[1]), None)
+        return {}
+
 
 class ApplyTest(unittest.TestCase):
+    def legacy_roles(self):
+        for name in ("diagnostic", "publisher"):
+            self.client.state[("issuance-role", name)] = copy.deepcopy(
+                self.client.responses["GET kubernetes/roles/" + name]
+            )
+
+    def test_retirement_plans_only_owned_roles_and_verifies_absence(self):
+        self.legacy_roles()
+        plan = apply.run(confirm="", **self.inputs)
+        self.assertEqual(self.client.deletes, [])
+        self.assertEqual(
+            plan["changes"],
+            [
+                {"kind": "issuance-role", "name": "diagnostic", "action": "delete"},
+                {"kind": "issuance-role", "name": "publisher", "action": "delete"},
+            ],
+        )
+        result = apply.run(confirm=plan["confirmation"], **self.inputs)
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(
+            self.client.deletes, ["kubernetes/roles/diagnostic", "kubernetes/roles/publisher"]
+        )
+        self.assertNotIn(("issuance-role", "diagnostic"), self.client.state)
+        self.assertIn(("issuance-role", "debugger"), self.client.state)
+        self.assertEqual(apply.run(confirm="", **self.inputs)["changes"], [])
+
+    def test_retirement_cannot_accept_ignored_delete_or_changed_role(self):
+        self.legacy_roles()
+        plan = apply.run(confirm="", **self.inputs)
+        self.client.ignore_deletes = True
+        with self.assertRaises(SafeError):
+            apply.run(confirm=plan["confirmation"], **self.inputs)
+        self.client.ignore_deletes = False
+        self.client.state[("issuance-role", "diagnostic")]["service_account_name"] = "foreign"
+        self.client.deletes.clear()
+        with self.assertRaises(SafeError):
+            apply.run(confirm="", **self.inputs)
+        self.assertEqual(self.client.deletes, [])
+
+    def test_retirement_rechecks_role_immediately_before_deletion(self):
+        self.legacy_roles()
+        plan = apply.run(confirm="", **self.inputs)
+        original = self.client.request
+        reads = 0
+
+        def request(method, path):
+            nonlocal reads
+            if path == "kubernetes/roles/diagnostic":
+                reads += 1
+                if reads == 3:
+                    self.client.state[("issuance-role", "diagnostic")]["token_max_ttl"] = 900
+            return original(method, path)
+
+        self.client.request = request
+        with self.assertRaisesRegex(SafeError, "source-mismatch"):
+            apply.run(confirm=plan["confirmation"], **self.inputs)
+        self.assertEqual(self.client.deletes, [])
+
+    def test_retirement_rejects_unknown_inventory_and_never_retries_delete(self):
+        from scripts.openbao.client import AmbiguousWrite
+
+        self.legacy_roles()
+        self.client.state[("issuance-role", "unowned")] = {}
+        with self.assertRaises(SafeError):
+            apply.run(confirm="", **self.inputs)
+        self.assertEqual(self.client.writes + self.client.deletes, [])
+        del self.client.state[("issuance-role", "unowned")]
+        plan = apply.run(confirm="", **self.inputs)
+
+        def ambiguous(path, token=None):
+            self.client.deletes.append(path)
+            raise AmbiguousWrite()
+
+        self.client.delete = ambiguous
+        with self.assertRaises(AmbiguousWrite):
+            apply.run(confirm=plan["confirmation"], **self.inputs)
+        self.assertEqual(self.client.deletes, ["kubernetes/roles/diagnostic"])
+
+    def test_observational_configuration_rejects_unretired_roles(self):
+        self.legacy_roles()
+        with self.assertRaises(SafeError):
+            apply.verify_configuration(DESIRED, self.client)
+        self.assertEqual(self.client.writes + self.client.deletes, [])
+
     def setUp(self):
         self.client = StateClient()
         self.target = {"source_revision": "a" * 40, "namespace_uid": "synthetic-ns"}

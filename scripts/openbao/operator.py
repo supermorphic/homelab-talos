@@ -468,7 +468,7 @@ def main(argv):
             if phase == "config-apply" and any(
                 change["kind"] == "userpass-user" for change in plan.get("changes", [])
             ):
-                _, current = apply.snapshot(apply.DESIRED, client)
+                _, current = apply.snapshot(apply.DESIRED, client, retiring=True)
                 if current[("userpass-user", "openbao-operator")][0] is None:
                     password = private_prompt("Retained operator password for missing account: ")
                     if not password:

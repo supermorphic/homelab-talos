@@ -54,8 +54,6 @@ assert all(path == "auth/token/revoke-self" or "update" not in rule["capabilitie
            for path, rule in reader_paths.items())
 profiles = {
     "observer": "homelab-observer",
-    "diagnostic": "homelab-diagnostic",
-    "publisher": "homelab-report-publisher",
     "campaign-coordinator": "homelab-campaign-coordinator",
     "debugger": "homelab-diagnostic",
     "test-runner": "homelab-test-runner",
@@ -70,6 +68,8 @@ profiles = {
     "test-openbao-lifecycle": "homelab-test-openbao-lifecycle"
 }
 objects = {(o.kind, o.name): o for o in desired["objects"]}
+assert not {"diagnostic", "publisher"} & set(desired["inventories"]["issuance-role"])
+assert all(("issuance-role", name) not in objects for name in ("diagnostic", "publisher"))
 for profile, account in profiles.items():
     fields = objects[("issuance-role", profile)].fields
     assert fields["service_account_name"] == account

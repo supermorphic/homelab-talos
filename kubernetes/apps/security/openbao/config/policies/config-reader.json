@@ -115,16 +115,6 @@
         "read"
       ]
     },
-    "kubernetes/roles/diagnostic": {
-      "capabilities": [
-        "read"
-      ]
-    },
-    "kubernetes/roles/publisher": {
-      "capabilities": [
-        "read"
-      ]
-    },
     "kubernetes/roles/campaign-coordinator": {
       "capabilities": [
         "read"

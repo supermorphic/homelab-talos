@@ -201,8 +201,13 @@ class InvocationTests(unittest.TestCase):
 
     def test_old_enrollment_cannot_issue_new_authority(self):
         broker = CurrentBroker()
+        old = state()
+        old["cluster"].update(
+            schema_version=1,
+            profiles=["observer", "diagnostic", "publisher", "campaign-coordinator"],
+        )
         with self.assertRaises(SafeError):
-            credentials.issue_exec_credential("test-conformance", state(), client=broker, now=NOW)
+            credentials.issue_exec_credential("test-conformance", old, client=broker, now=NOW)
         self.assertEqual(broker.calls, [])
 
     def test_refresh_uses_same_endpoint_and_revokes_login(self):
