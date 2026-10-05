@@ -648,6 +648,151 @@ class SecretPersistenceTests(unittest.TestCase):
             self.assertEqual(state["recoveryValidation"]["recoveryPod"], "qbit-recovered")
 
 
+class VpnRecoveryReadinessTests(unittest.TestCase):
+    class Clock:
+        def __init__(self):
+            self.value = 0.0
+
+        def now(self):
+            return self.value
+
+        def sleep(self, seconds):
+            self.value += seconds
+
+    def test_cleanup_and_verification_wait_for_the_recovered_public_ip(self):
+        for method in ("cleanup", "verify"):
+            with self.subTest(method=method), tempfile.TemporaryDirectory() as temporary:
+                run_dir = Path(temporary)
+                state_path = run_dir / "diagnostics" / vpn.STATE_NAME
+                atomic_write_json(
+                    state_path,
+                    {
+                        "phase": "fail-closed",
+                        "podUid": "old-uid",
+                        "homeWanIp": "203.0.113.9",
+                    },
+                )
+                clock = self.Clock()
+                addresses = iter(("", "", "198.51.100.8"))
+                observed = []
+
+                def runner(argv, addresses=addresses, observed=observed):
+                    command = " ".join(argv)
+                    if "get pods" in command:
+                        return pod_listing("qbit-recovered", "uid-new", "nuc3")
+                    if "grep -E" in command:
+                        return "in-memory-key\n"
+                    if "/v1/vpn/status" in command:
+                        return '{"status":"running"}'
+                    if "/v1/publicip/ip" in command:
+                        address = next(addresses)
+                        observed.append(address)
+                        return json.dumps({"public_ip": address})
+                    return "{}"
+
+                controller = vpn.Controller(
+                    "kubeconfig", run_dir, runner=runner, sleep=clock.sleep
+                )
+                with patch.object(vpn.time, "monotonic", clock.now):
+                    try:
+                        getattr(controller, method)()
+                    except ScenarioFailure as error:
+                        self.fail(f"Recovery rejected a transient empty public IP: {error}")
+                self.assertEqual(observed, ["", "", "198.51.100.8"])
+                self.assertGreater(clock.value, 0)
+                state = load_state(state_path)
+                if method == "cleanup":
+                    self.assertEqual(state["phase"], "fail-closed")
+                    self.assertEqual(load_state(run_dir / "recovery.json")["status"], "passed")
+                else:
+                    self.assertEqual(state["phase"], "verified")
+                    self.assertEqual(state["recoveryVpnIp"], "198.51.100.8")
+
+    def test_missing_public_ip_remains_a_bounded_failed_recovery(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            atomic_write_json(run_dir / "diagnostics" / vpn.STATE_NAME, {"phase": "fail-closed"})
+            clock = self.Clock()
+
+            def runner(argv):
+                command = " ".join(argv)
+                if "get pods" in command:
+                    return pod_listing("qbit-recovered", "uid-new", "nuc3")
+                if "grep -E" in command:
+                    return "in-memory-key\n"
+                if "/v1/vpn/status" in command:
+                    return '{"status":"running"}'
+                return '{"public_ip":""}'
+
+            controller = vpn.Controller("kubeconfig", run_dir, runner=runner, sleep=clock.sleep)
+            with (
+                patch.object(vpn.time, "monotonic", clock.now),
+                self.assertRaises(ScenarioFailure),
+            ):
+                controller.cleanup()
+            self.assertGreater(clock.value, 0)
+            self.assertLess(clock.value, 120)  # Registered Chainsaw step budget.
+            self.assertEqual(load_state(run_dir / "recovery.json")["status"], "failed")
+
+    def test_stopped_vpn_and_api_failure_are_not_retried_as_ip_readiness(self):
+        for failure in ("stopped", "api"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                run_dir = Path(temporary)
+                atomic_write_json(
+                    run_dir / "diagnostics" / vpn.STATE_NAME, {"phase": "fail-closed"}
+                )
+                clock = self.Clock()
+                api_calls = []
+
+                def runner(argv, failure=failure, api_calls=api_calls):
+                    command = " ".join(argv)
+                    if "get pods" in command:
+                        return pod_listing("qbit-recovered", "uid-new", "nuc3")
+                    if "grep -E" in command:
+                        return "in-memory-key\n"
+                    api_calls.append(command)
+                    if failure == "api":
+                        raise ScenarioFailure("kubectl exited with status 1")
+                    return '{"status":"stopped"}'
+
+                controller = vpn.Controller(
+                    "kubeconfig", run_dir, runner=runner, sleep=clock.sleep
+                )
+                with (
+                    patch.object(vpn.time, "monotonic", clock.now),
+                    self.assertRaises(ScenarioFailure),
+                ):
+                    controller.cleanup()
+                self.assertEqual(clock.value, 0)
+                self.assertEqual(len(api_calls), 1)
+                self.assertEqual(load_state(run_dir / "recovery.json")["status"], "failed")
+
+    def test_a_public_ip_returned_after_the_deadline_cannot_pass_recovery(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            atomic_write_json(run_dir / "diagnostics" / vpn.STATE_NAME, {"phase": "fail-closed"})
+            clock = self.Clock()
+
+            def runner(argv):
+                command = " ".join(argv)
+                if "get pods" in command:
+                    return pod_listing("qbit-recovered", "uid-new", "nuc3")
+                if "grep -E" in command:
+                    return "in-memory-key\n"
+                if "/v1/vpn/status" in command:
+                    return '{"status":"running"}'
+                clock.sleep(120)
+                return '{"public_ip":"198.51.100.8"}'
+
+            controller = vpn.Controller("kubeconfig", run_dir, runner=runner, sleep=clock.sleep)
+            with (
+                patch.object(vpn.time, "monotonic", clock.now),
+                self.assertRaises(ScenarioFailure),
+            ):
+                controller.cleanup()
+            self.assertEqual(load_state(run_dir / "recovery.json")["status"], "failed")
+
+
 def report_snapshot(
     pod_uid: str,
     *,
