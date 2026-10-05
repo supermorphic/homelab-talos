@@ -306,6 +306,51 @@ if rg -q -- '--as=|/pods/[^ ]*/proxy/|auth can-i' "$diagnostic_requests"; then
   exit 1
 fi
 
+curl() {
+  printf '%s\n' "$*" >>"$temp_dir/http-requests"
+  case "${*: -1}" in
+    */-/healthy) return 0 ;;
+    */api/v1/alertmanagers) printf '%s\n' "$alertmanagers_json" ;;
+    */api/v2/status)
+      local config='receivers: [{name: ntfy, webhook_configs: [{url: "http://example.invalid/webhook"}]}]
+route: {routes: [{receiver: ntfy, matchers: ["severity=~\"critical|warning\""]}]}'
+      case "$alertmanager_fixture_mode" in
+        loaded) ;;
+        missing-config) printf '%s\n' '{}'; return ;;
+        malformed-status) printf '%s\n' '{'; return ;;
+        api-error) return 22 ;;
+        missing-receiver) config="$(yq '.receivers = []' <<<"$config")" ;;
+        missing-webhook) config="$(yq '.receivers[0].webhook_configs = []' <<<"$config")" ;;
+        missing-route) config="$(yq '.route.routes = []' <<<"$config")" ;;
+        wrong-severity) config="$(yq '.route.routes[0].matchers = ["severity=\"info\""]' <<<"$config")" ;;
+        *) return 64 ;;
+      esac
+      jq -n --arg config "$config" '{config: {original: $config}}'
+      ;;
+    *) echo "Unexpected HTTP request: ${*: -1}" >&2; return 64 ;;
+  esac
+}
+for alertmanager_fixture_mode in loaded missing-config malformed-status api-error \
+  missing-receiver missing-webhook missing-route wrong-severity; do
+  if stage_alertmanager >"$temp_dir/alertmanager-$alertmanager_fixture_mode.log" 2>&1; then
+    [[ "$alertmanager_fixture_mode" == loaded ]] || {
+      echo "Alertmanager stage accepted $alertmanager_fixture_mode." >&2
+      exit 1
+    }
+  else
+    [[ "$alertmanager_fixture_mode" != loaded ]] || {
+      echo 'Alertmanager stage could not inspect its loaded configuration without Secret access.' >&2
+      exit 1
+    }
+  fi
+done
+rg -Fq 'Alertmanager receiver ntfy=loaded' "$temp_dir/alertmanager-loaded.log"
+rg -Fq 'severity warning/critical route to ntfy=loaded' "$temp_dir/alertmanager-loaded.log"
+if rg -q 'get secret|get secrets' "$diagnostic_requests"; then
+  echo 'Alertmanager stage attempted to read a Kubernetes Secret.' >&2
+  exit 1
+fi
+
 stage_labels=()
 stage_results=()
 stage_labels+=('Exporter raw metric' 'Prometheus scrape target' 'Prometheus metric')

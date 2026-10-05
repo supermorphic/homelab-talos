@@ -450,8 +450,7 @@ stage_prometheus_rule() {
 }
 
 stage_alertmanager() {
-  local status=0 response active_count encoded config_file route_match
-  config_file="$temp_dir/alertmanager.yaml"
+  local status=0 response active_count loaded_config route_match
 
   if curl --silent --show-error --fail --max-time 20 \
     --resolve "$alertmanager_resolve" \
@@ -474,19 +473,15 @@ stage_alertmanager() {
     status=1
   fi
 
-  encoded="$(
-    kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" \
-      get secret alertmanager-kube-prometheus-stack-alertmanager-generated \
-      --output jsonpath='{.data.alertmanager\.yaml\.gz}' 2>/dev/null ||
-      true
-  )"
-  if [[ -n "$encoded" ]] &&
-    printf '%s' "$encoded" | base64 -d | gunzip >"$config_file" 2>/dev/null; then
+  if response="$(curl --silent --show-error --fail --max-time 15 \
+    --resolve "$alertmanager_resolve" "${alertmanager_base_url}/api/v2/status")" &&
+    loaded_config="$(yq -r '.config.original // ""' <<<"$response" 2>/dev/null)" &&
+    [[ -n "$loaded_config" ]]; then
     if yq -e '
       .receivers[] |
       select(.name == "ntfy") |
       (.webhook_configs | length) > 0
-    ' "$config_file" >/dev/null 2>&1; then
+    ' - <<<"$loaded_config" >/dev/null 2>&1; then
       echo '  Alertmanager receiver ntfy=loaded'
     else
       echo '  Alertmanager receiver ntfy=missing' >&2
@@ -497,7 +492,7 @@ stage_alertmanager() {
         .route.routes[] |
         select(.receiver == "ntfy") |
         .matchers[]
-      ' "$config_file" 2>/dev/null |
+      ' - <<<"$loaded_config" 2>/dev/null |
         rg 'severity.*critical.*warning' ||
         true
     )"
@@ -508,7 +503,7 @@ stage_alertmanager() {
       status=1
     fi
   else
-    echo '  Could not inspect the generated Alertmanager routing config.' >&2
+    echo '  Could not inspect the loaded Alertmanager routing config.' >&2
     status=1
   fi
   return "$status"

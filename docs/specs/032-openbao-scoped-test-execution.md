@@ -149,6 +149,12 @@ impersonation grant is added. These separate grants are bound only to observer
 and debugger, not to test identities, coordinator, or report publisher. They
 need no attended OpenBao password or workstation enrollment change.
 
+The Alertmanager diagnostic stage checks the receiver and severity route from
+the loaded configuration returned by `/api/v2/status`, as the monitoring and
+Alertmanager verifiers do. It reports only the check results, and fails on an
+unavailable API, missing configuration, receiver, webhook, or expected route.
+It does not read the generated Kubernetes Secret or retain the response body.
+
 ### Generalized runner boundary
 
 Grant enumerated groups, resources, and verbs through namespace Roles wherever
