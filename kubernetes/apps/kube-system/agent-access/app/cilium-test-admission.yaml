@@ -174,10 +174,12 @@ spec:
         || (request.name.matches(''^spire-server-[0-9]{1,4}$'') && (object.container in [''spire-server'']
         || object.container.matches(''^sysdump-[0-9]{1,10}$''))) || (request.name.matches(''^sysdump-[a-z0-9]{5}$'')
         && (object.container in [''cilium-agent'', ''tetragon'', ''spire-server''])))) : true) : ((!has(object.stdin)
-        || !object.stdin) && (!has(object.tty) || !object.tty) && object.container in ["client", "client2",
+        || !object.stdin) && (!has(object.tty) || !object.tty) && (((!has(object.container) || object.container
+        == '''') && request.namespace == ''cilium-test-1'' && request.name.matches(''^host-netns(-non-cilium)?-[a-z0-9]{5}$''))
+        || (has(object.container) && object.container in ["client", "client2",
         "client3", "client-cp", "echo-same-node", "echo-other-node", "echo-external-node", "lrp-client",
         "lrp-backend", "socat-client", "l7-lb", "host-netns", "host-netns-non-cilium", "frr-external-node",
-        "socat-server-daemonset", "client-ccnp", "dns-test-server"])'
+        "socat-server-daemonset", "client-ccnp", "dns-test-server"])))'
       message: Exec permits the canonical component or recovery container without interactive input; this
         profile has privileged application runtime authority.
 ---
