@@ -179,6 +179,8 @@ root=Path(os.environ['DEDICATED_FIXTURE']); a=sys.argv[1:]
 assert a[a.index('--kubeconfig')+1]==str(root/'selected-config')
 assert '--context' not in a and '--cleanup' not in a
 (root/'cli-called').touch()
+if os.environ.get('EMIT_CONTAINER_ID')=='yes':
+    print('module=agent.controlplane.endpoint-api containerID='+'ab'*32+' endpointID=1234',file=sys.stderr)
 if a[:2]==['connectivity','test']:
     assert all((root/(n+'.json')).exists() for n in ['cilium-test-1','cilium-test-ccnp1','cilium-test-ccnp2'])
     assert a[a.index('--namespace-annotations')+1]=='homelab.supermorphic.com/test-run=synthetic-run'
@@ -206,6 +208,22 @@ assert a[0]=='sysdump'
         self.assertIn("diagnostics failed", result.stderr)
         self.assertEqual(sum("delete" in a for a in self.calls()), 3)
         self.assertFalse(any(self.directory.glob("cilium-test*.json")))
+
+    def test_cilium_native_and_diagnostic_logs_redact_runtime_container_ids(self):
+        for exit_code in (0, 7):
+            with self.subTest(exit_code=exit_code):
+                self.install_cilium()
+                self.env.update(CILIUM_CONNECTIVITY_CONFIRM="test:cilium-connectivity",
+                                CILIUM_RESULT=str(exit_code), EMIT_CONTAINER_ID="yes")
+                result = self.run_backend(
+                    ["bash", "scripts/test/scenarios/cilium-connectivity.sh", str(self.config)]
+                )
+                self.assertEqual(result.returncode, exit_code, result.stdout + result.stderr)
+                output = result.stdout + result.stderr
+                self.assertNotIn("ab" * 32, output)
+                self.assertIn("containerID=[redacted] endpointID=1234", output)
+                self.assertEqual(output.count("containerID=[redacted]"), 1 if exit_code == 0 else 2)
+                self.assertFalse(any(self.directory.glob("cilium-test*.json")))
 
     def test_cilium_replaced_namespace_preserves_primary_and_reports_cleanup_failure(self):
         self.install_cilium()
