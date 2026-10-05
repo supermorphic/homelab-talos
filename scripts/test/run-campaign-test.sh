@@ -659,6 +659,10 @@ run_acceptance "$acceptance_shared_root" true \
   "$repo_root/scripts/test/run-campaign.sh" record \
   test.nocodb-local-integration >"$acceptance_shared_root/run.log" 2>&1
 [[ "$(cat "$acceptance_shared_root/commands")" == 'acceptance-shared' ]]
+if rg -q '\.talos/config' "$acceptance_shared_root/preflight-calls"; then
+  echo 'Host-local record session required undeclared Talos access.' >&2
+  exit 1
+fi
 [[ "$(cat "$acceptance_shared_root/publish-contexts")" == \
   $'unset\tfalse\tunset' ]]
 
@@ -797,10 +801,10 @@ NTFY_PUBLISH_TEST_CONFIRM=test:ntfy:publish:media-critical-homelab \
     exit 1
   }
 [[ "$(cat "$operator_root/linked/commands")" == acceptance-operator ]]
-if rg -q '\.talos/config' "$operator_root/linked/preflight-calls"; then
-  echo 'Record session required Talos for a suite with no Talos prerequisite.' >&2
+rg -q '\.talos/config' "$operator_root/linked/preflight-calls" || {
+  echo 'ntfy record session omitted its declared Talos reader prerequisite.' >&2
   exit 1
-fi
+}
 
 acceptance_resume_root="$fixture/acceptance-resume"
 mkdir -p "$acceptance_resume_root"

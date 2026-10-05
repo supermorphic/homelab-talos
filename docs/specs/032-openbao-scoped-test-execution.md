@@ -407,8 +407,10 @@ arguments, environment and Python subprocesses; do not leave literal
 `.kube/config` paths that bypass the selected invocation.
 
 Nested verification within a test retains the parent's suite identity for backend
-operations. It cannot acquire a different test profile implicitly. Separate
-orchestration source/admission reads may use observer. Refactor explicit diagnostic
+operations. It cannot acquire a different test profile implicitly. Each parent
+declares the prerequisites used by its nested verifiers. The ntfy
+publication test declares Talos reader access for its foundation preflight.
+Separate orchestration source/admission reads may use observer. Refactor explicit diagnostic
 context selection to validate and use the declared config rather than search a
 multi-context file. Missing or mismatched authority fails before mutation.
 
