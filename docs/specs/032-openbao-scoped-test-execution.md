@@ -432,6 +432,13 @@ record session remains candidate evidence and never updates authoritative latest
 links, Homepage status or last-run metrics. Preserve each suite's stronger source
 guard, particularly attended OpenBao operations and physical node testing.
 
+For a standalone recorded report-persistence test, set `TEST_REPORT_RUN_ID` to
+one existing published canonical run. The resolver validates its identifier;
+the native backend checks the selected report, catalog entry, and PVC before
+and after Pod replacement. Without that input, a campaign selects its latest
+child with successful or idempotent publication. Missing or invalid references
+fail before the child starts. The test retains its mapped `test-runner` identity.
+
 ### Identity-audit exceptions
 
 `verification.agent-access` and `test.agent-credentials` intentionally test several
