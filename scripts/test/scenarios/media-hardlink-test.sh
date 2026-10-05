@@ -11,17 +11,8 @@ open_timeout_dir="$test_root/open-timeout"
 cleanup_failure_dir="$test_root/cleanup-failure"
 mkdir -p "$pass_dir" "$primary_failure_dir" "$open_failure_dir" "$open_timeout_dir" "$cleanup_failure_dir"
 cleanup() {
-  rm -f \
-    "$pass_dir/evidence.json" "$pass_dir/recovery.json" "$pass_dir/invocations.log" \
-    "$primary_failure_dir/evidence.json" "$primary_failure_dir/recovery.json" \
-    "$open_failure_dir/evidence.json" "$open_failure_dir/recovery.json" \
-    "$open_timeout_dir/evidence.json" "$open_timeout_dir/recovery.json" \
-    "$cleanup_failure_dir/evidence.json" "$cleanup_failure_dir/recovery.json"
-  rm -f "$pass_dir"/*.holder.out "$pass_dir"/*.holder.err "$pass_dir"/*.opener.out "$pass_dir"/*.opener.err "$pass_dir"/*.fifo \
-    "$open_failure_dir"/*.holder.out "$open_failure_dir"/*.holder.err "$open_failure_dir"/*.opener.out "$open_failure_dir"/*.opener.err "$open_failure_dir"/*.fifo \
-    "$open_timeout_dir"/*.holder.out "$open_timeout_dir"/*.holder.err "$open_timeout_dir"/*.opener.out "$open_timeout_dir"/*.opener.err "$open_timeout_dir"/*.fifo \
-    "$cleanup_failure_dir"/*.holder.out "$cleanup_failure_dir"/*.holder.err "$cleanup_failure_dir"/*.opener.out "$cleanup_failure_dir"/*.opener.err "$cleanup_failure_dir"/*.fifo
-  rmdir "$pass_dir" "$primary_failure_dir" "$open_failure_dir" "$open_timeout_dir" "$cleanup_failure_dir" "$test_root"
+  # This fixture owns the complete private mktemp directory.
+  rm -rf -- "$test_root"
 }
 trap cleanup EXIT
 
@@ -63,19 +54,33 @@ kubectl() {
 }
 export -f kubectl
 
-MOCK_LOG="$pass_dir/invocations.log" HOMELAB_TEST_RUN_DIR="$pass_dir" \
+MOCK_LOG="$test_root/invocations.log" HOMELAB_TEST_RUN_DIR="$pass_dir" \
   scripts/test/scenarios/media-hardlink.sh fake-kubeconfig >/dev/null
 yq -e '.status == "passed"' "$pass_dir/recovery.json" >/dev/null
 yq -e '.sameInode == true and .srcLinkCount == 2 and .dstLinkCount == 2' \
   "$pass_dir/evidence.json" >/dev/null
 yq -e '.qbitHeldPlexOpen == true and .plexHeldQbitOpen == true' \
   "$pass_dir/evidence.json" >/dev/null
-[[ "$(rg -c '^holder ' "$pass_dir/invocations.log")" == 2 ]]
-[[ "$(rg -c '^opener ' "$pass_dir/invocations.log")" == 2 ]]
-rg -q '^holder .*qbittorrent-test-0.*\/data\/downloads\/.* rw$' "$pass_dir/invocations.log"
-rg -q '^opener .*plex-test-0.*\/Volumes\/Prometheus\/media\/.* ro$' "$pass_dir/invocations.log"
-rg -q '^holder .*plex-test-0.*\/Volumes\/Prometheus\/media\/.* ro$' "$pass_dir/invocations.log"
-rg -q '^opener .*qbittorrent-test-0.*\/data\/downloads\/.* rw$' "$pass_dir/invocations.log"
+[[ "$(rg -c '^holder ' "$test_root/invocations.log")" == 2 ]]
+[[ "$(rg -c '^opener ' "$test_root/invocations.log")" == 2 ]]
+rg -q '^holder .*qbittorrent-test-0.*\/data\/downloads\/.* rw$' "$test_root/invocations.log"
+rg -q '^opener .*plex-test-0.*\/Volumes\/Prometheus\/media\/.* ro$' "$test_root/invocations.log"
+rg -q '^holder .*plex-test-0.*\/Volumes\/Prometheus\/media\/.* ro$' "$test_root/invocations.log"
+rg -q '^opener .*qbittorrent-test-0.*\/data\/downloads\/.* rw$' "$test_root/invocations.log"
+
+mkdir -p "$pass_dir/logs" "$pass_dir/diagnostics"
+touch "$pass_dir/environment.json" "$pass_dir/junit.xml" "$pass_dir/summary.json"
+normalize_native_artifacts "$pass_dir" fixture-run
+write_evidence_index "$pass_dir" fixture-run
+expected_root=$'diagnostics\nenvironment.json\nevidence.json\njunit.xml\nlogs\nsummary.json'
+actual_root="$(find "$pass_dir" -mindepth 1 -maxdepth 1 -exec basename {} \; | LC_ALL=C sort)"
+[[ "$actual_root" == "$expected_root" ]] || {
+  echo 'Media hardlink outputs broke the canonical six-entry structure.' >&2
+  diff -u <(printf '%s\n' "$expected_root") <(printf '%s\n' "$actual_root") >&2 || true
+  exit 1
+}
+jq -e '[.artifacts[] | select(.path | startswith("diagnostics/media-hardlink/"))] | length == 8' \
+  "$pass_dir/evidence.json" >/dev/null
 
 if MOCK_PRIMARY_FAIL=true HOMELAB_TEST_RUN_DIR="$primary_failure_dir" \
   scripts/test/scenarios/media-hardlink.sh fake-kubeconfig >/dev/null 2>&1; then
