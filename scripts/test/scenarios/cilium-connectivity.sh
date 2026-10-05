@@ -104,12 +104,14 @@ if cilium connectivity test \
   --flow-validation disabled \
   --test '!no-unexpected-packet-drops' \
   --timeout 45m \
-  --sysdump-output-filename "$diagnostic_dir/cilium-sysdump-<ts>"; then
+  --sysdump-output-filename "$diagnostic_dir/cilium-sysdump-<ts>" 2>&1 | \
+  sed -E 's/(containerID=)[[:xdigit:]]{64}([[:space:]]|$)/\1[redacted]\2/g'; then
   echo 'Cilium connectivity assertions passed; removing owned fixtures and checking postflight.'
 else
   primary="$?"
   if ! cilium sysdump --kubeconfig "$kubeconfig" --namespace kube-system \
-    --output-filename "$diagnostic_dir/cilium-sysdump-<ts>"; then
+    --output-filename "$diagnostic_dir/cilium-sysdump-<ts>" 2>&1 | \
+    sed -E 's/(containerID=)[[:xdigit:]]{64}([[:space:]]|$)/\1[redacted]\2/g'; then
     echo 'Connectivity diagnostics failed; original test status retained.' >&2
     printf '%s\n' '{"status":"failed","reason":"connectivity diagnostics"}' >"$HOMELAB_TEST_RUN_DIR/diagnostics.json"
   fi

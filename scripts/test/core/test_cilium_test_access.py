@@ -19,6 +19,42 @@ class CiliumAccessTests(unittest.TestCase):
     evaluate = helpers.DedicatedFluxMutationTests.evaluate
     admits = helpers.DedicatedFluxMutationTests.admits
 
+    def test_native_policy_collection_create_is_authorized_without_a_resource_name(self):
+        # POST collection requests have no resource name during RBAC authorization.
+        # Admission checks the object name separately after this authorization step.
+        targets = {
+            "homelab-test-cilium-fixtures-1": [
+                ("cilium.io", "ciliumnetworkpolicies"),
+                ("cilium.io", "ciliumlocalredirectpolicies"),
+                ("networking.k8s.io", "networkpolicies"),
+            ],
+            "homelab-test-cilium-cluster-policies": [
+                ("cilium.io", "ciliumclusterwidenetworkpolicies"),
+            ],
+            "homelab-test-cilium-global-fixtures": [
+                ("cilium.io", "ciliumcidrgroups"),
+                ("cilium.io", "ciliumclusterwideenvoyconfigs"),
+                ("policy.networking.k8s.io", "clusternetworkpolicies"),
+            ],
+        }
+        for role_name, resources in targets.items():
+            role = next(d for d in self.documents if d["kind"] == "ClusterRole"
+                        and d["metadata"]["name"] == role_name)
+            for group, resource in resources:
+                with self.subTest(role=role_name, resource=resource):
+                    self.assertTrue(any(
+                        group in rule["apiGroups"] and resource in rule["resources"]
+                        and "create" in rule["verbs"]
+                        and not rule.get("resourceNames")
+                        for rule in role["rules"]
+                    ), "native collection POST must reach bounded admission")
+                    for verb in ("get", "patch", "update", "delete", "list", "watch"):
+                        self.assertFalse(any(
+                            group in rule["apiGroups"] and resource in rule["resources"]
+                            and verb in rule["verbs"] and not rule.get("resourceNames")
+                            for rule in role["rules"]
+                        ), f"{verb} must not gain unbounded policy access")
+
     def test_namespace_lifecycle_grants_are_finite_and_have_no_node_or_rbac_write(self):
         roles = [
             d
@@ -417,7 +453,12 @@ class CiliumAccessTests(unittest.TestCase):
                     "resources": ["ciliumclusterwidenetworkpolicies"],
                     "resourceNames": names,
                     "verbs": ["get", "patch", "delete"],
-                }
+                },
+                {
+                    "apiGroups": ["cilium.io"],
+                    "resources": ["ciliumclusterwidenetworkpolicies"],
+                    "verbs": ["create"],
+                },
             ],
         )
         binding = [
@@ -1053,6 +1094,16 @@ class CiliumAccessTests(unittest.TestCase):
                     "resources": ["clusternetworkpolicies"],
                     "resourceNames": ["echo-ingress-from-client-tiered-wildcard-pass-l7"],
                     "verbs": ["get", "patch", "delete"],
+                },
+                {
+                    "apiGroups": ["cilium.io"],
+                    "resources": ["ciliumcidrgroups", "ciliumclusterwideenvoyconfigs"],
+                    "verbs": ["create"],
+                },
+                {
+                    "apiGroups": ["policy.networking.k8s.io"],
+                    "resources": ["clusternetworkpolicies"],
+                    "verbs": ["create"],
                 },
             ],
         )
