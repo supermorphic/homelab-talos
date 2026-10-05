@@ -22,7 +22,6 @@ ROLE_PATH = "auth/homelab-approle/role/" + ROLE
 LOGIN_PATH = "auth/homelab-approle/login"
 ENDPOINT = "https://openbao.lab.supermorphic.com"
 DIRECTORY = Path.home() / ".config/homelab-talos/openbao"
-PROFILES = ["observer", "diagnostic", "publisher", "campaign-coordinator"]
 
 
 def ensure_private_directory(directory):

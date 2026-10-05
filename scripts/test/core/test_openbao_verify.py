@@ -46,8 +46,6 @@ LIVE_INVENTORIES = {
     'issuance-role': [
         'openbao-acceptance',
         'observer',
-        'diagnostic',
-        'publisher',
         'campaign-coordinator',
         'debugger',
         'test-runner',

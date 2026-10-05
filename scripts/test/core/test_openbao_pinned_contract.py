@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 import yaml
 
-from scripts.openbao import apply, credentials, restore, workstation
+from scripts.openbao import apply, restore, workstation
 from scripts.openbao.client import AmbiguousWrite, NotFound
 from scripts.openbao.configuration import SafeError, load_document
 from scripts.test.scenarios.agent_credentials import BrokerScope
@@ -141,11 +141,25 @@ class PinnedServerContract(unittest.TestCase):
             local_client = LocalClient()
             private = Path(directory).resolve() / "workstation"
             metadata = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "server": "https://cluster.example.test:6443",
                 "certificate_authority_data": "synthetic-ca",
                 "openbao_server": workstation.ENDPOINT,
-                "profiles": workstation.PROFILES,
+                "profiles": {
+                    "observer": "homelab-observer",
+                    "debugger": "homelab-diagnostic",
+                    "test-runner": "homelab-test-runner",
+                    "report-publisher": "homelab-report-publisher",
+                    "campaign-coordinator": "homelab-campaign-coordinator",
+                    "test-flux-restart": "homelab-test-flux-restart",
+                    "test-cilium-connectivity": "homelab-test-cilium-connectivity",
+                    "test-node-reschedule": "homelab-test-node-reschedule",
+                    "test-conformance": "homelab-test-conformance",
+                    "test-openbao-issuance": "homelab-test-openbao-issuance",
+                    "test-openbao-ha": "homelab-test-openbao-ha",
+                    "test-openbao-restore": "homelab-test-openbao-restore",
+                    "test-openbao-lifecycle": "homelab-test-openbao-lifecycle",
+                },
             }
             with (
                 patch(
@@ -209,12 +223,15 @@ class PinnedServerContract(unittest.TestCase):
             self.assertEqual(request("POST", "kubernetes/config", {
                 "kubernetes_host": "http://127.0.0.1:1",
                 "service_account_jwt": "synthetic-local-issuer"})[0], 204)
-            for profile in {**credentials.LEGACY_PROFILES, **credentials.PROFILES}:
+            for profile in metadata["profiles"]:
                 self.assertEqual(request("POST", "kubernetes/creds/" + profile,
                     {}, token=auth["client_token"])[0], 500)
+            for profile in ("diagnostic", "publisher"):
+                self.assertEqual(request("POST", "kubernetes/creds/" + profile,
+                    {}, token=auth["client_token"])[0], 403)
             self.assertEqual(request("POST", "identity/entity/id/" + entity_id,
                                     {"disabled": True})[0], 204)
-            for profile in {**credentials.LEGACY_PROFILES, **credentials.PROFILES}:
+            for profile in (*metadata["profiles"], "diagnostic", "publisher"):
                 self.assertEqual(request("POST", "kubernetes/creds/" + profile,
                     {}, token=auth["client_token"])[0], 403)
             # Applying source configuration touches roles, never entities.

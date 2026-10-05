@@ -4,12 +4,13 @@ import copy
 from pathlib import Path
 
 from . import guards
-from .configuration import SafeError, canonical_json, load_document
+from .configuration import ObjectSpec, SafeError, canonical_json, load_document
 from .drift import compare, sanitize
 from .verify import INVENTORY_ENDPOINTS, _keys
 
 DESIRED = guards.PACKAGE / "config/desired.json"
 SENSITIVE = {"service_account_jwt", "token_reviewer_jwt", "password", "client_secret", "jwt"}
+RETIRED_ROLES = {"diagnostic": "debugger", "publisher": "report-publisher"}
 AUDIT = {
     "type": "file",
     "description": "Homelab hashed audit output",
@@ -38,9 +39,19 @@ def _safe_source(document):
             raise SafeError("invalid-source")
 
 
-def snapshot(desired_path, client):
+def retirement_specs(document):
+    roles = {s.name: s for s in document["objects"] if s.kind == "issuance-role"}
+    return [
+        ObjectSpec("issuance-role", old, "kubernetes/roles/" + old, roles[current].fields)
+        for old, current in RETIRED_ROLES.items()
+        if old not in document["inventories"]["issuance-role"] and current in roles
+    ]
+
+
+def snapshot(desired_path, client, *, retiring=False):
     document = load_document(desired_path)
     _safe_source(document)
+    retired = retirement_specs(document) if retiring else []
     inventory = {}
     for kind, endpoint in INVENTORY_ENDPOINTS.items():
         # Role endpoints do not exist until their parent backend is mounted.
@@ -60,6 +71,8 @@ def snapshot(desired_path, client):
         allowed = set(document["inventories"][kind]) | set(
             document["builtin_exceptions"].get(kind, [])
         )
+        if kind == "issuance-role":
+            allowed |= {s.name for s in retired}
         if actual - allowed:
             raise SafeError("invalid-response")
         inventory[kind] = response
@@ -99,14 +112,28 @@ def snapshot(desired_path, client):
         ):
             raise SafeError("invalid-response")
         states[(spec.kind, spec.name)] = (actual, differences)
+    for spec in retired:
+        actual = (
+            client.request("GET", spec.path)
+            if spec.name in _keys(inventory["issuance-role"], "issuance-role")
+            else None
+        )
+        if actual is not None and compare(spec, actual):
+            raise SafeError("source-mismatch")
+        states[(spec.kind, spec.name)] = (actual, [])
     return document, states
 
 
 def _changes(document, states):
-    return [
+    writes = [
         {"kind": s.kind, "name": s.name, "action": "write"}
         for s in document["objects"]
         if states[(s.kind, s.name)][1]
+    ]
+    return writes + [
+        {"kind": s.kind, "name": s.name, "action": "delete"}
+        for s in retirement_specs(document)
+        if (s.kind, s.name) in states and states[(s.kind, s.name)][0] is not None
     ]
 
 
@@ -190,7 +217,7 @@ def run(
 ):
     target = guards.freeze_target(kubeconfig, "config-apply")
     require_audit(client)
-    document, states = snapshot(desired_path, client)
+    document, states = snapshot(desired_path, client, retiring=True)
     changes = _changes(document, states)
     audit = audit_state(client)
     plan_digest = guards.digest(
@@ -206,7 +233,7 @@ def run(
     guards.assert_mutation_allowed(kubeconfig)
     if guards.freeze_target(kubeconfig, "config-apply") != target:
         raise SafeError("source-mismatch")
-    _, repeated = snapshot(desired_path, client)
+    _, repeated = snapshot(desired_path, client, retiring=True)
     if repeated != states or audit_state(client) != audit:
         raise SafeError("source-mismatch")
     missing_operator = states[("userpass-user", "openbao-operator")][0] is None
@@ -226,6 +253,17 @@ def run(
                 operator_password if spec.kind == "userpass-user" and actual is None else None,
             )
             journal.append("configuration-written")
+    for spec in retirement_specs(document):
+        actual = states[(spec.kind, spec.name)][0]
+        if actual is None:
+            continue
+        if client.request("GET", spec.path) != actual:
+            raise SafeError("source-mismatch")
+        guards.assert_mutation_allowed(kubeconfig)
+        if guards.freeze_target(kubeconfig, "config-apply") != target:
+            raise SafeError("source-mismatch")
+        client.delete(spec.path, token=token)
+        journal.append("legacy-issuance-role-retired")
     guards.assert_mutation_allowed(kubeconfig)
     if guards.freeze_target(kubeconfig, "config-apply") != target:
         raise SafeError("source-mismatch")

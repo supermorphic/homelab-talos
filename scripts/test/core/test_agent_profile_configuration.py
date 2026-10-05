@@ -13,12 +13,10 @@ ROOT = Path(__file__).resolve().parents[3]
 DESIRED = ROOT / "kubernetes/apps/security/openbao/config/desired.json"
 ACCOUNTS = {
     "observer": "homelab-observer",
-    "diagnostic": "homelab-diagnostic",
-    "publisher": "homelab-report-publisher",
-    "campaign-coordinator": "homelab-campaign-coordinator",
     "debugger": "homelab-diagnostic",
-    "test-runner": "homelab-test-runner",
     "report-publisher": "homelab-report-publisher",
+    "campaign-coordinator": "homelab-campaign-coordinator",
+    "test-runner": "homelab-test-runner",
     "test-flux-restart": "homelab-test-flux-restart",
     "test-cilium-connectivity": "homelab-test-cilium-connectivity",
     "test-node-reschedule": "homelab-test-node-reschedule",

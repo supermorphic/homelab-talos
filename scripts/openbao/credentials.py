@@ -31,7 +31,10 @@ SUITE_PROFILE_BINDINGS = {
     "test-conformance": ("conformance.quick", "conformance.certified"),
     "test-openbao-issuance": ("test.openbao-issuance",),
     "test-openbao-ha": ("test.openbao-ha", "test.credential-issuer.openbao-ha"),
-    "test-openbao-restore": ("test.openbao-restore-drill", "test.credential-issuer.openbao-restore"),
+    "test-openbao-restore": (
+        "test.openbao-restore-drill",
+        "test.credential-issuer.openbao-restore",
+    ),
     "test-openbao-lifecycle": ("test.agent-credentials",),
 }
 BASE_PROFILES = {
@@ -76,6 +79,8 @@ def load_workstation(directory):
     state = workstation.read_private(directory / "workstation.json")
     cluster = workstation.read_private(directory / "cluster.json")
     _cluster(cluster)
+    if cluster["schema_version"] != 2:
+        raise SafeError("invalid-source")
     if (
         set(state)
         != {"schema_version", "role_id", "secret_id", "entity_id", "expires_at", "cluster_digest"}
@@ -94,7 +99,9 @@ def load_workstation(directory):
 
 def issue_exec_credential(profile, workstation_state, *, client, now):
     _cluster(workstation_state.get("cluster"))
-    accounts = LEGACY_PROFILES if workstation_state["cluster"]["schema_version"] == 1 else PROFILES
+    if workstation_state["cluster"]["schema_version"] != 2:
+        raise SafeError("invalid-source")
+    accounts = PROFILES
     if profile not in accounts:
         raise SafeError("invalid-source")
     if (
@@ -216,7 +223,9 @@ def _read_config(fd, name="config"):
         raise SafeError("invalid-source") from None
 
 
-def _config(repo_root, cluster, profile):
+def _config(repo_root, cluster, profile, *, legacy=False):
+    if cluster["schema_version"] == 1 and not legacy:
+        raise SafeError("invalid-source")
     accounts = LEGACY_PROFILES if cluster["schema_version"] == 1 else {profile: PROFILES[profile]}
     return {
         "apiVersion": "v1",
@@ -265,7 +274,7 @@ def _validate_config(config, repo_root, metadata, *, legacy=False):
         context = config["current-context"]
         accounts = LEGACY_PROFILES if metadata["schema_version"] == 1 else PROFILES
         profile = next(name for name, account in accounts.items() if account == context)
-        expected = _config(repo_root, metadata, profile)
+        expected = _config(repo_root, metadata, profile, legacy=legacy)
         if config == expected:
             return
         if (
@@ -319,17 +328,13 @@ def validate_scoped_kubeconfig(path, repo_root):
 
 
 def install_kubeconfig(repo_root, directory, profile="observer"):
-    if profile not in BASE_PROFILES | LEGACY_PROFILES.keys():
+    if profile not in BASE_PROFILES:
         raise SafeError("invalid-source")
     local = load_workstation(directory)
-    accounts = LEGACY_PROFILES if local["cluster"]["schema_version"] == 1 else BASE_PROFILES
+    accounts = BASE_PROFILES
     if profile not in accounts:
         raise SafeError("invalid-source")
-    name = (
-        "config"
-        if local["cluster"]["schema_version"] == 1 or profile == "observer"
-        else profile + ".config"
-    )
+    name = "config" if profile == "observer" else profile + ".config"
     fd = _config_directory(repo_root, create=True)
     temporary = ".config-" + secrets.token_hex(16)
     try:
@@ -516,9 +521,7 @@ def main(argv):
             validate_scoped_kubeconfig(Path(argv[2]), root)
             return 0
         invocation = len(argv) == 3 and argv[1] == "invocation"
-        if not invocation and (
-            len(argv) != 2 or argv[1] not in BASE_PROFILES | LEGACY_PROFILES.keys()
-        ):
+        if not invocation and (len(argv) != 2 or argv[1] not in BASE_PROFILES):
             raise SafeError("invalid-source")
         info = json.loads(os.environ.get("KUBERNETES_EXEC_INFO", "{}"))
         if (
@@ -534,11 +537,7 @@ def main(argv):
             profile = validate_invocation(root, Path(argv[2]))["profile"]
         else:
             profile = argv[1]
-            name = (
-                "config"
-                if local["cluster"]["schema_version"] == 1 or profile == "observer"
-                else profile + ".config"
-            )
+            name = "config" if profile == "observer" else profile + ".config"
             validate_scoped_kubeconfig(root / ".kube" / name, root)
         output = issue_exec_credential(
             profile, local, client=BaoClient(workstation.ENDPOINT), now=time.time()

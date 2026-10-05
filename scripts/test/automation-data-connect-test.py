@@ -115,7 +115,7 @@ class ConnectTest(unittest.TestCase):
             **{k: v for k, v in local.items() if k != "cluster"}, "schema_version": 1,
             "cluster_digest": guards.digest(local["cluster"]),
         })
-        config = credentials.install_kubeconfig(repo, auth, "diagnostic")
+        config = credentials.install_kubeconfig(repo, auth, "debugger")
         with mock.patch.object(client, "__file__", str(repo / "scripts/lib/automation_data_client.py")), \
                 mock.patch.object(workstation, "DIRECTORY", auth):
             self.assertEqual(client.scoped_kubeconfig(config), config)

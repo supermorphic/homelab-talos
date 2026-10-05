@@ -255,44 +255,6 @@
     },
     {
       "kind": "issuance-role",
-      "name": "diagnostic",
-      "path": "kubernetes/roles/diagnostic",
-      "fields": {
-        "allowed_kubernetes_namespaces": [
-          "kube-system"
-        ],
-        "allowed_kubernetes_namespace_selector": "",
-        "service_account_name": "homelab-diagnostic",
-        "kubernetes_role_name": "",
-        "generated_role_rules": "",
-        "token_default_ttl": 600,
-        "token_max_ttl": 600,
-        "token_default_audiences": [
-          "https://192.168.90.20:6443"
-        ]
-      }
-    },
-    {
-      "kind": "issuance-role",
-      "name": "publisher",
-      "path": "kubernetes/roles/publisher",
-      "fields": {
-        "allowed_kubernetes_namespaces": [
-          "kube-system"
-        ],
-        "allowed_kubernetes_namespace_selector": "",
-        "service_account_name": "homelab-report-publisher",
-        "kubernetes_role_name": "",
-        "generated_role_rules": "",
-        "token_default_ttl": 600,
-        "token_max_ttl": 600,
-        "token_default_audiences": [
-          "https://192.168.90.20:6443"
-        ]
-      }
-    },
-    {
-      "kind": "issuance-role",
       "name": "campaign-coordinator",
       "path": "kubernetes/roles/campaign-coordinator",
       "fields": {
@@ -547,8 +509,6 @@
     "issuance-role": [
       "openbao-acceptance",
       "observer",
-      "diagnostic",
-      "publisher",
       "campaign-coordinator",
       "debugger",
       "test-runner",

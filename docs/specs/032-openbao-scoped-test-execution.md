@@ -498,6 +498,20 @@ transition.
    old public `diagnostic`/`publisher` endpoints and multi-context paths only after
    new-name acceptance, then repeat the affected checks.
 
+The final retirement uses the attended configuration-apply command below. Its
+plan removes the two legacy policy routes and deletes only the `diagnostic` and
+`publisher` issuance roles. It checks each role against its current replacement,
+binds the observed state into the confirmation, and repeats source, target and
+role checks before deletion. Independent configuration reads must prove that
+both roles are absent. An interrupted or ambiguous deletion requires a fresh
+plan; the command does not retry the write automatically.
+
+Current issuance and installation require upgraded enrollment metadata and a
+single selected context. Historical config recognition remains available for
+safe replacement of an existing checkout config. After configuration apply
+passes, retain `mise exec -- just test record verification.openbao` from clean
+deployed main before closing the issue.
+
 If prerequisite deployment or configuration validation fails, leave the affected
 callers paused and correct the Git/deployment mismatch before retrying. If
 workstation rotation is interrupted, use the

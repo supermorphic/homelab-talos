@@ -21,9 +21,18 @@ from scripts.openbao.configuration import SafeError
 NOW = 2000000000
 ACCOUNTS = {
     "observer": "homelab-observer",
-    "diagnostic": "homelab-diagnostic",
-    "publisher": "homelab-report-publisher",
+    "debugger": "homelab-diagnostic",
+    "test-runner": "homelab-test-runner",
+    "report-publisher": "homelab-report-publisher",
     "campaign-coordinator": "homelab-campaign-coordinator",
+    "test-flux-restart": "homelab-test-flux-restart",
+    "test-cilium-connectivity": "homelab-test-cilium-connectivity",
+    "test-node-reschedule": "homelab-test-node-reschedule",
+    "test-conformance": "homelab-test-conformance",
+    "test-openbao-issuance": "homelab-test-openbao-issuance",
+    "test-openbao-ha": "homelab-test-openbao-ha",
+    "test-openbao-restore": "homelab-test-openbao-restore",
+    "test-openbao-lifecycle": "homelab-test-openbao-lifecycle",
 }
 
 
@@ -49,7 +58,7 @@ def state():
         "entity_id": "synthetic-entity",
         "expires_at": NOW + 7776000,
         "cluster": {
-            "schema_version": 1,
+            "schema_version": 2,
             "server": issuance.AUDIENCE,
             "certificate_authority_data": base64.b64encode(
                 b"-----BEGIN CERTIFICATE-----\nsynthetic\n-----END CERTIFICATE-----"
@@ -99,6 +108,35 @@ class Broker:
 
 
 class CredentialTests(unittest.TestCase):
+    def test_legacy_metadata_and_aliases_fail_before_broker_access(self):
+        old = state()
+        old["cluster"].update(
+            schema_version=1,
+            profiles=["observer", "diagnostic", "publisher", "campaign-coordinator"],
+        )
+        for profile, local in (("observer", old), ("diagnostic", state()), ("publisher", state())):
+            with self.subTest(profile=profile), self.assertRaises(SafeError):
+                credentials.issue_exec_credential(profile, local, client=self.broker, now=NOW)
+            self.assertEqual(self.broker.calls, [])
+
+    def test_legacy_cli_names_refuse_before_private_authentication(self):
+        with patch("scripts.openbao.credentials.load_workstation") as load:
+            for profile in ("diagnostic", "publisher"):
+                with redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
+                    self.assertEqual(credentials.main(["exec", profile]), 1)
+                with self.assertRaises(SafeError):
+                    credentials.install_kubeconfig(Path("/synthetic"), Path("/private"), profile)
+            load.assert_not_called()
+
+    def test_legacy_multicontext_generation_is_only_for_replacement_validation(self):
+        old = state()["cluster"]
+        old.update(
+            schema_version=1,
+            profiles=["observer", "diagnostic", "publisher", "campaign-coordinator"],
+        )
+        with self.assertRaises(SafeError):
+            credentials._config(Path("/synthetic"), old, "observer")
+
     def setUp(self):
         self.broker = Broker()
 
@@ -225,11 +263,11 @@ class InstallationTests(unittest.TestCase):
     def install(self, repo=None):
         return credentials.install_kubeconfig(repo or self.repo, self.auth)
 
-    def test_installs_four_exec_contexts_without_reading_other_checkouts(self):
+    def test_installs_one_exec_context_without_reading_other_checkouts(self):
         path = self.install()
         config = yaml.safe_load(path.read_text())
         self.assertEqual(config["current-context"], "homelab-observer")
-        self.assertEqual({c["name"] for c in config["contexts"]}, set(ACCOUNTS.values()))
+        self.assertEqual({c["name"] for c in config["contexts"]}, {"homelab-observer"})
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         for user in config["users"]:
             self.assertEqual(set(user["user"]), {"exec"})
@@ -310,10 +348,13 @@ class InstallationTests(unittest.TestCase):
     def test_recognized_legacy_config_can_be_replaced_without_token_backup(self):
         p = self.install()
         config = yaml.safe_load(p.read_text())
-        config["contexts"] = config["contexts"][:3]
+        old_accounts = ("homelab-observer", "homelab-diagnostic", "homelab-report-publisher")
+        config["contexts"] = [
+            {"name": account, "context": {"cluster": "homelab", "user": account}}
+            for account in old_accounts
+        ]
         config["users"] = [
-            {"name": account, "user": {"token": jwt(account)}}
-            for account in list(ACCOUNTS.values())[:3]
+            {"name": account, "user": {"token": jwt(account)}} for account in old_accounts
         ]
         p.write_text(yaml.safe_dump(config))
         self.install()
