@@ -23,7 +23,7 @@ spec:
     - name: item
       expression: 'request.operation == ''DELETE'' ? oldObject : object'
   validations:
-    - expression: (!has(request.namespace) || request.namespace == '') && (!has(request.subResource) || request.subResource == '') && request.name in ['cilium-test-1','cilium-test-ccnp1','cilium-test-ccnp2']
+    - expression: has(request.namespace) && request.namespace == request.name && (!has(request.subResource) || request.subResource == '') && request.name in ['cilium-test-1','cilium-test-ccnp1','cilium-test-ccnp2']
         && variables.item.apiVersion == 'v1' && variables.item.kind == 'Namespace' && variables.item.metadata.name
         == request.name && (!has(variables.item.metadata.namespace) || variables.item.metadata.namespace
         == '') && variables.item.all(k, k in ['apiVersion','kind','metadata','spec','status']) && !has(variables.item.metadata.ownerReferences)

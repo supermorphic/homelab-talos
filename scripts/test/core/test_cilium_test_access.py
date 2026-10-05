@@ -75,13 +75,18 @@ class CiliumAccessTests(unittest.TestCase):
             }
             req = {
                 "operation": "CREATE",
-                "namespace": "",
+                # The Kubernetes Namespace handlers put the target name in
+                # admission attributes, including for cluster-scoped CREATE.
+                "namespace": name,
                 "name": name,
                 "subResource": "",
                 "resource": {"group": "", "version": "v1", "resource": "namespaces"},
                 "userInfo": {"username": IDENTITY},
             }
             self.assertTrue(self.admits(policy, req, obj))
+            self.assertFalse(self.admits(policy, {**req, "namespace": ""}, obj))
+            omitted_namespace = {k: v for k, v in req.items() if k != "namespace"}
+            self.assertFalse(self.admits(policy, omitted_namespace, obj))
             for metadata in (
                 {"annotations": {}},
                 {"ownerReferences": [{"uid": "other"}]},
@@ -107,6 +112,20 @@ class CiliumAccessTests(unittest.TestCase):
             updated["metadata"]["annotations"]["clustermesh.cilium.io/global"] = "true"
             updated["metadata"]["resourceVersion"] = "2"
             self.assertTrue(self.admits(policy, {**req, "operation": "UPDATE"}, updated, stored))
+            for operation, new, previous in (
+                ("UPDATE", updated, stored),
+                ("DELETE", None, stored),
+            ):
+                for namespace in ("", "kube-system", NAMESPACES[(NAMESPACES.index(name) + 1) % 3]):
+                    with self.subTest(name=name, operation=operation, namespace=namespace):
+                        self.assertFalse(
+                            self.admits(
+                                policy,
+                                {**req, "operation": operation, "namespace": namespace},
+                                new,
+                                previous,
+                            )
+                        )
             self.assertFalse(self.admits(policy, {**req, "operation": "UPDATE"}, stored, updated))
             for path, value in (
                 (("metadata", "annotations", OWNER), "replacement-run"),
