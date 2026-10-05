@@ -28,7 +28,6 @@ declare -a stage_results=()
 stage_index=0
 kubeconfig=''
 temp_dir=''
-exporter_pod=''
 raw_metric_present=false
 
 bounded_text() {
@@ -125,6 +124,32 @@ stage_flux_resources() {
   return "$status"
 }
 
+review_exporter_permission() {
+  local group="$1" resource="$2" verb="$3" request response result
+  request="$(jq -n --arg user "$exporter_subject" --arg group "$group" \
+    --arg resource "$resource" --arg verb "$verb" '{
+      apiVersion: "authorization.k8s.io/v1", kind: "SubjectAccessReview",
+      spec: {user: $user,
+        groups: ["system:serviceaccounts", "system:serviceaccounts:monitoring", "system:authenticated"],
+        resourceAttributes: {group: $group, resource: $resource, verb: $verb, namespace: ""}}
+    }')" || { echo error; return; }
+  if ! response="$(printf '%s\n' "$request" | kubectl --kubeconfig "$kubeconfig" \
+    create --raw /apis/authorization.k8s.io/v1/subjectaccessreviews -f - 2>/dev/null)"; then
+    echo error
+    return
+  fi
+  result="$(jq -r '
+    if (.status | type) != "object" or (.status.allowed | type) != "boolean" or
+       (.status.denied != null and (.status.denied | type) != "boolean") or
+       (.status.allowed == true and .status.denied == true) or
+       (.status.evaluationError != null and
+        ((.status.evaluationError | type) != "string" or .status.evaluationError != "")) then "error"
+    elif .status.allowed == true and (.status.denied // false) == false then "yes"
+    else "no" end
+  ' <<<"$response" 2>/dev/null)" || result=error
+  printf '%s\n' "$result"
+}
+
 stage_exporter_rbac() {
   local status=0
   local group version kind resource list_result watch_result
@@ -140,28 +165,14 @@ stage_exporter_rbac() {
       status=1
       continue
     fi
-    list_result="$(
-      kubectl --kubeconfig "$kubeconfig" auth can-i list "${resource}.${group}" \
-        --as="$exporter_subject" --all-namespaces 2>/dev/null || true
-    )"
-    watch_result="$(
-      kubectl --kubeconfig "$kubeconfig" auth can-i watch "${resource}.${group}" \
-        --as="$exporter_subject" --all-namespaces 2>/dev/null || true
-    )"
+    list_result="$(review_exporter_permission "$group" "$resource" list)"
+    watch_result="$(review_exporter_permission "$group" "$resource" watch)"
     printf '  %-18s list=%-3s watch=%-3s resource=%s\n' \
       "$kind" "${list_result:-error}" "${watch_result:-error}" "${resource}.${group}"
     [[ "$list_result" == 'yes' && "$watch_result" == 'yes' ]] || status=1
   done
-  list_result="$(
-    kubectl --kubeconfig "$kubeconfig" auth can-i list \
-      customresourcedefinitions.apiextensions.k8s.io \
-      --as="$exporter_subject" 2>/dev/null || true
-  )"
-  watch_result="$(
-    kubectl --kubeconfig "$kubeconfig" auth can-i watch \
-      customresourcedefinitions.apiextensions.k8s.io \
-      --as="$exporter_subject" 2>/dev/null || true
-  )"
+  list_result="$(review_exporter_permission apiextensions.k8s.io customresourcedefinitions list)"
+  watch_result="$(review_exporter_permission apiextensions.k8s.io customresourcedefinitions watch)"
   printf '  %-18s list=%-3s watch=%-3s resource=%s\n' \
     'KSM CRD discovery' "${list_result:-error}" "${watch_result:-error}" \
     'customresourcedefinitions.apiextensions.k8s.io'
@@ -215,7 +226,6 @@ stage_exporter_workload() {
   }
   if [[ -n "$pod_rows" ]]; then
     printf '%s\n' "$pod_rows" | sed 's/^/  pod /'
-    exporter_pod="$(awk 'NR == 1 {print $1}' <<<"$pod_rows")"
     if ! awk 'NF >= 4 && $2 == "Running" && $3 == "true" {good++} END {exit good > 0 ? 0 : 1}' \
       <<<"$pod_rows"; then
       status=1
@@ -257,27 +267,15 @@ stage_exporter_workload() {
 
 stage_exporter_raw_metric() {
   local status=0
-  local metric_count raw_kinds telemetry_path
+  local metric_count raw_kinds
   local error_file="$temp_dir/exporter-metrics.error"
   local metrics_file="$temp_dir/exporter-metrics.txt"
-  local telemetry_file="$temp_dir/exporter-telemetry.txt"
-
-  if [[ -z "$exporter_pod" ]]; then
-    exporter_pod="$(
-      kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" \
-        get pods --selector "$exporter_workload_selector" \
-        --output jsonpath='{.items[0].metadata.name}' 2>/dev/null || true
-    )"
-  fi
-  [[ -n "$exporter_pod" ]] || {
-    echo 'No exporter pod is available for the raw metrics boundary.' >&2
-    return 1
-  }
+  raw_metric_present=false
 
   if ! kubectl --kubeconfig "$kubeconfig" get --raw \
-    "/api/v1/namespaces/${namespace}/pods/${exporter_pod}:8080/proxy/metrics" \
+    "/api/v1/namespaces/${namespace}/services/${exporter_name}:http/proxy/metrics" \
     >"$metrics_file" 2>"$error_file"; then
-    echo "Pod metrics proxy failed: $(bounded_text <"$error_file")" >&2
+    echo "Exporter Service metrics proxy failed: $(bounded_text <"$error_file")" >&2
     return 1
   fi
   metric_count="$(rg -c --fixed-strings 'gotk_resource_info{' "$metrics_file" || true)"
@@ -294,15 +292,11 @@ stage_exporter_raw_metric() {
     raw_metric_present=true
   else
     status=1
-    telemetry_path="/api/v1/namespaces/${namespace}/pods/${exporter_pod}:8081/proxy/metrics"
-    if kubectl --kubeconfig "$kubeconfig" get --raw "$telemetry_path" \
-      >"$telemetry_file" 2>/dev/null; then
-      echo '  Exporter custom-resource config telemetry:'
-      rg '^kube_state_metrics_(config_hash|last_config_reload)' "$telemetry_file" |
-        bounded_text |
-        sed 's/^/    /' ||
-        echo '    No custom-resource config telemetry series found.'
-    fi
+    echo '  Exporter custom-resource config telemetry available on its named Service:'
+    rg '^kube_state_metrics_(config_hash|last_config_reload)' "$metrics_file" |
+      bounded_text |
+      sed 's/^/    /' ||
+      echo '    No config telemetry is exposed on the named Service; the Flux series check remains failed.'
   fi
   return "$status"
 }

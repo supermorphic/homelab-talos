@@ -135,6 +135,20 @@ change does not require replacing the Kubernetes identity. The generalized runne
 uses a new Git-managed `homelab-test-runner` account. It does not inherit debugger
 as a whole. Publisher and coordinator never inherit observer or test mutation.
 
+Flux-alert diagnostics use the same observer profile. Observer and debugger have
+separate Git-managed grants to create `SubjectAccessReview` queries and GET the
+named monitoring Service proxy
+`kube-prometheus-stack-kube-state-metrics:http`. Authorization reviews return
+permission decisions for a requested user; they do not authenticate or execute
+as that user. Their query authority is not limited to the exporter identity.
+The diagnostic submits the configured exporter ServiceAccount and its standard
+groups for the five Flux kinds and CRD list/watch checks. It fails on denied,
+malformed, or ambiguous responses. The Service proxy grant permits only the
+named HTTP port; missing Flux metrics remain a failed stage. No Pod proxy or
+impersonation grant is added. These separate grants are bound only to observer
+and debugger, not to test identities, coordinator, or report publisher. They
+need no attended OpenBao password or workstation enrollment change.
+
 ### Generalized runner boundary
 
 Grant enumerated groups, resources, and verbs through namespace Roles wherever

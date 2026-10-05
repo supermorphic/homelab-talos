@@ -8,13 +8,13 @@ diagnostic_namespaces := {
 }
 
 diagnostic_role_names := {name | some name in object.keys(diagnostic_namespaces)}
-agent_role_names := {"homelab-observer-extra"} | diagnostic_role_names
+agent_role_names := {"homelab-observer-extra", "homelab-flux-observation-authorize"} | diagnostic_role_names
 publisher_role_names := {
 	"homelab-report-publisher-flux-system",
 	"homelab-report-publisher-test-reports",
 }
 
-profile_role_names := {"homelab-campaign-coordinator", "openbao-agent-tokenrequest"} | object.keys(dedicated_role_contracts)
+profile_role_names := {"homelab-campaign-coordinator", "openbao-agent-tokenrequest", "homelab-flux-observation-metrics"} | object.keys(dedicated_role_contracts)
 
 connection_role_names := {"homelab-automation-data-connect"}
 
@@ -26,6 +26,7 @@ expected_document_names := {
 		"homelab-observer-view",
 		"homelab-diagnostic-view",
 		"homelab-observer-extra",
+		"homelab-flux-observation-authorize",
 		"homelab-test-runner-view",
 		"homelab-test-runner-observation",
 		"homelab-test-conformance",
@@ -163,6 +164,65 @@ allowed_rule("homelab-observer-extra", rule) if {
 
 allowed_rule("homelab-diagnostic-exec", rule) if {
 	rule_matches_named(rule, {""}, {"pods/exec"}, set(), {"create"})
+}
+
+allowed_rule("homelab-flux-observation-authorize", rule) if {
+	rule_matches(rule, {"authorization.k8s.io"}, {"subjectaccessreviews"}, {"create"})
+}
+
+flux_observation_review_exact if {
+	roles := publisher_documents("ClusterRole", "homelab-flux-observation-authorize")
+	count(roles) == 1
+	metadata_namespace(roles[0]) == ""
+	object.get(roles[0], "rules", []) == [{"apiGroups": ["authorization.k8s.io"], "resources": ["subjectaccessreviews"], "verbs": ["create"]}]
+	object.get(roles[0], "aggregationRule", null) == null
+	not flux_observation_aggregated(roles[0])
+}
+
+flux_observation_aggregated(document) if {
+	some label in object.keys(object.get(document.metadata, "labels", {}))
+	startswith(label, "rbac.authorization.k8s.io/aggregate-to-")
+}
+
+flux_observation_binding_exact(document, name) if {
+	name == "homelab-flux-observation-authorize"
+	document.kind == "ClusterRoleBinding"
+	metadata_name(document) == name
+	metadata_namespace(document) == ""
+	object.get(document, "roleRef", {}) == {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": name}
+	object.get(document, "subjects", []) == [
+		{"kind": "ServiceAccount", "name": "homelab-observer", "namespace": "kube-system"},
+		{"kind": "ServiceAccount", "name": "homelab-diagnostic", "namespace": "kube-system"},
+	]
+}
+
+flux_observation_binding_exact(document, name) if {
+	name == "homelab-flux-observation-metrics"
+	document.kind == "RoleBinding"
+	metadata_name(document) == name
+	profile_binding_exact(document, name)
+}
+
+deny contains "Flux observation must grant only authorization review queries" if {
+	not flux_observation_review_exact
+}
+
+flux_observation_authorization_binding_exact if {
+	bindings := publisher_documents("ClusterRoleBinding", "homelab-flux-observation-authorize")
+	count(bindings) == 1
+	flux_observation_binding_exact(bindings[0], "homelab-flux-observation-authorize")
+}
+
+deny contains "Flux authorization observation must bind only observer and debugger once" if {
+	not flux_observation_authorization_binding_exact
+}
+
+deny contains "Flux observation binding has unexpected authority" if {
+	some document in documents
+	document.kind in {"RoleBinding", "ClusterRoleBinding"}
+	name := object.get(object.get(document, "roleRef", {}), "name", "")
+	name in {"homelab-flux-observation-authorize", "homelab-flux-observation-metrics"}
+	not flux_observation_binding_exact(document, name)
 }
 
 allowed_rule("homelab-diagnostic-portforward", rule) if {
@@ -541,6 +601,14 @@ deny contains msg if {
 
 profile_role_contracts := object.union(
 	{
+		"homelab-flux-observation-metrics": {
+			"namespace": "monitoring",
+			"rules": [{"apiGroups": [""], "resources": ["services/proxy"], "resourceNames": ["kube-prometheus-stack-kube-state-metrics:http"], "verbs": ["get"]}],
+			"subjects": [
+				{"kind": "ServiceAccount", "name": "homelab-observer", "namespace": "kube-system"},
+				{"kind": "ServiceAccount", "name": "homelab-diagnostic", "namespace": "kube-system"},
+			],
+		},
 		"homelab-campaign-coordinator": {
 			"namespace": "flux-system",
 			"rules": [{

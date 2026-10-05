@@ -189,7 +189,47 @@ assert_eq false "$(flux_alerts_rules_select_production_source <<<"$unscoped_rule
 rg -Fq 'get helmrelease "$exporter_release"' scripts/diagnose/flux-alerts.sh
 
 kubectl() {
+  printf '%s\n' "$*" >>"$diagnostic_requests"
   case "$*" in
+  *'get --raw /apis/kustomize.toolkit.fluxcd.io/v1'*)
+    printf '%s\n' '{"resources":[{"kind":"Kustomization","name":"kustomizations"}]}'
+    ;;
+  *'get --raw /apis/helm.toolkit.fluxcd.io/v2'*)
+    printf '%s\n' '{"resources":[{"kind":"HelmRelease","name":"helmreleases"}]}'
+    ;;
+  *'get --raw /apis/source.toolkit.fluxcd.io/v1'*)
+    printf '%s\n' '{"resources":[{"kind":"GitRepository","name":"gitrepositories"},{"kind":"HelmRepository","name":"helmrepositories"},{"kind":"OCIRepository","name":"ocirepositories"}]}'
+    ;;
+  *'create --raw /apis/authorization.k8s.io/v1/subjectaccessreviews -f -'*)
+    local request
+    request="$(cat)"
+    jq -e '
+      .apiVersion == "authorization.k8s.io/v1" and .kind == "SubjectAccessReview" and
+      .spec.user == "system:serviceaccount:monitoring:kube-prometheus-stack-kube-state-metrics" and
+      (.spec.groups | sort) == (["system:serviceaccounts", "system:serviceaccounts:monitoring", "system:authenticated"] | sort) and
+      (.spec.resourceAttributes.verb == "list" or .spec.resourceAttributes.verb == "watch") and
+      (.spec.resourceAttributes.namespace // "") == "" and
+      ((.spec.resourceAttributes.group == "kustomize.toolkit.fluxcd.io" and
+        .spec.resourceAttributes.resource == "kustomizations") or
+       (.spec.resourceAttributes.group == "helm.toolkit.fluxcd.io" and
+        .spec.resourceAttributes.resource == "helmreleases") or
+       (.spec.resourceAttributes.group == "source.toolkit.fluxcd.io" and
+        (.spec.resourceAttributes.resource | IN("gitrepositories", "helmrepositories", "ocirepositories"))) or
+       (.spec.resourceAttributes.group == "apiextensions.k8s.io" and
+        .spec.resourceAttributes.resource == "customresourcedefinitions"))
+    ' <<<"$request" >/dev/null || return 64
+    jq -c . <<<"$request" >>"$review_requests"
+    case "${review_fixture_mode:-allowed}" in
+      allowed) printf '%s\n' '{"status":{"allowed":true,"denied":false}}' ;;
+      denied) printf '%s\n' '{"status":{"allowed":false,"denied":true}}' ;;
+      evaluation-error) printf '%s\n' '{"status":{"allowed":true,"evaluationError":"synthetic authorizer failure"}}' ;;
+      malformed) printf '%s\n' '{"status":{"allowed":"true"}}' ;;
+      contradictory) printf '%s\n' '{"status":{"allowed":true,"denied":true}}' ;;
+      missing-status) printf '%s\n' '{}' ;;
+      api-error) return 1 ;;
+      *) return 64 ;;
+    esac
+    ;;
   *'get kustomization kube-prometheus-stack'*) printf 'True' ;;
   *'get helmrelease kube-prometheus-stack'*) printf 'True' ;;
   *'get deployment kube-prometheus-stack-kube-state-metrics'*)
@@ -204,8 +244,13 @@ kubectl() {
     fi
     ;;
   *'logs deployment/kube-prometheus-stack-kube-state-metrics'*) printf '%s\n' 'metrics configured' ;;
-  *'/pods/kube-state-metrics-a:8080/proxy/metrics'*)
-    printf '%s\n' 'gotk_resource_info{customresource_kind="Kustomization"} 1'
+  *'/services/kube-prometheus-stack-kube-state-metrics:http/proxy/metrics'*)
+    case "${metrics_fixture_mode:-present}" in
+      present) printf '%s\n' 'gotk_resource_info{customresource_kind="Kustomization"} 1' ;;
+      absent) printf '%s\n' 'process_start_time_seconds 1' ;;
+      api-error) return 1 ;;
+      *) return 64 ;;
+    esac
     ;;
   *)
     echo "Unexpected kubectl request: $*" >&2
@@ -213,13 +258,53 @@ kubectl() {
     ;;
   esac
 }
-exporter_pod=''
 kubeconfig='/tmp/fixture-kubeconfig'
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-flux-alerts-diagnostics-test.XXXXXX")"
 trap 'rm -rf -- "$temp_dir"' EXIT
-stage_exporter_workload
-assert_eq kube-state-metrics-a "$exporter_pod" 'diagnostics selects the bundled kube-state-metrics pod'
+diagnostic_requests="$temp_dir/requests"
+review_requests="$temp_dir/reviews"
+stage_exporter_workload >"$temp_dir/workload.log"
+rg -Fq 'pod kube-state-metrics-a Running true 0' "$temp_dir/workload.log"
+if rg -q 'grafana-a' "$temp_dir/workload.log"; then
+  echo 'Workload check selected an unrelated Pod.' >&2
+  exit 1
+fi
 stage_exporter_raw_metric
+assert_eq true "$raw_metric_present" 'present native Flux metric'
+for metrics_fixture_mode in absent api-error; do
+  raw_metric_present=true
+  if stage_exporter_raw_metric >"$temp_dir/metrics-$metrics_fixture_mode.log" 2>&1; then
+    echo 'Raw exporter check accepted an absent metric or failed Service proxy.' >&2
+    exit 1
+  fi
+  assert_eq false "$raw_metric_present" 'failure clears the previous metric result'
+done
+rg -Fq 'No config telemetry is exposed on the named Service' "$temp_dir/metrics-absent.log"
+metrics_fixture_mode=present
+
+mapfile -t configured_gvks < <(flux_alerts_configured_gvks "$flux_alerts_values" "$flux_alerts_values_root")
+for review_fixture_mode in allowed denied evaluation-error malformed contradictory missing-status api-error; do
+  : >"$review_requests"
+  if stage_exporter_rbac >"$temp_dir/review-$review_fixture_mode.log" 2>&1; then
+    [[ "$review_fixture_mode" == allowed ]] || {
+      echo 'Exporter permission check accepted a denied or ambiguous review.' >&2
+      exit 1
+    }
+  else
+    [[ "$review_fixture_mode" != allowed ]] || {
+      echo 'Exporter permission check could not use authorization reviews.' >&2
+      exit 1
+    }
+  fi
+  assert_eq 12 "$(wc -l <"$review_requests" | tr -d ' ')" 'one review per list/watch permission'
+  jq -se 'length == 12 and
+    (unique_by([.spec.resourceAttributes.group, .spec.resourceAttributes.resource,
+      .spec.resourceAttributes.verb]) | length) == 12' "$review_requests" >/dev/null
+done
+if rg -q -- '--as=|/pods/[^ ]*/proxy/|auth can-i' "$diagnostic_requests"; then
+  echo 'Observation attempted impersonation or an unrestricted Pod proxy.' >&2
+  exit 1
+fi
 
 stage_labels=()
 stage_results=()
