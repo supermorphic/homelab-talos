@@ -729,6 +729,12 @@ rules:
       - get
       - patch
       - delete
+  - apiGroups:
+      - cilium.io
+    resources:
+      - ciliumclusterwidenetworkpolicies
+    verbs:
+      - create
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -1012,6 +1018,19 @@ rules:
       - get
       - patch
       - delete
+  - apiGroups:
+      - cilium.io
+    resources:
+      - ciliumnetworkpolicies
+      - ciliumlocalredirectpolicies
+    verbs:
+      - create
+  - apiGroups:
+      - networking.k8s.io
+    resources:
+      - networkpolicies
+    verbs:
+      - create
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -1076,6 +1095,19 @@ rules:
       - get
       - patch
       - delete
+  - apiGroups:
+      - cilium.io
+    resources:
+      - ciliumcidrgroups
+      - ciliumclusterwideenvoyconfigs
+    verbs:
+      - create
+  - apiGroups:
+      - policy.networking.k8s.io
+    resources:
+      - clusternetworkpolicies
+    verbs:
+      - create
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
