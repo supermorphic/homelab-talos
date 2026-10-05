@@ -113,6 +113,22 @@ class Controller:
     def _vpn_ip(self, pod: str, api_key: str) -> str:
         return str(self._api_json(pod, api_key, "/v1/publicip/ip").get("public_ip", ""))
 
+    def _recovered_vpn_ip(self, pod: str, api_key: str) -> str:
+        # Pod readiness can precede availability of Gluetun's public-IP result.
+        # Leave time within the existing two-minute Chainsaw step for evidence.
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if self._vpn_status(pod, api_key) != "running":
+                raise ScenarioFailure("VPN is not running on the recovered pod")
+            address = self._vpn_ip(pod, api_key)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if address:
+                return address
+            self.sleep(min(2, remaining))
+        raise ScenarioFailure("VPN public IP was unavailable before the recovery deadline")
+
     def _qbit_probe(self) -> None:
         self.runner(
             [
@@ -253,11 +269,7 @@ class Controller:
         if pod["metadata"]["uid"] == state["podUid"]:
             raise ScenarioFailure("Chainsaw did not recreate the disconnected VPN pod")
         api_key = self._api_key(pod_name)
-        if self._vpn_status(pod_name, api_key) != "running":
-            raise ScenarioFailure("VPN is not running on the replacement pod")
-        recovered_ip = self._vpn_ip(pod_name, api_key)
-        if not recovered_ip:
-            raise ScenarioFailure("replacement VPN has no public IP")
+        recovered_ip = self._recovered_vpn_ip(pod_name, api_key)
         recovery_timeline = self.timeline_dir / "recovery.jsonl"
         capture = self.runner(
             [
@@ -298,10 +310,7 @@ class Controller:
         try:
             pod = self._pod()
             api_key = self._api_key(str(pod["metadata"]["name"]))
-            if self._vpn_status(str(pod["metadata"]["name"]), api_key) != "running":
-                raise ScenarioFailure("VPN is not running after Chainsaw cleanup")
-            if not self._vpn_ip(str(pod["metadata"]["name"]), api_key):
-                raise ScenarioFailure("VPN has no public IP after Chainsaw cleanup")
+            self._recovered_vpn_ip(str(pod["metadata"]["name"]), api_key)
         except ScenarioFailure:
             write_recovery(self.run_dir, "failed", "VPN recovery-state validation failed")
             raise

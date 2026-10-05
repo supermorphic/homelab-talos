@@ -21,6 +21,8 @@ if [[ -z "$run_dir" ]]; then
   mkdir -p "$repo_root/.test-results"
   run_dir="$(mktemp -d "$repo_root/.test-results/$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short=12 HEAD)-media-hardlink.XXXXXX")"
 fi
+output_dir="$run_dir/diagnostics/media-hardlink"
+mkdir -p "$output_dir"
 run_id="$(basename "$run_dir" | tr -cd 'A-Za-z0-9')"
 src_dir="/data/downloads/.e2e-media-hardlink-${run_id}"
 dst_dir="/data/media/.e2e-media-hardlink-${run_id}"
@@ -102,9 +104,9 @@ echo "PRIMARY OK: same inode $src_inode across /data/downloads and /data/media, 
 concurrent_open() {
   local label="$1" holder_pod="$2" holder_path="$3" holder_mode="$4"
   local opener_pod="$5" opener_path="$6" opener_mode="$7"
-  local fifo="$run_dir/${label}.fifo" holder_out="$run_dir/${label}.holder.out"
-  local holder_err="$run_dir/${label}.holder.err" opener_out="$run_dir/${label}.opener.out"
-  local opener_err="$run_dir/${label}.opener.err" ready=false attempt
+  local fifo="$output_dir/${label}.fifo" holder_out="$output_dir/${label}.holder.out"
+  local holder_err="$output_dir/${label}.holder.err" opener_out="$output_dir/${label}.opener.out"
+  local opener_err="$output_dir/${label}.opener.err" ready=false attempt
   mkfifo "$fifo"
   # shellcheck disable=SC2016 # The quoted script expands inside the container.
   kubectl --kubeconfig "$kubeconfig" --namespace "$ns" exec -i "$holder_pod" -c app -- sh -c '

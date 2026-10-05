@@ -862,7 +862,7 @@ suites:
     native_results: {strategy: wrapper-junit}
     dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/automation-data-restore-drill.sh, args: ["@test-kubeconfig@"], selector: null}
   - metadata: {id: test.ntfy-publish, source: test, framework: bash, suite: platform, tier: integration, target: ntfy, scenario: publish, scope: application, intent: feature, mutates_cluster: true, execution_owner: shared}
-    access: {profile: debugger, prerequisites: []}
+    access: {profile: debugger, prerequisites: [talos-reader]}
     confirmation: {type: exact, variable: NTFY_PUBLISH_TEST_CONFIRM, expected: "test:ntfy:publish:media-critical-homelab"}
     runner: {command: "NTFY_PUBLISH_TEST_CONFIRM=test:ntfy:publish:media-critical-homelab mise exec -- just kube ntfy-publish-test", implementation: scripts/test/scenarios/ntfy-publish.sh}
     native_results: {strategy: wrapper-junit}

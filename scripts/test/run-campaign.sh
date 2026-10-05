@@ -674,12 +674,22 @@ resolve_member_command() {
     return 2
   }
   if [[ "$command" == *'<run-id>'* ]]; then
-    latest_published="$(
-      yq -r '[.runs[] | select(.publish_status == "published" or
-        .publish_status == "idempotent")] | last | .run_id // ""' "$manifest"
-    )"
+    latest_published=''
+    if [[ "$suite_id" == chainsaw.resilience.test-reports-persistence ]]; then
+      latest_published="${TEST_REPORT_RUN_ID:-}"
+    fi
+    if [[ -z "$latest_published" ]]; then
+      latest_published="$(
+        yq -r '[.runs[] | select(.publish_status == "published" or
+          .publish_status == "idempotent")] | .[-1].run_id // ""' "$manifest"
+      )"
+    fi
     [[ -n "$latest_published" ]] || {
       echo "$suite_id requires a previously published campaign run." >&2
+      return 1
+    }
+    [[ "$latest_published" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-(agent|github-actions|operator)-[0-9a-f]{8}$ ]] || {
+      echo "$suite_id requires a canonical published run identifier." >&2
       return 1
     }
     command="${command//<run-id>/$latest_published}"

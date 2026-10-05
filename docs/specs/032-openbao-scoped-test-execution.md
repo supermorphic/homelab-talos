@@ -243,7 +243,7 @@ issued through the same OpenBao interface; none is a default or an error fallbac
 
 | Profile | Catalog binding | Required distinction |
 | --- | --- | --- |
-| `test-flux-restart` | `test.flux-restart` | Restart the four named Flux controller Deployments and request named source/application reconciliation. Restrict patch shape to the intended restart/reconcile fields. |
+| `test-flux-restart` | `test.flux-restart` | Restart the four named Flux controller Deployments and request named source/application reconciliation. Restrict patch shape to the intended restart/reconcile fields. Wait up to five minutes for all active source consumers to report their current generation and main revision before the unchanged final Flux verifier. |
 | `test-cilium-connectivity` | `test.cilium-connectivity` | Canonical privileged connectivity workloads, test namespace/account lifecycle, cluster policy fixtures, Cilium runtime access, and canonical failure diagnostics. |
 | `test-node-reschedule` | `chainsaw.resilience.plex-cross-node-reschedule` | Named cluster Node scheduling changes plus the required Plex/media disruption and storage observations. No unrelated Node-field changes. |
 | `test-conformance` | `conformance.quick`, `conformance.certified` | Exceptional Kubernetes administrator authority required by the current Sonobuoy/conformance workload and RBAC lifecycle. Both modes share the profile. |
@@ -407,8 +407,10 @@ arguments, environment and Python subprocesses; do not leave literal
 `.kube/config` paths that bypass the selected invocation.
 
 Nested verification within a test retains the parent's suite identity for backend
-operations. It cannot acquire a different test profile implicitly. Separate
-orchestration source/admission reads may use observer. Refactor explicit diagnostic
+operations. It cannot acquire a different test profile implicitly. Each parent
+declares the prerequisites used by its nested verifiers. The ntfy
+publication test declares Talos reader access for its foundation preflight.
+Separate orchestration source/admission reads may use observer. Refactor explicit diagnostic
 context selection to validate and use the declared config rather than search a
 multi-context file. Missing or mismatched authority fails before mutation.
 
@@ -431,6 +433,13 @@ published campaign retains its exact deployed-main source checks. A candidate
 record session remains candidate evidence and never updates authoritative latest
 links, Homepage status or last-run metrics. Preserve each suite's stronger source
 guard, particularly attended OpenBao operations and physical node testing.
+
+For a standalone recorded report-persistence test, set `TEST_REPORT_RUN_ID` to
+one existing published canonical run. The resolver validates its identifier;
+the native backend checks the selected report, catalog entry, and PVC before
+and after Pod replacement. Without that input, a campaign selects its latest
+child with successful or idempotent publication. Missing or invalid references
+fail before the child starts. The test retains its mapped `test-runner` identity.
 
 ### Identity-audit exceptions
 

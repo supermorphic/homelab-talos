@@ -38,6 +38,39 @@ export PATH="$fixture/bin:$PATH"
 ln -s "$repo_root/tests/fixtures/campaign/fake-mise.sh" "$fixture/bin/mise"
 touch "$fixture/kubeconfig"
 
+# Exercise the real resolver and pinned yq before the mocked child campaigns.
+source scripts/test/lib/catalog.sh
+# shellcheck disable=SC1090 # Load only this function, without campaign execution.
+source <(sed -n '/^resolve_member_command() {/,/^}/p' scripts/test/run-campaign.sh)
+reference_suite='chainsaw.resilience.test-reports-persistence'
+reference_command="$(SUITE_ID="$reference_suite" yq -r \
+  '.suites[] | select(.metadata.id == strenv(SUITE_ID)) | .runner.command' "$catalog")"
+first_reference='20260101T000001Z-aaaaaaaaaaaa-operator-00000001'
+last_reference='20260101T000002Z-aaaaaaaaaaaa-operator-00000002'
+manifest="$fixture/report-reference.json"
+FIRST="$first_reference" LAST="$last_reference" yq --null-input -o=json '{"runs": [
+  {"run_id": strenv(FIRST), "publish_status": "published"},
+  {"run_id": strenv(LAST), "publish_status": "idempotent"},
+  {"run_id": "20260101T000003Z-aaaaaaaaaaaa-operator-00000003", "publish_status": "failed"}
+]}' >"$manifest"
+resolved_reference="$(resolve_member_command "$reference_suite")"
+[[ "$resolved_reference" == "${reference_command//<run-id>/$last_reference}" ]]
+
+printf '%s\n' '{"runs":[]}' >"$manifest"
+resolved_reference="$(TEST_REPORT_RUN_ID="$first_reference" resolve_member_command "$reference_suite")"
+[[ "$resolved_reference" == "${reference_command//<run-id>/$first_reference}" ]]
+if TEST_REPORT_RUN_ID='not-a-canonical-run' resolve_member_command "$reference_suite" \
+  >"$fixture/invalid-reference.log" 2>&1; then
+  echo 'Report persistence accepted an invalid explicit baseline identifier.' >&2
+  exit 1
+fi
+if resolve_member_command "$reference_suite" >"$fixture/missing-reference.log" 2>&1; then
+  echo 'Report persistence accepted a missing publication baseline.' >&2
+  exit 1
+fi
+rg -q 'requires a previously published' "$fixture/missing-reference.log"
+unset manifest
+
 plan_output="$fixture/plan.log"
 CAMPAIGN_TEST_SOURCE_STATE="$fixture/plan-source-state" \
 TEST_CATALOG_PATH="$catalog" \
@@ -626,6 +659,10 @@ run_acceptance "$acceptance_shared_root" true \
   "$repo_root/scripts/test/run-campaign.sh" record \
   test.nocodb-local-integration >"$acceptance_shared_root/run.log" 2>&1
 [[ "$(cat "$acceptance_shared_root/commands")" == 'acceptance-shared' ]]
+if rg -q '\.talos/config' "$acceptance_shared_root/preflight-calls"; then
+  echo 'Host-local record session required undeclared Talos access.' >&2
+  exit 1
+fi
 [[ "$(cat "$acceptance_shared_root/publish-contexts")" == \
   $'unset\tfalse\tunset' ]]
 
@@ -764,10 +801,10 @@ NTFY_PUBLISH_TEST_CONFIRM=test:ntfy:publish:media-critical-homelab \
     exit 1
   }
 [[ "$(cat "$operator_root/linked/commands")" == acceptance-operator ]]
-if rg -q '\.talos/config' "$operator_root/linked/preflight-calls"; then
-  echo 'Record session required Talos for a suite with no Talos prerequisite.' >&2
+rg -q '\.talos/config' "$operator_root/linked/preflight-calls" || {
+  echo 'ntfy record session omitted its declared Talos reader prerequisite.' >&2
   exit 1
-fi
+}
 
 acceptance_resume_root="$fixture/acceptance-resume"
 mkdir -p "$acceptance_resume_root"

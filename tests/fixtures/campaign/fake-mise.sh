@@ -104,7 +104,7 @@ case "$target" in
 esac
 
 case "$suite_id" in
-  verification.cilium|test.cilium-connectivity|test.agent-credentials)
+  verification.cilium|test.cilium-connectivity|test.agent-credentials|test.ntfy-publish)
     [[ "${TALOSCONFIG:-}" == "$CAMPAIGN_TEST_REPO_ROOT/.talos/config" ]] || {
       echo 'Campaign did not select its declared Talos reader path.' >&2
       exit 2

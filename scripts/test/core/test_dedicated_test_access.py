@@ -47,6 +47,12 @@ elif 'get' in a:
         name=a[a.index('deployment')+1]
         assert name in ['source-controller','kustomize-controller','helm-controller','notification-controller']
         print(json.dumps({'apiVersion':'apps/v1','kind':'Deployment','metadata':{'name':name,'uid':name+'-uid','resourceVersion':'12'},'spec':{'template':{'metadata':{}}}}))
+    elif 'kustomizations' in a:
+        count=root/'application-reads'
+        reads=int(count.read_text())+1 if count.exists() else 1
+        count.write_text(str(reads))
+        ready=reads>1
+        print(json.dumps({'items':[{'metadata':{'name':'example-app','generation':2},'spec':{'sourceRef':{'kind':'GitRepository','name':'flux-system'}},'status':{'observedGeneration':2,'conditions':[{'type':'Ready','status':'True' if ready else 'False','observedGeneration':2}],'lastAppliedRevision':'main@sha1:'+'0'*40}}]}))
     elif 'ciliumcidrgroups.cilium.io' in a and os.environ.get('FOREIGN_GLOBAL')=='yes':
         print('{"metadata":{"uid":"foreign-policy"}}')
     elif 'namespace' in a or 'namespaces' in a:
@@ -281,6 +287,22 @@ assert a[0]=='check' or (a[:3]==['reconcile','kustomization','cluster-apps'] and
 """,
         )
         self.env["FLUX_RESTART_CONFIRM"] = "restart:flux-system:controllers"
+        self.executable(
+            "git",
+            "import sys\na=sys.argv[1:]\n"
+            "if a==['remote','get-url','origin']: print('https://forgejo.infra.supermorphic.com/supermorphic/homelab-talos.git')\n"
+            "elif a==['ls-remote','--exit-code','origin','refs/heads/main']: print('0'*40+'\\trefs/heads/main')\n"
+            "else: raise AssertionError(a)\n",
+        )
+        self.executable(
+            "just",
+            "import os,sys\nfrom pathlib import Path\n"
+            "root=Path(os.environ['DEDICATED_FIXTURE'])\n"
+            "assert sys.argv[1:]==['kube','flux-verify']\n"
+            "reads=root/'application-reads'\n"
+            "assert reads.exists() and int(reads.read_text())>=2, 'Final verification ran before application recovery.'\n"
+            "(root/'postflight').touch()\n",
+        )
         result = self.run_backend(["bash", "-c", "\n".join(body)])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         patches = [a for a in self.calls() if "patch" in a]
