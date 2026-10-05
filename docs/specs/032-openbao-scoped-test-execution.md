@@ -494,7 +494,7 @@ transition.
    Never edit or copy private enrollment material by hand.
 5. Install the separate base configs and run the recorded lifecycle acceptance.
    Resume ordinary callers only after that acceptance passes. Keep the initiative
-   open while the full catalog and native-client acceptance below run. Retire the
+   open while credential-issuer and native-client acceptance below run. Retire the
    old public `diagnostic`/`publisher` endpoints and multi-context paths only after
    new-name acceptance, then repeat the affected checks.
 
@@ -646,26 +646,64 @@ Sonobuoy diagnostics and JUnit fragments. A premature completion fails acceptanc
 while preserving E2E results and performing normal cleanup. The later `kubectl`
 extension still proves original-bearer rejection and authenticated refresh.
 
+Issue completion proves OpenBao as the Kubernetes credential issuer. Offline
+checks must cover routing for the whole catalog, but live closeout uses the
+slices needed to prove each identity, its API boundary, expiry, refresh, and
+coordination. It does not require rerunning every application's acceptance or
+verification suite. Full application, HA-disruption, snapshot-restore and
+Kubernetes certification results retain their separate meaning.
+
+The dedicated HA and restore issuer slices use authenticated identity checks and
+allowed server-dry-run fixtures, followed by the existing real expiry, cached
+refresh, RBAC and admission denials. They create no persistent fixtures and need
+no OpenBao operator password, seal key or snapshot. The full attended HA and
+restore commands keep those inputs and their original assertions.
+
+The Cilium issuer slice runs five fixed native cases covering fixture reads and
+exec, namespaced policies, default-container host-network exec and a late fixture
+Pod exec. The pinned client pauses six seconds after each registered case, including
+skipped cases. Its native JUnit must show all five selected cases passed and the
+late scenario ran after the token lifetime. Its verbose action output must prove
+that the late scenario executed a fixture Pod request. The actual command duration
+must also cover that interval. The existing cached-client extension separately
+proves original-bearer API rejection and authenticated refresh. The full Cilium
+command retains its original selection; this slice has a separate canonical ID.
+
+Record the remaining issuer slices with:
+
+```bash
+mise exec -- just test record test.credential-issuer.cilium
+mise exec -- just test record test.credential-issuer.openbao-ha
+mise exec -- just test record test.credential-issuer.openbao-restore
+```
+
+Their guarded recipes enable real expiry proof. The Cilium slice retains its
+existing execution confirmation, owned-fixture cleanup and Talos reader
+prerequisite. Successful quick Sonobuoy native lifetime and expiry evidence
+covers the shared conformance identity and client; full certified E2E execution
+is not required for credential-issuer closeout.
+
 After deployment and separate authorization, retain canonical live evidence for:
 
-- Every dedicated profile, including both Sonobuoy modes and actual client refresh
+- Every dedicated profile, including the shared Sonobuoy identity and actual client refresh
   across a token lifetime. Use no standing administrator Kubernetes kubeconfig.
-- Ordinary runner creation, application disruption, restore fixtures and cleanup;
+- Ordinary runner creation, representative application disruption, restore fixtures and cleanup;
   actual permitted API operations plus safe negative requests against unrelated
   resources. Prefer server dry-run denials where it proves the intended boundary.
-- Observer/debugger suites, application-state tests with observational Kubernetes
-  profiles, optional scenario variants, and independent worktrees/campaigns.
+- Observer/debugger API boundaries and refresh, correct routing of optional
+  scenario variants, and independent worktrees/campaigns.
 - Loss/expiry/outage behavior, cleanup failure reporting, source drift and distinct
   coordinator/publication permissions. No broader-credential recovery.
-- Attended OpenBao suites with operator-supplied OpenBao credentials and the
-  dedicated Kubernetes profiles; the agent does not handle retained secret values.
+- OpenBao profile issuance and API boundaries through issuer slices. Preserve
+  attended full-workflow inputs; the agent does not handle retained secret values.
 
 Run relevant repository checks, commit-time secret/staged-blob checks, independent
 final review, and fresh validation for the exact candidate/base under the applicable
 repository CI gate.
 The optional full local CI run is not automatic. Reconcile this specification with
 the implemented and validated result before merge of completed work. Keep the
-issue open until the full runnable catalog and required live acceptance are proven.
+issue open until catalog routing, required issuer acceptance, and legacy-route
+retirement are proven.
 
 ## Catalog mapping at the audited baseline
 

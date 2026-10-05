@@ -428,6 +428,8 @@ class LiveClient:
                 },
             )
         if profile == "test-openbao-restore":
+            from scripts.test.scenarios.openbao_restore import scratch_configuration
+
             return self.request(
                 self.proxy_url,
                 "/api/v1/namespaces/openbao-restore-test/configmaps?dryRun=All",
@@ -438,8 +440,11 @@ class LiveClient:
                     "metadata": {
                         "name": "homelab-scoped-denial-probe",
                         "namespace": "openbao-restore-test",
+                        "annotations": {
+                            "homelab.supermorphic.com/test-run": "credential-issuer-denial-probe"
+                        },
                     },
-                    "data": {"marker": "synthetic"},
+                    "data": {"server.hcl": scratch_configuration("credential-issuer-acceptance")},
                 },
             )
         namespace = {

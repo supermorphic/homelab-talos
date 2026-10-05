@@ -80,6 +80,36 @@ except Exception:
 """
 
 
+def scratch_configuration(seal_id):
+    """Canonical non-secret scratch program shared by restore and dry-run proof."""
+    return """disable_mlock = true
+raw_storage_endpoint = true
+audit "file" "homelab" {
+  description = "Homelab hashed audit output"
+  options {
+    file_path = "stdout"
+    log_raw = "false"
+    hmac_accessor = "true"
+  }
+}
+api_addr = "http://127.0.0.1:8200"
+cluster_addr = "https://127.0.0.1:8201"
+listener "tcp" {
+  address = "127.0.0.1:8200"
+  cluster_address = "127.0.0.1:8201"
+  tls_disable = true
+}
+storage "raft" {
+  path = "/openbao/data"
+  node_id = "scratch"
+}
+seal "static" {
+  current_key_id = "SEAL_ID"
+  current_key = "file:///scratch-seal/key"
+}
+""".replace("SEAL_ID", seal_id)
+
+
 class ScratchKube:
     def __init__(self, kubeconfig, run_id, recovery_metadata, seal):
         self.kubeconfig = kubeconfig
@@ -198,32 +228,7 @@ class ScratchKube:
         self.create(seal)
         self.extra.append(self.created[-1])
         self.seal = None
-        config = """disable_mlock = true
-raw_storage_endpoint = true
-audit "file" "homelab" {
-  description = "Homelab hashed audit output"
-  options {
-    file_path = "stdout"
-    log_raw = "false"
-    hmac_accessor = "true"
-  }
-}
-api_addr = "http://127.0.0.1:8200"
-cluster_addr = "https://127.0.0.1:8201"
-listener "tcp" {
-  address = "127.0.0.1:8200"
-  cluster_address = "127.0.0.1:8201"
-  tls_disable = true
-}
-storage "raft" {
-  path = "/openbao/data"
-  node_id = "scratch"
-}
-seal "static" {
-  current_key_id = "SEAL_ID"
-  current_key = "file:///scratch-seal/key"
-}
-""".replace("SEAL_ID", self.recovery_metadata["seal_key_id"])
+        config = scratch_configuration(self.recovery_metadata["seal_key_id"])
         self.create(
             {
                 "apiVersion": "v1",

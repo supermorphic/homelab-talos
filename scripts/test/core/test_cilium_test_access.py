@@ -986,6 +986,34 @@ class CiliumAccessTests(unittest.TestCase):
             self.assertFalse(self.admits(policy, {**req, "subResource": "portforward"}, {}))
             self.assertFalse(self.admits(policy, {**req, "name": "production-7654321-abcde"}, obj))
 
+    def test_native_host_network_exec_accepts_default_container_only_for_owned_fixtures(self):
+        policy = "homelab-test-cilium-system-connect"
+        request = {
+            "operation": "CONNECT",
+            "namespace": "cilium-test-1",
+            "name": "host-netns-abcde",
+            "subResource": "exec",
+            "resource": {"group": "", "version": "v1", "resource": "pods"},
+            "userInfo": {"username": IDENTITY},
+        }
+        # The pinned encryption test sends an empty container name. Kubernetes
+        # also omits empty optional PodExecOptions fields from admission objects.
+        for pod in ("host-netns-abcde", "host-netns-non-cilium-abcde"):
+            for container in ({}, {"container": ""}):
+                with self.subTest(pod=pod, container=container):
+                    req = {**request, "name": pod}
+                    obj = {"command": ["ip", "-j", "route", "get", "192.0.2.10"],
+                           "stdout": True, "stderr": True, **container}
+                    self.assertTrue(self.admits(policy, req, obj))
+                    for field in ("stdin", "tty"):
+                        self.assertFalse(self.admits(policy, req, {**obj, field: True}))
+                    self.assertFalse(self.admits(policy, req, {**obj, "container": "openbao"}))
+                    for namespace in ("kube-system", "openbao", "cilium-test-ccnp1", "cilium-test-ccnp2"):
+                        self.assertFalse(self.admits(policy, {**req, "namespace": namespace}, obj))
+                    for name in ("production-abcde", "client-7654321-abcde", "host-netns-foreign", "cilium-abcde"):
+                        self.assertFalse(self.admits(policy, {**req, "name": name}, obj))
+                    self.assertFalse(self.admits(policy, {**req, "subResource": "portforward"}, {}))
+
     def test_fixture_accounts_services_configmaps_and_test_secrets_have_finite_targets(self):
         policy = "homelab-test-cilium-fixtures"
         inputs = [

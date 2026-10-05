@@ -11,12 +11,12 @@ from scripts.openbao import credentials
 ROOT = Path(__file__).resolve().parents[3]
 BINDINGS = {
     "test-flux-restart": ("test.flux-restart",),
-    "test-cilium-connectivity": ("test.cilium-connectivity",),
+    "test-cilium-connectivity": ("test.cilium-connectivity", "test.credential-issuer.cilium"),
     "test-node-reschedule": ("chainsaw.resilience.plex-cross-node-reschedule",),
     "test-conformance": ("conformance.quick", "conformance.certified"),
     "test-openbao-issuance": ("test.openbao-issuance",),
-    "test-openbao-ha": ("test.openbao-ha",),
-    "test-openbao-restore": ("test.openbao-restore-drill",),
+    "test-openbao-ha": ("test.openbao-ha", "test.credential-issuer.openbao-ha"),
+    "test-openbao-restore": ("test.openbao-restore-drill", "test.credential-issuer.openbao-restore"),
     "test-openbao-lifecycle": ("test.agent-credentials",),
 }
 

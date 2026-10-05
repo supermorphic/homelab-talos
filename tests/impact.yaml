@@ -255,6 +255,7 @@ core_paths:
   - scripts/test/cel/**
   - scripts/test/helpers/qbit_manage_policy_api.py
   - scripts/test/scenarios/cilium-connectivity.sh
+  - scripts/test/scenarios/credential_issuer.py
   - scripts/test/scenarios/flux-restart-wait.sh
   - scripts/test/scenarios/media-hardlink-test.sh
   - scripts/test/scenarios/*openbao*.py
