@@ -1,11 +1,16 @@
 """Use disposable age identities and real SOPS; never load the operator's key."""
 
+import contextlib
 import importlib.util
+import io
 import os
 import subprocess
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 
@@ -23,7 +28,7 @@ class NewsSecretsTests(unittest.TestCase):
         spec.loader.exec_module(self.module)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         for path in (DB, APP):
             (self.root / path).parent.mkdir(parents=True)
         self.kustomization = self.root / DB.parent / "kustomization.yaml"
@@ -192,6 +197,112 @@ class NewsSecretsTests(unittest.TestCase):
         with self.assertRaises(self.module.SecretWriteError):
             self.write(runner=modify)
         self.assertEqual((self.root / APP).read_bytes(), concurrent)
+
+    def test_policy_edit_after_encryption_prevents_installation(self):
+        self.write()
+        originals = {path: (self.root / path).read_bytes() for path in (DB, APP)}
+        count = 0
+
+        def modify_policy(command, **kwargs):
+            nonlocal count
+            kwargs.pop("check", None)
+            result = subprocess.run(command, check=False, **kwargs)
+            count += 1
+            if count == 2:
+                with (self.root / ".sops.yaml").open("a") as stream:
+                    stream.write("# operator changed policy during encryption\n")
+            return result
+
+        with self.assertRaises(self.module.SecretWriteError):
+            self.write(runner=modify_policy)
+        for path, content in originals.items():
+            self.assertEqual((self.root / path).read_bytes(), content)
+
+    def test_edit_between_replacements_is_preserved(self):
+        self.write()
+        original_db = (self.root / DB).read_bytes()
+        concurrent = b"operator edit between replacements"
+
+        def modify_after_first(source, destination):
+            os.replace(source, destination)
+            if destination == self.root / DB:
+                (self.root / APP).write_bytes(concurrent)
+
+        with self.assertRaises(self.module.SecretWriteError):
+            self.write(replace=modify_after_first)
+        self.assertEqual((self.root / APP).read_bytes(), concurrent)
+        self.assertEqual((self.root / DB).read_bytes(), original_db)
+
+    def test_competing_writers_leave_a_matched_pair(self):
+        self.write()
+        first_ready, second_db_written, first_done = (threading.Event() for _ in range(3))
+        second_environment = self.environment | {
+            "NEWS_DB_PASSWORD": "SyntheticCompeting" + "Z" * 32
+        }
+
+        def first_replace(source, destination):
+            if destination == self.root / DB:
+                first_ready.set()
+                second_db_written.wait(timeout=2)
+            os.replace(source, destination)
+
+        def second_replace(source, destination):
+            os.replace(source, destination)
+            if destination == self.root / DB:
+                second_db_written.set()
+                first_done.wait(timeout=5)
+
+        def first_writer():
+            try:
+                self.write(replace=first_replace)
+            finally:
+                first_done.set()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(first_writer)
+            self.assertTrue(first_ready.wait(timeout=5), "first writer did not reach installation")
+            second = executor.submit(
+                self.module.write_secrets, self.root, second_environment, replace=second_replace
+            )
+            first.result(timeout=10)
+            second.result(timeout=10)
+        self.assertTrue(
+            self.decrypt(DB)["stringData"]["freshrss-password"]
+            == self.decrypt(APP)["stringData"]["db-password"],
+            "competing writers left mismatched passwords",
+        )
+        self.assertEqual(
+            self.decrypt(DB)["stringData"]["freshrss-password"],
+            second_environment["NEWS_DB_PASSWORD"],
+        )
+
+    def test_rollback_failure_requests_operator_review_without_raw_output(self):
+        self.write()
+        count = 0
+
+        def fail_rollback(source, destination):
+            nonlocal count
+            count += 1
+            if count > 1:
+                raise OSError(self.environment["NEWS_DB_PASSWORD"])
+            os.replace(source, destination)
+
+        with self.assertRaises(self.module.SecretWriteError) as raised:
+            self.write(replace=fail_rollback)
+        self.assertIn("operator review required", str(raised.exception))
+        self.assertNotIn(self.environment["NEWS_DB_PASSWORD"], str(raised.exception))
+
+    def test_cli_preserves_safe_partial_installation_diagnostic(self):
+        message = "incomplete rollback; operator review required"
+        error = io.StringIO()
+        with (
+            patch.object(
+                self.module, "write_secrets", side_effect=self.module.SecretWriteError(message)
+            ),
+            contextlib.redirect_stderr(error),
+        ):
+            self.assertEqual(self.module.main(), 1)
+        self.assertIn(message, error.getvalue())
 
     def test_symlink_target_is_refused(self):
         victim = self.root / "other-task"

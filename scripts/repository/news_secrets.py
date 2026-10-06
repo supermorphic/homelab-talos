@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import os
 import re
 import subprocess
@@ -111,8 +112,23 @@ def validate(content, target, recipient, values):
 
 
 def write_secrets(root, environment, *, runner=subprocess.run, replace=os.replace):
-    """Stage both encrypted artifacts, then replace each atomically with rollback."""
+    """Serialize operators before reading, encrypting, and installing the pair."""
     root = root.resolve()
+    lock_path = root / ".tmp/news/secrets.lock"
+    if lock_path.parent.resolve() != root / ".tmp/news":
+        raise SecretWriteError("the news lock directory must remain inside this worktree")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    except OSError:
+        raise SecretWriteError("the news Secret writer lock is unavailable") from None
+    with os.fdopen(descriptor, "rb") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        _write_secrets_locked(root, environment, runner=runner, replace=replace)
+
+
+def _write_secrets_locked(root, environment, *, runner, replace):
+    """Stage encrypted artifacts, then replace each atomically with rollback."""
     if environment.get("NEWS_SECRETS_CONFIRM") != CONFIRMATION:
         raise SecretWriteError("NEWS_SECRETS_CONFIRM must contain the exact write confirmation")
     values = [environment.get(key, "") for key in PASSWORDS]
@@ -127,6 +143,7 @@ def write_secrets(root, environment, *, runner=subprocess.run, replace=os.replac
         raise SecretWriteError("each role, login and API password must be distinct")
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,31}", environment.get("NEWS_OPERATOR_NAME", "")):
         raise SecretWriteError("NEWS_OPERATOR_NAME must be a simple FreshRSS username")
+    original_policy = (root / ".sops.yaml").read_bytes()
     originals, recipients = {}, {}
     for target in CONTRACTS:
         path = root / target
@@ -222,34 +239,52 @@ def write_secrets(root, environment, *, runner=subprocess.run, replace=os.replac
                 raise SecretWriteError(
                     "news files changed during encryption; no replacement performed"
                 )
+        if (root / ".sops.yaml").read_bytes() != original_policy:
+            raise SecretWriteError(
+                "the SOPS policy changed during encryption; no replacement performed"
+            )
         installed = []
         try:
             for target, candidate in staged.items():
-                replace(candidate, root / target)
-                installed.append(target)
-        except OSError:
-            for target in reversed(installed):
                 path = root / target
-                if path.is_symlink() or path.read_bytes() != ciphertexts[target]:
-                    raise SecretWriteError(
-                        "news files changed during rollback; operator review required"
-                    ) from None
-                if originals[target] is None:
-                    path.unlink()
-                else:
-                    rollback = staged[target].parent / "rollback"
-                    rollback.touch(mode=0o600)
-                    rollback.write_bytes(originals[target])
-                    replace(rollback, path)
+                current = path.read_bytes() if path.exists() else None
+                if path.is_symlink() or current != originals[target]:
+                    raise SecretWriteError("news files changed during installation")
+                replace(candidate, path)
+                installed.append(target)
+        except (OSError, SecretWriteError) as install_error:
+            try:
+                for target in reversed(installed):
+                    path = root / target
+                    if path.is_symlink() or path.read_bytes() != ciphertexts[target]:
+                        raise SecretWriteError("news files changed during rollback")
+                    if originals[target] is None:
+                        path.unlink()
+                    else:
+                        rollback = staged[target].parent / "rollback"
+                        rollback.touch(mode=0o600)
+                        rollback.write_bytes(originals[target])
+                        replace(rollback, path)
+            except (OSError, SecretWriteError):
+                raise SecretWriteError(
+                    "incomplete ciphertext rollback; operator review required"
+                ) from None
+            if isinstance(install_error, SecretWriteError):
+                raise SecretWriteError(
+                    "news files changed during installation; earlier replacements restored"
+                ) from None
             raise SecretWriteError("ciphertext replacement failed; prior files restored") from None
 
 
 def main():
     try:
         write_secrets(Path(__file__).resolve().parents[2], os.environ)
-    except (SecretWriteError, OSError):
+    except SecretWriteError as error:
+        print(f"News Secret write stopped: {error}.", file=sys.stderr)
+        return 1
+    except OSError:
         print(
-            "News Secrets were not installed. Check intent, inputs and existing pair; values withheld.",
+            "News file operation failed; operator review of the existing pair is required. Values withheld.",
             file=sys.stderr,
         )
         return 1
