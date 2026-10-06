@@ -1,5 +1,6 @@
 """Restore a paired set into owned local targets without the source service."""
 
+import hashlib
 import io
 import json
 import tarfile
@@ -206,17 +207,52 @@ def exercise_restore(
     expected_items,
     expected_subscriptions,
 ):
-    for key in ("restore-data", "restore-dbdata", "restore-runtime"):
+    for key in ("restore-data", "restore-dbdata", "restore-runtime", "restore-backups"):
         names[key] = names["network"] + "-" + key
         ownership = ("--uid", "70", "--gid", "1000") if key == "restore-data" else ()
         create("volume", names[key], *ownership)
-    for key in ("restore-db", "restore-app", "restore-tool", "restore-owner"):
+    for key in ("restore-db", "restore-app", "restore-tool", "restore-owner", "restore-import"):
         names[key] = names["network"] + "-" + key
     selected = run("exec", names["backup"], "sh", "-c", "printf '%s\\n' /backups/set-*")
     sets = selected.stdout.decode().splitlines()
     assert sets and all(path.startswith("/backups/set-") for path in sets)
     backup = max(sets)
-    run("stop", names["app"], names["db"])
+    # Copy the complete recovery unit out through the host, then import it into
+    # different storage. No source volume or running helper may serve recovery.
+    portable = tmp / "portable-backups"
+    portable.mkdir(mode=0o700)
+    first = min(path for path in sets if not path.endswith("-history"))
+    sets = sorted({first, backup})
+    for selected_set in sets:
+        run("cp", names["backup"] + ":" + selected_set, str(portable))
+    expected_hashes = {
+        path.relative_to(portable).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for directory in portable.iterdir()
+        for path in directory.iterdir()
+    }
+    run("stop", names["app"], names["db"], names["backup"])
+    for key in ("app", "db", "backup"):
+        assert (
+            run("inspect", "--format", "{{.State.Running}}", names[key]).stdout.strip() == b"false"
+        )
+    container(
+        names["restore-import"],
+        "--user",
+        "1000:1000",
+        "-v",
+        names["restore-backups"] + ":/backups:U",
+        "-v",
+        str(tmp / "faults") + ":/faults:ro",
+        "--entrypoint",
+        "/bin/sh",
+        db_image,
+        "-c",
+        "exec sleep infinity",
+    )
+    run("cp", str(portable) + "/.", names["restore-import"] + ":/backups")
+    for relative, digest in expected_hashes.items():
+        actual = run("exec", names["restore-import"], "sha256sum", "/backups/" + relative)
+        assert actual.stdout.decode().split()[0] == digest, "portable backup copy changed bytes"
     start_database(names["restore-db"], names["restore-dbdata"], "news-restored")
     env = tmp / "restore.env"
     env.touch(mode=0o600)
@@ -248,7 +284,7 @@ def exercise_restore(
         "--tmpfs",
         "/tmp:rw,size=64m",
         "-v",
-        names["backups"] + ":/backups:ro",
+        names["restore-backups"] + ":/backups:ro",
         "-v",
         names["restore-data"] + ":/restore-data",
         "-v",
@@ -283,13 +319,21 @@ def exercise_restore(
 
     bad = "/backups/set-0000000000-corrupt"
     for damage in ("checksum", "dump", "archive", "mixed"):
-        run("exec", names["backup"], "cp", "-a", backup, bad)
+        run("exec", names["restore-import"], "cp", "-a", backup, bad)
         if damage == "checksum":
-            run("exec", names["backup"], "sh", "-c", 'printf bad >> "$1/data.tar.gz"', "sh", bad)
+            run(
+                "exec",
+                names["restore-import"],
+                "sh",
+                "-c",
+                'printf bad >> "$1/data.tar.gz"',
+                "sh",
+                bad,
+            )
         elif damage == "dump":
             run(
                 "exec",
-                names["backup"],
+                names["restore-import"],
                 "sh",
                 "-c",
                 'printf invalid > "$1/database.dump"',
@@ -297,13 +341,19 @@ def exercise_restore(
                 bad,
             )
         elif damage == "archive":
-            run("exec", names["backup"], "cp", "/faults/unsafe.tar.gz", bad + "/data.tar.gz")
+            run(
+                "exec",
+                names["restore-import"],
+                "cp",
+                "/faults/unsafe.tar.gz",
+                bad + "/data.tar.gz",
+            )
         else:
             first = min(path for path in sets if not path.endswith("-history"))
             assert (
                 run(
                     "exec",
-                    names["backup"],
+                    names["restore-import"],
                     "cmp",
                     first + "/database.dump",
                     backup + "/database.dump",
@@ -311,11 +361,17 @@ def exercise_restore(
                 ).returncode
                 != 0
             )
-            run("exec", names["backup"], "cp", first + "/database.dump", bad + "/database.dump")
+            run(
+                "exec",
+                names["restore-import"],
+                "cp",
+                first + "/database.dump",
+                bad + "/database.dump",
+            )
         if damage in ("dump", "archive"):
             run(
                 "exec",
-                names["backup"],
+                names["restore-import"],
                 "sh",
                 "-c",
                 'cd "$1" && sha256sum database.dump data.tar.gz manifest > SHA256SUMS',
@@ -329,7 +385,7 @@ def exercise_restore(
             != 0
         ), damage
         empty_targets()
-        run("exec", names["backup"], "rm", "-rf", bad)
+        run("exec", names["restore-import"], "rm", "-rf", bad)
     assert (
         run(
             "exec",
@@ -373,27 +429,65 @@ def exercise_restore(
     restored_env.touch(mode=0o600)
     restored_env.write_text(
         app_env.read_text().replace("NEWS_DB_HOST=news-postgresql", "NEWS_DB_HOST=news-restored")
+        + "NEWS_POLLING_ENABLED=false\n"
     )
     base = start_app(
         names["restore-app"], names["restore-data"], restored_env, names["restore-runtime"]
     )
+    run("exec", names["restore-app"], "sh", "/opt/news/refresh.sh")
+    assert (
+        run(
+            "exec",
+            names["restore-app"],
+            "test",
+            "!",
+            "-e",
+            "/run/news/last-refresh",
+            success=False,
+        ).returncode
+        == 0
+    ), "isolated recovery fetched feeds"
     assert (
         request(
             "/accounts/ClientLogin",
-            {"Email": "reader", "Passwd": passwords["NEWS_API_PASSWORD"]},
+            {"Email": "reader", "Passwd": "wrong"},
+            authenticated=False,
             base_url=base,
         )[0]
-        == 200
+        == 401
     )
+    status, login = request(
+        "/accounts/ClientLogin",
+        {"Email": "reader", "Passwd": passwords["NEWS_API_PASSWORD"]},
+        authenticated=False,
+        base_url=base,
+    )
+    assert status == 200
+    recovered_auth = dict(line.split("=", 1) for line in login.decode().splitlines())["Auth"]
     status, body = request(
-        "/reader/api/0/stream/contents/reading-list?output=json&n=100", base_url=base
+        "/reader/api/0/stream/contents/reading-list?output=json&n=100",
+        base_url=base,
+        authorization=recovered_auth,
     )
     assert status == 200 and json.loads(body)["items"] == expected_items
     assert (
-        request("/reader/api/0/subscription/list?output=json", base_url=base)[1]
+        request(
+            "/reader/api/0/subscription/list?output=json",
+            base_url=base,
+            authorization=recovered_auth,
+        )[1]
         == expected_subscriptions
     )
-    for name in (names["app"], names["db"]):
+    source_volumes = {names[key] for key in ("data", "dbdata", "runtime", "backups")}
+    for key in ("restore-app", "restore-db", "restore-tool", "restore-import"):
+        mounts = json.loads(run("inspect", names[key]).stdout)[0]["Mounts"]
+        assert not any(mount.get("Name") in source_volumes for mount in mounts), (
+            "recovery mounted source storage"
+        )
+        if key == "restore-tool":
+            backup_mount = next(m for m in mounts if m["Destination"] == "/backups")
+            assert not backup_mount["RW"], "restore source is writable"
+    for name in (names["app"], names["db"], names["backup"]):
         assert run("inspect", "--format", "{{.State.Running}}", name).stdout.strip() == b"false"
     for name in (names["restore-app"], names["restore-db"], names["restore-tool"]):
         logs = run("logs", name)

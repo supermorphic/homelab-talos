@@ -1,5 +1,10 @@
 #!/bin/sh
 set -eu
+case "${NEWS_POLLING_ENABLED-true}" in
+    true) ;;
+    false) exit 0 ;;
+    *) echo 'NEWS_POLLING_ENABLED must be true or false' >&2; exit 2 ;;
+esac
 exec 8>/run/news/service.lock
 flock -sn 8 || exit 0
 [ ! -e /run/news/maintenance-request ] || exit 0

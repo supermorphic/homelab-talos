@@ -1,5 +1,9 @@
 #!/bin/sh
 set -eu
+case "${NEWS_POLLING_ENABLED-true}" in
+    true|false) ;;
+    *) echo 'NEWS_POLLING_ENABLED must be true or false' >&2; exit 2 ;;
+esac
 umask 077
 mkdir -p /run/news /tmp/news-sessions
 echo "$$" > /run/news/supervisor.pid
@@ -18,18 +22,23 @@ rm -f /run/news/httpd.pid
 php /opt/news/bootstrap.php
 touch /run/news/initialized
 
-(
-    exec 8>&- 7>&-
-    while sleep 900; do
-        sh /opt/news/refresh.sh || true
-    done
-) &
-refresh_pid=$!
+refresh_pid=''
+if [ "${NEWS_POLLING_ENABLED-true}" = true ]; then
+    (
+        exec 8>&- 7>&-
+        while sleep 900; do
+            sh /opt/news/refresh.sh || true
+        done
+    ) &
+    refresh_pid=$!
+fi
 web_pid=''
 cleanup() {
     trap - TERM INT EXIT
-    kill "$refresh_pid" ${web_pid:+"$web_pid"} 2>/dev/null || true
-    wait "$refresh_pid" ${web_pid:+"$web_pid"} 2>/dev/null || true
+    for pid in ${refresh_pid:+"$refresh_pid"} ${web_pid:+"$web_pid"}; do
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+    done
 }
 trap cleanup TERM INT EXIT
 while :; do
