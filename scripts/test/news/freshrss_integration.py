@@ -270,6 +270,8 @@ def main():
                     str(drain_probe) + ":/var/www/FreshRSS/p/drain-probe.php:ro",
                     "-p",
                     "127.0.0.1::8080",
+                    "-p",
+                    "127.0.0.1::9090",
                     "--entrypoint",
                     "/bin/sh",
                     image,
@@ -280,6 +282,39 @@ def main():
                 return "http://127.0.0.1:" + port
 
             base = start_app()
+
+            def metrics():
+                port = (
+                    run("port", names["app"], "9090/tcp").stdout.decode().strip().rsplit(":", 1)[1]
+                )
+                with urllib.request.urlopen(
+                    "http://127.0.0.1:" + port + "/metrics", timeout=10
+                ) as response:
+                    assert response.headers["Content-Type"].startswith("text/plain")
+                    body = response.read().decode()
+                assert not any(value in body for value in passwords.values())
+                assert (
+                    "news-fixtures" not in body and "garden" not in body and "reader" not in body
+                )
+                run("exec", names["app"], "php", "-l", "/opt/news/metrics.php")
+                parsed = subprocess.run(
+                    ["promtool", "check", "metrics"],
+                    input=body,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
+                assert parsed.returncode == 0, parsed.stderr
+                return {
+                    line.split()[0]: float(line.split()[1])
+                    for line in body.splitlines()
+                    if line and not line.startswith("#")
+                }
+
+            cold = metrics()
+            assert cold["news_database_up"] == 1 and cold["news_feeds_active"] == 0
+            assert cold["news_backup_last_success_timestamp_seconds"] == 0
             run("exec", names["app"], "touch", "/var/www/FreshRSS/data/.news-restore-incomplete")
             assert (
                 run(
@@ -455,6 +490,11 @@ def main():
             run("exec", names["app"], "sh", "/opt/news/refresh.sh")
             after = run("exec", names["feeds"], "cat", "/tmp/request-count").stdout
             assert before == after, "normal polling fetched recently refreshed feeds again"
+            healthy = metrics()
+            assert healthy["news_feeds_active"] == 2 and healthy["news_feeds_failed"] == 0
+            assert healthy["news_feeds_stale"] == 0
+            assert healthy["news_feed_oldest_success_timestamp_seconds"] > 0
+            assert healthy["news_refresh_last_completed_timestamp_seconds"] > 0
             assert {i["id"] for i in items()} == {i["id"] for i in entries}
             probe = (
                 "require '/var/www/FreshRSS/cli/_cli.php'; "
@@ -553,6 +593,7 @@ def main():
             run("exec", names["backup"], "sh", "/opt/news/backup.sh")
             wait_ready()
             assert items() == entries_before_backup, "backup changed article state"
+            assert metrics()["news_backup_last_success_timestamp_seconds"] > 0
             exercise_backup_failures(
                 run=run,
                 names=names,
@@ -592,11 +633,18 @@ def main():
             assert len(errors) == 2 and all(error > 0 for error in errors), (
                 "outage test did not attempt failed feed fetches"
             )
+            failed = metrics()
+            assert failed["news_database_up"] == 1 and failed["news_feeds_failed"] == 2
+            assert failed["news_feeds_stale"] == 2
+            assert failed["news_feed_oldest_success_timestamp_seconds"] == 1
+            assert failed["news_refresh_last_completed_timestamp_seconds"] > 1
             assert items() == before_outage, "feed outage changed saved content or state"
             assert (
                 request("/reader/api/0/subscription/list?output=json")[1] == before_subscriptions
             )
             run("stop", names["db"])
+            unavailable = metrics()
+            assert unavailable["news_database_up"] == 0 and "news_feeds_active" not in unavailable
             assert (
                 run("exec", names["app"], "php", "/opt/news/ready.php", success=False).returncode
                 != 0

@@ -1,0 +1,431 @@
+rule_files:
+- news.yaml
+evaluation_interval: 1m
+tests:
+- name: all missing reports unavailable telemetry and independent freshness
+  interval: 1m
+  input_series:
+  - series: gatus_results_endpoint_success{group="Other",name="freshrss"}
+    values: 1+60x20
+  - series: news_database_up{namespace="other",service="freshrss"}
+    values: 1+60x20
+  - series: kube_statefulset_status_replicas_ready{namespace="other",statefulset="news-postgresql"}
+    values: 1+60x20
+  - series: news_refresh_last_completed_timestamp_seconds{namespace="other",service="freshrss"}
+    values: 1+60x20
+  - series: news_feeds_failed{namespace="other",service="freshrss"}
+    values: 1+60x20
+  - series: news_feeds_stale{namespace="other",service="freshrss"}
+    values: 1+60x20
+  - series: news_backup_last_success_timestamp_seconds{namespace="other",service="freshrss"}
+    values: 1+60x20
+  - series: longhorn_volume_last_backup_at{pvc_namespace="other",pvc="news-backups"}
+    values: 1+60x20
+  alert_rule_test:
+  - eval_time: 16m
+    alertname: NewsUnavailable
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+      exp_annotations:
+        summary: FreshRSS is unavailable through the internal gateway
+  - eval_time: 16m
+    alertname: NewsDatabaseUnavailable
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+      exp_annotations:
+        summary: FreshRSS database is unavailable
+  - eval_time: 16m
+    alertname: NewsTelemetryMissing
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+      exp_annotations:
+        summary: FreshRSS application telemetry is missing
+  - eval_time: 16m
+    alertname: NewsRefreshStale
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+      exp_annotations:
+        summary: FreshRSS scheduled refresh is stale or missing
+  - eval_time: 16m
+    alertname: NewsFeedFetchFailed
+    exp_alerts: []
+  - eval_time: 16m
+    alertname: NewsFeedsStale
+    exp_alerts: []
+  - eval_time: 16m
+    alertname: NewsLocalBackupStale
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+      exp_annotations:
+        summary: FreshRSS validated local paired backup is stale or missing
+  - eval_time: 16m
+    alertname: NewsOffClusterBackupStale
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+      exp_annotations:
+        summary: FreshRSS off-cluster Longhorn transfer is stale or missing
+- name: healthy signals remain quiet through fifty hours
+  interval: 1m
+  input_series:
+  - series: gatus_results_endpoint_success{group="News",name="freshrss"}
+    values: 1x3200
+  - series: news_database_up{namespace="news",service="freshrss"}
+    values: 1x3200
+  - series: kube_statefulset_status_replicas_ready{namespace="news",statefulset="news-postgresql"}
+    values: 1x3200
+  - series: news_refresh_last_completed_timestamp_seconds{namespace="news",service="freshrss"}
+    values: 1+60x3200
+  - series: news_feeds_failed{namespace="news",service="freshrss"}
+    values: '0x3200'
+  - series: news_feeds_stale{namespace="news",service="freshrss"}
+    values: '0x3200'
+  - series: news_backup_last_success_timestamp_seconds{namespace="news",service="freshrss"}
+    values: 1+60x3200
+  - series: longhorn_volume_last_backup_at{pvc_namespace="news",pvc="news-backups"}
+    values: 1+60x3200
+  alert_rule_test:
+  - eval_time: 50h
+    alertname: NewsUnavailable
+    exp_alerts: []
+  - eval_time: 50h
+    alertname: NewsDatabaseUnavailable
+    exp_alerts: []
+  - eval_time: 50h
+    alertname: NewsTelemetryMissing
+    exp_alerts: []
+  - eval_time: 50h
+    alertname: NewsRefreshStale
+    exp_alerts: []
+  - eval_time: 50h
+    alertname: NewsFeedFetchFailed
+    exp_alerts: []
+  - eval_time: 50h
+    alertname: NewsFeedsStale
+    exp_alerts: []
+  - eval_time: 50h
+    alertname: NewsLocalBackupStale
+    exp_alerts: []
+  - eval_time: 50h
+    alertname: NewsOffClusterBackupStale
+    exp_alerts: []
+- name: available HTTP does not hide database failure
+  interval: 1m
+  input_series:
+  - series: gatus_results_endpoint_success{group="News",name="freshrss"}
+    values: 1x3200
+  - series: news_database_up{namespace="news",service="freshrss"}
+    values: '0x3200'
+  - series: kube_statefulset_status_replicas_ready{namespace="news",statefulset="news-postgresql"}
+    values: 1x3200
+  - series: news_refresh_last_completed_timestamp_seconds{namespace="news",service="freshrss"}
+    values: 1+60x3200
+  - series: news_feeds_failed{namespace="news",service="freshrss"}
+    values: '0x3200'
+  - series: news_feeds_stale{namespace="news",service="freshrss"}
+    values: '0x3200'
+  - series: news_backup_last_success_timestamp_seconds{namespace="news",service="freshrss"}
+    values: 1+60x3200
+  - series: longhorn_volume_last_backup_at{pvc_namespace="news",pvc="news-backups"}
+    values: 1+60x3200
+  alert_rule_test:
+  - eval_time: 16m
+    alertname: NewsUnavailable
+    exp_alerts: []
+  - eval_time: 16m
+    alertname: NewsDatabaseUnavailable
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+      exp_annotations:
+        summary: FreshRSS database is unavailable
+  - eval_time: 16m
+    alertname: NewsTelemetryMissing
+    exp_alerts: []
+  - eval_time: 16m
+    alertname: NewsRefreshStale
+    exp_alerts: []
+  - eval_time: 16m
+    alertname: NewsFeedFetchFailed
+    exp_alerts: []
+  - eval_time: 16m
+    alertname: NewsFeedsStale
+    exp_alerts: []
+  - eval_time: 16m
+    alertname: NewsLocalBackupStale
+    exp_alerts: []
+  - eval_time: 16m
+    alertname: NewsOffClusterBackupStale
+    exp_alerts: []
+- name: local capture stale despite fresh off-cluster transfer
+  interval: 1m
+  input_series:
+  - series: gatus_results_endpoint_success{group="News",name="freshrss"}
+    values: 1x3200
+  - series: news_database_up{namespace="news",service="freshrss"}
+    values: 1x3200
+  - series: kube_statefulset_status_replicas_ready{namespace="news",statefulset="news-postgresql"}
+    values: 1x3200
+  - series: news_refresh_last_completed_timestamp_seconds{namespace="news",service="freshrss"}
+    values: 1+60x3200
+  - series: news_feeds_failed{namespace="news",service="freshrss"}
+    values: '0x3200'
+  - series: news_feeds_stale{namespace="news",service="freshrss"}
+    values: '0x3200'
+  - series: news_backup_last_success_timestamp_seconds{namespace="news",service="freshrss"}
+    values: 1x3200
+  - series: longhorn_volume_last_backup_at{pvc_namespace="news",pvc="news-backups"}
+    values: 1+60x3200
+  alert_rule_test:
+  - eval_time: 38h
+    alertname: NewsUnavailable
+    exp_alerts: []
+  - eval_time: 38h
+    alertname: NewsDatabaseUnavailable
+    exp_alerts: []
+  - eval_time: 38h
+    alertname: NewsTelemetryMissing
+    exp_alerts: []
+  - eval_time: 38h
+    alertname: NewsRefreshStale
+    exp_alerts: []
+  - eval_time: 38h
+    alertname: NewsFeedFetchFailed
+    exp_alerts: []
+  - eval_time: 38h
+    alertname: NewsFeedsStale
+    exp_alerts: []
+  - eval_time: 38h
+    alertname: NewsLocalBackupStale
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+      exp_annotations:
+        summary: FreshRSS validated local paired backup is stale or missing
+  - eval_time: 38h
+    alertname: NewsOffClusterBackupStale
+    exp_alerts: []
+- name: off-cluster transfer stale despite fresh local capture
+  interval: 1m
+  input_series:
+  - series: gatus_results_endpoint_success{group="News",name="freshrss"}
+    values: 1x3200
+  - series: news_database_up{namespace="news",service="freshrss"}
+    values: 1x3200
+  - series: kube_statefulset_status_replicas_ready{namespace="news",statefulset="news-postgresql"}
+    values: 1x3200
+  - series: news_refresh_last_completed_timestamp_seconds{namespace="news",service="freshrss"}
+    values: 1+60x3200
+  - series: news_feeds_failed{namespace="news",service="freshrss"}
+    values: '0x3200'
+  - series: news_feeds_stale{namespace="news",service="freshrss"}
+    values: '0x3200'
+  - series: news_backup_last_success_timestamp_seconds{namespace="news",service="freshrss"}
+    values: 1+60x3200
+  - series: longhorn_volume_last_backup_at{pvc_namespace="news",pvc="news-backups"}
+    values: 1x3200
+  alert_rule_test:
+  - eval_time: 50h
+    alertname: NewsUnavailable
+    exp_alerts: []
+  - eval_time: 50h
+    alertname: NewsDatabaseUnavailable
+    exp_alerts: []
+  - eval_time: 50h
+    alertname: NewsTelemetryMissing
+    exp_alerts: []
+  - eval_time: 50h
+    alertname: NewsRefreshStale
+    exp_alerts: []
+  - eval_time: 50h
+    alertname: NewsFeedFetchFailed
+    exp_alerts: []
+  - eval_time: 50h
+    alertname: NewsFeedsStale
+    exp_alerts: []
+  - eval_time: 50h
+    alertname: NewsLocalBackupStale
+    exp_alerts: []
+  - eval_time: 50h
+    alertname: NewsOffClusterBackupStale
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+      exp_annotations:
+        summary: FreshRSS off-cluster Longhorn transfer is stale or missing
+- name: never-completed timestamps cannot be treated as successful
+  interval: 1m
+  input_series:
+  - series: gatus_results_endpoint_success{group="News",name="freshrss"}
+    values: 1x3200
+  - series: news_database_up{namespace="news",service="freshrss"}
+    values: 1x3200
+  - series: kube_statefulset_status_replicas_ready{namespace="news",statefulset="news-postgresql"}
+    values: 1x3200
+  - series: news_refresh_last_completed_timestamp_seconds{namespace="news",service="freshrss"}
+    values: '0x3200'
+  - series: news_feeds_failed{namespace="news",service="freshrss"}
+    values: '0x3200'
+  - series: news_feeds_stale{namespace="news",service="freshrss"}
+    values: '0x3200'
+  - series: news_backup_last_success_timestamp_seconds{namespace="news",service="freshrss"}
+    values: '0x3200'
+  - series: longhorn_volume_last_backup_at{pvc_namespace="news",pvc="news-backups"}
+    values: '0x3200'
+  alert_rule_test:
+  - eval_time: 16m
+    alertname: NewsUnavailable
+    exp_alerts: []
+  - eval_time: 16m
+    alertname: NewsDatabaseUnavailable
+    exp_alerts: []
+  - eval_time: 16m
+    alertname: NewsTelemetryMissing
+    exp_alerts: []
+  - eval_time: 16m
+    alertname: NewsRefreshStale
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+      exp_annotations:
+        summary: FreshRSS scheduled refresh is stale or missing
+  - eval_time: 16m
+    alertname: NewsFeedFetchFailed
+    exp_alerts: []
+  - eval_time: 16m
+    alertname: NewsFeedsStale
+    exp_alerts: []
+  - eval_time: 16m
+    alertname: NewsLocalBackupStale
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+      exp_annotations:
+        summary: FreshRSS validated local paired backup is stale or missing
+  - eval_time: 16m
+    alertname: NewsOffClusterBackupStale
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+      exp_annotations:
+        summary: FreshRSS off-cluster Longhorn transfer is stale or missing
+- name: successful scheduler and HTTP do not hide feed failures, then recovery
+  interval: 1m
+  input_series:
+  - series: gatus_results_endpoint_success{group="News",name="freshrss"}
+    values: 1x3200
+  - series: news_database_up{namespace="news",service="freshrss"}
+    values: 1x3200
+  - series: kube_statefulset_status_replicas_ready{namespace="news",statefulset="news-postgresql"}
+    values: 1x3200
+  - series: news_refresh_last_completed_timestamp_seconds{namespace="news",service="freshrss"}
+    values: 1+60x3200
+  - series: news_feeds_failed{namespace="news",service="freshrss"}
+    values: 1x34 0x10
+  - series: news_feeds_stale{namespace="news",service="freshrss"}
+    values: 1x34 0x10
+  - series: news_backup_last_success_timestamp_seconds{namespace="news",service="freshrss"}
+    values: 1+60x3200
+  - series: longhorn_volume_last_backup_at{pvc_namespace="news",pvc="news-backups"}
+    values: 1+60x3200
+  alert_rule_test:
+  - eval_time: 32m
+    alertname: NewsUnavailable
+    exp_alerts: []
+  - eval_time: 32m
+    alertname: NewsDatabaseUnavailable
+    exp_alerts: []
+  - eval_time: 32m
+    alertname: NewsTelemetryMissing
+    exp_alerts: []
+  - eval_time: 32m
+    alertname: NewsRefreshStale
+    exp_alerts: []
+  - eval_time: 32m
+    alertname: NewsFeedFetchFailed
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+      exp_annotations:
+        summary: FreshRSS has active feeds with failed fetches
+  - eval_time: 32m
+    alertname: NewsFeedsStale
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+      exp_annotations:
+        summary: FreshRSS has active feeds overdue for successful refresh
+  - eval_time: 32m
+    alertname: NewsLocalBackupStale
+    exp_alerts: []
+  - eval_time: 32m
+    alertname: NewsOffClusterBackupStale
+    exp_alerts: []
+  - eval_time: 29m
+    alertname: NewsFeedFetchFailed
+    exp_alerts: []
+  - eval_time: 29m
+    alertname: NewsFeedsStale
+    exp_alerts: []
+  - eval_time: 38m
+    alertname: NewsFeedFetchFailed
+    exp_alerts: []
+  - eval_time: 38m
+    alertname: NewsFeedsStale
+    exp_alerts: []
+- name: stopped scheduler is stale and later recovers
+  interval: 1m
+  input_series:
+  - series: gatus_results_endpoint_success{group="News",name="freshrss"}
+    values: 1x3200
+  - series: news_database_up{namespace="news",service="freshrss"}
+    values: 1x3200
+  - series: kube_statefulset_status_replicas_ready{namespace="news",statefulset="news-postgresql"}
+    values: 1x3200
+  - series: news_refresh_last_completed_timestamp_seconds{namespace="news",service="freshrss"}
+    values: 1x100 7000+60x40
+  - series: news_feeds_failed{namespace="news",service="freshrss"}
+    values: '0x3200'
+  - series: news_feeds_stale{namespace="news",service="freshrss"}
+    values: '0x3200'
+  - series: news_backup_last_success_timestamp_seconds{namespace="news",service="freshrss"}
+    values: 1+60x3200
+  - series: longhorn_volume_last_backup_at{pvc_namespace="news",pvc="news-backups"}
+    values: 1+60x3200
+  alert_rule_test:
+  - eval_time: 95m
+    alertname: NewsUnavailable
+    exp_alerts: []
+  - eval_time: 95m
+    alertname: NewsDatabaseUnavailable
+    exp_alerts: []
+  - eval_time: 95m
+    alertname: NewsTelemetryMissing
+    exp_alerts: []
+  - eval_time: 95m
+    alertname: NewsRefreshStale
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+      exp_annotations:
+        summary: FreshRSS scheduled refresh is stale or missing
+  - eval_time: 95m
+    alertname: NewsFeedFetchFailed
+    exp_alerts: []
+  - eval_time: 95m
+    alertname: NewsFeedsStale
+    exp_alerts: []
+  - eval_time: 95m
+    alertname: NewsLocalBackupStale
+    exp_alerts: []
+  - eval_time: 95m
+    alertname: NewsOffClusterBackupStale
+    exp_alerts: []
+  - eval_time: 120m
+    alertname: NewsRefreshStale
+    exp_alerts: []

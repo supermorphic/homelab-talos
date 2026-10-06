@@ -64,6 +64,25 @@ def exercise_backup_failures(*, run, names, wait_ready, request, items, token, i
 
     baseline = complete_sets()
     stored = items()
+    original_status = run("exec", helper, "cat", "/run/news/last-backup").stdout
+    corrupt = "/backups/set-9999999999-status-test"
+    run(
+        "exec",
+        helper,
+        "sh",
+        "-c",
+        'source=$(printf "%s\\n" /backups/set-* | sort | tail -1); '
+        'cp -a "$source" "$1"; printf invalid > "$1/database.dump"; '
+        'stamp=$(cat /run/news/last-backup); while [ "$(date +%s)" -le "$stamp" ]; do sleep 1; done; '
+        'sed -i "s/^created_epoch=.*/created_epoch=$(date +%s)/" "$1/manifest"; '
+        '(cd "$1" && sha256sum database.dump data.tar.gz manifest > SHA256SUMS); '
+        "rm /run/news/last-backup",
+        "sh",
+        corrupt,
+    )
+    run("exec", helper, "sh", "/opt/news/backup-status.sh")
+    assert run("exec", helper, "cat", "/run/news/last-backup").stdout == original_status
+    run("exec", helper, "rm", "-rf", corrupt)
     for phase in ("dump", "archive", "validation", "publication"):
         failed = run(
             "exec",
@@ -79,6 +98,7 @@ def exercise_backup_failures(*, run, names, wait_ready, request, items, token, i
         assert failed.returncode != 0, "injected backup failure reported success: " + phase
         wait_ready()
         assert complete_sets() == baseline and items() == stored
+        assert run("exec", helper, "cat", "/run/news/last-backup").stdout == original_status
     # A real tiny tmpfs exercises ENOSPC without touching any publisher or live volume.
     assert (
         run(

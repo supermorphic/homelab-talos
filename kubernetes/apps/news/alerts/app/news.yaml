@@ -1,0 +1,64 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: news
+  namespace: monitoring
+spec:
+  groups:
+    - name: news
+      rules:
+        - alert: NewsUnavailable
+          expr: >-
+            max(gatus_results_endpoint_success{group="News",name="freshrss"}) == 0
+            or absent(max(gatus_results_endpoint_success{group="News",name="freshrss"}))
+          for: 15m
+          labels: {severity: critical}
+          annotations: {summary: FreshRSS is unavailable through the internal gateway}
+        - alert: NewsDatabaseUnavailable
+          expr: >-
+            max(news_database_up{namespace="news",service="freshrss"}) == 0
+            or max(kube_statefulset_status_replicas_ready{namespace="news",statefulset="news-postgresql"}) == 0
+            or absent(max(kube_statefulset_status_replicas_ready{namespace="news",statefulset="news-postgresql"}))
+          for: 5m
+          labels: {severity: critical}
+          annotations: {summary: FreshRSS database is unavailable}
+        - alert: NewsTelemetryMissing
+          expr: absent(max(news_database_up{namespace="news",service="freshrss"}))
+          for: 15m
+          labels: {severity: warning}
+          annotations: {summary: FreshRSS application telemetry is missing}
+        - alert: NewsRefreshStale
+          expr: >-
+            time() - max(news_refresh_last_completed_timestamp_seconds{namespace="news",service="freshrss"}) > 3600
+            or max(news_refresh_last_completed_timestamp_seconds{namespace="news",service="freshrss"}) == 0
+            or absent(max(news_refresh_last_completed_timestamp_seconds{namespace="news",service="freshrss"}))
+          for: 15m
+          labels: {severity: warning}
+          annotations: {summary: FreshRSS scheduled refresh is stale or missing}
+        - alert: NewsFeedFetchFailed
+          expr: max(news_feeds_failed{namespace="news",service="freshrss"}) > 0
+          for: 30m
+          labels: {severity: warning}
+          annotations: {summary: FreshRSS has active feeds with failed fetches}
+        - alert: NewsFeedsStale
+          expr: max(news_feeds_stale{namespace="news",service="freshrss"}) > 0
+          for: 30m
+          labels: {severity: warning}
+          annotations: {summary: FreshRSS has active feeds overdue for successful refresh}
+        - alert: NewsLocalBackupStale
+          expr: >-
+            time() - max(news_backup_last_success_timestamp_seconds{namespace="news",service="freshrss"}) > 36 * 60 * 60
+            or max(news_backup_last_success_timestamp_seconds{namespace="news",service="freshrss"}) == 0
+            or absent(max(news_backup_last_success_timestamp_seconds{namespace="news",service="freshrss"}))
+          for: 15m
+          labels: {severity: critical}
+          annotations: {summary: FreshRSS validated local paired backup is stale or missing}
+        - alert: NewsOffClusterBackupStale
+          expr: >-
+            time() - max(longhorn_volume_last_backup_at{pvc_namespace="news",pvc="news-backups"}) > 48 * 60 * 60
+            or max(longhorn_volume_last_backup_at{pvc_namespace="news",pvc="news-backups"}) == 0
+            or absent(max(longhorn_volume_last_backup_at{pvc_namespace="news",pvc="news-backups"}))
+          for: 15m
+          labels: {severity: critical}
+          annotations: {summary: FreshRSS off-cluster Longhorn transfer is stale or missing}

@@ -218,6 +218,11 @@ def campaign_exclusions() -> set[str]:
     )
     if nocodb_source.get("spec", {}).get("suspend") is True:
         exclusions.add("verification.nocodb")
+    news_path = REPO_ROOT / "kubernetes/apps/news/freshrss/ks.yaml"
+    if news_path.is_file():
+        news_source = yaml.safe_load(news_path.read_text(encoding="utf-8"))
+        if news_source.get("spec", {}).get("suspend") is True:
+            exclusions.add("verification.news")
     openbao_units = list(
         yaml.safe_load_all(
             (REPO_ROOT / "kubernetes/apps/security/openbao/ks.yaml").read_text(encoding="utf-8")

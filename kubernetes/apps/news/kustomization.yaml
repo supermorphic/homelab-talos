@@ -5,3 +5,4 @@ resources:
   - ./namespace/ks.yaml
   - ./postgresql/ks.yaml
   - ./freshrss/ks.yaml
+  - ./alerts/ks.yaml

@@ -51,6 +51,8 @@ final="$BACKUP_DIR/set-${stage##*/.pending-}"
 [ ! -e "$final" ]
 mv "$stage" "$final"
 stage=''
+printf '%s\n' "$stamp" > /run/news/last-backup.pending
+mv /run/news/last-backup.pending /run/news/last-backup
 rm -f /run/news/maintenance-request
 flock -u 8
 # Retain seven valid completed sets. Corrupt sets require attended investigation.

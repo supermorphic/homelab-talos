@@ -11,6 +11,48 @@ NEWS = ROOT / "kubernetes/apps/news"
 
 
 class FreshRSSManifestsTests(unittest.TestCase):
+    def test_metrics_are_separate_from_gateway_and_alerts_remain_staged(self):
+        objects = list(
+            yaml.safe_load_all(
+                subprocess.check_output(
+                    ["kustomize", "build", str(NEWS / "freshrss/app")], text=True
+                )
+            )
+        )
+        service = next(o for o in objects if o["kind"] == "Service")
+        self.assertIn(
+            {"name": "metrics", "port": 9090, "targetPort": "metrics"}, service["spec"]["ports"]
+        )
+        monitor = next(o for o in objects if o["kind"] == "ServiceMonitor")
+        self.assertEqual(monitor["spec"]["endpoints"][0]["port"], "metrics")
+        policy = next(o for o in objects if o["kind"] == "CiliumNetworkPolicy")["spec"]
+        metrics = [
+            r
+            for r in policy["ingress"]
+            if any(p["port"] == "9090" for t in r["toPorts"] for p in t["ports"])
+        ]
+        self.assertEqual(len(metrics), 1)
+        self.assertEqual(
+            metrics[0]["fromEndpoints"],
+            [
+                {
+                    "matchLabels": {
+                        "k8s:io.kubernetes.pod.namespace": "monitoring",
+                        "app.kubernetes.io/name": "prometheus",
+                    }
+                }
+            ],
+        )
+        for rule in policy["ingress"]:
+            if any(
+                e["matchLabels"].get("k8s:io.kubernetes.pod.namespace") == "envoy-gateway-system"
+                for e in rule["fromEndpoints"]
+            ):
+                self.assertEqual(
+                    [p["port"] for t in rule["toPorts"] for p in t["ports"]], ["8080"]
+                )
+        self.assertTrue(yaml.safe_load((NEWS / "alerts/ks.yaml").read_text())["spec"]["suspend"])
+
     def test_paired_backup_has_read_only_source_and_separate_credentials(self):
         objects = list(
             yaml.safe_load_all(

@@ -8,6 +8,7 @@ resources:
   - ./httproute.yaml
   - ./persistentvolumeclaims.yaml
   - ./service.yaml
+  - ./servicemonitor.yaml
 configMapGenerator:
   - name: freshrss-scripts
     files:
@@ -20,6 +21,8 @@ configMapGenerator:
       - backup-loop.sh=scripts/backup-loop.sh
       - validate-backup.sh=scripts/validate-backup.sh
       - restore.sh=scripts/restore.sh
+      - metrics.php=scripts/metrics.php
+      - backup-status.sh=scripts/backup-status.sh
   - name: freshrss-httpd
     files:
       - httpd.conf
