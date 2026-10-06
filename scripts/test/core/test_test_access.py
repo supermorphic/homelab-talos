@@ -152,6 +152,7 @@ class AccessContractTests(unittest.TestCase):
             "test.nocodb-local-integration",
             "test.web-research-local-integration",
             "test.news-postgresql-local-integration",
+            "test.news-local-integration",
         ):
             entry = self.entry(suite_id)
             self.assertIsNone(entry.get("access", {}).get("profile"))

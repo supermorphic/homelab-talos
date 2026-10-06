@@ -16,11 +16,13 @@ owns truncated-content detection, public article fetching, extraction, cleanup,
 sanitization of extracted HTML, safe fallback, and extraction-quality acceptance.
 No extraction engine or package is selected or required for the base platform.
 
-Implementation has started with a suspended dedicated database, retained storage,
-encrypted bootstrap generation, and synthetic content fixtures. The news namespace
-is not selected by the root application list. FreshRSS deployment, application
-container compatibility, paired recovery, the initial source catalog, and native
-synchronization still require implementation and acceptance.
+Source defines suspended FreshRSS and dedicated database workloads, retained
+storage, encrypted bootstrap generation, and synthetic content fixtures. Local
+container acceptance exercises FreshRSS/PostgreSQL and its synchronization API.
+The news namespace is not selected by the root application list. Paired recovery,
+operational monitoring, real bootstrap ciphertext, the initial source catalog,
+live routing/network/storage checks, and attended native synchronization remain
+required before activation and completion.
 
 Assume one operator account, private access through the existing internal Gateway
 and Tailscale path, and a modest curated feed collection. Multiple users, public
@@ -150,10 +152,39 @@ synchronization; native clients may continue reading already cached articles.
 Before selecting the staged database for rollout, the operator supplies bootstrap
 values through `mise exec -- just repo news-secrets`. The recipe defines its exact
 input names and write confirmation. It encrypts with the repository's public age
-recipient, validates both database and FreshRSS artifacts, and selects the database
-ciphertext after validation. It does not need the operator's private age key or
+recipient, validates both database and FreshRSS artifacts, and selects both
+ciphertexts after validation. It also selects the FreshRSS artifact when upgrading
+from the earlier database-only resource selection. It does not need the operator's private age key or
 activate Flux. Keep the login and API passwords separate. Retain the operator's
 decryption authority for subsequent recovery; synthetic test keys are disposable.
+
+The FreshRSS workload uses an immutable upstream image and repository-owned
+startup/configuration scripts. Its upstream entrypoint requires writable system
+paths; the selected startup instead runs as an unprivileged user with a read-only
+root and bounded writable data/runtime/temp volumes. No custom OCI build or
+extraction package is required. Test the pinned image with
+`mise exec -- just kube news-local-integration-test`; this creates and removes only
+labelled local Podman containers, an isolated network, and disposable volumes.
+The suite uses synthetic credentials and feeds and needs no cluster credentials.
+
+First startup initializes the PostgreSQL-backed application, one operator account,
+and separate web/API passwords without upstream default subscriptions. A completion
+marker allows interrupted account initialization to finish on restart. After that
+marker exists, restarts preserve the account's web/API passwords; the Secret writer
+does not rotate live account or database credentials. Change an established account
+through FreshRSS's supported account controls, and coordinate database credential
+changes with the database owner. Renaming the bootstrap account requires an explicit
+account migration rather than changing the Secret and creating a second user.
+
+Startup reapplies repository-owned system policy, including API/authentication,
+fetch limits, and the empty private-host allowlist. Manage subscriptions, categories,
+and filters in FreshRSS. The scheduler periodically invokes upstream refresh under
+a shared local lock; transient failures leave future refreshes enabled. Per-feed
+intervals and upstream cache/rate-limit behavior avoid unnecessary fetches. Ordinary
+application/request logs are disabled to keep private feed URLs and credentials out
+of logs; supervisor failures report only the failed operation. Readiness checks
+both the database and the HTTP API surface. These checks do not replace the pending
+feed-freshness monitoring or attended native-client acceptance.
 
 FreshRSS still needs its own retained claim for filesystem configuration and user
 settings. Use a single FreshRSS replica with `Recreate` for that `ReadWriteOnce`

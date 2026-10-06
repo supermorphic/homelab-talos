@@ -1,0 +1,23 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: news
+resources:
+  - ./ciliumnetworkpolicy.yaml
+  - ./deployment.yaml
+  - ./httproute.yaml
+  - ./persistentvolumeclaims.yaml
+  - ./service.yaml
+configMapGenerator:
+  - name: freshrss-scripts
+    files:
+      - bootstrap.php=scripts/bootstrap.php
+      - ready.php=scripts/ready.php
+      - refresh.sh=scripts/refresh.sh
+      - start.sh=scripts/start.sh
+  - name: freshrss-httpd
+    files:
+      - httpd.conf
+generatorOptions:
+  labels:
+    reconcile.fluxcd.io/watch: Enabled

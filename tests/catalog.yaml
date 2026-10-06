@@ -396,7 +396,7 @@ suites:
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube web-research-validate", implementation: scripts/validate/web-research.sh}
     native_results: {strategy: wrapper-junit}
-  # Staged database/storage/bootstrap checks only; FreshRSS runtime acceptance is pending.
+  # Offline source checks; runtime acceptance uses the separate local integration suite.
   - metadata: {id: validation.news, source: validation, framework: mixed, suite: ci, tier: offline, target: news, scenario: database-foundation, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
     access: {profile: null, prerequisites: []}
     confirmation: {type: none, variable: null, expected: null}
@@ -859,6 +859,12 @@ suites:
     runner: {command: "mise exec -- just kube news-postgresql-local-integration-test", implementation: scripts/test/scenarios/news-postgresql-local-integration.sh}
     native_results: {strategy: wrapper-junit}
     dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/news-postgresql-local-integration.sh, args: [], selector: null}
+  - metadata: {id: test.news-local-integration, source: test, framework: bash, suite: platform, tier: integration, target: news-local, scenario: disposable-podman, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: shared}
+    access: {profile: null, prerequisites: []}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube news-local-integration-test", implementation: scripts/test/scenarios/news-local-integration.sh}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/news-local-integration.sh, args: [], selector: null}
   - metadata: {id: test.web-research-local-integration, source: test, framework: bash, suite: platform, tier: integration, target: web-research-local, scenario: disposable-podman, scope: system, intent: acceptance, mutates_cluster: false, execution_owner: shared}
     access: {profile: null, prerequisites: []}
     confirmation: {type: none, variable: null, expected: null}
