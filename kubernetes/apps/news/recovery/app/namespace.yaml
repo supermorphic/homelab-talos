@@ -31,6 +31,6 @@ spec:
     persistentvolumeclaims: '5'
     requests.storage: 5Gi
     secrets: '1'
-    configmaps: '1'
+    configmaps: '2'
     limits.cpu: '6'
     limits.memory: 5Gi
