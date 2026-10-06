@@ -1,0 +1,24 @@
+{
+  "article.html": {
+    "outcome": "full",
+    "ordered_text": [
+      "The survey",
+      "Volunteers measured twelve beds",
+      "The beds after the autumn survey",
+      "What comes next",
+      "same measurements",
+      "Disclosure: the reporter volunteers"
+    ],
+    "required_image": {
+      "path": "/garden.svg",
+      "alt": "Twelve garden beds arranged in three rows",
+      "caption": "The beds after the autumn survey. Illustration: Test Author."
+    },
+    "required_link_path": "/method",
+    "excluded_text": ["Site navigation", "A sponsored widget", "Newsletter signup"]
+  },
+  "restricted.html": {
+    "outcome": "restricted",
+    "fallback_summary": "The publisher provides this summary to all readers."
+  }
+}

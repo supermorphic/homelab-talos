@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Synthetic summary source</title>
+    <link>https://publisher.example/</link>
+    <description>Authored summaries for extraction and fallback acceptance.</description>
+    <item>
+      <guid isPermaLink="false">synthetic-truncated-001</guid>
+      <title>Measuring a community garden</title>
+      <link>https://publisher.example/article.html?section=garden&amp;edition=autumn</link>
+      <pubDate>Mon, 05 Oct 2026 12:00:00 GMT</pubDate>
+      <description>A summary of a fictional garden survey.</description>
+    </item>
+    <item>
+      <guid isPermaLink="false">synthetic-restricted-001</guid>
+      <title>Members-only garden records</title>
+      <link>https://publisher.example/restricted.html</link>
+      <pubDate>Mon, 05 Oct 2026 13:00:00 GMT</pubDate>
+      <description>The publisher provides this summary to all readers.</description>
+    </item>
+  </channel>
+</rss>
