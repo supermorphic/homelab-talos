@@ -128,11 +128,16 @@ def main():
             fakebin = tmp / "bin"
             fakebin.mkdir()
             commands = {
-                "sleep": "exec /bin/sleep 0.05\n",
+                "sleep": '[ "$1" != 900 ] || touch /tmp/scheduler-started\nexec /bin/sleep 0.05\n',
                 "php": 'case "$1" in */bootstrap.php) exit 0;; esac\n'
                 "if [ ! -f /tmp/attempt ]; then touch /tmp/attempt; exit 1; fi\n"
                 "touch /tmp/refreshed\n",
-                "httpd": 'i=0\nwhile [ "$i" -lt 40 ]; do\n'
+                "httpd": 'if [ "${NEWS_POLLING_ENABLED:-true}" = false ]; then\n'
+                '  i=0; while [ "$i" -lt 40 ]; do\n'
+                "    [ ! -f /tmp/scheduler-started ] || exit 1\n"
+                "    /bin/sleep 0.05; i=$((i+1))\n"
+                "  done; exit 0\nfi\n"
+                'i=0\nwhile [ "$i" -lt 40 ]; do\n'
                 "  [ ! -f /tmp/refreshed ] || exit 0\n"
                 "  /bin/sleep 0.05; i=$((i+1))\ndone\nexit 3\n",
             }
@@ -140,28 +145,31 @@ def main():
                 path = fakebin / name
                 path.write_text("#!/bin/sh\n" + body)
                 path.chmod(0o755)
-            container(
-                names["scheduler"],
-                "--user",
-                "1000:1000",
-                "--tmpfs",
-                "/tmp:rw,size=16m",
-                "--tmpfs",
-                "/run/news:rw,mode=1777,size=16m",
-                "-v",
-                str(fakebin) + ":/testbin:ro",
-                "-v",
-                str(APP / "scripts") + ":/opt/news:ro",
-                "-e",
-                "PATH=/testbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-                "--entrypoint",
-                "/bin/sh",
-                image,
-                "/opt/news/start.sh",
-            )
-            assert run("wait", names["scheduler"], timeout=15).stdout.strip() == b"0", (
-                "refresh scheduler stopped after a failed refresh"
-            )
+            for polling in ("true", "false"):
+                target = names["scheduler"] + "-" + polling
+                container(
+                    target,
+                    "--user",
+                    "1000:1000",
+                    "--tmpfs",
+                    "/tmp:rw,size=16m",
+                    "--tmpfs",
+                    "/run/news:rw,mode=1777,size=16m",
+                    "-v",
+                    str(fakebin) + ":/testbin:ro",
+                    "-v",
+                    str(APP / "scripts") + ":/opt/news:ro",
+                    "-e",
+                    "PATH=/testbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                    *(("-e", "NEWS_POLLING_ENABLED=false") if polling == "false" else ()),
+                    "--entrypoint",
+                    "/bin/sh",
+                    image,
+                    "/opt/news/start.sh",
+                )
+                assert run("wait", target, timeout=15).stdout.strip() == b"0", (
+                    "scheduler ignored polling intent or stopped after a failed refresh"
+                )
             db_env = tmp / "db.env"
             db_env.touch(mode=0o600)
             db_env.write_text(
@@ -392,9 +400,12 @@ def main():
             )
             auth = ""
 
-            def request(path, data=None, authenticated=True, base_url=None):
+            def request(path, data=None, authenticated=True, base_url=None, authorization=None):
+                credential = auth if authorization is None else authorization
                 headers = (
-                    {"Authorization": "GoogleLogin auth=" + auth} if authenticated and auth else {}
+                    {"Authorization": "GoogleLogin auth=" + credential}
+                    if authenticated and credential
+                    else {}
                 )
                 payload = (
                     urllib.parse.urlencode(data, doseq=True).encode() if data is not None else None

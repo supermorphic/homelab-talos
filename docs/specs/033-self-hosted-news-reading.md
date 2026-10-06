@@ -287,8 +287,20 @@ An interrupted restore leaves an incomplete marker that blocks FreshRSS startup;
 discard those isolated targets and retry into new ones. Never point this command
 at an existing production claim or database.
 
+When opening the isolated application for validation, set
+`NEWS_POLLING_ENABLED=false`. This disables the supervisor's scheduler and makes
+`refresh.sh` return without fetching or updating refresh freshness. The default is
+`true`; other values are refused before startup. Keep the recovered application
+off the production route and restrict its network access while checking stored
+content. This switch does not prevent an attended UI action or another upstream
+entry point from fetching a feed. Enable normal polling only after the recovered
+state is accepted.
+
 `mise exec -- just kube news-local-integration-test` proves this path with
-synthetic data after stopping the original local app and database. Registration
+synthetic data copied through private temporary host storage into a separate backup
+volume. It stops the original local app, database, and backup helper, restores into
+new data volumes, and checks stored content and state with polling disabled.
+The original volumes are not mounted by the recovery containers. Registration
 and execution of the scoped cluster restore drill, confirmed off-cluster recovery,
 and native-client reconciliation remain activation gates.
 

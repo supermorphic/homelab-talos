@@ -1,0 +1,24 @@
+<?xml version='1.0' encoding='utf-8'?>
+<opml version="2.0">
+  <head>
+    <title>Initial homelab news subscriptions</title>
+  </head>
+  <body>
+    <outline text="News and politics" title="News and politics">
+      <outline type="rss" text="BBC News" title="BBC News" xmlUrl="https://feeds.bbci.co.uk/news/rss.xml" htmlUrl="https://www.bbc.com/news" />
+      <outline type="rss" text="The Hill" title="The Hill" xmlUrl="https://thehill.com/feed/" htmlUrl="https://thehill.com/" />
+    </outline>
+    <outline text="Technology" title="Technology">
+      <outline type="rss" text="Ars Technica" title="Ars Technica" xmlUrl="https://feeds.arstechnica.com/arstechnica/index" htmlUrl="https://arstechnica.com/" />
+      <outline type="rss" text="The Register" title="The Register" xmlUrl="https://www.theregister.com/?lab_viewport=rss" htmlUrl="https://www.theregister.com/" />
+      <outline type="rss" text="WIRED" title="WIRED" xmlUrl="https://www.wired.com/feed/rss" htmlUrl="https://www.wired.com/" />
+      <outline type="rss" text="The Verge" title="The Verge" xmlUrl="https://www.theverge.com/rss/index.xml" htmlUrl="https://www.theverge.com/" />
+    </outline>
+    <outline text="Security" title="Security">
+      <outline type="rss" text="BleepingComputer" title="BleepingComputer" xmlUrl="https://www.bleepingcomputer.com/feed/" htmlUrl="https://www.bleepingcomputer.com/" />
+    </outline>
+    <outline text="Science and engineering" title="Science and engineering">
+      <outline type="rss" text="IEEE Spectrum" title="IEEE Spectrum" xmlUrl="https://spectrum.ieee.org/feeds/feed.rss" htmlUrl="https://spectrum.ieee.org/" />
+    </outline>
+  </body>
+</opml>
