@@ -14,7 +14,8 @@ and the initial curated source catalog. It can ship with publisher-provided full
 bodies or summaries. [Issue 572](https://forgejo.infra.supermorphic.com/supermorphic/homelab-talos/issues/572)
 owns truncated-content detection, public article fetching, extraction, cleanup,
 sanitization of extracted HTML, safe fallback, and extraction-quality acceptance.
-No extraction engine or package is selected or required for the base platform.
+No extraction engine or package is required for the base platform. The optional
+Graby integration has its own [extraction design](034-community-backed-news-extraction.md).
 
 Source defines suspended FreshRSS and dedicated database workloads, retained
 storage, encrypted bootstrap generation, and synthetic content fixtures. Local
@@ -37,7 +38,7 @@ found in this research requires replacing FreshRSS for Talos or NetNewsWire.
 | --- | --- | --- |
 | Source acquisition and initial catalog | Publisher RSS/Atom feeds selected by the operator under issue 274 | Retain publisher identity, article links, dates, and available bodies or summaries. |
 | Aggregation and state | FreshRSS under issue 274 | Own subscriptions, categories, filtering, stored article bodies, read/unread state, and favorites. |
-| Full-text extraction and cleanup | Issue 572; approach to be selected | Supply sanitized complete bodies or preserve useful content on failure through the integration seam below. |
+| Full-text extraction and cleanup | Issue 572; community-backed Graby | Supply sanitized complete bodies or preserve useful content on failure through the integration seam below. |
 | Optional enrichment and curation | Future independent consumer | Derive annotations and suggestions without taking ownership of subscriptions or reading state. Absent in v1. |
 | Native presentation | NetNewsWire under issue 274 | Render the FreshRSS-provided body and synchronize supported state through its FreshRSS account. |
 
@@ -53,8 +54,8 @@ flowchart LR
 ```
 
 FreshRSS owns feed polling and stored reading state. Native clients synchronize
-against FreshRSS. The optional extraction boundary does not prescribe an article
-API, converted feed, extension, or native selector implementation.
+against FreshRSS. The optional extraction design selects an ingestion extension
+and separate Graby worker without making them base-platform dependencies.
 
 ## Source acquisition
 
@@ -89,10 +90,10 @@ guarantee an offline copy of remote assets.
 
 ## Integration seam for issue 572
 
-Issue 274 defines this contract without implementing extraction. Issue 572 selects
-and validates its implementation through a bounded candidate comparison. Its
-research and isolated quality tests can run in parallel with platform work; final
-integration acceptance uses the delivered FreshRSS and native-client path.
+Issue 274 defines this contract without implementing extraction. Issue 572's
+[community-backed extraction design](034-community-backed-news-extraction.md) owns
+the selected implementation and its acceptance. Final integration acceptance uses
+the delivered FreshRSS and native-client path.
 
 - FreshRSS remains authoritative for subscriptions, categories, filters, stored
   reading bodies, and read/favorite state. Extraction introduces no second user
@@ -117,9 +118,10 @@ integration acceptance uses the delivered FreshRSS and native-client path.
   not bypass authentication, subscriptions, paywalls, or anti-bot controls.
 
 The available FiveFilters community container is not an accepted deployment
-choice. Issue 274 has no FiveFilters acquisition dependency. Candidate selection
-and detailed extraction acceptance have their canonical scope in issue 572;
-image proxying/caching stays separable unless required for correct extraction.
+choice. Issue 274 has no FiveFilters acquisition dependency. Issue 572 instead
+uses upstream site configs as a tested dependency of its Graby worker; detailed
+extraction acceptance belongs to that design. Image proxying/caching stays
+separable unless required for correct extraction.
 
 ## Aggregation, state, and recovery
 
