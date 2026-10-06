@@ -64,6 +64,21 @@ Prefer publisher-provided full-content RSS or Atom. Summary-only feeds remain
 usable with their publisher links; the base platform does not fetch article pages
 to expand them. Keep a normal publisher article URL on each item.
 
+The operator's initial catalog is available as an
+[OPML import](../../kubernetes/apps/news/freshrss/initial-sources.opml): BBC News,
+The Hill, Ars Technica's public feed, The Register, BleepingComputer, IEEE Spectrum,
+WIRED, and The Verge. Import it once into the empty operator account. Categories
+group news and politics, technology, security, and science and engineering.
+FreshRSS owns subsequent subscription changes; this file does not reconcile them
+from Git. The initial filtering intent preserves all items, with no automatic
+discard or mark-as-read rules. Review any later filters against representative
+articles. WIRED and The Verge may require click-through or subscriptions.
+
+Reuters is also selected, but a usable public publisher feed has not been verified.
+Its [documented RSS delivery](https://reutersagency.com/content-delivery-platforms/content-delivery)
+is part of licensed content distribution. Add Reuters only after identifying an
+authorized feed; do not substitute a generated feed or premium-content integration.
+
 Use one subscription path per source. Preserve feed and item identities,
 categories, and read state across configuration changes. An actual feed URL change
 requires an in-place migration verified against existing articles and read state,
