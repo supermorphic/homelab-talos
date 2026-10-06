@@ -19,9 +19,10 @@ No extraction engine or package is selected or required for the base platform.
 Source defines suspended FreshRSS and dedicated database workloads, retained
 storage, encrypted bootstrap generation, and synthetic content fixtures. Local
 container acceptance exercises FreshRSS/PostgreSQL, its synchronization API, and
-paired backup/restore into disposable local targets. The news namespace is not
-selected by the root application list. An off-cluster restore drill, operational
-monitoring, real bootstrap ciphertext, the initial source catalog,
+paired backup/restore into disposable local targets. Source also stages aggregate
+metrics, alerts, a private-route probe, and read-only verification. The news
+namespace is not selected by the root application list. An off-cluster restore
+drill, deployed monitoring acceptance, real bootstrap ciphertext, the initial source catalog,
 live routing/network/storage checks, and attended native synchronization remain
 required before activation and completion.
 
@@ -186,7 +187,35 @@ intervals and upstream cache/rate-limit behavior avoid unnecessary fetches. Ordi
 application/request logs are disabled to keep private feed URLs and credentials out
 of logs; supervisor failures report only the failed operation. Readiness checks
 the operator's database tables and the HTTP API surface. These checks do not
-replace the pending feed-freshness monitoring or attended native-client acceptance.
+replace feed-freshness observations or attended native-client acceptance.
+
+The separate metrics listener is reachable only by Prometheus, through a scoped
+network policy. It emits fixed aggregate gauges without account names, feed URLs,
+article content, or other private labels. A bounded read-only database query
+reports active feeds, latest fetch failures, and overdue successful refreshes;
+muted feeds are excluded and staleness respects each feed's polling interval.
+Scheduler completion is a separate observation: upstream can finish a refresh
+while individual feeds fail, or skip recently refreshed feeds. The private Gatus
+probe checks the API landing page through the internal gateway, independently of
+ingestion. Diagnose individual publisher failures in FreshRSS's private feed UI.
+
+The backup helper publishes local freshness only after a paired set validates and
+is atomically completed. It reconstructs that observation from validated retained
+sets after restart and during periodic checks; capture failures do not advance it.
+Longhorn transfer freshness is a separate off-cluster observation. A current
+transfer timestamp cannot prove which paired set it contains or replace the
+off-cluster recovery drill.
+
+News alerts remain suspended with the application, and its verifier is registered
+without recurring campaign enrollment. Activate the news Flux units, root
+application selection, retained Gatus endpoint definition, and verification
+campaign enrollment together through the reviewed deployment change. After
+`mise exec -- just kube kubeconfig`, run
+`mise exec -- just kube news-verify` with the scoped observer. While staged it
+checks that no news workload is running; after activation it requires current
+workload readiness and healthy refresh, feed, local-backup, and Longhorn-transfer
+observations. These are observational checks, not network-denial, restore, or
+native-client acceptance.
 
 FreshRSS still needs its own retained claim for filesystem configuration and user
 settings. Use a single FreshRSS replica with `Recreate` for that `ReadWriteOnce`

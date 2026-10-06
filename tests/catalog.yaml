@@ -397,7 +397,7 @@ suites:
     runner: {command: "mise exec -- just kube web-research-validate", implementation: scripts/validate/web-research.sh}
     native_results: {strategy: wrapper-junit}
   # Offline source checks; runtime acceptance uses the separate local integration suite.
-  - metadata: {id: validation.news, source: validation, framework: mixed, suite: ci, tier: offline, target: news, scenario: database-foundation, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
+  - metadata: {id: validation.news, source: validation, framework: mixed, suite: ci, tier: offline, target: news, scenario: source-and-alerts, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
     access: {profile: null, prerequisites: []}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube news-validate", implementation: scripts/validate/news.sh}
@@ -618,6 +618,12 @@ suites:
     access: {profile: observer, prerequisites: []}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube automation-data-verify", implementation: scripts/verify/automation-data.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.news, source: verification, framework: bash, suite: platform, tier: verification, target: news, scenario: staged-or-active, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: shared}
+    description: Observes staged absence or current FreshRSS readiness, feed health, paired local backup and Longhorn transfer; excludes restore and native-client acceptance.
+    access: {profile: observer, prerequisites: []}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube news-verify", implementation: scripts/verify/news.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.nocodb, source: verification, framework: bash, suite: platform, tier: verification, target: nocodb, scenario: null, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: shared}
     access: {profile: observer, prerequisites: []}

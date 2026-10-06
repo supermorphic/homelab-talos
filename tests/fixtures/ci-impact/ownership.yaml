@@ -277,3 +277,15 @@ contracts:
       - scripts/validate/news.sh
     required_tests:
       - catalog:validation.news
+  news-monitoring:
+    changed_inputs:
+      - kubernetes/apps/news/freshrss/app/scripts/metrics.php
+      - kubernetes/apps/news/freshrss/app/scripts/backup-status.sh
+      - kubernetes/apps/news/freshrss/app/servicemonitor.yaml
+      - kubernetes/apps/news/alerts/app/news.yaml
+      - kubernetes/apps/monitoring/gatus/app/news-activation.values.yaml
+      - scripts/verify/news.sh
+      - scripts/test/news/test_verification.py
+      - tests/prometheus/news-alerts_test.yaml
+    required_tests:
+      - catalog:validation.news

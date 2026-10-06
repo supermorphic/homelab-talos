@@ -29,6 +29,10 @@ web-research-validate: require-bash
 news-validate: require-bash
     @scripts/validate/news.sh
 
+# Observe staged absence or deployed news health with the scoped observer identity.
+news-verify: require-bash
+    @scripts/test/run-catalog-suite.sh verification.news -- scripts/verify/news.sh {{quote(test_kubeconfig)}}
+
 # Exercise only the news database in disposable restricted amd64 Podman containers.
 news-postgresql-local-integration-test: require-bash
     @scripts/test/run-catalog-suite.sh test.news-postgresql-local-integration -- \

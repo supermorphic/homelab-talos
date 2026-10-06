@@ -137,6 +137,9 @@ conditional_paths:
     - kubernetes/apps/news/**
     - scripts/repository/news_secrets.py
     - scripts/validate/news.sh
+    - scripts/verify/news.sh
+    - tests/prometheus/news-alerts_test.yaml
+    - kubernetes/apps/monitoring/gatus/app/news-activation.values.yaml
     - scripts/test/news/**
     - scripts/test/news-*.sh
     - scripts/test/scenarios/news-*.sh
