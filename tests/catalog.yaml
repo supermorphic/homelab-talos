@@ -396,7 +396,7 @@ suites:
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube web-research-validate", implementation: scripts/validate/web-research.sh}
     native_results: {strategy: wrapper-junit}
-  # Staged database/storage/bootstrap checks only; full extraction is not admitted yet.
+  # Staged database/storage/bootstrap checks only; FreshRSS runtime acceptance is pending.
   - metadata: {id: validation.news, source: validation, framework: mixed, suite: ci, tier: offline, target: news, scenario: database-foundation, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
     access: {profile: null, prerequisites: []}
     confirmation: {type: none, variable: null, expected: null}
