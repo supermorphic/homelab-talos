@@ -5,9 +5,11 @@
 Design for [issue 274](https://forgejo.infra.supermorphic.com/supermorphic/homelab-talos/issues/274):
 replace or reduce Apple News dependence with operator-curated reputable sources,
 readable full articles, and synchronized native reading on iPhone, iPad, and Mac.
-This is a proposed design for operator review, not a deployed service or an
-implementation plan. Source research supports the architecture; article quality,
-container compatibility, recovery, and native synchronization still require acceptance.
+Implementation has started with a suspended dedicated database, retained storage,
+encrypted bootstrap generation, and synthetic article fixtures. The news namespace
+is not selected by the root application list. FreshRSS and the extractor are not
+deployed; article quality, application-container compatibility, paired recovery,
+and native synchronization still require acceptance.
 
 Select FreshRSS as the subscription and reading-state authority, self-hosted
 FiveFilters Full-Text RSS as the preferred extraction service, and NetNewsWire as
@@ -257,6 +259,14 @@ failover are outside v1; a StatefulSet and Longhorn replicas do not supply those
 capabilities. PostgreSQL unavailability stops FreshRSS database operations and
 synchronization; native clients may continue reading already cached articles.
 
+Before selecting the staged database for rollout, the operator supplies bootstrap
+values through `mise exec -- just repo news-secrets`. The recipe defines its exact
+input names and write confirmation. It encrypts with the repository's public age
+recipient, validates both database and FreshRSS artifacts, and selects the database
+ciphertext after validation. It does not need the operator's private age key or
+activate Flux. Keep the login and API passwords separate. Retain the operator's
+decryption authority for subsequent recovery; synthetic test keys are disposable.
+
 FreshRSS still needs its own retained claim for filesystem configuration and user
 settings. Use a single FreshRSS replica with `Recreate` for that `ReadWriteOnce`
 claim. Keep refresh scheduling with the application workload and serialize refresh
@@ -418,12 +428,13 @@ article text, query strings, private feed URLs, and credentials.
 
 ## Acceptance and remaining design decisions
 
-The preferred architecture is established; FiveFilters package acquisition remains
-an operator choice. If a suitable current self-hosted package is unavailable or its
+The preferred architecture is established; acquiring a current self-hosted
+FiveFilters package remains an operator choice and blocks extraction admission.
+Database-only local acceptance does not establish full-text service acceptance.
+If a suitable current self-hosted package is unavailable or its
 cost is declined, compare morss against the same acceptance corpus before changing
 the extractor decision. Keep FreshRSS and NetNewsWire unless an actual incompatibility
-is demonstrated. No purchase, installation, image build, or implementation planning
-is part of this design review.
+is demonstrated. Implementation authorization does not authorize a purchase or deployment.
 
 The operator selects a small representative corpus from intended reputable sources.
 It must include a full-content feed, a truncated public article, figures with captions,
@@ -456,7 +467,8 @@ Required evidence before deployment is accepted:
   private network boundaries, database-outage behavior, and restoration of the paired
   PostgreSQL and FreshRSS filesystem recovery unit, including database credentials.
 
-These remain pending native/runtime acceptance, distinct from source inspection and
-mechanical documentation validation. Local or hosted offline checks cannot prove
-the intended reading experience. Design approval is the next decision; implementation
-planning requires a subsequent operator request.
+These remain pending native/runtime acceptance, distinct from database-only tests,
+source inspection and mechanical documentation validation. Local or hosted offline
+checks cannot prove the intended reading experience. Deployment requires admitted
+packages, the complete recovery and workload lifecycle, hosted validation, and
+explicit authorization for the specific merge.

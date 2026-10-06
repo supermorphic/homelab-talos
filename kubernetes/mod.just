@@ -25,6 +25,15 @@ cilium-validate: require-bash
 web-research-validate: require-bash
     @scripts/validate/web-research.sh
 
+# Validate the staged news database, retained storage and encrypted bootstrap writer.
+news-validate: require-bash
+    @scripts/validate/news.sh
+
+# Exercise only the news database in disposable restricted amd64 Podman containers.
+news-postgresql-local-integration-test: require-bash
+    @scripts/test/run-catalog-suite.sh test.news-postgresql-local-integration -- \
+      scripts/test/scenarios/news-postgresql-local-integration.sh
+
 # Run disposable native web research containers and automatic credential cutover.
 web-research-local-integration-test: require-bash
     @scripts/test/run-catalog-suite.sh test.web-research-local-integration -- \

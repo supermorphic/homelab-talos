@@ -134,6 +134,13 @@ conditional_paths:
     - kubernetes/apps/automation/**
     - kubernetes/apps/automation-data/**
     - kubernetes/apps/web-research/**
+    - kubernetes/apps/news/**
+    - scripts/repository/news_secrets.py
+    - scripts/validate/news.sh
+    - scripts/test/news/**
+    - scripts/test/news-*.sh
+    - scripts/test/scenarios/news-*.sh
+    - tests/fixtures/news/**
     - scripts/validate/web-research.sh
     - scripts/validate/web_research.py
     - scripts/validate/alerts.sh

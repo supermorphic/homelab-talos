@@ -21,7 +21,11 @@ PREREQUISITES = {
     "openbao-recovery",
 }
 AUDIT_SUITES = {"verification.agent-access", "test.agent-credentials"}
-HOST_LOCAL_SUITES = {"test.nocodb-local-integration", "test.web-research-local-integration"}
+HOST_LOCAL_SUITES = {
+    "test.nocodb-local-integration",
+    "test.web-research-local-integration",
+    "test.news-postgresql-local-integration",
+}
 PHYSICAL_SUITE = "test.resilience.node-abrupt-loss"
 PURPOSE_PROFILES = {
     "campaign-observer": "observer",

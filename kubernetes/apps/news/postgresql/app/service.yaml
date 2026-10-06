@@ -1,0 +1,16 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: news-postgresql
+  labels:
+    app.kubernetes.io/name: news-postgresql
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: news-postgresql
+  ports:
+    - name: postgresql
+      port: 5432
+      protocol: TCP
+      targetPort: postgresql

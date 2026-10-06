@@ -114,7 +114,11 @@ class InvocationTests(unittest.TestCase):
             "scripts.openbao.credentials.load_workstation",
             side_effect=AssertionError("must not read secrets"),
         ):
-            self.assertIsNone(self.prepare(suite="test.nocodb-local-integration"))
+            for suite in (
+                "test.nocodb-local-integration",
+                "test.news-postgresql-local-integration",
+            ):
+                self.assertIsNone(self.prepare(suite=suite))
 
     def test_changed_binding_and_source_rejected(self):
         path = self.prepare()

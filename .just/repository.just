@@ -114,6 +114,13 @@ secrets:
 crawl4ai-secrets:
     uv run --locked --no-dev python scripts/repository/crawl4ai_secrets.py
 
+# Encrypt operator-supplied NEWS_{POSTGRES,DB,BACKUP,MONITORING,OPERATOR,API}_PASSWORD
+# and NEWS_OPERATOR_NAME. Use distinct passwords, including the separate API password.
+# Guard: NEWS_SECRETS_CONFIRM='write:news:bootstrap:sops'. No private age key is needed.
+# Selects the database ciphertext only after both encrypted artifacts are validated.
+news-secrets:
+    uv run --locked --no-dev python scripts/repository/news_secrets.py
+
 # Write only the SOPS-encrypted Gatus media-integration API-key Secret. The five
 # API keys are used by Gatus native-health endpoints; this recipe never echoes them.
 gatus-media-integration-secrets:

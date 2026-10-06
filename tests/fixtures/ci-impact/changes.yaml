@@ -17,3 +17,12 @@ cases:
   full:
     changes: [{status: M, old_path: null, new_path: .github/workflows/ci.yml}]
     groups: [core, observability, automation, ci-framework]
+  news-database:
+    changes: [{status: A, old_path: null, new_path: kubernetes/apps/news/postgresql/app/statefulset.yaml}]
+    groups: [core, automation]
+  news-bootstrap:
+    changes: [{status: A, old_path: null, new_path: scripts/repository/news_secrets.py}]
+    groups: [core, automation]
+  news-validation:
+    changes: [{status: A, old_path: null, new_path: scripts/validate/news.sh}]
+    groups: [core, automation]

@@ -51,6 +51,7 @@ executions:
     - validation.automation-data
     - validation.nocodb
     - validation.web-research
+    - validation.news
     - validation.test-harness-ci-framework
   ci-core:
     - validation.repo-lint
@@ -102,6 +103,7 @@ executions:
     - validation.automation-data
     - validation.nocodb
     - validation.web-research
+    - validation.news
   ci-framework:
     - validation.test-harness-ci-framework
 
@@ -393,6 +395,12 @@ suites:
     access: {profile: null, prerequisites: []}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube web-research-validate", implementation: scripts/validate/web-research.sh}
+    native_results: {strategy: wrapper-junit}
+  # Staged database/storage/bootstrap checks only; full extraction is not admitted yet.
+  - metadata: {id: validation.news, source: validation, framework: mixed, suite: ci, tier: offline, target: news, scenario: database-foundation, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
+    access: {profile: null, prerequisites: []}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube news-validate", implementation: scripts/validate/news.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: validation.nocodb, source: validation, framework: bash, suite: ci, tier: offline, target: nocodb, scenario: source, scope: system, intent: regression, mutates_cluster: false, execution_owner: shared}
     access: {profile: null, prerequisites: []}
@@ -845,6 +853,12 @@ suites:
     runner: {command: "mise exec -- just kube nocodb-local-integration-test", implementation: scripts/test/scenarios/nocodb-local-integration.sh}
     native_results: {strategy: wrapper-junit}
     dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/nocodb-local-integration.sh, args: [], selector: null}
+  - metadata: {id: test.news-postgresql-local-integration, source: test, framework: bash, suite: platform, tier: integration, target: news-postgresql-local, scenario: disposable-podman, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: shared}
+    access: {profile: null, prerequisites: []}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube news-postgresql-local-integration-test", implementation: scripts/test/scenarios/news-postgresql-local-integration.sh}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/news-postgresql-local-integration.sh, args: [], selector: null}
   - metadata: {id: test.web-research-local-integration, source: test, framework: bash, suite: platform, tier: integration, target: web-research-local, scenario: disposable-podman, scope: system, intent: acceptance, mutates_cluster: false, execution_owner: shared}
     access: {profile: null, prerequisites: []}
     confirmation: {type: none, variable: null, expected: null}
