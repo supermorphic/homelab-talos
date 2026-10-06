@@ -898,10 +898,13 @@ Secret read, exec, workload mutation, public ingress, or fallback to broader cre
 is allowed. See the [named access grant](031-openbao-agent-credential-profiles.md#profiles-and-kubernetes-authority).
 Connectivity alone does not authorize consumer queries, writes, or migrations.
 
-Migration uses an explicitly selected, operator-retained migrator profile. Missing
-credentials require separately authorized recovery through the existing domain rotation
-lifecycle, preserving the n8n binding and arranging protected delivery. Onboarding never
-retrieves that credential from n8n or rotates it automatically.
+Local CLI migration uses an explicitly selected, operator-retained migrator profile.
+Missing local credentials require separately authorized recovery through the existing
+domain rotation lifecycle, preserving the n8n binding and arranging protected delivery.
+Onboarding never retrieves that credential from n8n or rotates it automatically. This
+local prerequisite does not apply to migrations executed within n8n using its retained
+credential; use [credential discovery](#credential-discovery-for-approved-work) to
+inspect that execution context.
 
 ### Verification and rollout
 
@@ -1080,6 +1083,14 @@ workflow uses it yet. Observed bindings do not establish that a consumer's migra
 workflow is installed, suitable, or authenticated. Installing, binding, and executing that
 workflow require their own reviewed task authority. Discovery only reports metadata; it
 does not export credentials, deliver passwords, install workflows, or execute migrations.
+
+Inventory availability does not prove that the current n8n connection can use the
+credential. Confirm access to the exact discovered credential ID before binding it;
+an inaccessible credential is an access prerequisite, not a request for password delivery.
+A saved workflow draft does not establish that its changes are published. For authorized
+production execution, check the intended published version and its credential binding,
+then verify the execution result before reporting the migration complete. Simulated
+workflow tests do not prove database authentication or successful schema changes.
 
 ## External references
 
