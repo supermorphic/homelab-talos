@@ -81,15 +81,70 @@ spec:
             periodSeconds: 15
             timeoutSeconds: 10
           livenessProbe:
-            tcpSocket:
-              port: http
+            exec:
+              command: [sh, /opt/news/live.sh]
             periodSeconds: 30
+            timeoutSeconds: 5
           volumeMounts:
             - name: data
               mountPath: /var/www/FreshRSS/data
             - name: runtime
               mountPath: /run/news
             - name: tmp
+              mountPath: /tmp
+            - name: scripts
+              mountPath: /opt/news
+              readOnly: true
+            - name: httpd
+              mountPath: /opt/news-httpd.conf
+              subPath: httpd.conf
+              readOnly: true
+        - name: backup
+          image: postgres:17.11-alpine3.24
+          command: ["/bin/sh", "/opt/news/backup-loop.sh"]
+          env:
+            - name: DATA_PATH
+              value: /var/www/FreshRSS/data
+            - name: BACKUP_DIR
+              value: /backups/news
+            - name: PGHOST
+              value: news-postgresql
+            - name: PGDATABASE
+              value: freshrss
+            - name: PGUSER
+              value: news_backup
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: news-postgresql-credentials
+                  key: backup-password
+            - name: NEWS_APP_IMAGE
+              value: docker.io/freshrss/freshrss:1.30.1-alpine@sha256:b6ae27fb5f507ba5f2bff39ca78af90850b294c1e94bf21bae8d368133422b0e
+            - name: NEWS_DATABASE_IMAGE
+              value: postgres:17.11-alpine3.24
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/www/FreshRSS/data
+              readOnly: true
+            - name: runtime
+              mountPath: /run/news
+            - name: backups
+              mountPath: /backups
+            - name: backup-tmp
               mountPath: /tmp
             - name: scripts
               mountPath: /opt/news
@@ -109,6 +164,12 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 128Mi
+        - name: backup-tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: backups
+          persistentVolumeClaim:
+            claimName: news-backups
         - name: scripts
           configMap:
             name: freshrss-scripts

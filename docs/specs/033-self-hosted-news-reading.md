@@ -18,9 +18,10 @@ No extraction engine or package is selected or required for the base platform.
 
 Source defines suspended FreshRSS and dedicated database workloads, retained
 storage, encrypted bootstrap generation, and synthetic content fixtures. Local
-container acceptance exercises FreshRSS/PostgreSQL and its synchronization API.
-The news namespace is not selected by the root application list. Paired recovery,
-operational monitoring, real bootstrap ciphertext, the initial source catalog,
+container acceptance exercises FreshRSS/PostgreSQL, its synchronization API, and
+paired backup/restore into disposable local targets. The news namespace is not
+selected by the root application list. An off-cluster restore drill, operational
+monitoring, real bootstrap ciphertext, the initial source catalog,
 live routing/network/storage checks, and attended native synchronization remain
 required before activation and completion.
 
@@ -210,6 +211,26 @@ publishing backup freshness, then retain the complete backup set off-cluster.
 An uncoordinated copy of an active database or a healthy Longhorn replica alone is
 insufficient evidence of recoverability.
 
+A PostgreSQL-tool helper in the FreshRSS Pod captures the database and reads the
+application data claim through a read-only mount. The supervisor holds a shared
+service lock while bootstrapping or serving HTTP; scheduled refresh takes its own
+shared lock. A backup requests maintenance, waits for Apache to drain and all
+writers to release the lock, then holds it exclusively during capture and
+validation. Readiness becomes unavailable during that window; supervisor liveness
+continues. A stale maintenance request is cleared only after proving no backup
+owner remains. Capture subprocesses retain the locks until they exit, including
+when their coordinating shell is interrupted.
+
+Each completed set contains a logical dump, filesystem archive, checksums, and
+image/configuration provenance. Publication is an atomic directory rename after
+validation; incomplete staging directories cannot establish backup freshness.
+The helper retains completed local sets on `news-backups`, which participates in
+the existing Longhorn default off-cluster backup policy. Local completion is not
+proof that Longhorn has copied that set off-cluster. Confirm the selected set in
+off-cluster storage and test its recovery before treating it as retained evidence.
+Backups contain private settings and account material and need the same access
+restrictions as the live data claim.
+
 Recovery must remain possible without FreshRSS running:
 
 1. Recover the reviewed Git revision, pinned images, encrypted bootstrap material,
@@ -225,6 +246,22 @@ Recovery must remain possible without FreshRSS running:
    Restore private routing, then reconcile native clients against the recovered server.
    A restore can lose state newer than the backup; do not let stale client queues
    silently undo the verified recovered state.
+
+The recovery entry point is `sh /opt/news/restore.sh <complete-set-directory>`
+inside the matching PostgreSQL-tool recovery container. Its `--help` describes
+required mounts and inputs. Mount the selected backup read-only, provide an empty
+isolated filesystem target and a newly bootstrapped database through the
+application role, and keep the application stopped. The command checks the entire
+set, image/configuration compatibility, target emptiness, and role before writing.
+It restores the database transactionally and then extracts the paired files.
+An interrupted restore leaves an incomplete marker that blocks FreshRSS startup;
+discard those isolated targets and retry into new ones. Never point this command
+at an existing production claim or database.
+
+`mise exec -- just kube news-local-integration-test` proves this path with
+synthetic data after stopping the original local app and database. Registration
+and execution of the scoped cluster restore drill, confirmed off-cluster recovery,
+and native-client reconciliation remain activation gates.
 
 An isolated restore drill is required before treating this as the primary reader.
 Capacity, retention, backup frequency, and concrete guarded recovery commands belong

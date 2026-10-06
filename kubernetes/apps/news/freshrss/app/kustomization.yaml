@@ -15,6 +15,11 @@ configMapGenerator:
       - ready.php=scripts/ready.php
       - refresh.sh=scripts/refresh.sh
       - start.sh=scripts/start.sh
+      - live.sh=scripts/live.sh
+      - backup.sh=scripts/backup.sh
+      - backup-loop.sh=scripts/backup-loop.sh
+      - validate-backup.sh=scripts/validate-backup.sh
+      - restore.sh=scripts/restore.sh
   - name: freshrss-httpd
     files:
       - httpd.conf

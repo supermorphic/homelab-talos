@@ -11,6 +11,37 @@ NEWS = ROOT / "kubernetes/apps/news"
 
 
 class FreshRSSManifestsTests(unittest.TestCase):
+    def test_paired_backup_has_read_only_source_and_separate_credentials(self):
+        objects = list(
+            yaml.safe_load_all(
+                subprocess.check_output(
+                    ["kustomize", "build", str(NEWS / "freshrss/app")], text=True
+                )
+            )
+        )
+        pod = next(o for o in objects if o["kind"] == "Deployment")["spec"]["template"]["spec"]
+        helper = next((c for c in pod["containers"] if c["name"] == "backup"), None)
+        self.assertIsNotNone(helper, "paired backup helper missing")
+        mounts = {m["name"]: m for m in helper["volumeMounts"]}
+        self.assertTrue(mounts["data"]["readOnly"])
+        self.assertFalse(mounts["backups"].get("readOnly", False))
+        self.assertIn("runtime", mounts)
+        secrets = [e["valueFrom"]["secretKeyRef"] for e in helper["env"] if "valueFrom" in e]
+        self.assertEqual(
+            secrets, [{"name": "news-postgresql-credentials", "key": "backup-password"}]
+        )
+        app = next(c for c in pod["containers"] if c["name"] == "freshrss")
+        values = {e["name"]: e["value"] for e in helper["env"] if "value" in e}
+        database = yaml.safe_load((NEWS / "postgresql/app/statefulset.yaml").read_text())
+        self.assertEqual(values["NEWS_APP_IMAGE"], app["image"])
+        self.assertEqual(values["NEWS_DATABASE_IMAGE"], helper["image"])
+        self.assertEqual(
+            helper["image"], database["spec"]["template"]["spec"]["containers"][0]["image"]
+        )
+        self.assertIn(
+            "exec", app["livenessProbe"], "maintenance must not trip an HTTP liveness probe"
+        )
+
     def test_private_single_writer_and_scoped_network(self):
         app = NEWS / "freshrss/app"
         self.assertTrue(
