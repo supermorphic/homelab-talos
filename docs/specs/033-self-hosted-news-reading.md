@@ -11,7 +11,8 @@ container compatibility, recovery, and native synchronization still require acce
 
 Select FreshRSS as the subscription and reading-state authority, self-hosted
 FiveFilters Full-Text RSS as the preferred extraction service, and NetNewsWire as
-the native client. Full-text extraction is part of v1. Recommendations and learning
+the native client. Use a dedicated PostgreSQL service for FreshRSS's database.
+Full-text extraction is part of v1. Recommendations and learning
 are independent future capabilities. A failed extraction may produce an explicit
 summary-only result; pervasive failure for the selected public sources is not a
 successful full-text deployment.
@@ -40,6 +41,7 @@ flowchart LR
     X -->|Safe HTML or failure| I
     I --> F
     B[Optional RSS-Bridge for an approved source] -.-> I
+    F --> D[(Dedicated PostgreSQL)]
     F <-->|Google Reader compatible API| N[NetNewsWire on iPhone, iPad, Mac]
     F -.-> E[Future enrichment consumer]
     E -.-> O[Operator reviews suggested sources]
@@ -235,22 +237,45 @@ FreshRSS saved searches and advanced filters need not appear as equivalent contr
 in NetNewsWire. Select server-side effects deliberately: marking an article read is
 not the same as excluding it from synchronization or deleting it.
 
-Select SQLite on one retained Longhorn claim for the initial single-operator service.
-[FreshRSS supports SQLite directly](https://freshrss.github.io/FreshRSS/en/admins/DatabaseConfig.html).
-Use a single FreshRSS replica with `Recreate` for the `ReadWriteOnce` claim. Keep
-refresh scheduling with that workload; do not create a second Pod writer on the
-same claim. This trades brief rollout downtime for a small, recoverable state model.
-The existing n8n and automation-data databases have separate ownership contracts
-and are not a general-purpose database pool for this service.
+Select a dedicated PostgreSQL service, following
+[FreshRSS's recommended database](https://freshrss.github.io/FreshRSS/en/admins/02_Prerequisites.html).
+This also provides the documented option of
+[PostgreSQL search indexes](https://freshrss.github.io/FreshRSS/en/admins/DatabaseConfig.html)
+for a growing full-article collection. Index selection must account for storage and
+write costs; full-text extraction itself does not require PostgreSQL. SQLite remains
+a simpler supported alternative, but the selected design accepts a separate database
+lifecycle for PostgreSQL's upstream recommendation and search capabilities.
+
+Run PostgreSQL as one StatefulSet replica with a retained Longhorn data claim and
+a private ClusterIP Service. Reuse the repository's dedicated application-database
+pattern described in the
+[automation-data platform context](026-automation-data-postgresql-platform.md#existing-platform-context),
+with separate FreshRSS database credentials, backup artifacts, and recovery ownership.
+The existing n8n and automation-data instances remain dedicated to their respective
+contracts. A PostgreSQL operator, database replication, and automatic database
+failover are outside v1; a StatefulSet and Longhorn replicas do not supply those
+capabilities. PostgreSQL unavailability stops FreshRSS database operations and
+synchronization; native clients may continue reading already cached articles.
+
+FreshRSS still needs its own retained claim for filesystem configuration and user
+settings. Use a single FreshRSS replica with `Recreate` for that `ReadWriteOnce`
+claim. Keep refresh scheduling with the application workload and serialize refresh
+work. PostgreSQL stores the database; it does not make all FreshRSS state stateless.
+Retain logical backups on a separate claim through the established off-cluster
+storage path. Pin database versions in executable source; major-version changes
+require an explicit migration and restore decision.
 
 The recovery unit is FreshRSS's complete data/configuration, including extraction
-settings and entry provenance, plus a consistent user database backup and the exact
-deployed software/extension/configuration revisions. OPML is a
+settings and entry provenance, plus a consistent PostgreSQL logical backup and the
+exact deployed software/extension/configuration revisions. OPML is a
 portability aid, not a recovery backup: it cannot restore article bodies, read
 state, or all source settings. Upstream describes the
 [required data and database backup surfaces](https://freshrss.github.io/FreshRSS/en/admins/05_Backup.html).
-Use a coordinated backup with refresh and configuration writes quiesced, validate
-the SQLite copy, then retain it through the established off-cluster storage path.
+Use a coordinated backup of the filesystem state and a consistent `pg_dump`, with
+refresh, native-client state writes, and configuration writes quiesced for the paired
+backup window. Preserve database ownership/grants through recoverable bootstrap
+configuration and operator-managed encrypted credentials. Validate the dump before
+publishing backup freshness, then retain the complete backup set off-cluster.
 An uncoordinated copy of an active database or a healthy Longhorn replica alone is
 insufficient evidence of recoverability.
 
@@ -258,11 +283,14 @@ Recovery must remain possible without FreshRSS or the extractor running:
 
 1. Recover the reviewed Git revision, pinned images, encrypted bootstrap material,
    operator-held decryption authority, and a verified off-cluster backup.
-2. Restore FreshRSS into a new isolated claim with polling and client access disabled.
-   Use the software revision that created the backup before considering migrations.
-3. Check database integrity, login, source settings, article bodies, categories,
-   favorites, and read/unread state. Recreate the extractor with its pinned rules;
-   an empty extractor cache is expected.
+2. Restore the dedicated PostgreSQL database into a new isolated data claim and
+   restore the matching FreshRSS filesystem backup into a separate new claim. Keep
+   polling and client access disabled. Recreate database ownership and credentials,
+   and use compatible database tooling and the application revision that created
+   the backup before considering migrations.
+3. Check database restoration, application database authentication, login, source
+   settings, article bodies, categories, favorites, and read/unread state. Recreate
+   the extractor with its pinned rules; an empty extractor cache is expected.
 4. Enable controlled polling and verify stable item identities and fallback behavior.
    Restore private routing, then reconcile native clients against the recovered server.
    A restore can lose state newer than the backup; do not let stale client queues
@@ -278,9 +306,15 @@ Unread and starred content must not be silently discarded to satisfy a storage c
 NetNewsWire is the selected free native iPhone/iPad/macOS client. No subscription,
 advertisements, or upgrade nagging is an acceptance requirement for the client. Its
 [published features](https://netnewswire.com/) include FreshRSS synchronization.
-Use FreshRSS's [Google Reader compatible API](https://freshrss.github.io/FreshRSS/en/developers/06_GoogleReader_API.html)
-with a separate API password and trusted HTTPS. Preserve encoded API paths through
-Envoy. Avoid an interactive authentication proxy that intercepts native API calls.
+Use FreshRSS's self-hosted
+[Google Reader–compatible synchronization API](https://freshrss.github.io/FreshRSS/en/developers/06_GoogleReader_API.html)
+over trusted HTTPS, authenticated with a separate FreshRSS API password. This
+community-supported compatibility interface has no dependency on Google's
+discontinued service. Prefer it over the Fever API, consistent with
+[FreshRSS's mobile-access guidance](https://freshrss.github.io/FreshRSS/en/users/06_Mobile_access.html).
+It is a de facto compatibility protocol, not a formally standardized open protocol.
+Preserve encoded API paths through Envoy. Avoid an interactive authentication proxy
+that intercepts native API calls.
 Device OS compatibility must be checked against the chosen stable NetNewsWire release.
 
 The current [NetNewsWire Reader API implementation](https://github.com/Ranchero-Software/NetNewsWire/blob/main/Modules/Account/Sources/Account/ReaderAPI/ReaderAPIAccountDelegate.swift)
@@ -336,7 +370,8 @@ to simulate that feature.
 ## Platform fit and operating boundaries
 
 Follow the [Talos/Flux platform](010-talos-flux-platform.md) with a dedicated news
-namespace and app-local Flux packages for FreshRSS and the extractor. Use the
+namespace and app-local Flux packages for FreshRSS, its dedicated PostgreSQL service,
+and the extractor. Order FreshRSS startup after database readiness. Use the
 existing internal Gateway, certificate, DNS, and private Tailscale route for the
 FreshRSS UI/API. Public exposure and new Talos host services are outside this design.
 PHP and the web server belong in containers; no host package installation is needed.
@@ -349,7 +384,9 @@ refresh scheduling must be proven under those settings before image selection is
 complete; a Docker Compose example alone does not prove Kubernetes compatibility.
 
 Apply default-deny network policy with scoped ingress, DNS, public publisher HTTP(S),
-and the specific FreshRSS-to-extractor exception. Validate destinations and redirects
+and specific FreshRSS-to-extractor and FreshRSS-to-database exceptions. PostgreSQL
+accepts only application, backup, and required monitoring traffic; the extractor
+has no database access. Validate destinations and redirects
 and exclude private, loopback, link-local, metadata, and cluster destinations from
 publisher fetching. A publisher feed is untrusted even when the operator selected
 it. Preserve the intentional internal extractor exception without granting general
@@ -361,9 +398,10 @@ claims about existing deployed controls.
 
 Bound response size, redirect count, per-article time, whole-feed time, concurrency,
 and temporary cache/disk use. Independent probes distinguish serving FreshRSS from
-successful feed ingestion. Observe refresh freshness and extraction failures as well
-as Pod health. A working homepage or a successful HTTP response alone proves neither
-complete articles nor native synchronization. Logs and metric labels must omit
+successful feed ingestion. Observe database availability, backup freshness, refresh
+freshness, and extraction failures as well as Pod health. A working homepage or a
+successful HTTP response alone proves neither complete articles nor native
+synchronization. Logs and metric labels must omit
 article text, query strings, private feed URLs, and credentials.
 
 ## Alternatives and tradeoffs
@@ -415,7 +453,8 @@ Required evidence before deployment is accepted:
   categories, bidirectional state, offline/reconnect behavior, and LAN/off-LAN private
   access. Demonstrate the limitations of already cached body updates and image access.
 - Prove container restrictions, storage restart/rescheduling, bounded refresh work,
-  private network boundaries, and restoration of the complete FreshRSS recovery unit.
+  private network boundaries, database-outage behavior, and restoration of the paired
+  PostgreSQL and FreshRSS filesystem recovery unit, including database credentials.
 
 These remain pending native/runtime acceptance, distinct from source inspection and
 mechanical documentation validation. Local or hosted offline checks cannot prove
