@@ -106,6 +106,12 @@ Preserve important decisions and authorization history.
 
 ## Authority boundaries
 
+- Use Git for repository content. Use the configured `teacli` client for issues,
+  pull requests, reviews, comments, labels, and other forge metadata.
+- Do not manipulate Forgejo's database or invoke its server-side CLI directly.
+- Use the Forgejo REST API only when `teacli` does not expose the
+  required operation. Use configured client credentials within the task's
+  authorization; do not expose secrets or broaden access.
 - Run established repository workflows through the pinned toolchain with
   `mise exec -- just …`. When no recipe exists, use `mise exec -- <tool> …`
   for repository-dependent tools whose pinned version matters. Ordinary
