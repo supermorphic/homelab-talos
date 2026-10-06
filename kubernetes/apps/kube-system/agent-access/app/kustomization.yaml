@@ -6,6 +6,8 @@ resources:
   - ./report-publication-lease.yaml
   - ./rbac.yaml
   - ./test-rbac.yaml
+  - ./news-recovery-rbac.yaml
+  - ./news-recovery-admission.yaml
   - ./dedicated-rbac.yaml
   - ./dedicated-admission.yaml
   - ./node-reschedule-admission.yaml

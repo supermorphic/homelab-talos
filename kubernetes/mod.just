@@ -43,6 +43,11 @@ news-local-integration-test: require-bash
     @scripts/test/run-catalog-suite.sh test.news-local-integration -- \
       scripts/test/scenarios/news-local-integration.sh
 
+# Recover synthetic paired news data into fresh, isolated Longhorn claims.
+news-restore-drill: require-bash
+    @scripts/test/run-catalog-suite.sh test.news-restore-drill -- \
+      scripts/test/scenarios/news-restore-drill.sh {{quote(test_kubeconfig)}}
+
 # Run disposable native web research containers and automatic credential cutover.
 web-research-local-integration-test: require-bash
     @scripts/test/run-catalog-suite.sh test.web-research-local-integration -- \

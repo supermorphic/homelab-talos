@@ -14,6 +14,8 @@ spec:
   matchConditions:
     - name: test-runner
       expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: outside-news-recovery
+      expression: request.namespace != 'news-recovery-test'
     - name: probes-or-creation
       expression: >-
         !(request.operation == 'DELETE' ? oldObject : object).metadata.name.matches('^(qbprobe|qbsentinel|vpndis)-wan-[0-9]{1,10}$') &&
@@ -140,6 +142,8 @@ spec:
   matchConditions:
     - name: test-runner
       expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: outside-news-recovery
+      expression: request.namespace != 'news-recovery-test'
   variables:
     - name: claim
       expression: "request.operation == 'DELETE' ? oldObject : object"
@@ -213,6 +217,8 @@ spec:
   matchConditions:
     - name: test-runner
       expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: outside-news-recovery
+      expression: request.namespace != 'news-recovery-test'
   validations:
     - expression: >-
         request.namespace != 'test-reports' || (
@@ -753,6 +759,8 @@ spec:
   matchConditions:
     - name: test-runner
       expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: outside-news-recovery
+      expression: request.namespace != 'news-recovery-test'
     - name: application-disruption
       expression: >-
         !oldObject.metadata.name.matches('^(qbprobe|qbsentinel|vpndis)-wan-[0-9]{1,10}$') &&

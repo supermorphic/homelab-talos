@@ -3,6 +3,7 @@ package homelab.agent_access
 import rego.v1
 
 runner_fixture_roles := {
+	"homelab-test-news-recovery": {"namespaces": ["news-recovery-test"], "rules": [{"apiGroups": [""], "resources": ["pods", "persistentvolumeclaims", "secrets", "configmaps"], "verbs": ["get", "create", "delete"]}, {"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["create"]}, {"apiGroups": [""], "resources": ["resourcequotas"], "resourceNames": ["recovery"], "verbs": ["get"]}, {"apiGroups": ["cilium.io"], "resources": ["ciliumnetworkpolicies"], "resourceNames": ["isolation"], "verbs": ["get"]}]},
 	"homelab-test-jobs": {
 		"namespaces": [
 			"media",
@@ -224,6 +225,9 @@ runner_fixture_roles := {
 }
 
 runner_fixture_rules := {
+	"homelab-test-news-pods": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["pods"]}],
+	"homelab-test-news-inputs": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["persistentvolumeclaims", "secrets", "configmaps"]}],
+	"homelab-test-news-exec": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CONNECT"], "resources": ["pods/exec"]}],
 	"homelab-test-wan-reference-pods": [{
 		"apiGroups": [""],
 		"apiVersions": ["v1"],
@@ -503,6 +507,9 @@ runner_fixture_rules := {
 }
 
 runner_fixture_params := {
+	"homelab-test-news-pods": {"binding": {"matchResources": {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "news-recovery-test"}}}}},
+	"homelab-test-news-inputs": {"binding": {"matchResources": {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "news-recovery-test"}}}}},
+	"homelab-test-news-exec": {"binding": {"matchResources": {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "news-recovery-test"}}}}},
 	"homelab-test-ad-restore-hosts": {
 		"kind": {
 			"apiVersion": "v1",
@@ -587,7 +594,7 @@ runner_fixture_admission := array.concat(
 		{"paramKind": runner_fixture_params[name].kind},
 	)} |
 		some name, rules in runner_fixture_rules
-		name in object.keys(runner_fixture_params)
+		"kind" in object.keys(object.get(runner_fixture_params, name, {}))
 	],
 	array.concat(
 		[{"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingAdmissionPolicy", "metadata": {"name": name}, "spec": {
@@ -596,7 +603,7 @@ runner_fixture_admission := array.concat(
 			"validations": [{"expression": "object.metadata.name == 'fixture'", "message": "fixture guard"}],
 		}} |
 			some name, rules in runner_fixture_rules
-			not name in object.keys(runner_fixture_params)
+			not "kind" in object.keys(object.get(runner_fixture_params, name, {}))
 		],
 		[{"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingAdmissionPolicyBinding", "metadata": {"name": name}, "spec": object.union({"policyName": name, "validationActions": ["Deny"]}, object.get(object.get(runner_fixture_params, name, {}), "binding", {}))} | some name in object.keys(runner_fixture_rules)],
 	),
