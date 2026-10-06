@@ -75,18 +75,31 @@ try {
     $config['db'] = ['type' => 'pgsql', 'host' => setting('NEWS_DB_HOST'), 'user' => 'freshrss',
                      'password' => $dbPassword, 'base' => 'freshrss', 'prefix' => ''];
     saveConfig($data . '/config.php', $config);
-    if (!is_file($data . '/users/' . $user . '/config.php')) {
-        cli('create-user.php', ['--user=' . $user, '--password=' . $loginPassword,
-            '--api-password=' . $apiPassword, '--no-default-feeds']);
-    } elseif (!is_file($complete)) {
+    $home = $data . '/users/' . $user;
+    if (!is_file($complete)) {
+        if (!is_file($home . '/config.php')) {
+            // Upstream can stop after mkdir but before config creation. Remove
+            // only an empty directory; preserve unexpected files for recovery.
+            if (is_dir($home) && !rmdir($home)) {
+                throw new RuntimeException('Incomplete account directory needs recovery');
+            }
+            cli('create-user.php', ['--user=' . $user, '--password=' . $loginPassword,
+                '--api-password=' . $apiPassword, '--no-default-feeds']);
+        }
+        // User config precedes tables upstream. Its idempotent schema installer
+        // completes an interrupted initial create without replacing saved rows.
+        require '/var/www/FreshRSS/cli/_cli.php';
+        if (!FreshRSS_Factory::createUserDao($user)->createUser()) {
+            throw new RuntimeException('Incomplete account schema');
+        }
         cli('update-user.php', ['--user=' . $user, '--password=' . $loginPassword,
             '--api-password=' . $apiPassword]);
-    }
-    if (!is_file($complete)) {
         if (file_put_contents($complete . '.new', $user . "\n") === false ||
             !rename($complete . '.new', $complete)) {
             throw new RuntimeException('Unable to record completed bootstrap');
         }
+    } elseif (!is_file($home . '/config.php')) {
+        throw new RuntimeException('Completed account configuration needs recovery');
     }
     echo "FreshRSS bootstrap ready\n";
 } catch (Throwable $error) {

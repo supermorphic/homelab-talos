@@ -169,8 +169,9 @@ The suite uses synthetic credentials and feeds and needs no cluster credentials.
 
 First startup initializes the PostgreSQL-backed application, one operator account,
 and separate web/API passwords without upstream default subscriptions. A completion
-marker allows interrupted account initialization to finish on restart. After that
-marker exists, restarts preserve the account's web/API passwords; the Secret writer
+marker allows interrupted account initialization to finish on restart, including
+an empty user directory or saved configuration with incomplete database tables.
+After that marker exists, restarts preserve the account's web/API passwords; the Secret writer
 does not rotate live account or database credentials. Change an established account
 through FreshRSS's supported account controls, and coordinate database credential
 changes with the database owner. Renaming the bootstrap account requires an explicit
@@ -183,8 +184,8 @@ a shared local lock; transient failures leave future refreshes enabled. Per-feed
 intervals and upstream cache/rate-limit behavior avoid unnecessary fetches. Ordinary
 application/request logs are disabled to keep private feed URLs and credentials out
 of logs; supervisor failures report only the failed operation. Readiness checks
-both the database and the HTTP API surface. These checks do not replace the pending
-feed-freshness monitoring or attended native-client acceptance.
+the operator's database tables and the HTTP API surface. These checks do not
+replace the pending feed-freshness monitoring or attended native-client acceptance.
 
 FreshRSS still needs its own retained claim for filesystem configuration and user
 settings. Use a single FreshRSS replica with `Recreate` for that `ReadWriteOnce`

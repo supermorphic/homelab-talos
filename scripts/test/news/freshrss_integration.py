@@ -253,6 +253,36 @@ def main():
                 return "http://127.0.0.1:" + port
 
             base = start_app()
+            # Upstream creates the user directory/config before its SQL tables.
+            # Reproduce each interruption using only this disposable empty account.
+            for interrupted_at in ("schema", "directory"):
+                run(
+                    "exec",
+                    names["app"],
+                    "php",
+                    "-r",
+                    "require '/var/www/FreshRSS/cli/_cli.php'; "
+                    "if (!FreshRSS_Factory::createUserDao('reader')->deleteUser()) exit(1); "
+                    "$home=getenv('DATA_PATH').'/users/reader'; "
+                    "if ($argv[1]==='directory') { foreach (new DirectoryIterator($home) as $f) { "
+                    "if (!$f->isDot() && (!$f->isFile() || !unlink($f->getPathname()))) exit(1); }}",
+                    interrupted_at,
+                )
+                assert (
+                    run(
+                        "exec", names["app"], "php", "/opt/news/ready.php", success=False
+                    ).returncode
+                    != 0
+                ), "readiness accepted an account without its schema"
+                run(
+                    "exec",
+                    names["app"],
+                    "php",
+                    "-r",
+                    "unlink(getenv('DATA_PATH').'/news-bootstrap.complete');",
+                )
+                run("restart", names["app"])
+                wait_ready()
             # Simulate interruption after the user file was created but before API
             # credentials were saved; the next start must repair initial bootstrap.
             run(
@@ -443,9 +473,39 @@ def main():
             assert any(c.endswith("/read") for c in saved["categories"])
             assert any(c.endswith("/starred") for c in saved["categories"])
             assert saved["summary"]["content"] == content
+            before_outage = items()
+            before_subscriptions = request("/reader/api/0/subscription/list?output=json")[1]
+            # Make both synthetic feeds due and remove their cached responses.
+            # Otherwise this test can pass without attempting a network fetch.
+            run(
+                "exec",
+                names["app"],
+                "php",
+                "-r",
+                "require '/var/www/FreshRSS/cli/_cli.php'; cliInitUser('reader'); "
+                "$dao=FreshRSS_Factory::createFeedDao(); foreach ($dao->listFeeds() as $feed) { "
+                "if (!$dao->updateFeed($feed->id(),['lastUpdate'=>1,'error'=>0])) exit(1); "
+                "$cache=$feed->cacheFilename(); if (is_file($cache) && !unlink($cache)) exit(1); }",
+            )
             run("stop", names["feeds"])
             run("exec", names["app"], "sh", "/opt/news/refresh.sh")
-            assert len(items()) == 3, "feed outage dropped stored items"
+            failures = run(
+                "exec",
+                names["app"],
+                "php",
+                "-r",
+                "require '/var/www/FreshRSS/cli/_cli.php'; cliInitUser('reader'); "
+                "$feeds=FreshRSS_Factory::createFeedDao()->listFeeds(); "
+                "echo json_encode(array_values(array_map(fn($f)=>$f->lastError(),$feeds)));",
+            )
+            errors = json.loads(failures.stdout)
+            assert len(errors) == 2 and all(error > 0 for error in errors), (
+                "outage test did not attempt failed feed fetches"
+            )
+            assert items() == before_outage, "feed outage changed saved content or state"
+            assert (
+                request("/reader/api/0/subscription/list?output=json")[1] == before_subscriptions
+            )
             run("stop", names["db"])
             assert (
                 run("exec", names["app"], "php", "/opt/news/ready.php", success=False).returncode
