@@ -50,7 +50,15 @@ def parse_request(argv: list[str]) -> DiscoveryRequest:
             "recipe and arguments. Keep that connection running while using the selected "
             "profile in the consumer. Readiness does not authorize the consumer operation. "
             "For a blocked result, report its prerequisite and nextAction; do not switch "
-            "to broader credentials or provision a replacement."
+            "to broader credentials or provision a replacement. "
+            "Migration results also include executionContexts.local and executionContexts.n8n. "
+            "The top-level decision, nextAction, and exit code retain local connection semantics: "
+            "local access requires a protected current profile. The n8n context can independently "
+            "report a retained credential ready for workflow binding without a local profile. "
+            "Its nextAction identifies the PostgreSQL credential and observed published workflow "
+            "IDs; these do not establish installation or suitability of a consumer migration "
+            "workflow. Binding and execution need separate task authorization and authentication. "
+            "Discovery never exports credentials or installs a workflow."
         ),
     )
     resolution.add_argument("domain", help="Registered domain to inspect.")

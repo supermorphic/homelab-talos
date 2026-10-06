@@ -251,6 +251,101 @@ class CommandTests(unittest.TestCase):
         ]
         self.assertEqual(self.resolve("workflow").decision, "inconsistent")
 
+    def migrator_binding(self):
+        binding = copy.deepcopy(self.raw["n8n"]["objects"][-1])
+        binding.update(id="fixture-workflow:2:postgres", node="2", credentialId="fixture-migrator")
+        self.raw["n8n"]["objects"].append(binding)
+        return binding
+
+    def test_migration_exposes_n8n_binding_without_local_profile(self):
+        self.migrator_binding()
+        self.profile = ProfileMetadata("missing")
+        result = self.resolve("migration")
+        self.assertEqual(result.decision, "setup_required")
+        contexts = inventory_api.to_wire(result)["executionContexts"]
+        self.assertEqual(contexts["local"]["decision"], "setup_required")
+        self.assertIn(
+            {"name": "protected_current_profile", "status": "missing"},
+            contexts["local"]["prerequisites"],
+        )
+        n8n = contexts["n8n"]
+        self.assertEqual(n8n["decision"], "ready")
+        self.assertEqual(
+            n8n["nextAction"],
+            {
+                "kind": "workflow_binding",
+                "credentialId": "fixture-migrator",
+                "credentialType": "postgres",
+                "workflowIds": ["fixture-workflow"],
+            },
+        )
+        self.assertIn(
+            {"name": "consumer_migration_workflow", "status": "not_verified"},
+            n8n["prerequisites"],
+        )
+        self.assertNotIn("protected_current_profile", json.dumps(n8n))
+        for format in ["json", "text"]:
+            wire = inventory_api.render_result(result, format)
+            parsed = json.loads(wire[wire.index("{") :])
+            self.assertEqual(parsed["resolution"]["executionContexts"], contexts)
+
+    def test_migration_credential_can_be_bound_without_existing_workflow(self):
+        self.profile = ProfileMetadata("missing")
+        n8n = inventory_api.to_wire(self.resolve("migration"))["executionContexts"]["n8n"]
+        self.assertEqual(n8n["decision"], "ready")
+        self.assertEqual(n8n["nextAction"]["workflowIds"], [])
+        self.assertEqual(n8n["nextAction"]["credentialId"], "fixture-migrator")
+
+    def test_migration_local_profile_states_do_not_block_n8n(self):
+        for status in ["ready", "missing", "pending", "stale", "unbound", "unsafe"]:
+            with self.subTest(status=status):
+                self.profile = ProfileMetadata(status)
+                result = self.resolve("migration")
+                contexts = inventory_api.to_wire(result)["executionContexts"]
+                expected = (
+                    "ready"
+                    if status == "ready"
+                    else ("setup_required" if status == "missing" else "recovery_required")
+                )
+                self.assertEqual(result.decision, expected)
+                self.assertEqual(contexts["local"]["decision"], expected)
+                self.assertEqual(contexts["n8n"]["decision"], "ready")
+
+    def test_migration_contexts_reject_missing_or_inconsistent_credentials(self):
+        for problem in ["missing", "wrong_type", "wrong_name", "stale", "ambiguous"]:
+            with self.subTest(problem=problem):
+                self.raw = fixtures()
+                credential = next(
+                    o for o in self.raw["n8n"]["objects"] if o["id"] == "fixture-migrator"
+                )
+                if problem == "missing":
+                    self.raw["n8n"]["objects"].remove(credential)
+                elif problem == "wrong_type":
+                    credential["type"] = "httpHeaderAuth"
+                elif problem == "wrong_name":
+                    credential["name"] = "automation-data/other/migrator"
+                elif problem == "stale":
+                    credential["updatedAt"] = (
+                        datetime.now(UTC) - timedelta(seconds=30)
+                    ).isoformat()
+                else:
+                    binding = self.migrator_binding()
+                    self.raw["n8n"]["objects"].append({**binding, "id": "duplicate-binding"})
+                contexts = inventory_api.to_wire(self.resolve("migration"))["executionContexts"]
+                for context in contexts.values():
+                    self.assertEqual(context["decision"], "inconsistent")
+                    self.assertNotEqual(context["nextAction"]["kind"], "workflow_binding")
+
+    def test_migration_n8n_rejects_wrong_binding_type(self):
+        self.migrator_binding()["credentialType"] = "httpHeaderAuth"
+        contexts = inventory_api.to_wire(self.resolve("migration"))["executionContexts"]
+        self.assertEqual(contexts["n8n"]["decision"], "inconsistent")
+
+    def test_migration_contexts_require_fresh_complete_metadata(self):
+        self.raw["n8n"]["complete"] = False
+        contexts = inventory_api.to_wire(self.resolve("migration"))["executionContexts"]
+        self.assertEqual({c["decision"] for c in contexts.values()}, {"unavailable"})
+
     def test_unpublished_binding_does_not_establish_readiness(self):
         self.raw["n8n"]["objects"][-1]["published"] = False
         self.assertNotEqual(self.resolve("workflow").decision, "ready")
@@ -534,6 +629,16 @@ class CommandTests(unittest.TestCase):
             self.assertNotIn("SENTINEL_SECRET", text)
         self.profile = ProfileMetadata("missing")
         self.assertEqual(invoke(["resolve", "sample", "migration"])[0], 1)
+        status, text = invoke(["resolve", "sample", "migration", "--format=json"])
+        self.assertEqual(status, 1)
+        resolution = json.loads(text)["resolution"]
+        self.assertEqual(resolution["identity"]["localProfile"]["status"], "missing")
+        self.assertEqual(resolution["executionContexts"]["local"]["decision"], "setup_required")
+        self.assertEqual(resolution["executionContexts"]["n8n"]["decision"], "ready")
+        self.assertEqual(
+            resolution["executionContexts"]["n8n"]["nextAction"]["credentialId"],
+            "fixture-migrator",
+        )
 
 
 if __name__ == "__main__":
