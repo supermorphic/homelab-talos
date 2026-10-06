@@ -114,14 +114,18 @@ Preserve important decisions and authorization history.
   authorization; do not expose secrets or broaden access.
 - For n8n workflow work, use established repository workflows where provided and
   the configured n8n MCP tools for other supported operations within task authority.
-  For database credential selection, start with
-  [credential discovery](docs/specs/026-automation-data-postgresql-platform.md#credential-discovery-for-approved-work).
-  For migration discovery, inspect the intended execution context; its exit code
-  describes local connection readiness and does not determine n8n credential availability.
+  For database credential selection, use
+  `mise exec -- just kube automation-data-credentials resolve --help`, then resolve
+  the intended domain and purpose.
+- For migration discovery, inspect `executionContexts.n8n` and its `nextAction`.
+  The top-level decision and exit code describe local connection readiness.
+  A missing local profile does not block the existing n8n credential binding path.
 - Before binding an n8n credential, confirm that the discovered credential ID is
   accessible through the configured n8n connection. Do not request its password or
-  substitute a broader credential. Distinguish saved drafts, published versions,
-  and verified execution results when reporting workflow readiness.
+  substitute a broader credential. Credential availability does not establish task
+  authorization, authentication, or installation of a consumer migration workflow.
+  Distinguish saved drafts, published versions, and verified execution results
+  when reporting workflow readiness.
 - Run established repository workflows through the pinned toolchain with
   `mise exec -- just …`. When no recipe exists, use `mise exec -- <tool> …`
   for repository-dependent tools whose pinned version matters. Ordinary
