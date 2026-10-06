@@ -90,7 +90,7 @@ def documents():
       variables.item.metadata.labels == {'homelab-talos/run-id': dyn(variables.run), 'homelab-talos/test': dyn('news-restore-drill')} &&
       !has(variables.item.metadata.ownerReferences) &&
       (!has(variables.item.metadata.finalizers) || variables.item.metadata.finalizers.size() == 0 ||
-       (request.operation == 'DELETE' && variables.item.kind == 'PersistentVolumeClaim' && variables.item.metadata.finalizers == ['kubernetes.io/pvc-protection'])) &&
+       (variables.item.kind == 'PersistentVolumeClaim' && variables.item.metadata.finalizers == ['kubernetes.io/pvc-protection'])) &&
       (request.operation == 'DELETE' || !has(variables.item.metadata.annotations)) &&
       (request.operation != 'DELETE' || (has(variables.item.metadata.uid) && variables.item.metadata.uid != ''))"""
     templates = {
