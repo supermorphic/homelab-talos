@@ -59,7 +59,7 @@ def discover_shell_sources(root: Path) -> list[Path]:
         candidate = root / relative
         if candidate.is_file() and not candidate.is_symlink():
             discovered.append(relative)
-    return sorted(discovered)
+    return sorted(discovered, key=lambda relative: relative.as_posix())
 
 
 def source_set_digest(root: Path, relative_paths: list[Path]) -> str:

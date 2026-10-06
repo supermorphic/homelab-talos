@@ -9,6 +9,7 @@ resources:
   - ./media
   - ./monitoring
   - ./networking
+  - ./news/recovery/ks.yaml
   - ./security
   - ./storage
   - ./testing

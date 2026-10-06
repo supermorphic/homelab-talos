@@ -42,14 +42,17 @@ def git_shell_oracle(root: Path) -> list[Path]:
         check=True,
         capture_output=True,
     )
-    return sorted(
-        Path(os.fsdecode(item))
-        for item in completed.stdout.split(b"\0")
-        if item
-        and item.endswith(b".sh")
-        and (root / os.fsdecode(item)).is_file()
-        and not (root / os.fsdecode(item)).is_symlink()
-    )
+    return [
+        Path(name)
+        for name in sorted(
+            os.fsdecode(item)
+            for item in completed.stdout.split(b"\0")
+            if item
+            and item.endswith(b".sh")
+            and (root / os.fsdecode(item)).is_file()
+            and not (root / os.fsdecode(item)).is_symlink()
+        )
+    ]
 
 
 def shell_result_document(
@@ -138,6 +141,21 @@ exit 0
         (tools / "bash").chmod(0o755)
         (tools / "shellcheck").chmod(0o755)
         return tools, shellcheck_sentinel
+
+    def test_discovery_order_matches_serialized_strings_for_prefix_siblings(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_repository(root)
+            (root / "scripts/test/news").mkdir()
+            for name in ("news/fixture.sh", "news-manifests.sh"):
+                (root / "scripts/test" / name).write_text("#!/bin/sh\nexit 0\n")
+            sources = repository_shell_validation.discover_shell_sources(root)
+            serialized = [source.as_posix() for source in sources]
+            self.assertEqual(serialized, sorted(serialized))
+            self.assertLess(
+                serialized.index("scripts/test/news-manifests.sh"),
+                serialized.index("scripts/test/news/fixture.sh"),
+            )
 
     def test_discovers_exact_current_git_shell_set(self) -> None:
         expected = git_shell_oracle(REPO_ROOT)

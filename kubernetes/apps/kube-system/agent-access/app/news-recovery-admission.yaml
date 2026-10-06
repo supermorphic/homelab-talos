@@ -1,0 +1,260 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-news-pods
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:
+      - ''
+      apiVersions:
+      - v1
+      operations:
+      - CREATE
+      - UPDATE
+      - DELETE
+      resources:
+      - pods
+  matchConditions:
+  - name: test-runner
+    expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+  variables:
+  - name: item
+    expression: 'request.operation == ''DELETE'' ? oldObject : object'
+  - name: run
+    expression: variables.item.metadata.labels['homelab-talos/run-id']
+  - name: prefix
+    expression: '''news-drill-'' + variables.run'
+  - name: restored
+    expression: variables.item.metadata.name == variables.prefix + '-restored'
+  - name: pod
+    expression: variables.item.spec
+  - name: selectionEnv
+    expression: variables.pod.containers[2].env.filter(e, e.name == 'NEWS_SELECTED_SET')[0]
+  - name: selected
+    expression: 'has(variables.selectionEnv.value) ? variables.selectionEnv.value
+      : '''''
+  - name: expected
+    expression: 'variables.restored ? {"automountServiceAccountToken":dyn(false),"enableServiceLinks":dyn(false),"restartPolicy":dyn("Never"),"activeDeadlineSeconds":dyn(1800),"terminationGracePeriodSeconds":dyn(30),"securityContext":dyn({"fsGroup":dyn(1000),"seccompProfile":dyn({"type":dyn("RuntimeDefault")})}),"containers":dyn([dyn({"name":dyn("app"),"image":dyn("docker.io/freshrss/freshrss:1.30.1-alpine@sha256:b6ae27fb5f507ba5f2bff39ca78af90850b294c1e94bf21bae8d368133422b0e"),"imagePullPolicy":dyn("IfNotPresent"),"command":dyn([dyn("sh"),dyn("/opt/news/drill-start.sh"),dyn("restored")]),"env":dyn([dyn({"name":dyn("NEWS_DB_HOST"),"value":dyn("127.0.0.1")}),dyn({"name":dyn("NEWS_OPERATOR_NAME"),"value":dyn("reader")}),dyn({"name":dyn("NEWS_BASE_URL"),"value":dyn("http://localhost:8080")}),dyn({"name":dyn("DATA_PATH"),"value":dyn("/var/www/FreshRSS/data/instance")}),dyn({"name":dyn("INTERNAL_HOST_ALLOWLIST"),"value":dyn("127.0.0.1:8080")}),dyn({"name":dyn("NEWS_POLLING_ENABLED"),"value":dyn("false")}),dyn({"name":dyn("NEWS_DB_PASSWORD"),"valueFrom":dyn({"secretKeyRef":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-credentials")),"key":dyn("db-password")})})}),dyn({"name":dyn("NEWS_OPERATOR_PASSWORD"),"valueFrom":dyn({"secretKeyRef":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-credentials")),"key":dyn("operator-password")})})}),dyn({"name":dyn("NEWS_API_PASSWORD"),"valueFrom":dyn({"secretKeyRef":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-credentials")),"key":dyn("api-password")})})})]),"volumeMounts":dyn([dyn({"name":dyn("scripts"),"mountPath":dyn("/opt/news"),"readOnly":dyn(true)}),dyn({"name":dyn("runtime"),"mountPath":dyn("/run/news")}),dyn({"name":dyn("app-data"),"mountPath":dyn("/var/www/FreshRSS/data")}),dyn({"name":dyn("app-tmp"),"mountPath":dyn("/tmp")}),dyn({"name":dyn("httpd"),"mountPath":dyn("/opt/news-httpd.conf"),"readOnly":dyn(true),"subPath":dyn("httpd.conf")}),dyn({"name":dyn("fixtures"),"mountPath":dyn("/var/www/FreshRSS/p/full-feed.xml"),"readOnly":dyn(true),"subPath":dyn("full-feed.xml")}),dyn({"name":dyn("fixtures"),"mountPath":dyn("/var/www/FreshRSS/p/truncated-feed.xml"),"readOnly":dyn(true),"subPath":dyn("truncated-feed.xml")})]),"resources":dyn({"requests":dyn({"cpu":dyn("50m"),"memory":dyn("128Mi")}),"limits":dyn({"cpu":dyn("1"),"memory":dyn("1Gi")})}),"securityContext":dyn({"runAsNonRoot":dyn(true),"runAsUser":dyn(1000),"runAsGroup":dyn(1000),"allowPrivilegeEscalation":dyn(false),"readOnlyRootFilesystem":dyn(true),"capabilities":dyn({"drop":dyn([dyn("ALL")])})}),"readinessProbe":dyn({"exec":dyn({"command":dyn([dyn("php"),dyn("/opt/news/ready.php")])}),"timeoutSeconds":dyn(1),"successThreshold":dyn(1),"periodSeconds":dyn(5),"failureThreshold":dyn(120)})}),dyn({"name":dyn("database"),"image":dyn("postgres:17.11-alpine3.24"),"imagePullPolicy":dyn("IfNotPresent"),"command":dyn([dyn("docker-entrypoint.sh"),dyn("postgres"),dyn("-c"),dyn("listen_addresses=127.0.0.1")]),"env":dyn([dyn({"name":dyn("POSTGRES_DB"),"value":dyn("postgres")}),dyn({"name":dyn("POSTGRES_USER"),"value":dyn("postgres")}),dyn({"name":dyn("PGDATA"),"value":dyn("/var/lib/postgresql/data/pgdata")}),dyn({"name":dyn("POSTGRES_INITDB_ARGS"),"value":dyn("--auth-host=scram-sha-256
+      --auth-local=trust")}),dyn({"name":dyn("POSTGRES_PASSWORD"),"valueFrom":dyn({"secretKeyRef":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-credentials")),"key":dyn("postgres-password")})})}),dyn({"name":dyn("FRESHRSS_PASSWORD"),"valueFrom":dyn({"secretKeyRef":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-credentials")),"key":dyn("db-password")})})}),dyn({"name":dyn("BACKUP_PASSWORD"),"valueFrom":dyn({"secretKeyRef":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-credentials")),"key":dyn("backup-password")})})}),dyn({"name":dyn("MONITORING_PASSWORD"),"valueFrom":dyn({"secretKeyRef":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-credentials")),"key":dyn("monitoring-password")})})})]),"volumeMounts":dyn([dyn({"name":dyn("database-data"),"mountPath":dyn("/var/lib/postgresql/data")}),dyn({"name":dyn("pg-run"),"mountPath":dyn("/var/run/postgresql")}),dyn({"name":dyn("db-tmp"),"mountPath":dyn("/tmp")}),dyn({"name":dyn("init"),"mountPath":dyn("/docker-entrypoint-initdb.d"),"readOnly":dyn(true)})]),"resources":dyn({"requests":dyn({"cpu":dyn("50m"),"memory":dyn("128Mi")}),"limits":dyn({"cpu":dyn("1"),"memory":dyn("1Gi")})}),"securityContext":dyn({"runAsNonRoot":dyn(true),"runAsUser":dyn(70),"runAsGroup":dyn(70),"allowPrivilegeEscalation":dyn(false),"readOnlyRootFilesystem":dyn(true),"capabilities":dyn({"drop":dyn([dyn("ALL")])})})}),dyn({"name":dyn("helper"),"image":dyn("postgres:17.11-alpine3.24"),"imagePullPolicy":dyn("IfNotPresent"),"command":dyn([dyn("sh"),dyn("/opt/news/drill-helper.sh"),dyn("restored")]),"env":dyn([dyn({"name":dyn("PGHOST"),"value":dyn("127.0.0.1")}),dyn({"name":dyn("PGDATABASE"),"value":dyn("freshrss")}),dyn({"name":dyn("PGUSER"),"value":dyn("freshrss")}),dyn({"name":dyn("DATA_PATH"),"value":dyn("/data/instance")}),dyn({"name":dyn("BACKUP_DIR"),"value":dyn("/backups/news")}),dyn({"name":dyn("NEWS_SELECTED_SET"),"value":dyn(variables.selected)}),dyn({"name":dyn("NEWS_APP_IMAGE"),"value":dyn("docker.io/freshrss/freshrss:1.30.1-alpine@sha256:b6ae27fb5f507ba5f2bff39ca78af90850b294c1e94bf21bae8d368133422b0e")}),dyn({"name":dyn("NEWS_DATABASE_IMAGE"),"value":dyn("postgres:17.11-alpine3.24")}),dyn({"name":dyn("PGPASSWORD"),"valueFrom":dyn({"secretKeyRef":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-credentials")),"key":dyn("db-password")})})})]),"volumeMounts":dyn([dyn({"name":dyn("scripts"),"mountPath":dyn("/opt/news"),"readOnly":dyn(true)}),dyn({"name":dyn("runtime"),"mountPath":dyn("/run/news")}),dyn({"name":dyn("app-data"),"mountPath":dyn("/data")}),dyn({"name":dyn("backups"),"mountPath":dyn("/backups"),"readOnly":dyn(true)}),dyn({"name":dyn("helper-tmp"),"mountPath":dyn("/tmp")}),dyn({"name":dyn("httpd"),"mountPath":dyn("/opt/news-httpd.conf"),"readOnly":dyn(true),"subPath":dyn("httpd.conf")})]),"resources":dyn({"requests":dyn({"cpu":dyn("50m"),"memory":dyn("128Mi")}),"limits":dyn({"cpu":dyn("1"),"memory":dyn("256Mi")})}),"securityContext":dyn({"runAsNonRoot":dyn(true),"runAsUser":dyn(1000),"runAsGroup":dyn(1000),"allowPrivilegeEscalation":dyn(false),"readOnlyRootFilesystem":dyn(true),"capabilities":dyn({"drop":dyn([dyn("ALL")])})})})]),"volumes":dyn([dyn({"name":dyn("app-data"),"persistentVolumeClaim":dyn({"claimName":dyn((''news-drill-''
+      + variables.run + "-restored-data"))})}),dyn({"name":dyn("database-data"),"persistentVolumeClaim":dyn({"claimName":dyn((''news-drill-''
+      + variables.run + "-restored-db"))})}),dyn({"name":dyn("backups"),"persistentVolumeClaim":dyn({"claimName":dyn((''news-drill-''
+      + variables.run + "-backups")),"readOnly":dyn(true)})}),dyn({"name":dyn("scripts"),"configMap":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-scripts")),"defaultMode":dyn(292),"items":dyn([dyn({"key":dyn("backup-loop.sh"),"path":dyn("backup-loop.sh")}),dyn({"key":dyn("backup-status.sh"),"path":dyn("backup-status.sh")}),dyn({"key":dyn("backup.sh"),"path":dyn("backup.sh")}),dyn({"key":dyn("bootstrap.php"),"path":dyn("bootstrap.php")}),dyn({"key":dyn("live.sh"),"path":dyn("live.sh")}),dyn({"key":dyn("metrics.php"),"path":dyn("metrics.php")}),dyn({"key":dyn("ready.php"),"path":dyn("ready.php")}),dyn({"key":dyn("refresh.sh"),"path":dyn("refresh.sh")}),dyn({"key":dyn("restore.sh"),"path":dyn("restore.sh")}),dyn({"key":dyn("start.sh"),"path":dyn("start.sh")}),dyn({"key":dyn("validate-backup.sh"),"path":dyn("validate-backup.sh")}),dyn({"key":dyn("httpd.conf"),"path":dyn("httpd.conf")}),dyn({"key":dyn("init-news.sh"),"path":dyn("init-news.sh")}),dyn({"key":dyn("drill-start.sh"),"path":dyn("drill-start.sh")}),dyn({"key":dyn("drill-helper.sh"),"path":dyn("drill-helper.sh")}),dyn({"key":dyn("drill.php"),"path":dyn("drill.php")}),dyn({"key":dyn("full-feed.xml"),"path":dyn("full-feed.xml")}),dyn({"key":dyn("truncated-feed.xml"),"path":dyn("truncated-feed.xml")})])})}),dyn({"name":dyn("httpd"),"configMap":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-scripts")),"defaultMode":dyn(292),"items":dyn([dyn({"key":dyn("httpd.conf"),"path":dyn("httpd.conf")})])})}),dyn({"name":dyn("fixtures"),"configMap":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-scripts")),"defaultMode":dyn(292),"items":dyn([dyn({"key":dyn("full-feed.xml"),"path":dyn("full-feed.xml")}),dyn({"key":dyn("truncated-feed.xml"),"path":dyn("truncated-feed.xml")})])})}),dyn({"name":dyn("init"),"configMap":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-scripts")),"defaultMode":dyn(292),"items":dyn([dyn({"key":dyn("init-news.sh"),"path":dyn("init-news.sh")})])})}),dyn({"name":dyn("runtime"),"emptyDir":dyn({"sizeLimit":dyn("128Mi")})}),dyn({"name":dyn("app-tmp"),"emptyDir":dyn({"sizeLimit":dyn("128Mi")})}),dyn({"name":dyn("db-tmp"),"emptyDir":dyn({"sizeLimit":dyn("128Mi")})}),dyn({"name":dyn("helper-tmp"),"emptyDir":dyn({"sizeLimit":dyn("128Mi")})}),dyn({"name":dyn("pg-run"),"emptyDir":dyn({"sizeLimit":dyn("128Mi")})})])}
+      : {"automountServiceAccountToken":dyn(false),"enableServiceLinks":dyn(false),"restartPolicy":dyn("Never"),"activeDeadlineSeconds":dyn(1800),"terminationGracePeriodSeconds":dyn(30),"securityContext":dyn({"fsGroup":dyn(1000),"seccompProfile":dyn({"type":dyn("RuntimeDefault")})}),"containers":dyn([dyn({"name":dyn("app"),"image":dyn("docker.io/freshrss/freshrss:1.30.1-alpine@sha256:b6ae27fb5f507ba5f2bff39ca78af90850b294c1e94bf21bae8d368133422b0e"),"imagePullPolicy":dyn("IfNotPresent"),"command":dyn([dyn("sh"),dyn("/opt/news/drill-start.sh"),dyn("source")]),"env":dyn([dyn({"name":dyn("NEWS_DB_HOST"),"value":dyn("127.0.0.1")}),dyn({"name":dyn("NEWS_OPERATOR_NAME"),"value":dyn("reader")}),dyn({"name":dyn("NEWS_BASE_URL"),"value":dyn("http://localhost:8080")}),dyn({"name":dyn("DATA_PATH"),"value":dyn("/var/www/FreshRSS/data/instance")}),dyn({"name":dyn("INTERNAL_HOST_ALLOWLIST"),"value":dyn("127.0.0.1:8080")}),dyn({"name":dyn("NEWS_POLLING_ENABLED"),"value":dyn("false")}),dyn({"name":dyn("NEWS_DB_PASSWORD"),"valueFrom":dyn({"secretKeyRef":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-credentials")),"key":dyn("db-password")})})}),dyn({"name":dyn("NEWS_OPERATOR_PASSWORD"),"valueFrom":dyn({"secretKeyRef":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-credentials")),"key":dyn("operator-password")})})}),dyn({"name":dyn("NEWS_API_PASSWORD"),"valueFrom":dyn({"secretKeyRef":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-credentials")),"key":dyn("api-password")})})})]),"volumeMounts":dyn([dyn({"name":dyn("scripts"),"mountPath":dyn("/opt/news"),"readOnly":dyn(true)}),dyn({"name":dyn("runtime"),"mountPath":dyn("/run/news")}),dyn({"name":dyn("app-data"),"mountPath":dyn("/var/www/FreshRSS/data")}),dyn({"name":dyn("app-tmp"),"mountPath":dyn("/tmp")}),dyn({"name":dyn("httpd"),"mountPath":dyn("/opt/news-httpd.conf"),"readOnly":dyn(true),"subPath":dyn("httpd.conf")}),dyn({"name":dyn("fixtures"),"mountPath":dyn("/var/www/FreshRSS/p/full-feed.xml"),"readOnly":dyn(true),"subPath":dyn("full-feed.xml")}),dyn({"name":dyn("fixtures"),"mountPath":dyn("/var/www/FreshRSS/p/truncated-feed.xml"),"readOnly":dyn(true),"subPath":dyn("truncated-feed.xml")})]),"resources":dyn({"requests":dyn({"cpu":dyn("50m"),"memory":dyn("128Mi")}),"limits":dyn({"cpu":dyn("1"),"memory":dyn("1Gi")})}),"securityContext":dyn({"runAsNonRoot":dyn(true),"runAsUser":dyn(1000),"runAsGroup":dyn(1000),"allowPrivilegeEscalation":dyn(false),"readOnlyRootFilesystem":dyn(true),"capabilities":dyn({"drop":dyn([dyn("ALL")])})}),"readinessProbe":dyn({"exec":dyn({"command":dyn([dyn("php"),dyn("/opt/news/ready.php")])}),"timeoutSeconds":dyn(1),"successThreshold":dyn(1),"periodSeconds":dyn(5),"failureThreshold":dyn(120)})}),dyn({"name":dyn("database"),"image":dyn("postgres:17.11-alpine3.24"),"imagePullPolicy":dyn("IfNotPresent"),"command":dyn([dyn("docker-entrypoint.sh"),dyn("postgres"),dyn("-c"),dyn("listen_addresses=127.0.0.1")]),"env":dyn([dyn({"name":dyn("POSTGRES_DB"),"value":dyn("postgres")}),dyn({"name":dyn("POSTGRES_USER"),"value":dyn("postgres")}),dyn({"name":dyn("PGDATA"),"value":dyn("/var/lib/postgresql/data/pgdata")}),dyn({"name":dyn("POSTGRES_INITDB_ARGS"),"value":dyn("--auth-host=scram-sha-256
+      --auth-local=trust")}),dyn({"name":dyn("POSTGRES_PASSWORD"),"valueFrom":dyn({"secretKeyRef":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-credentials")),"key":dyn("postgres-password")})})}),dyn({"name":dyn("FRESHRSS_PASSWORD"),"valueFrom":dyn({"secretKeyRef":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-credentials")),"key":dyn("db-password")})})}),dyn({"name":dyn("BACKUP_PASSWORD"),"valueFrom":dyn({"secretKeyRef":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-credentials")),"key":dyn("backup-password")})})}),dyn({"name":dyn("MONITORING_PASSWORD"),"valueFrom":dyn({"secretKeyRef":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-credentials")),"key":dyn("monitoring-password")})})})]),"volumeMounts":dyn([dyn({"name":dyn("database-data"),"mountPath":dyn("/var/lib/postgresql/data")}),dyn({"name":dyn("pg-run"),"mountPath":dyn("/var/run/postgresql")}),dyn({"name":dyn("db-tmp"),"mountPath":dyn("/tmp")}),dyn({"name":dyn("init"),"mountPath":dyn("/docker-entrypoint-initdb.d"),"readOnly":dyn(true)})]),"resources":dyn({"requests":dyn({"cpu":dyn("50m"),"memory":dyn("128Mi")}),"limits":dyn({"cpu":dyn("1"),"memory":dyn("1Gi")})}),"securityContext":dyn({"runAsNonRoot":dyn(true),"runAsUser":dyn(70),"runAsGroup":dyn(70),"allowPrivilegeEscalation":dyn(false),"readOnlyRootFilesystem":dyn(true),"capabilities":dyn({"drop":dyn([dyn("ALL")])})})}),dyn({"name":dyn("helper"),"image":dyn("postgres:17.11-alpine3.24"),"imagePullPolicy":dyn("IfNotPresent"),"command":dyn([dyn("sh"),dyn("/opt/news/drill-helper.sh"),dyn("source")]),"env":dyn([dyn({"name":dyn("PGHOST"),"value":dyn("127.0.0.1")}),dyn({"name":dyn("PGDATABASE"),"value":dyn("freshrss")}),dyn({"name":dyn("PGUSER"),"value":dyn("news_backup")}),dyn({"name":dyn("DATA_PATH"),"value":dyn("/data/instance")}),dyn({"name":dyn("BACKUP_DIR"),"value":dyn("/backups/news")}),dyn({"name":dyn("NEWS_SELECTED_SET")}),dyn({"name":dyn("NEWS_APP_IMAGE"),"value":dyn("docker.io/freshrss/freshrss:1.30.1-alpine@sha256:b6ae27fb5f507ba5f2bff39ca78af90850b294c1e94bf21bae8d368133422b0e")}),dyn({"name":dyn("NEWS_DATABASE_IMAGE"),"value":dyn("postgres:17.11-alpine3.24")}),dyn({"name":dyn("PGPASSWORD"),"valueFrom":dyn({"secretKeyRef":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-credentials")),"key":dyn("backup-password")})})})]),"volumeMounts":dyn([dyn({"name":dyn("scripts"),"mountPath":dyn("/opt/news"),"readOnly":dyn(true)}),dyn({"name":dyn("runtime"),"mountPath":dyn("/run/news")}),dyn({"name":dyn("app-data"),"mountPath":dyn("/data"),"readOnly":dyn(true)}),dyn({"name":dyn("backups"),"mountPath":dyn("/backups")}),dyn({"name":dyn("helper-tmp"),"mountPath":dyn("/tmp")}),dyn({"name":dyn("httpd"),"mountPath":dyn("/opt/news-httpd.conf"),"readOnly":dyn(true),"subPath":dyn("httpd.conf")})]),"resources":dyn({"requests":dyn({"cpu":dyn("50m"),"memory":dyn("128Mi")}),"limits":dyn({"cpu":dyn("1"),"memory":dyn("256Mi")})}),"securityContext":dyn({"runAsNonRoot":dyn(true),"runAsUser":dyn(1000),"runAsGroup":dyn(1000),"allowPrivilegeEscalation":dyn(false),"readOnlyRootFilesystem":dyn(true),"capabilities":dyn({"drop":dyn([dyn("ALL")])})})})]),"volumes":dyn([dyn({"name":dyn("app-data"),"persistentVolumeClaim":dyn({"claimName":dyn((''news-drill-''
+      + variables.run + "-source-data"))})}),dyn({"name":dyn("database-data"),"persistentVolumeClaim":dyn({"claimName":dyn((''news-drill-''
+      + variables.run + "-source-db"))})}),dyn({"name":dyn("backups"),"persistentVolumeClaim":dyn({"claimName":dyn((''news-drill-''
+      + variables.run + "-backups"))})}),dyn({"name":dyn("scripts"),"configMap":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-scripts")),"defaultMode":dyn(292),"items":dyn([dyn({"key":dyn("backup-loop.sh"),"path":dyn("backup-loop.sh")}),dyn({"key":dyn("backup-status.sh"),"path":dyn("backup-status.sh")}),dyn({"key":dyn("backup.sh"),"path":dyn("backup.sh")}),dyn({"key":dyn("bootstrap.php"),"path":dyn("bootstrap.php")}),dyn({"key":dyn("live.sh"),"path":dyn("live.sh")}),dyn({"key":dyn("metrics.php"),"path":dyn("metrics.php")}),dyn({"key":dyn("ready.php"),"path":dyn("ready.php")}),dyn({"key":dyn("refresh.sh"),"path":dyn("refresh.sh")}),dyn({"key":dyn("restore.sh"),"path":dyn("restore.sh")}),dyn({"key":dyn("start.sh"),"path":dyn("start.sh")}),dyn({"key":dyn("validate-backup.sh"),"path":dyn("validate-backup.sh")}),dyn({"key":dyn("httpd.conf"),"path":dyn("httpd.conf")}),dyn({"key":dyn("init-news.sh"),"path":dyn("init-news.sh")}),dyn({"key":dyn("drill-start.sh"),"path":dyn("drill-start.sh")}),dyn({"key":dyn("drill-helper.sh"),"path":dyn("drill-helper.sh")}),dyn({"key":dyn("drill.php"),"path":dyn("drill.php")}),dyn({"key":dyn("full-feed.xml"),"path":dyn("full-feed.xml")}),dyn({"key":dyn("truncated-feed.xml"),"path":dyn("truncated-feed.xml")})])})}),dyn({"name":dyn("httpd"),"configMap":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-scripts")),"defaultMode":dyn(292),"items":dyn([dyn({"key":dyn("httpd.conf"),"path":dyn("httpd.conf")})])})}),dyn({"name":dyn("fixtures"),"configMap":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-scripts")),"defaultMode":dyn(292),"items":dyn([dyn({"key":dyn("full-feed.xml"),"path":dyn("full-feed.xml")}),dyn({"key":dyn("truncated-feed.xml"),"path":dyn("truncated-feed.xml")})])})}),dyn({"name":dyn("init"),"configMap":dyn({"name":dyn((''news-drill-''
+      + variables.run + "-scripts")),"defaultMode":dyn(292),"items":dyn([dyn({"key":dyn("init-news.sh"),"path":dyn("init-news.sh")})])})}),dyn({"name":dyn("runtime"),"emptyDir":dyn({"sizeLimit":dyn("128Mi")})}),dyn({"name":dyn("app-tmp"),"emptyDir":dyn({"sizeLimit":dyn("128Mi")})}),dyn({"name":dyn("db-tmp"),"emptyDir":dyn({"sizeLimit":dyn("128Mi")})}),dyn({"name":dyn("helper-tmp"),"emptyDir":dyn({"sizeLimit":dyn("128Mi")})}),dyn({"name":dyn("pg-run"),"emptyDir":dyn({"sizeLimit":dyn("128Mi")})})])}'
+  - name: defaults
+    expression: '{"dnsPolicy":dyn("ClusterFirst"),"schedulerName":dyn("default-scheduler"),"serviceAccountName":dyn("default"),"serviceAccount":dyn("default"),"hostNetwork":dyn(false),"hostPID":dyn(false),"hostIPC":dyn(false),"priority":dyn(0),"preemptionPolicy":dyn("PreemptLowerPriority")}'
+  - name: containerDefaults
+    expression: '{"terminationMessagePath":dyn("/dev/termination-log"),"terminationMessagePolicy":dyn("File"),"stdin":dyn(false),"stdinOnce":dyn(false),"tty":dyn(false)}'
+  validations:
+  - expression: "request.namespace == 'news-recovery-test' && request.operation !=\
+      \ 'UPDATE' &&\n      variables.run.matches('^[0-9a-f]{12}$') && variables.item.metadata.namespace\
+      \ == request.namespace &&\n      variables.item.metadata.labels == {'homelab-talos/run-id':\
+      \ dyn(variables.run), 'homelab-talos/test': dyn('news-restore-drill')} &&\n\
+      \      !has(variables.item.metadata.ownerReferences) &&\n      (!has(variables.item.metadata.finalizers)\
+      \ || variables.item.metadata.finalizers.size() == 0 ||\n       (request.operation\
+      \ == 'DELETE' && variables.item.kind == 'PersistentVolumeClaim' && variables.item.metadata.finalizers\
+      \ == ['kubernetes.io/pvc-protection'])) &&\n      (request.operation == 'DELETE'\
+      \ || !has(variables.item.metadata.annotations)) &&\n      (request.operation\
+      \ != 'DELETE' || (has(variables.item.metadata.uid) && variables.item.metadata.uid\
+      \ != '')) && variables.item.metadata.name in [variables.prefix + '-source',\
+      \ variables.prefix + '-restored']"
+    message: Only run-owned synthetic news Pods may be created or deleted.
+  - expression: '(variables.restored ? variables.selected.matches(''^set-[0-9]{10}-[A-Za-z0-9]{6}$'')
+      : variables.selected == '''')'
+    message: The selected paired set must have a bounded directory name.
+  - expression: "variables.expected.all(k, k in variables.pod && (k in ['containers','volumes']\
+      \ || variables.pod[k] == variables.expected[k])) &&\n          variables.pod.all(k,\
+      \ k in variables.expected || (k in variables.defaults && variables.pod[k] ==\
+      \ variables.defaults[k]) ||\n           (k == 'nodeName' && request.operation\
+      \ == 'DELETE') ||\n           (k == 'tolerations' ? variables.pod[k].all(t,\
+      \ t.key in ['node.kubernetes.io/not-ready','node.kubernetes.io/unreachable']\
+      \ &&\n             t.operator == 'Exists' && t.effect == 'NoExecute' && t.tolerationSeconds\
+      \ == 300 &&\n             t.all(f, f in ['key','operator','effect','tolerationSeconds']))\
+      \ : false))"
+    message: Synthetic news Pods cannot change identity, storage, security, scheduling,
+      or lifetime.
+  - expression: "variables.pod.containers.size() == 3 && [0,1,2].all(i,\n        \
+      \  variables.expected.containers[i].all(k, k in variables.pod.containers[i]\
+      \ && variables.pod.containers[i][k] == variables.expected.containers[i][k])\
+      \ &&\n          variables.pod.containers[i].all(k, k in variables.expected.containers[i]\
+      \ ||\n            (k in variables.containerDefaults && variables.pod.containers[i][k]\
+      \ == variables.containerDefaults[k]))) &&\n          variables.pod.volumes ==\
+      \ variables.expected.volumes"
+    message: Images, commands, credentials and mounts are limited to the isolated
+      fixture.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-news-pods
+spec:
+  policyName: homelab-test-news-pods
+  validationActions:
+  - Deny
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: news-recovery-test
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-news-inputs
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:
+      - ''
+      apiVersions:
+      - v1
+      operations:
+      - CREATE
+      - UPDATE
+      - DELETE
+      resources:
+      - persistentvolumeclaims
+      - secrets
+      - configmaps
+  matchConditions:
+  - name: test-runner
+    expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+  variables:
+  - name: item
+    expression: 'request.operation == ''DELETE'' ? oldObject : object'
+  - name: run
+    expression: variables.item.metadata.labels['homelab-talos/run-id']
+  - name: prefix
+    expression: '''news-drill-'' + variables.run'
+  validations:
+  - expression: "request.namespace == 'news-recovery-test' && request.operation !=\
+      \ 'UPDATE' &&\n      variables.run.matches('^[0-9a-f]{12}$') && variables.item.metadata.namespace\
+      \ == request.namespace &&\n      variables.item.metadata.labels == {'homelab-talos/run-id':\
+      \ dyn(variables.run), 'homelab-talos/test': dyn('news-restore-drill')} &&\n\
+      \      !has(variables.item.metadata.ownerReferences) &&\n      (!has(variables.item.metadata.finalizers)\
+      \ || variables.item.metadata.finalizers.size() == 0 ||\n       (request.operation\
+      \ == 'DELETE' && variables.item.kind == 'PersistentVolumeClaim' && variables.item.metadata.finalizers\
+      \ == ['kubernetes.io/pvc-protection'])) &&\n      (request.operation == 'DELETE'\
+      \ || !has(variables.item.metadata.annotations)) &&\n      (request.operation\
+      \ != 'DELETE' || (has(variables.item.metadata.uid) && variables.item.metadata.uid\
+      \ != ''))"
+    message: Only immutable run-owned synthetic recovery inputs are allowed.
+  - expression: "variables.item.kind != 'PersistentVolumeClaim' ||\n          (variables.item.metadata.name\
+      \ in [dyn(('news-drill-' + variables.run + \"-source-db\")),dyn(('news-drill-'\
+      \ + variables.run + \"-source-data\")),dyn(('news-drill-' + variables.run +\
+      \ \"-backups\")),dyn(('news-drill-' + variables.run + \"-restored-db\")),dyn(('news-drill-'\
+      \ + variables.run + \"-restored-data\"))] &&\n           variables.item.spec.storageClassName\
+      \ == 'longhorn' && variables.item.spec.accessModes == ['ReadWriteOnce'] &&\n\
+      \           variables.item.spec.resources.requests == {'storage':'1Gi'} &&\n\
+      \           variables.item.spec.resources.all(k, k == 'requests') && variables.item.spec.all(k,\n\
+      \            k in ['storageClassName','accessModes','resources'] || (k == 'volumeMode'\
+      \ && variables.item.spec[k] == 'Filesystem') ||\n            (k == 'volumeName'\
+      \ && request.operation == 'DELETE')))"
+    message: Claims must be fresh bounded Longhorn filesystem claims, without adoption
+      or clone sources.
+  - expression: "variables.item.kind != 'Secret' || (variables.item.metadata.name\
+      \ == variables.prefix + '-credentials' &&\n          variables.item.type ==\
+      \ 'Opaque' && variables.item.immutable && !has(variables.item.binaryData) &&\n\
+      \          ((has(variables.item.stringData) && !has(variables.item.data) &&\
+      \ variables.item.stringData.size() == 6 &&\n            variables.item.stringData.all(k,\
+      \ k in ['postgres-password','db-password','backup-password','monitoring-password','operator-password','api-password']\
+      \ &&\n              variables.item.stringData[k].matches('^[a-f0-9]{48}$')))\
+      \ ||\n           (has(variables.item.data) && !has(variables.item.stringData)\
+      \ && variables.item.data.size() == 6 &&\n            variables.item.data.all(k,\
+      \ k in ['postgres-password','db-password','backup-password','monitoring-password','operator-password','api-password']\
+      \ &&\n              variables.item.data[k].matches('^[A-Za-z0-9+/]{64}$')))))"
+    message: The ephemeral Secret has only the six synthetic fixture passwords.
+  - expression: "variables.item.kind != 'ConfigMap' || (variables.item.metadata.name\
+      \ == variables.prefix + '-scripts' &&\n          variables.item.immutable &&\
+      \ !has(variables.item.binaryData) && variables.item.data.size() == 18 && variables.item.data.all(k,\
+      \ k in [\"backup-loop.sh\", \"backup-status.sh\", \"backup.sh\", \"bootstrap.php\"\
+      , \"live.sh\", \"metrics.php\", \"ready.php\", \"refresh.sh\", \"restore.sh\"\
+      , \"start.sh\", \"validate-backup.sh\", \"httpd.conf\", \"init-news.sh\", \"\
+      drill-start.sh\", \"drill-helper.sh\", \"drill.php\", \"full-feed.xml\", \"\
+      truncated-feed.xml\"] && variables.item.data[k].size() <= 65536))"
+    message: Fixture programs are bounded public input in the isolated namespace.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-news-inputs
+spec:
+  policyName: homelab-test-news-inputs
+  validationActions:
+  - Deny
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: news-recovery-test
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-news-exec
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:
+      - ''
+      apiVersions:
+      - v1
+      operations:
+      - CONNECT
+      resources:
+      - pods/exec
+  matchConditions:
+  - name: test-runner
+    expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+  variables: []
+  validations:
+  - expression: "request.namespace == 'news-recovery-test' && request.name.matches('^news-drill-[0-9a-f]{12}-(source|restored)$')\
+      \ &&\n          ((object.container == 'app' && object.command == ['php','/opt/news/drill.php',request.name.endsWith('-source')\
+      \ ? 'source' : 'restored']) ||\n           (request.name.endsWith('-source')\
+      \ && object.container == 'helper' && object.command in [['sh','/opt/news/drill-helper.sh','capture'],['sh','/opt/news/drill-helper.sh','captured']]))\
+      \ &&\n          (!has(object.tty) || !object.tty) && object.stdout && object.stderr\
+      \ &&\n          (request.name.endsWith('-source') ? (!has(object.stdin) || !object.stdin)\
+      \ : object.stdin)"
+    message: Only non-interactive fixture phase commands may execute.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-news-exec
+spec:
+  policyName: homelab-test-news-exec
+  validationActions:
+  - Deny
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: news-recovery-test

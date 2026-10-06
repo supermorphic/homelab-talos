@@ -3,6 +3,7 @@ package homelab.agent_access
 import rego.v1
 
 ordinary_role_contracts := {
+	"homelab-test-news-recovery": {"namespaces": ["news-recovery-test"], "rules": [{"apiGroups": [""], "resources": ["pods", "persistentvolumeclaims", "secrets", "configmaps"], "verbs": ["get", "create", "delete"]}, {"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["create"]}, {"apiGroups": [""], "resources": ["resourcequotas"], "resourceNames": ["recovery"], "verbs": ["get"]}, {"apiGroups": ["cilium.io"], "resources": ["ciliumnetworkpolicies"], "resourceNames": ["isolation"], "verbs": ["get"]}]},
 	"homelab-test-jobs": {
 		"namespaces": [
 			"media",
@@ -224,6 +225,9 @@ ordinary_role_contracts := {
 }
 
 ordinary_admission_rules := {
+	"homelab-test-news-pods": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["pods"]}],
+	"homelab-test-news-inputs": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CREATE", "UPDATE", "DELETE"], "resources": ["persistentvolumeclaims", "secrets", "configmaps"]}],
+	"homelab-test-news-exec": [{"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CONNECT"], "resources": ["pods/exec"]}],
 	"homelab-test-wan-reference-pods": [{
 		"apiGroups": [""],
 		"apiVersions": ["v1"],
@@ -503,6 +507,9 @@ ordinary_admission_rules := {
 }
 
 ordinary_admission_params := {
+	"homelab-test-news-pods": {"binding": {"matchResources": {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "news-recovery-test"}}}}},
+	"homelab-test-news-inputs": {"binding": {"matchResources": {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "news-recovery-test"}}}}},
+	"homelab-test-news-exec": {"binding": {"matchResources": {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "news-recovery-test"}}}}},
 	"homelab-test-ad-restore-hosts": {
 		"kind": {
 			"apiVersion": "v1",

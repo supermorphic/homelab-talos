@@ -1,0 +1,35 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-news-recovery
+  namespace: news-recovery-test
+rules:
+  - apiGroups: ['']
+    resources: [pods, persistentvolumeclaims, secrets, configmaps]
+    verbs: [get, create, delete]
+  - apiGroups: ['']
+    resources: [pods/exec]
+    verbs: [create]
+  - apiGroups: ['']
+    resources: [resourcequotas]
+    resourceNames: [recovery]
+    verbs: [get]
+  - apiGroups: [cilium.io]
+    resources: [ciliumnetworkpolicies]
+    resourceNames: [isolation]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-news-recovery
+  namespace: news-recovery-test
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-news-recovery
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-runner
+    namespace: kube-system

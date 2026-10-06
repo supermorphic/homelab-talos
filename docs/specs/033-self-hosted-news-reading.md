@@ -300,9 +300,28 @@ state is accepted.
 synthetic data copied through private temporary host storage into a separate backup
 volume. It stops the original local app, database, and backup helper, restores into
 new data volumes, and checks stored content and state with polling disabled.
-The original volumes are not mounted by the recovery containers. Registration
-and execution of the scoped cluster restore drill, confirmed off-cluster recovery,
-and native-client reconciliation remain activation gates.
+The original volumes are not mounted by the recovery containers. The same local
+suite also executes the cluster drill's fixture programs with synthetic volumes.
+
+After Flux has applied `news-recovery-test` and its scoped agent-access rules, run
+`NEWS_RESTORE_DRILL_CONFIRM=restore:news:disposable mise exec -- just test record test.news-restore-drill`
+from a clean linked worktree with task-scoped credentials. This standalone suite
+uses `test-runner`, disposable credentials, and five fresh Longhorn claims in a
+restricted namespace with all ingress and egress denied. The app, database, and
+backup helper communicate over loopback. It captures two synthetic feeds and
+article/category/read/star state, removes the source Pod, restores the paired set
+into separate claims, and checks the saved state through fresh API authentication
+with polling disabled. Only the backup claim is shared with the restored Pod,
+where it is read-only. It never mounts production storage or credentials.
+
+The result requires successful assertions and cleanup. The private run directory
+contains a sanitized outcome and creation-UID ownership ledger. If cleanup fails,
+retain that ledger and investigate the named run resources before retrying; do not
+adopt or delete replacement objects. Namespace policy and quota are checked before
+mutations. Deployed network-denial acceptance remains separate from these source
+and baseline checks. This drill proves logical recovery and fresh claim use;
+confirmed Longhorn off-cluster recovery and native-client reconciliation remain
+activation gates.
 
 An isolated restore drill is required before treating this as the primary reader.
 Capacity, retention, backup frequency, and concrete guarded recovery commands belong

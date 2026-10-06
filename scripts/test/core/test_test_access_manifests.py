@@ -2090,7 +2090,12 @@ class TestAccessPolicyTests(unittest.TestCase):
                         }
                     )
                 if "secrets" in rule["resources"]:
-                    self.assertTrue(rule.get("resourceNames"))
+                    if role["metadata"]["name"] == "homelab-test-news-recovery":
+                        self.assertEqual(role["metadata"]["namespace"], "news-recovery-test")
+                        self.assertEqual(set(rule["verbs"]), {"get", "create", "delete"})
+                        self.policy("homelab-test-news-inputs")
+                    else:
+                        self.assertTrue(rule.get("resourceNames"))
                     self.assertNotIn("list", rule["verbs"])
 
     def test_fresh_pvc_allowed_but_unrelated_claim_and_shape_denied(self):
