@@ -211,6 +211,37 @@ class NewsAdmissionTests(unittest.TestCase):
             self.assertFalse(self.admits("homelab-test-news-inputs", bad), key)
         self.assertFalse(self.admits("homelab-test-news-inputs", obj, "UPDATE"))
 
+    def test_new_claims_accept_api_protection_but_reject_other_mutations(self):
+        from scripts.test.news import cluster_recovery as module
+
+        claim = module.resources("abcdef123456")[0]
+        # StorageObjectInUseProtection adds this before validating admission.
+        claim["metadata"]["finalizers"] = ["kubernetes.io/pvc-protection"]
+        claim["spec"]["volumeMode"] = "Filesystem"
+        self.assertTrue(self.admits("homelab-test-news-inputs", claim))
+        self.assertFalse(self.admits("homelab-test-news-inputs", claim, "UPDATE"))
+        for finalizers in (
+            ["synthetic.example/protection"],
+            ["kubernetes.io/pvc-protection", "synthetic.example/protection"],
+            ["kubernetes.io/pvc-protection", "kubernetes.io/pvc-protection"],
+        ):
+            bad = copy.deepcopy(claim)
+            bad["metadata"]["finalizers"] = finalizers
+            self.assertFalse(self.admits("homelab-test-news-inputs", bad), finalizers)
+        for field, value in (
+            ("volumeName", "synthetic-existing-volume"),
+            ("dataSource", {"kind": "PersistentVolumeClaim", "name": "synthetic-existing"}),
+        ):
+            bad = copy.deepcopy(claim)
+            bad["spec"][field] = value
+            self.assertFalse(self.admits("homelab-test-news-inputs", bad), field)
+        for other in module.resources("abcdef123456")[-2:]:
+            other["metadata"]["finalizers"] = ["kubernetes.io/pvc-protection"]
+            self.assertFalse(self.admits("homelab-test-news-inputs", other), other["kind"])
+        other = module.pod("abcdef123456", "source")
+        other["metadata"]["finalizers"] = ["kubernetes.io/pvc-protection"]
+        self.assertFalse(self.admits("homelab-test-news-pods", other))
+
     def test_server_defaulted_pod_and_bound_claim_allow_owned_deletion(self):
         from scripts.test.news import cluster_recovery as module
 

@@ -80,13 +80,12 @@ spec:
       \ == request.namespace &&\n      variables.item.metadata.labels == {'homelab-talos/run-id':\
       \ dyn(variables.run), 'homelab-talos/test': dyn('news-restore-drill')} &&\n\
       \      !has(variables.item.metadata.ownerReferences) &&\n      (!has(variables.item.metadata.finalizers)\
-      \ || variables.item.metadata.finalizers.size() == 0 ||\n       (request.operation\
-      \ == 'DELETE' && variables.item.kind == 'PersistentVolumeClaim' && variables.item.metadata.finalizers\
-      \ == ['kubernetes.io/pvc-protection'])) &&\n      (request.operation == 'DELETE'\
-      \ || !has(variables.item.metadata.annotations)) &&\n      (request.operation\
-      \ != 'DELETE' || (has(variables.item.metadata.uid) && variables.item.metadata.uid\
-      \ != '')) && variables.item.metadata.name in [variables.prefix + '-source',\
-      \ variables.prefix + '-restored']"
+      \ || variables.item.metadata.finalizers.size() == 0 ||\n       (variables.item.kind\
+      \ == 'PersistentVolumeClaim' && variables.item.metadata.finalizers == ['kubernetes.io/pvc-protection']))\
+      \ &&\n      (request.operation == 'DELETE' || !has(variables.item.metadata.annotations))\
+      \ &&\n      (request.operation != 'DELETE' || (has(variables.item.metadata.uid)\
+      \ && variables.item.metadata.uid != '')) && variables.item.metadata.name in\
+      \ [variables.prefix + '-source', variables.prefix + '-restored']"
     message: Only run-owned synthetic news Pods may be created or deleted.
   - expression: '(variables.restored ? variables.selected.matches(''^set-[0-9]{10}-[A-Za-z0-9]{6}$'')
       : variables.selected == '''')'
@@ -161,12 +160,11 @@ spec:
       \ == request.namespace &&\n      variables.item.metadata.labels == {'homelab-talos/run-id':\
       \ dyn(variables.run), 'homelab-talos/test': dyn('news-restore-drill')} &&\n\
       \      !has(variables.item.metadata.ownerReferences) &&\n      (!has(variables.item.metadata.finalizers)\
-      \ || variables.item.metadata.finalizers.size() == 0 ||\n       (request.operation\
-      \ == 'DELETE' && variables.item.kind == 'PersistentVolumeClaim' && variables.item.metadata.finalizers\
-      \ == ['kubernetes.io/pvc-protection'])) &&\n      (request.operation == 'DELETE'\
-      \ || !has(variables.item.metadata.annotations)) &&\n      (request.operation\
-      \ != 'DELETE' || (has(variables.item.metadata.uid) && variables.item.metadata.uid\
-      \ != ''))"
+      \ || variables.item.metadata.finalizers.size() == 0 ||\n       (variables.item.kind\
+      \ == 'PersistentVolumeClaim' && variables.item.metadata.finalizers == ['kubernetes.io/pvc-protection']))\
+      \ &&\n      (request.operation == 'DELETE' || !has(variables.item.metadata.annotations))\
+      \ &&\n      (request.operation != 'DELETE' || (has(variables.item.metadata.uid)\
+      \ && variables.item.metadata.uid != ''))"
     message: Only immutable run-owned synthetic recovery inputs are allowed.
   - expression: "variables.item.kind != 'PersistentVolumeClaim' ||\n          (variables.item.metadata.name\
       \ in [dyn(('news-drill-' + variables.run + \"-source-db\")),dyn(('news-drill-'\
