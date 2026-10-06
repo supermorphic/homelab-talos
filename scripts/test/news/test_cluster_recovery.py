@@ -337,6 +337,40 @@ class NewsAdmissionTests(unittest.TestCase):
 
 
 class ControllerTests(unittest.TestCase):
+    def test_configmap_quota_leaves_room_for_the_automatic_namespace_ca(self):
+        import yaml
+
+        from scripts.test.news import cluster_recovery as module
+
+        objects = list(
+            yaml.safe_load_all(
+                (module.ROOT / "kubernetes/apps/news/recovery/app/namespace.yaml").read_text()
+            )
+        )
+        quota = next(o for o in objects if o["kind"] == "ResourceQuota")
+        fixture_maps = sum(o["kind"] == "ConfigMap" for o in module.resources("abcdef123456"))
+        # kube-root-ca.crt is a controller-created ConfigMap in every namespace.
+        self.assertGreaterEqual(int(quota["spec"]["hard"]["configmaps"]), fixture_maps + 1)
+
+    def test_failed_input_creation_records_phase_without_runtime_error(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import Mock
+
+        from scripts.test.news import cluster_recovery as module
+
+        with tempfile.TemporaryDirectory() as directory:
+            client = Mock(directory=Path(directory))
+            client.create_inputs.side_effect = RuntimeError("synthetic-private-value")
+            with self.assertRaises(RuntimeError):
+                module.run_drill(client)
+            content = (client.directory / "diagnostics/news-recovery.json").read_text()
+            report = json.loads(content)
+            self.assertEqual(report["phase"], "inputs")
+            self.assertEqual(report["assertions"], "failed")
+            self.assertEqual(report["cleanup"], "passed")
+            self.assertNotIn("synthetic-private-value", content)
+
     def test_preflight_checks_the_campaign_or_standalone_lease_holder(self):
         import datetime
         import os

@@ -481,12 +481,20 @@ class Cluster:
 def run_drill(client):
     from scripts.test.scenarios.resilience_support import atomic_write_json
 
-    outcome = {"assertions": "failed", "cleanup": "pending", "off_cluster": "not-tested"}
+    outcome = {
+        "assertions": "failed",
+        "cleanup": "pending",
+        "off_cluster": "not-tested",
+        "phase": "preflight",
+    }
     try:
         client.preflight()
+        outcome["phase"] = "inputs"
         client.create_inputs()
+        outcome["phase"] = "source-start"
         client.preflight()
         client.create_pod("source")
+        outcome["phase"] = "capture"
         client.preflight()
         expected = json.loads(client.execute("source"))
         if set(expected) != {
@@ -505,13 +513,17 @@ def run_drill(client):
             or expected["subscriptions"] != 2
         ):
             raise ValueError("invalid synthetic capture outcome")
+        outcome["phase"] = "remove-source"
         client.preflight()
         client.delete_source()
+        outcome["phase"] = "restore-start"
         client.preflight()
         client.create_pod("restored", expected["set"])
+        outcome["phase"] = "verify-restored"
         client.preflight()
         client.execute("restored", expected)
         outcome["assertions"] = "passed"
+        outcome["phase"] = "complete"
     finally:
         try:
             outcome["cleanup"] = "failed"
