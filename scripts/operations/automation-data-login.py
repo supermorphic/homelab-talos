@@ -36,6 +36,7 @@ from automation_data_client import (
     write_private_file_exclusive,
 )
 from automation_data_inventory import DiscoveryRequest, build_inventory, resolve
+from automation_data_login_transport import request_configuration
 
 WEBHOOK = "https://n8n.lab.supermorphic.com/webhook/automation-data-provision"
 DOMAIN = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
@@ -63,22 +64,31 @@ WEBHOOK_OPENER = urllib.request.build_opener(RejectRedirects())
 
 def send_request(payload: dict) -> dict:
     """Call only the fixed private webhook with verified TLS and bounded output."""
+    transport = os.environ.get("AUTOMATION_DATA_LOGIN_TRANSPORT")
+    if transport:
+        url, headers = request_configuration(Path(transport), payload)
+        return send_private_request(url, headers, payload, timeout=90)
     token = os.environ.get("AUTOMATION_DATA_PROVISIONING_TOKEN", "")
     configured_url = os.environ.get("AUTOMATION_DATA_PROVISIONING_URL", WEBHOOK)
     if not re.fullmatch(r"[A-Za-z0-9_-]{32,}", token) or configured_url != WEBHOOK:
         raise RequestError("request_configuration_invalid")
+    return send_private_request(WEBHOOK, {"X-Automation-Data-Provisioning": token}, payload)
+
+
+def send_private_request(url: str, headers: dict, payload: dict, *,
+                         timeout: int | None = None) -> dict:
+    """Send one bounded request without redirects or automatic retries."""
     body = json.dumps(payload, separators=(",", ":")).encode()
-    request = urllib.request.Request(WEBHOOK, data=body, method="POST", headers={
-        "Content-Type": "application/json",
-        "X-Automation-Data-Provisioning": token,
+    request = urllib.request.Request(url, data=body, method="POST", headers={
+        "Content-Type": "application/json", **headers,
     })
     try:
         # Successful mutations can include up to 30 seconds of optional inventory
         # readback. Preserve their response within the original 20-second operation
         # budget plus readback and margin; observational validation stays shorter.
-        timeout = 60 if payload.get("operation") in {
+        timeout = timeout or (60 if payload.get("operation") in {
             "login-register", "login-activate", "login-rotate", "login-complete"
-        } else 20
+        } else 20)
         with WEBHOOK_OPENER.open(request, timeout=timeout) as response:
             content = response.read(65537)
         if len(content) > 65536:
@@ -270,6 +280,7 @@ def require_deployed_login_sources() -> None:
               "'automation-data application login' "
               "scripts/operations/automation-data-login.py "
               "scripts/lib/automation_data_client.py "
+              "scripts/lib/automation_data_login_transport.py "
               "kubernetes/apps/automation/n8n/app/workflows/automation-data-provisioner.json "
               "kubernetes/apps/automation-data/postgresql/app/scripts/application-login.sql")
     subprocess.run(["bash", "-c", script], cwd=repository, check=True,

@@ -889,6 +889,62 @@ confirmed new rotation. This lifecycle neither reads NocoDB credentials nor extr
 credentials, and leaves other roles unchanged. Backups retain registrations and verifiers;
 the protected client credential is a separate recovery root.
 
+### Enrollment through the retained n8n credential
+
+When the provisioning Header Auth is retained in n8n, an authorized agent can prepare
+an expiring relay for one initial application enrollment. The existing private n8n
+origin serves the relay; it adds no service, image, Kubernetes permission, or public
+route. The retained provisioning token stays inside n8n. A random temporary bearer
+remains in protected client storage; the workflow stores only its SHA-256 digest.
+
+The relay binds one domain, application, schema, and one-hour interval. It permits
+registration, observational validation, activation from generation zero, and completion
+of generation one. It cannot provision domains or rotate an existing login. Native
+Crypto hashes the incoming bearer. The next node checks authentication, expiry, exact
+scope, and operation fields before rebuilding the request for the fixed provisioner.
+The HTTP node calls the provisioner through n8n loopback, binds the existing provisioning
+Header Auth, and refuses redirects and automatic retries. The client reaches only the
+private HTTPS origin; no internal gateway egress permission is needed. Before activation or completion, it reads and verifies the registered schema and role,
+then rechecks expiry at dispatch. Its response contains only typed identity and lifecycle
+metadata.
+
+Preparation and workflow access do not authorize enrollment. Under explicit task authority:
+
+1. Confirm the existing provisioning Header Auth is accessible through the configured
+   n8n connection. Run `mise exec -- just kube automation-data-login-transport prepare --help`
+   and prepare a new private session directory outside every Git checkout, using that
+   credential ID and the approved application scope. Preparation returns file paths;
+   it does not contact n8n or print the bearer.
+2. Install the generated inactive `workflow.json` through the configured n8n connection.
+   Confirm its binding, guards, and disabled success/error/manual/progress retention.
+   Publish only that relay. Read back the full workflow, including its active version,
+   into a local observation file. Do not pin data or attach an error workflow.
+3. Run `mise exec -- just kube automation-data-login-transport verify --help` and verify
+   that observation against the prepared session. Verification rejects draft/published
+   differences and records the selected workflow/version locally. It is a check of fresh
+   connection evidence, not remote attestation; repeat discovery if another editor changes
+   the workflow. Never fabricate or reuse a historical observation.
+4. Set `AUTOMATION_DATA_LOGIN_TRANSPORT` to the generated `transport.json` path and use
+   the existing registration and activation commands with their exact confirmations.
+   Apply the consumer's reviewed grants between registration and activation. The client
+   rejects expired or changed profiles and does not fall back to a broader token when a
+   selected relay fails. The protected candidate, generation acknowledgement, tunnel
+   authentication, and profile installation follow the lifecycle above.
+5. Unpublish and archive the relay when enrollment finishes or is abandoned. Its fixed
+   server-side expiry rejects further operations even if cleanup is interrupted. Delete
+   only that session's temporary transport files after cleanup; keep the installed
+   application profile and any pending activation candidate.
+
+A timeout or expired relay does not establish whether activation committed. Prepare and
+verify a replacement relay for the same approved scope, then retry the existing activation
+command. It reuses the retained candidate and operation ID. Do not delete pending material,
+rotate the application, or obtain broader credentials to recover a transport failure.
+The direct attended-token path remains available independently for existing procedures.
+Native acceptance must establish successful registration, grant validation, candidate
+installation, authentication, and completion, plus refusal of wrong tokens, scope, and
+expired sessions without provisioning side effects. Offline checks cannot establish the
+published workflow, credential authentication, or deployed runtime behavior.
+
 ### Private connection and migration boundary
 
 The helper validates a registered identity and protected profile, then opens a loopback

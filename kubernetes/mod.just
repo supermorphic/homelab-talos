@@ -121,6 +121,11 @@ n8n-validate: require-bash
 automation-data-validate: require-bash
     @scripts/validate/automation-data.sh
 
+# Prepare and check an expiring relay using the provisioning credential retained in n8n.
+[positional-arguments]
+automation-data-login-transport *args: require-bash
+    @uv run --locked python scripts/operations/automation-data-login-transport.py "$@"
+
 # Register or manage a separately scoped application login through the private provisioner.
 # The Python command owns exact confirmations and protected local credential files.
 automation-data-login-register domain application schema: require-bash
