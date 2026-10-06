@@ -221,6 +221,7 @@ class Resolution:
     identity: dict | None = None
     next_action: dict | None = None
     authority_requirements: str = "Apply repository policy and existing task authorization."
+    execution_contexts: dict | None = None
 
 
 def timestamp(value: object) -> datetime:
@@ -352,8 +353,13 @@ def to_wire(value: object) -> dict:
         "error_code": "errorCode",
         "next_action": "nextAction",
         "authority_requirements": "authorityRequirements",
+        "execution_contexts": "executionContexts",
     }
-    return {rename.get(key, key): item for key, item in asdict(value).items()}
+    return {
+        rename.get(key, key): item
+        for key, item in asdict(value).items()
+        if key != "execution_contexts" or item is not None
+    }
 
 
 FAMILY_DEFINITIONS = {
@@ -910,6 +916,20 @@ def build_inventory(observations: list[SourceObservation]) -> InventoryEnvelope:
 
 
 def resolve(request: DiscoveryRequest, inventory: InventoryEnvelope, profile=None) -> Resolution:
+    """Preserve local readiness while exposing migration access in each context."""
+    local = _resolve(request, inventory, profile)
+    if request.purpose == "migration":
+        n8n = _resolve(request, inventory, profile, n8n_binding=True)
+        local.execution_contexts = {
+            name: {key: value for key, value in to_wire(result).items() if key != "identity"}
+            for name, result in [("local", local), ("n8n", n8n)]
+        }
+    return local
+
+
+def _resolve(
+    request: DiscoveryRequest, inventory: InventoryEnvelope, profile=None, *, n8n_binding=False
+) -> Resolution:
     """Readiness is observed prerequisites, never task authorization or authentication proof."""
     validate_request(request)
     required = {
@@ -1018,6 +1038,35 @@ def resolve(request: DiscoveryRequest, inventory: InventoryEnvelope, profile=Non
             or not item["evidence"].get("credential")
         ):
             return result("unavailable", "credential_identity_and_marker", "unknown")
+        if request.purpose == "migration" and n8n_binding:
+            bindings = item["evidence"].get("bindings", [])
+            if any(binding.get("credentialType") != "postgres" for binding in bindings):
+                return result("inconsistent", "published_workflow_binding", "blocked")
+            prerequisites.extend(
+                [
+                    {"name": "consumer_migration_workflow", "status": "not_verified"},
+                    {"name": "consumer_authentication", "status": "not_verified"},
+                    {"name": "task_authorization", "status": "required"},
+                ]
+            )
+            binding_result = result(
+                "ready",
+                "n8n_credential_binding",
+                "available",
+                {
+                    "kind": "workflow_binding",
+                    "credentialId": item["credentialId"],
+                    "credentialType": "postgres",
+                    "workflowIds": sorted({b["workflowId"] for b in bindings}),
+                },
+            )
+            binding_result.authority_requirements = (
+                "The retained n8n credential is available to bind to a separately reviewed "
+                "migration workflow. Observed workflow IDs do not prove that the consumer's "
+                "migration workflow is installed or suitable. Binding and execution require "
+                "task authorization; discovery does not authenticate, install, or execute it."
+            )
+            return binding_result
         if request.purpose == "workflow":
             bindings = item["evidence"].get("bindings", [])
             if not bindings or any(
@@ -1095,6 +1144,12 @@ def render_result(result: InventoryEnvelope | Resolution, format: str) -> str:
         if isinstance(result, Resolution)
         else "Credential metadata inventory; authentication and authorization are separate."
     )
+    if isinstance(result, Resolution) and result.execution_contexts is not None:
+        heading = (
+            f"Local connection: {result.execution_contexts['local']['decision']}; "
+            f"n8n credential binding: {result.execution_contexts['n8n']['decision']}. "
+            "Authentication, task authorization, and consumer workflow installation are separate."
+        )
     return heading + "\n" + json.dumps(wire, indent=2, sort_keys=True)
 
 

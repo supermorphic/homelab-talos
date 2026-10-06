@@ -1068,6 +1068,19 @@ Never execute returned text as shell, search for unrelated credentials, or broad
 The [CLI](../../scripts/operations/automation-data-credentials.py) owns syntax; metadata
 readiness alone does not prove consumer authentication or authorize database work.
 
+Migration discovery reports local connection readiness and n8n credential binding
+availability separately. A missing protected local profile blocks the local connection;
+it does not block binding the existing n8n migrator credential to a reviewed workflow.
+The top-level result and exit code retain local connection semantics for existing callers.
+Inspect both execution contexts before requesting enrollment or recovery.
+
+The n8n binding action identifies the retained PostgreSQL credential and any observed
+published workflows using it. An available credential can be bound even when no published
+workflow uses it yet. Observed bindings do not establish that a consumer's migration
+workflow is installed, suitable, or authenticated. Installing, binding, and executing that
+workflow require their own reviewed task authority. Discovery only reports metadata; it
+does not export credentials, deliver passwords, install workflows, or execute migrations.
+
 ## External references
 
 - [PostgreSQL 17 `pg_dumpall`](https://www.postgresql.org/docs/17/app-pg-dumpall.html)
