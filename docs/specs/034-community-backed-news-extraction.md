@@ -116,15 +116,21 @@ Avoid reusing a cached result for another feed/item or article URL.
 The extension must preserve this contract during publisher updates, worker
 restarts, disabled enrichment, and mixed old/new release operation. Failures must
 return a usable entry to FreshRSS. A storage error must not leave a partially
-accepted body/provenance pair. Removing the extension leaves already stored bodies
-readable; disabling it while installed preserves existing accepted bodies on
-subsequent feed updates. Removing it requires freezing affected updates or
-accepting a deliberate return to publisher RSS after a backup.
+accepted body/provenance pair. To disable enrichment safely, keep the extension
+enabled with extraction requests disabled so its preservation hooks still run on
+publisher updates. Disabling or removing the extension leaves already stored
+bodies readable but stops that preservation behavior. Either action requires
+freezing affected updates or accepting a deliberate return to publisher RSS after
+a backup.
 
 Initial enrichment is synchronous with a short bounded delay before first
-storage. There is no background backfill promise for previously synchronized
-snippets. A deliberate later reprocessing feature would need separate acceptance
-for existing item identity, concurrent state changes, and native client caches.
+storage. Articles stored as RSS because of worker unavailability, saturation, or
+refresh-budget exhaustion are not retried when the worker recovers. They remain
+RSS unless the publisher changes the feed entry and a later ingestion attempt
+accepts enrichment. Reader View remains available for these articles. There is no
+automatic background reprocessing of previously synchronized snippets. A later
+reprocessing feature would need separate acceptance for existing item identity,
+concurrent state changes, and native client caches.
 
 ## Worker interface and failure isolation
 
