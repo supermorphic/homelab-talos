@@ -370,7 +370,7 @@ class Cluster:
                 'source scripts/lib/lease.sh; verify_test_lease_holder "$1" "$2"',
                 "news-lease",
                 str(self.config),
-                self.directory.name,
+                os.environ.get("TEST_CAMPAIGN_LEASE_HOLDER") or self.directory.name,
             ]
         )
         namespace = json.loads(
