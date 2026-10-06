@@ -33,6 +33,8 @@ class NewsSecretsTests(unittest.TestCase):
             (self.root / path).parent.mkdir(parents=True)
         self.kustomization = self.root / DB.parent / "kustomization.yaml"
         self.kustomization.write_text("resources: [./statefulset.yaml]\n")
+        self.app_selection = self.root / APP.parent / "kustomization.yaml"
+        self.app_selection.write_text("resources: [./deployment.yaml]\n")
         self.key = self.root / "synthetic-age-key"
         result = subprocess.run(
             ["age-keygen", "-o", str(self.key)], capture_output=True, check=True
@@ -81,6 +83,10 @@ class NewsSecretsTests(unittest.TestCase):
         self.assertEqual(
             yaml.safe_load(self.kustomization.read_text())["resources"],
             ["./statefulset.yaml", "./postgresql-credentials.sops.yaml"],
+        )
+        self.assertEqual(
+            yaml.safe_load(self.app_selection.read_text())["resources"],
+            ["./deployment.yaml", "./freshrss-runtime.sops.yaml"],
         )
         self.assertEqual(
             db["metadata"], {"name": "news-postgresql-credentials", "namespace": "news"}
@@ -133,6 +139,15 @@ class NewsSecretsTests(unittest.TestCase):
                 self.assertFalse((self.root / DB).exists())
                 self.assertFalse((self.root / APP).exists())
 
+    def test_selects_app_secret_from_previous_database_only_writer(self):
+        self.write()
+        self.app_selection.write_text("resources: [./deployment.yaml]\n")
+        self.write()
+        self.assertIn(
+            "./freshrss-runtime.sops.yaml",
+            yaml.safe_load(self.app_selection.read_text())["resources"],
+        )
+
     def test_ambiguous_recipient_policy_is_refused(self):
         self.policy["creation_rules"].append(self.policy["creation_rules"][0])
         (self.root / ".sops.yaml").write_text(yaml.safe_dump(self.policy))
@@ -168,6 +183,37 @@ class NewsSecretsTests(unittest.TestCase):
             self.write(replace=fail_second)
         for path, content in originals.items():
             self.assertEqual((self.root / path).read_bytes(), content)
+
+    def test_failed_app_selection_restores_both_secrets_and_database_selection(self):
+        originals = {p: p.read_bytes() for p in (self.kustomization, self.app_selection)}
+
+        def fail_app_selection(source, destination):
+            if destination == self.app_selection:
+                raise OSError("synthetic selection failure")
+            os.replace(source, destination)
+
+        with self.assertRaises(self.module.SecretWriteError):
+            self.write(replace=fail_app_selection)
+        for path, content in originals.items():
+            self.assertEqual(path.read_bytes(), content)
+        self.assertFalse((self.root / DB).exists())
+        self.assertFalse((self.root / APP).exists())
+
+    def test_external_app_selection_edit_is_preserved_during_install(self):
+        external = b"resources: [./deployment.yaml, ./operator-resource.yaml]\n"
+        original_db = self.kustomization.read_bytes()
+
+        def edit_selection(source, destination):
+            os.replace(source, destination)
+            if destination == self.root / APP:
+                self.app_selection.write_bytes(external)
+
+        with self.assertRaises(self.module.SecretWriteError):
+            self.write(replace=edit_selection)
+        self.assertEqual(self.app_selection.read_bytes(), external)
+        self.assertEqual(self.kustomization.read_bytes(), original_db)
+        self.assertFalse((self.root / DB).exists())
+        self.assertFalse((self.root / APP).exists())
 
     def test_encryption_failure_hides_raw_stderr_and_preserves_files(self):
         self.write()
