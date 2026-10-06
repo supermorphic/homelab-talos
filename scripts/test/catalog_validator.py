@@ -92,6 +92,7 @@ STANDALONE_SUITES = {
     # Host-local disposable integration is intentional acceptance, not a live
     # cluster campaign. Electrical loss requires attended physical target input.
     "test.nocodb-local-integration",
+    "test.news-postgresql-local-integration",
     "test.web-research-live-contract",
     "test.web-research-local-integration",
     "test.resilience.node-abrupt-loss",

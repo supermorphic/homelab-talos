@@ -153,6 +153,8 @@ check_document_path() {
   README.md | AGENTS.md | CLAUDE.md | \
     kubernetes/apps/monitoring/homepage/app/icons/NOTICE.md | \
     scripts/test/core/fixtures/PROVENANCE.md) return ;;
+  # Synthetic article inputs for the news extraction contract, not repository prose.
+  tests/fixtures/news/article.html | tests/fixtures/news/restricted.html) return ;;
   docs/specs/*)
     name="${source#docs/specs/}"
     if [[ "$name" != */* && "$name" =~ ^[0-9]{3}-[a-z0-9-]+\.md$ ]]; then

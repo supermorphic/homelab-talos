@@ -266,3 +266,14 @@ contracts:
       - python:scripts/test/scenarios/test_openbao_ha.py
       - python:scripts/test/scenarios/test_openbao_issuance.py
       - python:scripts/test/scenarios/test_openbao_restore.py
+  news-database-foundation:
+    changed_inputs:
+      - kubernetes/apps/news/postgresql/app/statefulset.yaml
+      - kubernetes/apps/news/postgresql/app/scripts/init-news.sh
+      - kubernetes/apps/news/freshrss/app/persistentvolumeclaims.yaml
+      - scripts/repository/news_secrets.py
+      - scripts/test/news/test_manifests.py
+      - scripts/test/news/test_secrets.py
+      - scripts/validate/news.sh
+    required_tests:
+      - catalog:validation.news

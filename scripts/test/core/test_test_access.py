@@ -148,7 +148,11 @@ class AccessContractTests(unittest.TestCase):
             self.validate(entry)
 
     def test_physical_and_host_local_boundaries(self):
-        for suite_id in ("test.nocodb-local-integration", "test.web-research-local-integration"):
+        for suite_id in (
+            "test.nocodb-local-integration",
+            "test.web-research-local-integration",
+            "test.news-postgresql-local-integration",
+        ):
             entry = self.entry(suite_id)
             self.assertIsNone(entry.get("access", {}).get("profile"))
             self.validate(entry)
