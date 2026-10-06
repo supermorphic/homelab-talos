@@ -1,0 +1,117 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: freshrss
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: freshrss
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: freshrss
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: freshrss
+          image: docker.io/freshrss/freshrss:1.30.1-alpine@sha256:b6ae27fb5f507ba5f2bff39ca78af90850b294c1e94bf21bae8d368133422b0e
+          command: ["/bin/sh", "/opt/news/start.sh"]
+          env:
+            - name: DATA_PATH
+              value: /var/www/FreshRSS/data
+            - name: NEWS_BASE_URL
+              value: https://news.lab.supermorphic.com
+            - name: NEWS_DB_HOST
+              value: news-postgresql
+            - name: NEWS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: freshrss-runtime
+                  key: db-password
+            - name: NEWS_OPERATOR_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: freshrss-runtime
+                  key: operator-name
+            - name: NEWS_OPERATOR_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: freshrss-runtime
+                  key: operator-password
+            - name: NEWS_API_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: freshrss-runtime
+                  key: api-password
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 768Mi
+          startupProbe:
+            exec:
+              command: [php, /opt/news/ready.php]
+            periodSeconds: 5
+            timeoutSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command: [php, /opt/news/ready.php]
+            periodSeconds: 15
+            timeoutSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 30
+          volumeMounts:
+            - name: data
+              mountPath: /var/www/FreshRSS/data
+            - name: runtime
+              mountPath: /run/news
+            - name: tmp
+              mountPath: /tmp
+            - name: scripts
+              mountPath: /opt/news
+              readOnly: true
+            - name: httpd
+              mountPath: /opt/news-httpd.conf
+              subPath: httpd.conf
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: freshrss-data
+        - name: runtime
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi
+        - name: scripts
+          configMap:
+            name: freshrss-scripts
+        - name: httpd
+          configMap:
+            name: freshrss-httpd

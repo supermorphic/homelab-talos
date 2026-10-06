@@ -15,8 +15,7 @@ import yaml
 
 DB = Path("kubernetes/apps/news/postgresql/app/postgresql-credentials.sops.yaml")
 APP = Path("kubernetes/apps/news/freshrss/app/freshrss-runtime.sops.yaml")
-KUSTOMIZATION = DB.parent / "kustomization.yaml"
-RESOURCE = "./postgresql-credentials.sops.yaml"
+SELECTIONS = {secret.parent / "kustomization.yaml": secret for secret in (DB, APP)}
 CONFIRMATION = "write:news:bootstrap:sops"
 PASSWORDS = (
     "NEWS_POSTGRES_PASSWORD",
@@ -157,18 +156,26 @@ def _write_secrets_locked(root, environment, *, runner, replace):
             validate(originals[target], target, recipients[target], values)
     if len({value is None for value in originals.values()}) != 1:
         raise SecretWriteError("existing news bootstrap artifacts must be a complete pair")
-    selection_path = root / KUSTOMIZATION
-    if selection_path.is_symlink():
-        raise SecretWriteError("the database Kustomization must not be a symlink")
-    original_selection = selection_path.read_bytes()
-    selection = load(original_selection)
-    resources = selection.get("resources")
-    if not isinstance(resources, list) or not all(isinstance(r, str) for r in resources):
-        raise SecretWriteError("database resource selection is invalid")
-    equivalent = [r for r in resources if Path(os.path.normpath(DB.parent / r)) == DB]
-    if equivalent != ([RESOURCE] if originals[DB] is not None else []):
-        raise SecretWriteError("existing database Secret and resource selection are inconsistent")
-    originals[KUSTOMIZATION] = original_selection
+    selections = {}
+    for target, secret in SELECTIONS.items():
+        selection_path = root / target
+        if selection_path.is_symlink():
+            raise SecretWriteError("news Kustomizations must not be symlinks")
+        original_selection = selection_path.read_bytes()
+        selection = load(original_selection)
+        resources = selection.get("resources")
+        if not isinstance(resources, list) or not all(isinstance(r, str) for r in resources):
+            raise SecretWriteError("news resource selection is invalid")
+        resource = "./" + secret.name
+        equivalent = [r for r in resources if Path(os.path.normpath(secret.parent / r)) == secret]
+        legacy_app_selection = secret == APP and originals[APP] is not None and not equivalent
+        if (
+            equivalent != ([resource] if originals[secret] is not None else [])
+            and not legacy_app_selection
+        ):
+            raise SecretWriteError("existing news Secret and resource selection are inconsistent")
+        originals[target] = original_selection
+        selections[target] = selection
 
     with ExitStack() as stack:
         staged, ciphertexts = {}, {}
@@ -226,12 +233,14 @@ def _write_secrets_locked(root, environment, *, runner, replace):
             candidate.touch(mode=0o600)
             candidate.write_bytes(result.stdout)
             ciphertexts[target], staged[target] = result.stdout, candidate
-        if originals[DB] is None:
-            selection["resources"].append(RESOURCE)
-            candidate = staged[DB].parent / "kustomization.yaml"
-            candidate.write_text(yaml.safe_dump(selection, sort_keys=False))
-            staged[KUSTOMIZATION] = candidate
-            ciphertexts[KUSTOMIZATION] = candidate.read_bytes()
+        for target, secret in SELECTIONS.items():
+            if "./" + secret.name not in selections[target]["resources"]:
+                selection = selections[target]
+                selection["resources"].append("./" + secret.name)
+                candidate = staged[secret].parent / "kustomization.yaml"
+                candidate.write_text(yaml.safe_dump(selection, sort_keys=False))
+                staged[target] = candidate
+                ciphertexts[target] = candidate.read_bytes()
         for target, original in originals.items():
             path = root / target
             current = path.read_bytes() if path.exists() else None

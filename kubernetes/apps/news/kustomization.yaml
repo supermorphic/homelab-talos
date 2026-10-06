@@ -4,3 +4,4 @@ kind: Kustomization
 resources:
   - ./namespace/ks.yaml
   - ./postgresql/ks.yaml
+  - ./freshrss/ks.yaml

@@ -1,0 +1,27 @@
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: freshrss
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: news
+    - name: news-postgresql
+    - name: longhorn
+    - name: internal-gateway
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age
+  interval: 1h
+  path: ./kubernetes/apps/news/freshrss/app
+  prune: true
+  retryInterval: 1m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  suspend: true
+  timeout: 10m
+  wait: true

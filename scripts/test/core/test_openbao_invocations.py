@@ -117,6 +117,7 @@ class InvocationTests(unittest.TestCase):
             for suite in (
                 "test.nocodb-local-integration",
                 "test.news-postgresql-local-integration",
+                "test.news-local-integration",
             ):
                 self.assertIsNone(self.prepare(suite=suite))
 

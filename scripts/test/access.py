@@ -25,6 +25,7 @@ HOST_LOCAL_SUITES = {
     "test.nocodb-local-integration",
     "test.web-research-local-integration",
     "test.news-postgresql-local-integration",
+    "test.news-local-integration",
 }
 PHYSICAL_SUITE = "test.resilience.node-abrupt-loss"
 PURPOSE_PROFILES = {

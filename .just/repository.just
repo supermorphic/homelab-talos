@@ -117,7 +117,7 @@ crawl4ai-secrets:
 # Encrypt operator-supplied NEWS_{POSTGRES,DB,BACKUP,MONITORING,OPERATOR,API}_PASSWORD
 # and NEWS_OPERATOR_NAME. Use distinct passwords, including the separate API password.
 # Guard: NEWS_SECRETS_CONFIRM='write:news:bootstrap:sops'. No private age key is needed.
-# Selects the database ciphertext only after both encrypted artifacts are validated.
+# Selects both ciphertexts only after both encrypted artifacts are validated.
 news-secrets:
     uv run --locked --no-dev python scripts/repository/news_secrets.py
 
