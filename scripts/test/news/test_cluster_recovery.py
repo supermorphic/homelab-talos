@@ -306,6 +306,90 @@ class NewsAdmissionTests(unittest.TestCase):
 
 
 class ControllerTests(unittest.TestCase):
+    def test_preflight_checks_the_campaign_or_standalone_lease_holder(self):
+        import datetime
+        import os
+        import sys
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        import yaml
+
+        from scripts.test.news import cluster_recovery as module
+
+        baseline = list(
+            yaml.safe_load_all(
+                (module.ROOT / "kubernetes/apps/news/recovery/app/namespace.yaml").read_text()
+            )
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            child = root / "synthetic-child"
+            child.mkdir()
+            fixture = root / "objects.json"
+            calls = root / "calls.jsonl"
+            executable = root / "kubectl"
+            executable.write_text(
+                f"#!{sys.executable}\n"
+                "import json, pathlib, sys\n"
+                f"root = pathlib.Path({str(root)!r})\n"
+                "args = sys.argv[1:]\n"
+                "with (root / 'calls.jsonl').open('a') as stream:\n"
+                "    stream.write(json.dumps(args) + '\\n')\n"
+                "if 'get' not in args: sys.exit(9)\n"
+                "kind = args[args.index('get') + 1]\n"
+                "print(json.dumps(json.loads((root / 'objects.json').read_text())[kind]))\n"
+            )
+            executable.chmod(0o700)
+            now = datetime.datetime.now(datetime.UTC)
+            for campaign, actual, age, admitted in (
+                ("campaign:synthetic-parent", "campaign:synthetic-parent", 0, True),
+                ("", "synthetic-child", 0, True),
+                ("campaign:synthetic-parent", "synthetic-child", 0, False),
+                ("campaign:synthetic-parent", "campaign:synthetic-parent", 120, False),
+            ):
+                with self.subTest(campaign=campaign, actual=actual, age=age):
+                    objects = {
+                        "lease": {
+                            "spec": {
+                                "holderIdentity": actual,
+                                "renewTime": (now - datetime.timedelta(seconds=age)).strftime(
+                                    "%Y-%m-%dT%H:%M:%S.000000Z"
+                                ),
+                                "leaseDurationSeconds": 90,
+                            }
+                        },
+                        "namespace": {
+                            "metadata": {
+                                "labels": {"pod-security.kubernetes.io/enforce": "restricted"}
+                            }
+                        },
+                        "ciliumnetworkpolicy": next(
+                            o for o in baseline if o["kind"] == "CiliumNetworkPolicy"
+                        ),
+                        "resourcequota": next(o for o in baseline if o["kind"] == "ResourceQuota"),
+                    }
+                    fixture.write_text(json.dumps(objects))
+                    calls.unlink(missing_ok=True)
+                    with patch.dict(
+                        os.environ,
+                        {
+                            "PATH": str(root) + os.pathsep + os.environ["PATH"],
+                            "TEST_LEASE_KUBECTL": str(executable),
+                            "TEST_CAMPAIGN_LEASE_HOLDER": campaign,
+                        },
+                    ):
+                        client = module.Cluster(Path("synthetic-kubeconfig"), child)
+                        if admitted:
+                            client.preflight()
+                        else:
+                            with self.assertRaises(RuntimeError):
+                                client.preflight()
+                    requests = [json.loads(line) for line in calls.read_text().splitlines()]
+                    self.assertEqual(len(requests), 4 if admitted else 1)
+                    self.assertTrue(all("get" in request for request in requests))
+
     def test_failed_source_deletion_prevents_recovery_and_still_cleans_up(self):
         import tempfile
         from pathlib import Path
