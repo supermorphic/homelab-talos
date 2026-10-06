@@ -29,6 +29,9 @@ function saveConfig(string $path, array $config): void {
 try {
     umask(0077);
     $data = setting('DATA_PATH');
+    if (is_file($data . '/.news-restore-incomplete')) {
+        throw new RuntimeException('Incomplete restore target must not start');
+    }
     $user = setting('NEWS_OPERATOR_NAME');
     if (!preg_match('/^[A-Za-z][A-Za-z0-9_]{0,31}$/D', $user)) {
         throw new RuntimeException('Invalid operator username');

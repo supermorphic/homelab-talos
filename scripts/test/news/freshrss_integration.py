@@ -13,6 +13,7 @@ import urllib.request
 from pathlib import Path
 
 import yaml
+from recovery_integration import exercise_backup_failures, exercise_restore, write_fault_tools
 
 ROOT = Path(__file__).resolve().parents[3]
 APP = ROOT / "kubernetes/apps/news/freshrss/app"
@@ -29,7 +30,18 @@ def main():
     label = "homelab-talos.test-run=" + marker
     names = {
         kind: marker + "-" + kind
-        for kind in ("app", "db", "feeds", "scheduler", "network", "data", "dbdata")
+        for kind in (
+            "app",
+            "db",
+            "feeds",
+            "scheduler",
+            "backup",
+            "network",
+            "data",
+            "dbdata",
+            "runtime",
+            "backups",
+        )
     }
     passwords = {
         key: secrets.token_hex(24)
@@ -82,14 +94,15 @@ def main():
         )
         run("start", name)
 
-    def wait_ready():
+    def wait_ready(target=None):
+        target = target or names["app"]
         deadline = time.monotonic() + 90
         while time.monotonic() < deadline:
-            ready = run("exec", names["app"], "php", "/opt/news/ready.php", success=False)
+            ready = run("exec", target, "php", "/opt/news/ready.php", success=False)
             if ready.returncode == 0:
                 return
             time.sleep(1)
-        logs = run("logs", names["app"], success=False)
+        logs = run("logs", target, success=False)
         diagnostic = (logs.stdout + logs.stderr).decode(errors="replace")
         for value in passwords.values():
             diagnostic = diagnostic.replace(value, "[redacted]")
@@ -100,10 +113,16 @@ def main():
         run("pull", "--platform", "linux/amd64", image)
         run("pull", "--platform", "linux/amd64", db_image)
         create("network", names["network"], "--internal")
-        for key in ("data", "dbdata"):
+        for key in ("data", "dbdata", "runtime", "backups"):
             create("volume", names[key])
         with tempfile.TemporaryDirectory(prefix="news-runtime-") as temporary:
             tmp = Path(temporary)
+            drain_probe = tmp / "drain-probe.php"
+            drain_probe.write_text(
+                "<?php $d=getenv('DATA_PATH'); "
+                "file_put_contents($d.'/.test-drain-start','started'); sleep(3); "
+                "file_put_contents($d.'/.test-drain-done','complete'); echo 'complete';"
+            )
             # Exercise the real supervisor/refresh scripts with fast, controlled
             # child commands: a transient refresh failure must not kill scheduling.
             fakebin = tmp / "bin"
@@ -150,36 +169,40 @@ def main():
                 + "\nPOSTGRES_DB=postgres\nPGDATA=/var/lib/postgresql/data/pgdata\n"
                 "POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 --auth-local=trust\n"
             )
-            container(
-                names["db"],
-                "--user",
-                "70:70",
-                "--env-file",
-                str(db_env),
-                "--network-alias",
-                "news-postgresql",
-                "--tmpfs",
-                "/var/run/postgresql:rw,mode=1777,size=16m",
-                "--tmpfs",
-                "/tmp:rw,size=64m",
-                "-v",
-                names["dbdata"] + ":/var/lib/postgresql/data:U",
-                "-v",
-                str(DB / "scripts") + ":/docker-entrypoint-initdb.d:ro",
-                db_image,
-            )
-            deadline = time.monotonic() + 90
-            while time.monotonic() < deadline:
-                if (
-                    run(
-                        "exec", names["db"], "pg_isready", "-U", "postgres", success=False
-                    ).returncode
-                    == 0
-                ):
-                    break
-                time.sleep(1)
-            else:
-                raise AssertionError("database startup timed out")
+
+            def start_database(target, volume, alias):
+                container(
+                    target,
+                    "--user",
+                    "70:70",
+                    "--env-file",
+                    str(db_env),
+                    "--network-alias",
+                    alias,
+                    "--tmpfs",
+                    "/var/run/postgresql:rw,mode=1777,size=16m",
+                    "--tmpfs",
+                    "/tmp:rw,size=64m",
+                    "-v",
+                    volume + ":/var/lib/postgresql/data:U",
+                    "-v",
+                    str(DB / "scripts") + ":/docker-entrypoint-initdb.d:ro",
+                    db_image,
+                )
+                deadline = time.monotonic() + 90
+                while time.monotonic() < deadline:
+                    if (
+                        run(
+                            "exec", target, "pg_isready", "-U", "postgres", success=False
+                        ).returncode
+                        == 0
+                    ):
+                        break
+                    time.sleep(1)
+                else:
+                    raise AssertionError("database startup timed out")
+
+            start_database(names["db"], names["dbdata"], "news-postgresql")
             fixtures = tmp / "feeds"
             fixtures.mkdir()
             for name in ("full-feed.xml", "truncated-feed.xml"):
@@ -222,23 +245,29 @@ def main():
                 f"NEWS_API_PASSWORD={passwords['NEWS_API_PASSWORD']}\n"
             )
 
-            def start_app():
+            def start_app(target=None, volume=None, environment=None, runtime=None):
+                target = target or names["app"]
+                volume = volume or names["data"]
+                environment = environment or app_env
+                runtime = runtime or names["runtime"]
                 container(
-                    names["app"],
+                    target,
                     "--user",
                     "1000:1000",
                     "--env-file",
-                    str(app_env),
+                    str(environment),
                     "--tmpfs",
                     "/tmp:rw,size=128m",
-                    "--tmpfs",
-                    "/run/news:rw,mode=1777,size=16m",
                     "-v",
-                    names["data"] + ":/var/www/FreshRSS/data:U",
+                    runtime + ":/run/news:U",
+                    "-v",
+                    volume + ":/var/www/FreshRSS/data:U",
                     "-v",
                     str(APP / "scripts") + ":/opt/news:ro",
                     "-v",
                     str(APP / "httpd.conf") + ":/opt/news-httpd.conf:ro",
+                    "-v",
+                    str(drain_probe) + ":/var/www/FreshRSS/p/drain-probe.php:ro",
                     "-p",
                     "127.0.0.1::8080",
                     "--entrypoint",
@@ -246,13 +275,19 @@ def main():
                     image,
                     "/opt/news/start.sh",
                 )
-                wait_ready()
-                port = (
-                    run("port", names["app"], "8080/tcp").stdout.decode().strip().rsplit(":", 1)[1]
-                )
+                wait_ready(target)
+                port = run("port", target, "8080/tcp").stdout.decode().strip().rsplit(":", 1)[1]
                 return "http://127.0.0.1:" + port
 
             base = start_app()
+            run("exec", names["app"], "touch", "/var/www/FreshRSS/data/.news-restore-incomplete")
+            assert (
+                run(
+                    "exec", names["app"], "php", "/opt/news/bootstrap.php", success=False
+                ).returncode
+                != 0
+            )
+            run("exec", names["app"], "rm", "/var/www/FreshRSS/data/.news-restore-incomplete")
             # Upstream creates the user directory/config before its SQL tables.
             # Reproduce each interruption using only this disposable empty account.
             for interrupted_at in ("schema", "directory"):
@@ -304,6 +339,9 @@ def main():
                 "$c['internal_host_allowlist']=['*']; "
                 "file_put_contents($p,'<?php return '.var_export($c,true).';');",
             )
+            # PID 1 is guaranteed to exist after restart; a stale pid file must
+            # not be mistaken for a running Apache in the new container.
+            run("exec", names["app"], "sh", "-c", "echo 1 > /run/news/httpd.pid")
             run("restart", names["app"])
             wait_ready()
             policy = run(
@@ -319,7 +357,7 @@ def main():
             )
             auth = ""
 
-            def request(path, data=None, authenticated=True):
+            def request(path, data=None, authenticated=True, base_url=None):
                 headers = (
                     {"Authorization": "GoogleLogin auth=" + auth} if authenticated and auth else {}
                 )
@@ -327,7 +365,7 @@ def main():
                     urllib.parse.urlencode(data, doseq=True).encode() if data is not None else None
                 )
                 req = urllib.request.Request(
-                    base + "/api/greader.php" + path, data=payload, headers=headers
+                    (base_url or base) + "/api/greader.php" + path, data=payload, headers=headers
                 )
                 try:
                     with urllib.request.urlopen(req, timeout=30) as response:
@@ -473,6 +511,58 @@ def main():
             assert any(c.endswith("/read") for c in saved["categories"])
             assert any(c.endswith("/starred") for c in saved["categories"])
             assert saved["summary"]["content"] == content
+            backup_env = tmp / "backup.env"
+            faults = tmp / "faults"
+            write_fault_tools(faults)
+            backup_env.touch(mode=0o600)
+            backup_env.write_text(
+                "PGHOST=news-postgresql\nPGDATABASE=freshrss\nPGUSER=news_backup\n"
+                f"PGPASSWORD={passwords['BACKUP_PASSWORD']}\n"
+                "DATA_PATH=/var/www/FreshRSS/data\nBACKUP_DIR=/backups\n"
+                f"NEWS_APP_IMAGE={image}\nNEWS_DATABASE_IMAGE={db_image}\n"
+            )
+            container(
+                names["backup"],
+                "--user",
+                "1000:1000",
+                "--env-file",
+                str(backup_env),
+                "--tmpfs",
+                "/tmp:rw,size=64m",
+                "--tmpfs",
+                "/small:rw,mode=1777,size=4096",
+                "-v",
+                str(faults) + ":/faults:ro",
+                "-v",
+                names["data"] + ":/var/www/FreshRSS/data:ro",
+                "-v",
+                names["runtime"] + ":/run/news:U",
+                "-v",
+                names["backups"] + ":/backups:U",
+                "-v",
+                str(APP / "scripts") + ":/opt/news:ro",
+                "-v",
+                str(APP / "httpd.conf") + ":/opt/news-httpd.conf:ro",
+                "--entrypoint",
+                "/bin/sh",
+                db_image,
+                "-c",
+                "while :; do sleep 3600; done",
+            )
+            entries_before_backup = items()
+            run("exec", names["backup"], "sh", "/opt/news/backup.sh")
+            wait_ready()
+            assert items() == entries_before_backup, "backup changed article state"
+            exercise_backup_failures(
+                run=run,
+                names=names,
+                wait_ready=wait_ready,
+                request=request,
+                items=items,
+                token=token,
+                identity=identity,
+                base_url=base,
+            )
             before_outage = items()
             before_subscriptions = request("/reader/api/0/subscription/list?output=json")[1]
             # Make both synthetic feeds due and remove their cached responses.
@@ -519,6 +609,22 @@ def main():
                 assert not any(
                     value.encode() in logs.stdout + logs.stderr for value in passwords.values()
                 ), "runtime logged a password"
+            exercise_restore(
+                run=run,
+                container=container,
+                create=create,
+                start_database=start_database,
+                start_app=start_app,
+                request=request,
+                names=names,
+                passwords=passwords,
+                db_image=db_image,
+                image=image,
+                tmp=tmp,
+                app_env=app_env,
+                expected_items=entries_before_backup,
+                expected_subscriptions=before_subscriptions,
+            )
         print(
             "PASS: restricted FreshRSS, PostgreSQL, API authentication, feed bodies, categories, state, restart and failures"
         )
@@ -536,7 +642,7 @@ def main():
             if labels.get("homelab-talos.test-run") != marker:
                 failed.append(name)
                 continue
-            args = ("rm", "-f", name) if kind == "container" else (kind, "rm", name)
+            args = ("rm", "-f", "--time", "0", name) if kind == "container" else (kind, "rm", name)
             if run(*args, success=False).returncode:
                 failed.append(name)
         if failed:
