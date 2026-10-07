@@ -6,3 +6,4 @@ resources:
   - ./postgresql/ks.yaml
   - ./freshrss/ks.yaml
   - ./alerts/ks.yaml
+  - ./graby/ks.yaml

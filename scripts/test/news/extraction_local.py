@@ -205,11 +205,13 @@ def main():
         default="all",
     )
     args = parser.parse_args()
-    if args.phase == "ingestion":
+    if args.phase in ("ingestion", "recovery"):
         from freshrss_integration import main as freshrss
 
-        freshrss(extraction=True)
-        record_evidence("ingestion")
+        freshrss(
+            extraction=args.phase == "ingestion", extraction_recovery=args.phase == "recovery"
+        )
+        record_evidence(args.phase)
         return
     assert (APP / "scripts/initialize.sh").is_file(), "release initializer is missing"
     print(

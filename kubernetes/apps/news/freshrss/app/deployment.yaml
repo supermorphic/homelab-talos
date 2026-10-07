@@ -24,7 +24,9 @@ spec:
       containers:
         - name: freshrss
           image: docker.io/freshrss/freshrss:1.30.1-alpine@sha256:b6ae27fb5f507ba5f2bff39ca78af90850b294c1e94bf21bae8d368133422b0e
-          command: ["/bin/sh", "/opt/news/start.sh"]
+          command:
+            - /bin/sh
+            - /opt/news/start.sh
           env:
             - name: DATA_PATH
               value: /var/www/FreshRSS/data
@@ -52,6 +54,8 @@ spec:
                 secretKeyRef:
                   name: freshrss-runtime
                   key: api-password
+            - name: NEWS_EXTRACTION_REQUESTS_ENABLED
+              value: 'false'
           ports:
             - name: http
               containerPort: 8080
@@ -64,7 +68,8 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
-              drop: [ALL]
+              drop:
+                - ALL
           resources:
             requests:
               cpu: 100m
@@ -73,18 +78,24 @@ spec:
               memory: 768Mi
           startupProbe:
             exec:
-              command: [php, /opt/news/ready.php]
+              command:
+                - php
+                - /opt/news/ready.php
             periodSeconds: 5
             timeoutSeconds: 10
             failureThreshold: 30
           readinessProbe:
             exec:
-              command: [php, /opt/news/ready.php]
+              command:
+                - php
+                - /opt/news/ready.php
             periodSeconds: 15
             timeoutSeconds: 10
           livenessProbe:
             exec:
-              command: [sh, /opt/news/live.sh]
+              command:
+                - sh
+                - /opt/news/live.sh
             periodSeconds: 30
             timeoutSeconds: 5
           volumeMounts:
@@ -101,9 +112,17 @@ spec:
               mountPath: /opt/news-httpd.conf
               subPath: httpd.conf
               readOnly: true
+            - name: extraction-release
+              mountPath: /opt/news-extraction
+              readOnly: true
+            - name: extraction-extension
+              mountPath: /var/www/FreshRSS/extensions/xExtension-CommunityExtraction
+              readOnly: true
         - name: backup
           image: postgres:17.11-alpine3.24
-          command: ["/bin/sh", "/opt/news/backup-loop.sh"]
+          command:
+            - /bin/sh
+            - /opt/news/backup-loop.sh
           env:
             - name: DATA_PATH
               value: /var/www/FreshRSS/data
@@ -131,7 +150,8 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
-              drop: [ALL]
+              drop:
+                - ALL
           resources:
             requests:
               cpu: 25m
@@ -154,6 +174,9 @@ spec:
             - name: httpd
               mountPath: /opt/news-httpd.conf
               subPath: httpd.conf
+              readOnly: true
+            - name: extraction-release
+              mountPath: /opt/news-extraction
               readOnly: true
       volumes:
         - name: data
@@ -178,3 +201,27 @@ spec:
         - name: httpd
           configMap:
             name: freshrss-httpd
+        - name: extraction-extension
+          configMap:
+            name: freshrss-extraction-extension
+        - name: extraction-release
+          projected:
+            sources:
+              - configMap:
+                  name: freshrss-extraction-release
+                  items:
+                    - key: release.json
+                      path: release.json
+              - configMap:
+                  name: freshrss-extraction-extension
+                  items:
+                    - key: Client.php
+                      path: extension/Client.php
+                    - key: Preservation.php
+                      path: extension/Preservation.php
+                    - key: configure.php
+                      path: extension/configure.php
+                    - key: extension.php
+                      path: extension/extension.php
+                    - key: metadata.json
+                      path: extension/metadata.json

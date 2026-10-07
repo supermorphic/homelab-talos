@@ -21,7 +21,7 @@ APP = ROOT / "kubernetes/apps/news/freshrss/app"
 DB = ROOT / "kubernetes/apps/news/postgresql/app"
 
 
-def main(*, extraction=False):
+def main(*, extraction=False, extraction_recovery=False):
     assert (APP / "scripts/start.sh").is_file(), "FreshRSS restricted startup is missing"
     deployment = yaml.safe_load((APP / "deployment.yaml").read_text())
     image = deployment["spec"]["template"]["spec"]["containers"][0]["image"]
@@ -248,7 +248,7 @@ def main(*, extraction=False):
                         )
                         + ":/release.json:ro",
                     ]
-                    if extraction
+                    if (extraction or extraction_recovery)
                     else []
                 ),
                 "--tmpfs",
@@ -277,6 +277,37 @@ def main(*, extraction=False):
                 f"NEWS_API_PASSWORD={passwords['NEWS_API_PASSWORD']}\n"
             )
 
+            release_app = Path(
+                os.environ.get(
+                    "NEWS_EXTRACTION_CANDIDATE", str(ROOT / "kubernetes/apps/news/graby/app")
+                )
+            )
+            extraction_mounts = [
+                "-v",
+                str(release_app / "release.json") + ":/opt/news-extraction/release.json:ro",
+                "-v",
+                str(APP / "extensions/xExtension-CommunityExtraction")
+                + ":/opt/news-extraction/extension:ro",
+            ]
+
+            def extraction_snapshot(target):
+                result = run(
+                    "exec",
+                    target,
+                    "php",
+                    "-r",
+                    "require '/var/www/FreshRSS/cli/_cli.php'; cliInitUser('reader'); "
+                    "$dao=FreshRSS_Factory::createEntryDao(); "
+                    "$feed=FreshRSS_Factory::createFeedDao(); $out=[]; "
+                    "foreach ($feed->listFeeds() as $f) { foreach (['accepted','pipeline'] as $guid) { "
+                    "$e=$dao->searchByGuid($f->id(),$guid); if ($e===null) continue; "
+                    "$out[]=['id'=>$e->id(),'guid'=>$e->guid(),'content'=>$e->content(false), "
+                    "'provenance'=>$e->attributeArray('community_extraction'), "
+                    "'original'=>$e->attributeString('community_original_rss'), "
+                    "'read'=>$e->isRead(),'favorite'=>$e->isFavorite()]; }} echo json_encode($out);",
+                )
+                return json.loads(result.stdout)
+
             def start_app(target=None, volume=None, environment=None, runtime=None):
                 target = target or names["app"]
                 volume = volume or names["data"]
@@ -300,29 +331,17 @@ def main(*, extraction=False):
                     str(APP / "httpd.conf") + ":/opt/news-httpd.conf:ro",
                     "-v",
                     str(drain_probe) + ":/var/www/FreshRSS/p/drain-probe.php:ro",
+                    *extraction_mounts,
+                    "-v",
+                    str(APP / "extensions/xExtension-CommunityExtraction")
+                    + ":/var/www/FreshRSS/extensions/xExtension-CommunityExtraction:ro",
                     *(
                         [
                             "-v",
                             str(Path(__file__).with_name("extraction-ingestion-tests.php"))
                             + ":/extraction-tests.php:ro",
                         ]
-                        + [
-                            "-v",
-                            str(APP / "extensions/xExtension-CommunityExtraction")
-                            + ":/var/www/FreshRSS/extensions/xExtension-CommunityExtraction:ro",
-                            "-v",
-                            str(
-                                Path(
-                                    os.environ.get(
-                                        "NEWS_EXTRACTION_CANDIDATE",
-                                        str(ROOT / "kubernetes/apps/news/graby/app"),
-                                    )
-                                )
-                                / "release.json"
-                            )
-                            + ":/opt/news-extraction/release.json:ro",
-                        ]
-                        if extraction
+                        if (extraction or extraction_recovery)
                         else []
                     ),
                     "-p",
@@ -656,14 +675,48 @@ def main(*, extraction=False):
                 str(APP / "scripts") + ":/opt/news:ro",
                 "-v",
                 str(APP / "httpd.conf") + ":/opt/news-httpd.conf:ro",
+                *extraction_mounts,
                 "--entrypoint",
                 "/bin/sh",
                 db_image,
                 "-c",
                 "while :; do sleep 3600; done",
             )
+            if extraction_recovery:
+                run(
+                    "exec",
+                    "--detach",
+                    names["feeds"],
+                    "php",
+                    "-S",
+                    "0.0.0.0:8080",
+                    "/client-router.php",
+                )
+                checked = run("exec", names["app"], "php", "/extraction-tests.php")
+                print(checked.stdout.decode(), end="")
+            saved_extraction = extraction_snapshot(names["app"]) if extraction_recovery else []
+            if extraction_recovery:
+                assert any(e["provenance"] and e["original"] for e in saved_extraction)
             entries_before_backup = items()
             run("exec", names["backup"], "sh", "/opt/news/backup.sh")
+            if extraction_recovery:
+                latest = (
+                    run(
+                        "exec",
+                        names["backup"],
+                        "sh",
+                        "-c",
+                        "printf '%s\\n' /backups/set-* | sort | tail -1",
+                    )
+                    .stdout.decode()
+                    .strip()
+                )
+                manifest = run(
+                    "exec", names["backup"], "cat", latest + "/manifest"
+                ).stdout.decode()
+                assert "format=news-paired-v2\n" in manifest, (
+                    "extraction-aware backup manifest missing"
+                )
             wait_ready()
             assert items() == entries_before_backup, "backup changed article state"
             assert metrics()["news_backup_last_success_timestamp_seconds"] > 0
@@ -703,12 +756,15 @@ def main(*, extraction=False):
                 "echo json_encode(array_values(array_map(fn($f)=>$f->lastError(),$feeds)));",
             )
             errors = json.loads(failures.stdout)
-            assert len(errors) == 2 and all(error > 0 for error in errors), (
+            expected_feeds = 3 if extraction_recovery else 2
+            assert len(errors) == expected_feeds and all(error > 0 for error in errors), (
                 "outage test did not attempt failed feed fetches"
             )
             failed = metrics()
-            assert failed["news_database_up"] == 1 and failed["news_feeds_failed"] == 2
-            assert failed["news_feeds_stale"] == 2
+            assert (
+                failed["news_database_up"] == 1 and failed["news_feeds_failed"] == expected_feeds
+            )
+            assert failed["news_feeds_stale"] == expected_feeds
             assert failed["news_feed_oldest_success_timestamp_seconds"] == 1
             assert failed["news_refresh_last_completed_timestamp_seconds"] > 1
             assert items() == before_outage, "feed outage changed saved content or state"
@@ -724,7 +780,7 @@ def main(*, extraction=False):
             )
             run("start", names["db"])
             wait_ready()
-            assert len(items()) == 3
+            assert items() == before_outage
             for name in (names["app"], names["db"]):
                 logs = run("logs", name)
                 assert not any(
@@ -745,6 +801,9 @@ def main(*, extraction=False):
                 app_env=app_env,
                 expected_items=entries_before_backup,
                 expected_subscriptions=before_subscriptions,
+                extraction_mounts=extraction_mounts,
+                extraction_snapshot=extraction_snapshot,
+                expected_extraction=saved_extraction,
             )
         print(
             "PASS: restricted FreshRSS, PostgreSQL, API authentication, feed bodies, categories, state, restart and failures"

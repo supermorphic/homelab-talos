@@ -259,7 +259,10 @@ stores; do not commit publisher article bodies or client screenshots publicly.
 
 Original RSS, accepted bodies, provenance, and persistent extension/feed settings
 belong to FreshRSS's existing paired recovery unit. Extend backup provenance and
-restore compatibility checks to include the extraction release. Preserve the
+restore compatibility checks to include the extraction release. Extraction-aware
+paired sets use `news-paired-v2` and bind the actual mounted release and extension
+bytes. Restore a `news-paired-v1` set with its matching historical software and
+configuration, without extraction inputs, before migration; do not relabel it. Preserve the
 base maintenance locks for all entry/configuration writes. The worker's temporary
 dependencies, request cache, and circuit state are reconstructible and need no
 PVC or separate backup. Prove restored content and state remain readable while

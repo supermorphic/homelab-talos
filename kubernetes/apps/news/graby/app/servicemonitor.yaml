@@ -1,0 +1,14 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: news-graby
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: news-graby
+  endpoints:
+  - port: metrics
+    path: /metrics
+    interval: 1m
+    scrapeTimeout: 5s

@@ -9,7 +9,7 @@ try {
     require '/var/www/FreshRSS/cli/_cli.php'; cliInitUser($options['user']);
     $dao=FreshRSS_Factory::createFeedDao(); $feed=$dao->searchById((int)$options['feed-id']);
     if ($feed===null) { throw new RuntimeException(); }
-    if ($options['mode']==='community'&&($feed->httpAuth()!==''||!preg_match('~^https?://~i',$feed->url(false))||parse_url($feed->url(false),PHP_URL_USER)!==null||!empty($feed->attributeArray('curl_options')))) { throw new RuntimeException(); }
+    if ($options['mode']==='community'&&!\CommunityExtraction\Preservation::eligibleFeed($feed)) { throw new RuntimeException(); }
     $attributes=$feed->attributes(); $attributes['community_extraction_mode']=$options['mode'];
     $values=['attributes'=>$attributes];
     if ($options['mode']==='community') { $values['pathEntries']=''; }

@@ -5,15 +5,23 @@ namespace CommunityExtraction;
 final class Preservation {
     private \WeakMap $selected;
     public function __construct(private ?Client $client,private bool $requestsEnabled=false) { $this->selected=new \WeakMap(); }
+    public static function eligibleFeed(\FreshRSS_Feed $feed): bool {
+        $url=@parse_url($feed->url(false));
+        if (!is_array($url)||!in_array(strtolower($url['scheme']??''),['http','https'],true)||isset($url['user'])||isset($url['pass'])||$feed->httpAuth()!==''||!empty($feed->attributeArray('curl_options'))) { return false; }
+        $host=strtolower(trim($url['host']??'','[]'));
+        if ($host===''||$host==='localhost'||preg_match('/(?:\.localhost|\.local|\.internal|\.svc|\.cluster\.local)$/D',$host)) { return false; }
+        if (filter_var($host,FILTER_VALIDATE_IP)) { return filter_var($host,FILTER_VALIDATE_IP,FILTER_FLAG_NO_PRIV_RANGE|FILTER_FLAG_NO_RES_RANGE)!==false; }
+        return str_contains($host,'.');
+    }
     public function beforeInsert(\FreshRSS_Entry $entry): \FreshRSS_Entry {
         if (isset($this->selected[$entry])) { return $this->beforeUpdate($entry); }
         $hash=$entry->hash(); $rss=$entry->originalContent(); $body=$entry->content(false); $provenance=null;
         try {
             $prior=\FreshRSS_Factory::createEntryDao()->searchByGuid($entry->feedId(),$entry->guid());
             $old=$prior?->attributeArray('community_extraction');
-            if ($prior!==null&&is_array($old)&&($old['feed_id']??null)===$entry->feedId()&&($old['guid']??null)===$entry->guid()&&($old['body_sha256']??'')===hash('sha256',$prior->content(false))) { $body=$prior->content(false); $provenance=$old; }
+            if ($prior!==null&&is_array($old)&&strlen(json_encode($old))<=16384&&($old['feed_id']??null)===$entry->feedId()&&($old['guid']??null)===$entry->guid()&&($old['body_sha256']??'')===hash('sha256',$prior->content(false))) { $body=$prior->content(false); $provenance=$old; }
             $feed=$entry->feed(); $url=htmlspecialchars_decode($entry->link(),ENT_QUOTES);
-            if ($this->requestsEnabled&&$this->client!==null&&$feed!==null&&$feed->attributeString('community_extraction_mode')==='community'&&$feed->httpAuth()===''&&empty($feed->attributeArray('curl_options'))&&preg_match('~^https?://~i',$feed->url(false))&&parse_url($feed->url(false),PHP_URL_USER)===null) {
+            if ($this->requestsEnabled&&$this->client!==null&&strlen($entry->guid())<=767&&strlen($url)<=4096&&$feed!==null&&$feed->attributeString('community_extraction_mode')==='community'&&self::eligibleFeed($feed)) {
                 $validators=$provenance!==null&&($provenance['publisher_url']??'')===$url?($provenance['validators']??[]):[];
                 $reply=$this->client->extract($url,$validators,10);
                 if (($reply['decision']??'')==='accepted') {

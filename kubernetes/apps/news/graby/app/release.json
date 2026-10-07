@@ -7,8 +7,11 @@
     "sha256": "3400dfb4c61ea4cb9cc5c0be9e5a8666deb218a5d41db872a6ca8da2d3360556"
   },
   "files": {
+    "ciliumnetworkpolicy.yaml": "a0803ae6216b579af9fcdf0700d0c450d1c809b0f43da2646467f364414e6abd",
     "composer.json": "ddba80e309d77916daf52e9666674977cd47d03e90fc9426a06471e3ad5ce913",
     "composer.lock": "3c1874561f35c3b7280e5fde589760f9dfe605b4fedfc22aeb55838337704100",
+    "deployment.yaml": "3546ba9fd99e54931feae9f923a7ff5b98463bacb47a557d91b4af2118a8cea1",
+    "kustomization.yaml": "d5eac35af26a6e44dd2d822d498384d47daabc6bf2e4caab91317050dc1b5236",
     "limits.json": "6a776c97dfcb242c272a535905a80eef79380416cbcabd5f846a9fd92dd32966",
     "scripts/archive.php": "3334d21690b209d1e2caa16b8b014bb53ff35e8fb0c55eea0397e29c4e7f4285",
     "scripts/initialize.php": "dc6cb35aaea4fe573afa3bd4b4a62f3ff6d90bb17d028c07b89456bc2c922b0c",
@@ -20,6 +23,8 @@
     "scripts/runtime.php": "42dc10257c14b94b4dcfacc06c7816faaf7d5ef350c20b209bbb84951c306d40",
     "scripts/serve.php": "086814fc57908c345d98481dc6935ef662f7f2e05652cbab024a67dafb248c2b",
     "scripts/smoke.php": "3cb681b8d60df77109ba5cc6dc06e4c5b62ddabeb109ce10f903d98a0fcde60f",
+    "service.yaml": "36bbc34406cbcdabf139e028da01690b2f8dc080cbe51904fa4a5f4bd2ca9be2",
+    "servicemonitor.yaml": "b34a6da52f915516f714b9a262e1ca91ead6cb303103051ab4bd4ab0a72f1e37",
     "src/Extractor.php": "8ad3f20388b556f6d2cd87e0fb907f144b23a4ce88d99f7991c010e49f92bb16",
     "src/Fetcher.php": "8cb2e580ceee180821595eca316ed9bbf5552907a0abeaf262af41ca2d0f6451",
     "src/Release.php": "7a80116ad7e82518b3484d43357c50aac9f2125b8569e6a3e8d03ec876779cb1",
@@ -27,9 +32,9 @@
     "src/Server.php": "891803d203b4577f1ffcd76ea25084fc300188571f0627d49270dd7bd2fea8e1"
   },
   "extension_files": {
-    "Client.php": "767b8ed3b75c30633897975205360fe7dee7b76efb9fdcd160c50c2ff16fc1ed",
-    "Preservation.php": "0abf522f03a834d725be61f1f8ddb22ac1b698891e8978249b272444eac23702",
-    "configure.php": "25fc1f0b00cc73cd1d4ebba92145f8281ee6726428ec66b38bbaff5e17a1b0b8",
+    "Client.php": "cff021e68560391fe74e2bdf4895ae16b862618741568479ec1734e1444f923f",
+    "Preservation.php": "ae25dd062369ac494f974075a7ad5f2f143fd462519a881bbceca90bd91d1bdf",
+    "configure.php": "f0025af3b8d62d31e0c8418c1cb9a6036eb303c092abbb91af0d6264bd6f5b16",
     "extension.php": "c9eb62d76f0fcb0048105d35887ee871c08f4f9ebdab2952b2e3bcf216e74228",
     "metadata.json": "afc4aea5c80937e49c7de21b04b69dcb42f5505d72d89b51dec239ccadbdc8c9"
   },
@@ -237,5 +242,5 @@
       }
     }
   },
-  "id": "846962203695d7f7f4ee07bba7792ae95d185b4cde1128b5759fc2621b01d302"
+  "id": "7abe377b433b391103075917b0cc9df35a1efffb0421a4e20221994ce3fdfe84"
 }

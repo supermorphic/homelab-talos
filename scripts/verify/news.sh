@@ -19,13 +19,13 @@ done
 selected=$(yq -r '[.resources[] | select(. == "./news")] | length' kubernetes/apps/kustomization.yaml)
 if [[ "$staged" == true ]]; then
   [[ "$selected" == 0 ]] || fail 'Suspended news is selected by the root application list.'
-  for name in news news-postgresql freshrss news-alerts; do
+  for name in news news-postgresql freshrss news-alerts news-graby; do
     live=$("${kc[@]}" --namespace flux-system get kustomization "$name" --ignore-not-found --output json)
     if [[ -n "$live" ]]; then
       yq -p=json -e '.spec.suspend == true' - >/dev/null <<<"$live" || fail 'A staged news Flux unit is live and active.'
     fi
   done
-  for resource in deployment/freshrss statefulset/news-postgresql; do
+  for resource in deployment/freshrss statefulset/news-postgresql deployment/news-graby; do
     live=$("${kc[@]}" --namespace news get "$resource" --ignore-not-found --output name) || fail 'Cannot read staged news workload state.'
     [[ -z "$live" ]] || fail 'A staged news workload exists.'
   done
@@ -63,5 +63,11 @@ require_signal 'max(gatus_results_endpoint_success{group="News",name="freshrss"}
 require_signal 'max(news_refresh_last_completed_timestamp_seconds{namespace="news",service="freshrss"}) > 0 and time() - max(news_refresh_last_completed_timestamp_seconds{namespace="news",service="freshrss"}) < 3600'
 require_signal 'max(news_backup_last_success_timestamp_seconds{namespace="news",service="freshrss"}) > 0 and time() - max(news_backup_last_success_timestamp_seconds{namespace="news",service="freshrss"}) < 36 * 60 * 60'
 require_signal 'max(longhorn_volume_last_backup_at{pvc_namespace="news",pvc="news-backups"}) > 0 and time() - max(longhorn_volume_last_backup_at{pvc_namespace="news",pvc="news-backups"}) < 48 * 60 * 60'
+worker=$("${kc[@]}" --namespace news get deployment news-graby --ignore-not-found --output json)
+if [[ -n "$worker" ]]; then
+  yq -p=json -e '.status.availableReplicas == 1 and .status.observedGeneration == .metadata.generation' - >/dev/null <<<"$worker" && echo 'Extraction worker observation: available.' || echo 'Extraction worker observation: unavailable; FreshRSS acceptance is independent.'
+else
+  echo 'Extraction worker observation: absent; FreshRSS acceptance is independent.'
+fi
 echo 'News read-only observations passed: phase=active; readiness, refresh, feed health, local backup, and Longhorn transfer are current.'
 echo 'Paired-set off-cluster contents, isolated restore, publisher quality, network denial, and native-client acceptance require separate evidence.'

@@ -17,12 +17,16 @@ awk '
 ' "$set_dir/SHA256SUMS"
 (cd "$set_dir" && sha256sum -c SHA256SUMS >/dev/null)
 awk -F= '
-    $1 == "format" && $2 == "news-paired-v1" { seen[$1]++; next }
+    $1 == "format" && ($2 == "news-paired-v1" || $2 == "news-paired-v2") { format=$2; seen[$1]++; next }
     $1 == "created_epoch" && $2 ~ /^[0-9]+$/ { seen[$1]++; next }
     ($1 == "app_image" || $1 == "database_image") && $2 ~ /^[A-Za-z0-9_.:\/@-]+$/ { seen[$1]++; next }
-    $1 == "config_sha256" && length($2) == 64 && $2 ~ /^[0-9a-f]+$/ { seen[$1]++; next }
+    ($1 == "config_sha256" || $1 == "extraction_release_id" || $1 == "extraction_inputs_sha256") && length($2) == 64 && $2 ~ /^[0-9a-f]+$/ { seen[$1]++; next }
     { exit 1 }
-    END { if (NR != 5 || length(seen) != 5) exit 1 }
+    END {
+        for (key in seen) if (seen[key] != 1) exit 1
+        if (format == "news-paired-v1" && (NR != 5 || length(seen) != 5 || seen["extraction_release_id"] || seen["extraction_inputs_sha256"])) exit 1
+        if (format == "news-paired-v2" && (NR != 7 || length(seen) != 7 || !seen["extraction_release_id"] || !seen["extraction_inputs_sha256"])) exit 1
+    }
 ' "$set_dir/manifest"
 # Decode every dump block, not just its table of contents.
 pg_restore --file=/dev/null "$set_dir/database.dump"

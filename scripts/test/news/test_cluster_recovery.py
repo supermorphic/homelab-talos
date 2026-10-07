@@ -82,6 +82,46 @@ class ClusterRecoveryTests(unittest.TestCase):
                 self.assertEqual(list(target.iterdir()), [])
         self.assertEqual(relative_paths[0], relative_paths[1])
 
+    def test_extraction_restore_inputs_are_readonly_and_match_source(self):
+        from scripts.test.news import cluster_recovery as module
+
+        data = module.config_data()
+        self.assertEqual(
+            data["release.json"],
+            (module.ROOT / "kubernetes/apps/news/graby/app/release.json").read_text(),
+        )
+        for phase in ("source", "restored"):
+            spec = module.pod(
+                "abcdef123456", phase, "set-1234567890-ABC123" if phase == "restored" else ""
+            )["spec"]
+            volumes = {v["name"]: v for v in spec["volumes"]}
+            for name in ("app", "helper"):
+                c = next(c for c in spec["containers"] if c["name"] == name)
+                inputs = next(
+                    m for m in c["volumeMounts"] if m["mountPath"] == "/opt/news-extraction"
+                )
+                self.assertTrue(inputs["readOnly"])
+                paths = {item["path"] for item in volumes[inputs["name"]]["configMap"]["items"]}
+                self.assertIn("release.json", paths)
+                extension = next(
+                    m
+                    for m in c["volumeMounts"]
+                    if m["mountPath"] == "/opt/news-extraction/extension"
+                )
+                self.assertTrue(extension["readOnly"])
+                self.assertIn(
+                    "Client.php",
+                    {i["path"] for i in volumes[extension["name"]]["configMap"]["items"]},
+                )
+            app = next(c for c in spec["containers"] if c["name"] == "app")
+            self.assertTrue(
+                next(
+                    m
+                    for m in app["volumeMounts"]
+                    if m["mountPath"].endswith("/extensions/xExtension-CommunityExtraction")
+                )["readOnly"]
+            )
+
     def test_invalid_resource_inputs_fail_before_any_client_call(self):
         for run, phase, selected in (
             ("../outside", "source", ""),

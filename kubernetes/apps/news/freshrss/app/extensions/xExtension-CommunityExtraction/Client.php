@@ -46,7 +46,7 @@ final class Client {
         } finally { fclose($handle); }
     }
     public function extract(string $url,array $validators,float $remainingSeconds=10): array {
-        $fallback=fn($reason)=>['decision'=>'rejected','reason'=>$reason];
+        $fallback=function ($reason): array { $this->circuit(false,'fallback'); return ['decision'=>'rejected','reason'=>$reason]; };
         $remaining=min($remainingSeconds,60-$this->used,$this->deadline-($this->clock)());
         if ($this->release===''||$remaining<=0) { $this->circuit(false,'budget_exhausted'); return $fallback('budget_exhausted'); }
         if ($this->circuit()) { return $fallback('worker_unavailable'); }

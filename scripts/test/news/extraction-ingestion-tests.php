@@ -62,6 +62,11 @@ $wire=new CommunityExtraction\Client($manifest); $reply=$wire->extract('https://
 check(($reply['decision']??'')==='accepted','real worker client failed');
 $wire->resetContext(); $reply=$wire->extract('https://fixture.example/oversized',[],2); check($reply['decision']==='rejected','real client accepted oversized reply');
 @unlink('/run/news/extraction-circuit.json');
+$client->resetContext(); $n=count($calls); $huge=$new(str_repeat('g',900)); $preserve->beforeInsert($huge);
+check(count($calls)===$n&&!$huge->hasAttribute('community_extraction'),'unbounded item identity entered provenance');
+$privateFeed=new FreshRSS_Feed('http://127.0.0.1/private'); $privateFeed->_id($feed->id()); $privateFeed->_attribute('community_extraction_mode','community');
+$private=$new('private-feed'); $private->_feed($privateFeed); $preserve->beforeInsert($private);
+check(count($calls)===$n,'private feed selected extraction');
 // The actual ingestion controller, not a model-only imitation, must skip
 // unchanged enclosure entries and evaluate filters against the selected body.
 $clock=0; $client->resetContext(); $decision='accepted';

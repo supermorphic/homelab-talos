@@ -62,3 +62,28 @@ spec:
           for: 15m
           labels: {severity: critical}
           annotations: {summary: FreshRSS off-cluster Longhorn transfer is stale or missing}
+
+        - alert: NewsExtractionUnavailable
+          expr: >-
+            (max(news_extraction_ready{namespace="news",service="news-graby"}) == 0
+            or absent(max(news_extraction_ready{namespace="news",service="news-graby"})))
+            and on() (max(news_extraction_requests_enabled{namespace="news",service="freshrss"}) == 1)
+          for: 15m
+          labels: {severity: warning}
+          annotations: {summary: Article extraction is unavailable while requests are enabled}
+        - alert: NewsExtractionFallbackHigh
+          expr: >-
+            (sum(increase(news_extraction_fallback_total{namespace="news",service="freshrss"}[20m])) > 5)
+            and on() (sum(increase(news_extraction_fallback_total{namespace="news",service="freshrss"}[20m]))
+            > sum(increase(news_extraction_accepted_total{namespace="news",service="freshrss"}[20m])))
+            and on() (max(news_extraction_requests_enabled{namespace="news",service="freshrss"}) == 1)
+          for: 10m
+          labels: {severity: warning}
+          annotations: {summary: Most article extraction attempts are falling back to RSS}
+        - alert: NewsExtractionBudgetExhausted
+          expr: >-
+            sum(increase(news_extraction_budget_exhausted_total{namespace="news",service="freshrss"}[20m])) > 0
+            and on() (max(news_extraction_requests_enabled{namespace="news",service="freshrss"}) == 1)
+          for: 10m
+          labels: {severity: warning}
+          annotations: {summary: Article extraction is exhausting the refresh budget}

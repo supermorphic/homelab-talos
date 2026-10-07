@@ -429,3 +429,38 @@ tests:
   - eval_time: 120m
     alertname: NewsRefreshStale
     exp_alerts: []
+
+- name: successful RSS ingestion does not hide extraction outage and recovery
+  interval: 1m
+  input_series:
+  - series: news_extraction_requests_enabled{namespace="news",service="freshrss"}
+    values: 1x35 0x10
+  - series: news_extraction_ready{namespace="news",service="news-graby"}
+    values: 0x20 1x25
+  - series: news_extraction_fallback_total{namespace="news",service="freshrss"}
+    values: 0+10x20 200x25
+  - series: news_extraction_accepted_total{namespace="news",service="freshrss"}
+    values: 0x20 0+20x25
+  - series: news_extraction_budget_exhausted_total{namespace="news",service="freshrss"}
+    values: 0x45
+  - series: news_refresh_last_completed_timestamp_seconds{namespace="news",service="freshrss"}
+    values: 1+60x45
+  - series: news_feeds_failed{namespace="news",service="freshrss"}
+    values: 0x45
+  alert_rule_test:
+  - eval_time: 16m
+    alertname: NewsExtractionUnavailable
+    exp_alerts:
+    - exp_labels: {severity: warning}
+      exp_annotations: {summary: Article extraction is unavailable while requests are enabled}
+  - eval_time: 16m
+    alertname: NewsExtractionFallbackHigh
+    exp_alerts:
+    - exp_labels: {severity: warning}
+      exp_annotations: {summary: Most article extraction attempts are falling back to RSS}
+  - eval_time: 32m
+    alertname: NewsExtractionUnavailable
+    exp_alerts: []
+  - eval_time: 40m
+    alertname: NewsExtractionFallbackHigh
+    exp_alerts: []

@@ -1,0 +1,40 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: news
+resources:
+- ./deployment.yaml
+- ./service.yaml
+- ./ciliumnetworkpolicy.yaml
+- ./servicemonitor.yaml
+configMapGenerator:
+- name: news-graby-code
+  files:
+  - ciliumnetworkpolicy.yaml=ciliumnetworkpolicy.yaml
+  - composer.json=composer.json
+  - composer.lock=composer.lock
+  - deployment.yaml=deployment.yaml
+  - kustomization.yaml=kustomization.yaml
+  - limits.json=limits.json
+  - release.json=release.json
+  - scripts__archive.php=scripts/archive.php
+  - scripts__initialize.php=scripts/initialize.php
+  - scripts__initialize.sh=scripts/initialize.sh
+  - scripts__job.php=scripts/job.php
+  - scripts__ready.php=scripts/ready.php
+  - scripts__release.php=scripts/release.php
+  - scripts__resolve.php=scripts/resolve.php
+  - scripts__runtime.php=scripts/runtime.php
+  - scripts__serve.php=scripts/serve.php
+  - scripts__smoke.php=scripts/smoke.php
+  - service.yaml=service.yaml
+  - servicemonitor.yaml=servicemonitor.yaml
+  - src__Extractor.php=src/Extractor.php
+  - src__Fetcher.php=src/Fetcher.php
+  - src__Release.php=src/Release.php
+  - src__Sanitizer.php=src/Sanitizer.php
+  - src__Server.php=src/Server.php
+generatorOptions:
+  immutable: true
+  labels:
+    reconcile.fluxcd.io/watch: Enabled

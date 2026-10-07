@@ -139,7 +139,7 @@ class FreshRSSManifestsTests(unittest.TestCase):
         ]
         self.assertEqual(
             {e.get("app.kubernetes.io/name") for e in endpoints if "app.kubernetes.io/name" in e},
-            {"news-postgresql"},
+            {"news-postgresql", "news-graby"},
         )
         self.assertFalse(any(o["kind"] == "CronJob" for o in objects))
         ks = yaml.safe_load((NEWS / "freshrss/ks.yaml").read_text())

@@ -206,6 +206,9 @@ def exercise_restore(
     app_env,
     expected_items,
     expected_subscriptions,
+    extraction_mounts,
+    extraction_snapshot,
+    expected_extraction,
 ):
     for key in ("restore-data", "restore-dbdata", "restore-runtime", "restore-backups"):
         names[key] = names["network"] + "-" + key
@@ -291,6 +294,7 @@ def exercise_restore(
         str(APP / "scripts") + ":/opt/news:ro",
         "-v",
         str(APP / "httpd.conf") + ":/opt/news-httpd.conf:ro",
+        *extraction_mounts,
         "--entrypoint",
         "/bin/sh",
         db_image,
@@ -318,7 +322,7 @@ def exercise_restore(
         )
 
     bad = "/backups/set-0000000000-corrupt"
-    for damage in ("checksum", "dump", "archive", "mixed"):
+    for damage in ("checksum", "dump", "archive", "mixed", "release", "inputs", "legacy"):
         run("exec", names["restore-import"], "cp", "-a", backup, bad)
         if damage == "checksum":
             run(
@@ -348,6 +352,12 @@ def exercise_restore(
                 "/faults/unsafe.tar.gz",
                 bad + "/data.tar.gz",
             )
+        elif damage in ("release", "inputs", "legacy"):
+            key = "extraction_release_id" if damage == "release" else "extraction_inputs_sha256"
+            command = 'sed -i "s/^' + key + "=.*/" + key + "=" + "0" * 64 + '/" "$1/manifest"'
+            if damage == "legacy":
+                command = 'sed -i "/^extraction_/d;s/news-paired-v2/news-paired-v1/" "$1/manifest"'
+            run("exec", names["restore-import"], "sh", "-c", command, "sh", bad)
         else:
             first = min(path for path in sets if not path.endswith("-history"))
             assert (
@@ -368,7 +378,7 @@ def exercise_restore(
                 first + "/database.dump",
                 bad + "/database.dump",
             )
-        if damage in ("dump", "archive"):
+        if damage in ("dump", "archive", "release", "inputs", "legacy"):
             run(
                 "exec",
                 names["restore-import"],
@@ -378,6 +388,8 @@ def exercise_restore(
                 "sh",
                 bad,
             )
+        if damage == "legacy":
+            run("exec", names["restore-tool"], "sh", "/opt/news/validate-backup.sh", bad)
         assert (
             run(
                 "exec", names["restore-tool"], "sh", "/opt/news/restore.sh", bad, success=False
@@ -477,6 +489,9 @@ def exercise_restore(
             authorization=recovered_auth,
         )[1]
         == expected_subscriptions
+    )
+    assert extraction_snapshot(names["restore-app"]) == expected_extraction, (
+        "restore lost original RSS, provenance or article state"
     )
     source_volumes = {names[key] for key in ("data", "dbdata", "runtime", "backups")}
     for key in ("restore-app", "restore-db", "restore-tool", "restore-import"):

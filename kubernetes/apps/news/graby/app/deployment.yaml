@@ -1,0 +1,175 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: news-graby
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: &id001
+      app.kubernetes.io/name: news-graby
+  template:
+    metadata:
+      labels: *id001
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+      - name: initialize
+        image: docker.io/thecodingmachine/php:8.4-v5-cli@sha256:16aceb03a41e9da89f03a3a6d9ad08fb226af6cd1312bc4a0603452a37ff9399
+        command:
+        - /bin/sh
+        - /app/scripts/initialize.sh
+        securityContext: &id002
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+            ephemeral-storage: 256Mi
+          limits:
+            memory: 768Mi
+            ephemeral-storage: 1Gi
+        volumeMounts:
+        - name: code
+          mountPath: /app
+          readOnly: true
+        - name: work
+          mountPath: /work
+        - name: init-tmp
+          mountPath: /tmp
+      containers:
+      - name: worker
+        image: docker.io/thecodingmachine/php:8.4-v5-cli@sha256:16aceb03a41e9da89f03a3a6d9ad08fb226af6cd1312bc4a0603452a37ff9399
+        command:
+        - /usr/bin/php8.4
+        - -d
+        - extension=tidy
+        - -d
+        - memory_limit=512M
+        - /app/scripts/serve.php
+        ports:
+        - name: http
+          containerPort: 8080
+        - name: metrics
+          containerPort: 9090
+        securityContext: *id002
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+            ephemeral-storage: 128Mi
+          limits:
+            memory: 512Mi
+            ephemeral-storage: 512Mi
+        startupProbe:
+          httpGet:
+            path: /ready
+            port: http
+          periodSeconds: 5
+          timeoutSeconds: 1
+          failureThreshold: 4
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 1
+        livenessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          periodSeconds: 30
+          timeoutSeconds: 1
+        volumeMounts:
+        - name: code
+          mountPath: /app
+          readOnly: true
+        - name: work
+          mountPath: /work
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        - name: runtime
+          mountPath: /run/news-graby
+      volumes:
+      - name: code
+        configMap:
+          name: news-graby-code
+          defaultMode: 292
+          items:
+          - key: ciliumnetworkpolicy.yaml
+            path: ciliumnetworkpolicy.yaml
+          - key: composer.json
+            path: composer.json
+          - key: composer.lock
+            path: composer.lock
+          - key: deployment.yaml
+            path: deployment.yaml
+          - key: kustomization.yaml
+            path: kustomization.yaml
+          - key: limits.json
+            path: limits.json
+          - key: release.json
+            path: release.json
+          - key: scripts__archive.php
+            path: scripts/archive.php
+          - key: scripts__initialize.php
+            path: scripts/initialize.php
+          - key: scripts__initialize.sh
+            path: scripts/initialize.sh
+          - key: scripts__job.php
+            path: scripts/job.php
+          - key: scripts__ready.php
+            path: scripts/ready.php
+          - key: scripts__release.php
+            path: scripts/release.php
+          - key: scripts__resolve.php
+            path: scripts/resolve.php
+          - key: scripts__runtime.php
+            path: scripts/runtime.php
+          - key: scripts__serve.php
+            path: scripts/serve.php
+          - key: scripts__smoke.php
+            path: scripts/smoke.php
+          - key: service.yaml
+            path: service.yaml
+          - key: servicemonitor.yaml
+            path: servicemonitor.yaml
+          - key: src__Extractor.php
+            path: src/Extractor.php
+          - key: src__Fetcher.php
+            path: src/Fetcher.php
+          - key: src__Release.php
+            path: src/Release.php
+          - key: src__Sanitizer.php
+            path: src/Sanitizer.php
+          - key: src__Server.php
+            path: src/Server.php
+      - name: work
+        emptyDir:
+          sizeLimit: 256Mi
+      - name: init-tmp
+        emptyDir:
+          sizeLimit: 256Mi
+      - name: tmp
+        emptyDir:
+          medium: Memory
+          sizeLimit: 32Mi
+      - name: runtime
+        emptyDir:
+          medium: Memory
+          sizeLimit: 1Mi
