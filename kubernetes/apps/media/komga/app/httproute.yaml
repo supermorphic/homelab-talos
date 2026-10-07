@@ -9,7 +9,7 @@ metadata:
     external-dns.k8s.io/audience: internal
     gethomepage.dev/enabled: "true"
     gethomepage.dev/name: "Komga"
-    gethomepage.dev/description: "Comic reading"
+    gethomepage.dev/description: "Comic reader"
     gethomepage.dev/pod-selector: "app.kubernetes.io/name=komga"
     gethomepage.dev/group: "Media"
     gethomepage.dev/icon: "komga.svg"
