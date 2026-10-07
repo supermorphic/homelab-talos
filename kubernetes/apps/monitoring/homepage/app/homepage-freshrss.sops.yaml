@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: Secret
+type: Opaque
+metadata:
+    name: homepage-freshrss
+    namespace: homepage
+stringData:
+    username: ENC[AES256_GCM,data:YA43fg8=,iv:Pn/2ax5PHbAMALfjOFlh7Nnc4L0Cscwi8pukXuL0nsI=,tag:NzspxV/6vrqKqAe0YUJz7A==,type:str]
+    password: ENC[AES256_GCM,data:HinPtQ5ZyaB612nZ6xmMhvUHCWQ8oDmH1TysBxtlXur4Gi/FKUV9sw==,iv:yVqYTQMj4m6hEaxkJpuqGnG7IOX60c3BjoDlxYpTGIw=,tag:C+Se7JZESrVK7r8gGzrfVw==,type:str]
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSB5Rk16dklacHFKVUQ4alZJ
+            eFgzSUNSaUI1bUtVNjl5YmpaV1RJYTdVUVVJClVDb21RbDR6OU5aeWV6ZG9MWXhi
+            WDE3Y1djUklMUVJ6ZGFvT3c1RmtzancKLS0tICtCZkRPSG51MkpTUU9EYmdkZlQr
+            QUZoa3c1WDBPNFhBSUpVbjJkWlZZeUUKNHMfkLtEbF005x4/F8JB0j9EgfRtM/sY
+            Zy6JrNcSVhwYLiTXlFQGmCR5JYC4OpHntZ2N4ejL4JzTfksxOZGOmg==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age1da2cywfkg9hp6v39jvj9qcmqz4n8w3gm6nqj5vygu7e0zzgnp5psne9wlx
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-10-07T22:04:31Z"
+    mac: ENC[AES256_GCM,data:5H7eiYeDjlHTWEqvToKRiMjafIUlm8BT4SIZJsw+VQI4OTPPe0XGgIyP21EzuVyUhIeWNjrc7JZAdat/iwYG3zVfoV90lVDNiA2dYTPLSMA1xJh+7coW1bI/iGv9eg4OwztsGQSclZlicoEr16SSeCV9pndy314lhvMHuITlv8k=,iv:SE34+CMG4bgsab7S5YpJWKlmrQYNW7swWy5ronDDxbo=,tag:yQaXxv6nHbLJE9b6+PI2zQ==,type:str]
+    version: 3.13.2
