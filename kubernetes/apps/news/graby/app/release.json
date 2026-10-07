@@ -9,20 +9,22 @@
   "files": {
     "composer.json": "ddba80e309d77916daf52e9666674977cd47d03e90fc9426a06471e3ad5ce913",
     "composer.lock": "3c1874561f35c3b7280e5fde589760f9dfe605b4fedfc22aeb55838337704100",
-    "limits.json": "24e565d397901f575c6e21d7e5f46b60d36479b30b687b8b41e3a09d7f1b5204",
+    "limits.json": "6a776c97dfcb242c272a535905a80eef79380416cbcabd5f846a9fd92dd32966",
     "scripts/archive.php": "3334d21690b209d1e2caa16b8b014bb53ff35e8fb0c55eea0397e29c4e7f4285",
     "scripts/initialize.php": "dc6cb35aaea4fe573afa3bd4b4a62f3ff6d90bb17d028c07b89456bc2c922b0c",
     "scripts/initialize.sh": "32524a6b2e89495053aa0c987a145cb6aff01e89205191d3b9bb254d93f386c2",
-    "scripts/job.php": "3003b299235e87308e14765874ca05c249a701a4f1f0dff024fe39859ca93f8b",
+    "scripts/job.php": "de8b434713edc44245ef7d5260a2175a370580e1c5afff05a35a79d5b7b5e358",
     "scripts/ready.php": "72222f8bb515351f01ff70f4af47d88c5730138805e04c3215db2f6a9861a06d",
     "scripts/release.php": "790755270b49d431d6f03238a4b89d48ebb79df95a4dc5c3ef51f181197d7282",
     "scripts/resolve.php": "f0be711f47e3a6388572bfa245228e55c98ca71d4cf41cac4e9342efe998bdd2",
     "scripts/runtime.php": "42dc10257c14b94b4dcfacc06c7816faaf7d5ef350c20b209bbb84951c306d40",
+    "scripts/serve.php": "086814fc57908c345d98481dc6935ef662f7f2e05652cbab024a67dafb248c2b",
     "scripts/smoke.php": "3cb681b8d60df77109ba5cc6dc06e4c5b62ddabeb109ce10f903d98a0fcde60f",
     "src/Extractor.php": "8ad3f20388b556f6d2cd87e0fb907f144b23a4ce88d99f7991c010e49f92bb16",
-    "src/Fetcher.php": "b5ae072e3ba05bb697b944a99db54d1b558bac5766fcabbd8c1470c3fcf23842",
+    "src/Fetcher.php": "8cb2e580ceee180821595eca316ed9bbf5552907a0abeaf262af41ca2d0f6451",
     "src/Release.php": "7a80116ad7e82518b3484d43357c50aac9f2125b8569e6a3e8d03ec876779cb1",
-    "src/Sanitizer.php": "42b0339dcf31914a8d250a115ef6818cdbce83e4d23107fac88c90d733ed4f94"
+    "src/Sanitizer.php": "42b0339dcf31914a8d250a115ef6818cdbce83e4d23107fac88c90d733ed4f94",
+    "src/Server.php": "891803d203b4577f1ffcd76ea25084fc300188571f0627d49270dd7bd2fea8e1"
   },
-  "id": "bd8c76e51a670ca2a2d35683c6e9a42371f2488f62119b50f604288d0630f560"
+  "id": "0bd385e961553589781ded9daaea1b7501953a52b92d3165231e5b2bae7a7965"
 }

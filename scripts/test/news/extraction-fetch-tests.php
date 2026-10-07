@@ -75,4 +75,8 @@ $timed = new NewsExtraction\Fetcher($limits, fn()=>$public, function ($url,$addr
 });
 check($timed->fetch('https://synthetic.example/a', [], hrtime(true)/1e9 + 0.05)['reason'] === 'timeout', 'redirect reset aggregate deadline');
 check(count(array_unique($remaining)) === 1, 'hops used different deadlines');
-require __DIR__.'/extraction-wire-tests.php';
+(function () use ($limits) { require __DIR__.'/extraction-wire-tests.php'; })();
+$cooldown=new NewsExtraction\Fetcher($limits,fn()=>$public,$transport,['https:cooled.example'=>hrtime(true)/1e9+60]);
+$reply=['status'=>302,'headers'=>['location'=>'https://cooled.example/article'],'html'=>''];
+$before=count($calls);
+check($cooldown->fetch('https://another.example/article',[],hrtime(true)/1e9+5)['reason']==='origin_cooldown'&&count($calls)===$before+1,'redirect ignored publisher cooldown');

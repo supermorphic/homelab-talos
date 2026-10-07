@@ -1,5 +1,6 @@
 <?php
 declare(strict_types=1);
+posix_setpgid(0,0);
 require __DIR__.'/runtime.php';
 $reply=['decision'=>'rejected','reason'=>'request_invalid'];
 try {
@@ -12,7 +13,12 @@ try {
     if (strlen($raw)>$limits['request_bytes']) { throw new RuntimeException('request_invalid'); }
     $request=json_decode($raw,true,16,JSON_THROW_ON_ERROR);
     if (!is_array($request) || array_diff(array_keys($request),['url','expected_release','validators']) || !is_string($request['url']??null) || ($request['expected_release']??'')!==$release->id() || !is_array($request['validators']??[])) { throw new RuntimeException('request_invalid'); }
-    $fetch=(new NewsExtraction\Fetcher($limits))->fetch($request['url'],$request['validators']??[],hrtime(true)/1e9+$limits['fetch_seconds']);
+    $cooldowns=[]; $state='/run/news-graby/origins.json';
+    if (is_file($state) && filesize($state)<=163840) {
+        $stored=json_decode(file_get_contents($state),true,8);
+        if (is_array($stored) && count($stored)<=256) { foreach ($stored as $origin=>$until) { if (is_string($origin) && (is_int($until)||is_float($until)) && $until>hrtime(true)/1e9 && $until<=hrtime(true)/1e9+$limits['max_retry_after_seconds']) { $cooldowns[$origin]=$until; } } }
+    }
+    $fetch=(new NewsExtraction\Fetcher($limits,null,null,$cooldowns))->fetch($request['url'],$request['validators']??[],hrtime(true)/1e9+$limits['fetch_seconds']);
     if (!$fetch['ok']) { $reply=['decision'=>'rejected','release_id'=>$release->id(),'reason'=>$fetch['reason']]+array_intersect_key($fetch,array_flip(['retry_after','final_url'])); }
     elseif ($fetch['status']===304) { $reply=['decision'=>'not_modified','release_id'=>$release->id(),'reason'=>'not_modified','validators'=>$fetch['validators']]; }
     else {

@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace NewsExtraction;
 
 final class Fetcher {
-    public function __construct(private array $limits, private ?\Closure $resolver = null, private ?\Closure $transport = null) {}
+    public function __construct(private array $limits, private ?\Closure $resolver = null, private ?\Closure $transport = null, private array $cooldowns = []) {}
     private static function now(): float { return hrtime(true) / 1e9; }
     private static function reject(string $reason, array $extra = []): array { return ['ok' => false, 'reason' => $reason] + $extra; }
 
@@ -85,6 +85,7 @@ final class Fetcher {
             $parts = self::urlParts($url);
             if ($parts === null || ($secure && $parts['scheme']!=='https')) { return self::reject('destination_rejected'); }
             $secure = $secure || $parts['scheme']==='https';
+            if (($this->cooldowns[$parts['scheme'].':'.$parts['host']]??0)>self::now()) { return self::reject('origin_cooldown'); }
             $url = $parts['scheme'].'://'.(str_contains($parts['host'],':')?'['.$parts['host'].']':$parts['host']).$parts['path'].($parts['query']!==null?'?'.$parts['query']:'');
             try {
                 $addresses = $this->resolve($parts['host'], $deadline);

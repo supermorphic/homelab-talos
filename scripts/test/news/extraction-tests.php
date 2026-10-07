@@ -49,6 +49,7 @@ if ($phase === 'initialization' || $phase === 'all') {
 }
 if ($phase === 'fetch' || $phase === 'all') { require __DIR__ . '/extraction-fetch-tests.php'; }
 if ($phase === 'extraction' || $phase === 'all') { require __DIR__ . '/extraction-body-tests.php'; }
-if (!in_array($phase, ['initialization', 'fetch', 'extraction', 'all'], true)) {
+if ($phase === 'service' || $phase === 'all') { require __DIR__ . '/extraction-service-tests.php'; }
+if (!in_array($phase, ['initialization', 'fetch', 'extraction', 'service', 'all'], true)) {
     throw new RuntimeException('phase not implemented: ' . $phase);
 }

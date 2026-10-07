@@ -38,7 +38,7 @@ def container(command, *, network="none", app=APP, timeout=330, slow_dns=False):
                 "--security-opt",
                 "no-new-privileges",
                 "--memory",
-                "768m",
+                "512m",
                 "--pids-limit",
                 "64",
                 "--network",
@@ -48,6 +48,8 @@ def container(command, *, network="none", app=APP, timeout=330, slow_dns=False):
                 "/tmp:rw,size=256m",
                 "--tmpfs",
                 "/work:rw,mode=1777,size=512m",
+                "--tmpfs",
+                "/run/news-graby:rw,mode=1777,size=16m",
                 "-v",
                 str(ROOT) + ":/repo:ro",
                 "-v",
@@ -184,10 +186,16 @@ def main():
     assert (APP / "scripts/initialize.sh").is_file(), "release initializer is missing"
     print(
         container(
-            ("sh /app/scripts/initialize.sh && " if args.phase in ("extraction", "all") else "")
+            (
+                "sh /app/scripts/initialize.sh && "
+                if args.phase in ("extraction", "service", "all")
+                else ""
+            )
             + "/usr/bin/php8.4 -d extension=tidy /repo/scripts/test/news/extraction-tests.php "
             + args.phase,
-            network="bridge" if args.phase in ("fetch", "extraction", "all") else "none",
+            network="bridge"
+            if args.phase in ("fetch", "extraction", "service", "all")
+            else "none",
         ),
         end="",
     )
