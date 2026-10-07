@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Secret
+type: Opaque
+metadata:
+    name: freshrss-runtime
+    namespace: news
+stringData:
+    db-password: ENC[AES256_GCM,data:V2z4GnrqkDEVz3ikjdyA/jfsAybgdIgaf+eC5R565dZ0xNnbFvNENg==,iv:qNYpSca8y0LPyoyVRI9pfUBTp3acQyh124YPV/e8Mfg=,tag:F1UyKwgB1HhX2R4aJb9dFQ==,type:str]
+    operator-name: ENC[AES256_GCM,data:SCFIlfI=,iv:E4cDD8Nbq8H5drPRvnIa9qnTh1x7iA0QKpO9YvV1lbs=,tag:mtan2II/xRqoRfaPwdM2MQ==,type:str]
+    operator-password: ENC[AES256_GCM,data:viubBFEoJn/xCYGQNiaDCpkqz0MNvXtBTc2wmC+y/vzVxDiMmnyOXQ==,iv:tyWY+GmVlVlxlJpIN2Qg6wxIgW18RL+W5tmp8SNgwLA=,tag:QcZvb0P/Yky4qPcx6sGKPw==,type:str]
+    api-password: ENC[AES256_GCM,data:tYhlJCnGbJ3Rs6ZTROISkAH0Ldei3JsR0iN70V3i1/E/bzRx6+j2VQ==,iv:hkUHQP3ITa9zyEryNhQC3Z8m6E4WvM9pxUPDsrxJA/g=,tag:Y0SSWMIyCMim25hvq4zcsw==,type:str]
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBWM2tsMTU5cmZDbTJ4V3ow
+            dm9leE5zYlRIQW10cHNrVkpNVi82TTcyMkF3CkYwdTMzUkNpeDVhVFd2WlBsY0dR
+            YzJyck9TcGZJbmNZK3R5aFBzWGJEVncKLS0tIGtKRnFNZWpSMnVQNDVsT1R1aUZr
+            ZnZiT1E3VGJKK0xJSEtQUjJDRzZNWXMKMdKTdjpi/3SiXXqj87e4PzP5jL1GrUVJ
+            jh4XwbOcvE5OhwjKddlLSDwncr2Fe6T9tQVQmNeObBu8Vq4i+PV8Xw==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age1da2cywfkg9hp6v39jvj9qcmqz4n8w3gm6nqj5vygu7e0zzgnp5psne9wlx
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-10-07T15:31:31Z"
+    mac: ENC[AES256_GCM,data:LRZGGbEhA+0dV64+rweKj8oT5T8SziG2HLGiG2Rc9Ub2ih8YHWyijbe4GZPljCYv5PbHHH3/297omG5esjJ+At0JD7T1za+gR8zuEgeNKH0srtO2TCkY/2USTZieYXVSExMweygFnGh+JhIA32sgypJW04ruOBH6j9rPTyZGOtQ=,iv:0VYAchE047rKKCuvt4R6Bxahh4lctj4/Inwbf9ur+XA=,tag:dJlAbvkOocjRZ2AskeSqnw==,type:str]
+    version: 3.13.2
