@@ -359,7 +359,9 @@ extracted bodies use this same path; client-side reader mode is not evidence for
 server-side extraction acceptance.
 
 Synchronize subscriptions/categories and bidirectional read/unread and starred
-state on all three device types. Exercise offline actions followed by reconnection.
+state. The operator selected the configured Mac as sufficient for native-client
+acceptance; iPhone and iPad checks are optional and must not be reported as tested
+without separate evidence. Exercise offline actions followed by reconnection.
 Do not promise immediate background sync on iOS, identical advanced-filter UI, or
 automatic replacement of cached bodies. Offline text depends on prior client sync;
 offline image availability requires separate testing.
@@ -467,7 +469,7 @@ Required evidence before the base deployment is accepted:
 - Verify stable item identity, no duplicate subscriptions or read-state reset on
   repeated polls, and preservation of stored items when a feed is unavailable or
   invalid. Exercise full-content and summary-only feeds without an extractor.
-- Perform attended iPhone, iPad, and Mac checks for normal article rendering,
+- Perform Mac checks for normal article rendering,
   categories, bidirectional state, offline/reconnect behavior, and LAN/off-LAN
   private access. Record limits of cached-body updates and remote image access.
 - Prove container restrictions, storage restart/rescheduling, bounded refresh work,
