@@ -871,6 +871,12 @@ suites:
     runner: {command: "mise exec -- just kube news-extraction-local-integration-test", implementation: scripts/test/scenarios/news-extraction-local-integration.sh}
     native_results: {strategy: wrapper-junit}
     dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/news-extraction-local-integration.sh, args: [], selector: null}
+  - metadata: {id: test.news-extraction-corpus, source: test, framework: bash, suite: platform, tier: integration, target: news-extraction-corpus, scenario: disposable-podman, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: shared}
+    access: {profile: null, prerequisites: []}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube news-extraction-corpus-test", implementation: scripts/test/scenarios/news-extraction-corpus.sh}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/news-extraction-corpus.sh, args: [], selector: null}
   - metadata: {id: test.news-local-integration, source: test, framework: bash, suite: platform, tier: integration, target: news-local, scenario: disposable-podman, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: shared}
     access: {profile: null, prerequisites: []}
     confirmation: {type: none, variable: null, expected: null}

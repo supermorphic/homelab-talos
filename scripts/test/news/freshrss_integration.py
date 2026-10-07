@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import subprocess
 import tempfile
@@ -236,7 +237,15 @@ def main(*, extraction=False):
                         str(ROOT / "tests/fixtures/news/extraction/client-router.php")
                         + ":/client-router.php:ro",
                         "-v",
-                        str(ROOT / "kubernetes/apps/news/graby/app/release.json")
+                        str(
+                            Path(
+                                os.environ.get(
+                                    "NEWS_EXTRACTION_CANDIDATE",
+                                    str(ROOT / "kubernetes/apps/news/graby/app"),
+                                )
+                            )
+                            / "release.json"
+                        )
                         + ":/release.json:ro",
                     ]
                     if extraction
@@ -302,7 +311,15 @@ def main(*, extraction=False):
                             str(APP / "extensions/xExtension-CommunityExtraction")
                             + ":/var/www/FreshRSS/extensions/xExtension-CommunityExtraction:ro",
                             "-v",
-                            str(ROOT / "kubernetes/apps/news/graby/app/release.json")
+                            str(
+                                Path(
+                                    os.environ.get(
+                                        "NEWS_EXTRACTION_CANDIDATE",
+                                        str(ROOT / "kubernetes/apps/news/graby/app"),
+                                    )
+                                )
+                                / "release.json"
+                            )
                             + ":/opt/news-extraction/release.json:ro",
                         ]
                         if extraction

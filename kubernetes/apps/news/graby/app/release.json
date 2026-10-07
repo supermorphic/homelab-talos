@@ -33,5 +33,209 @@
     "extension.php": "c9eb62d76f0fcb0048105d35887ee871c08f4f9ebdab2952b2e3bcf216e74228",
     "metadata.json": "afc4aea5c80937e49c7de21b04b69dcb42f5505d72d89b51dec239ccadbdc8c9"
   },
-  "id": "e020bf904f25db37ac238c15104d0dc576e880aad495b6c79afe6c07d61a93fd"
+  "corpus": {
+    "sha256": "39b36d691e71e0563c49ae420754c20fdb38f4d481b39de35b50e262e8a1aa77",
+    "cases": [
+      "9to5mac-live-0",
+      "9to5mac-live-1",
+      "ars-0",
+      "ars-1",
+      "ars-2",
+      "ars-live-0",
+      "ars-live-1",
+      "bbc-live-0",
+      "bbc-live-1",
+      "bleepingcomputer-live-0",
+      "bleepingcomputer-live-1",
+      "caranddriver-1",
+      "caranddriver-5",
+      "caranddriver-6",
+      "caranddriver-7",
+      "caranddriver-live-0",
+      "caranddriver-live-1",
+      "coloradosun-live-0",
+      "coloradosun-live-1",
+      "control-empty",
+      "control-malformed",
+      "control-public",
+      "control-restricted",
+      "decoder-live-0",
+      "decoder-live-1",
+      "engadget-live-0",
+      "engadget-live-1",
+      "guardian-live-0",
+      "guardian-live-1",
+      "milehighreport-0",
+      "milehighreport-1",
+      "milehighreport-3",
+      "newsline-0",
+      "newsline-1",
+      "newsline-2",
+      "no-rule-ars-0",
+      "no-rule-caranddriver-5",
+      "no-rule-wired-0",
+      "npr-live-0",
+      "npr-live-1",
+      "outside-live-1",
+      "revalidated-ars-0",
+      "revalidated-ars-1",
+      "revalidated-ars-2",
+      "revalidated-caranddriver-1",
+      "revalidated-caranddriver-5",
+      "revalidated-caranddriver-6",
+      "revalidated-caranddriver-7",
+      "revalidated-wired-0",
+      "revalidated-wired-1",
+      "revalidated-wired-4",
+      "revalidated-wired-7",
+      "sciencenews-live-0",
+      "sciencenews-live-1",
+      "techcrunch-live-0",
+      "techcrunch-live-1",
+      "wired-0",
+      "wired-1",
+      "wired-4",
+      "wired-7",
+      "wired-live-0",
+      "wired-live-1"
+    ],
+    "quality": {
+      "wired-0": {
+        "blocks": 21,
+        "images": 1,
+        "captions": 1
+      },
+      "wired-4": {
+        "blocks": 16,
+        "images": 1,
+        "captions": 1
+      },
+      "wired-7": {
+        "blocks": 13,
+        "images": 1,
+        "captions": 1
+      },
+      "wired-1": {
+        "blocks": 31,
+        "images": 11,
+        "captions": 1
+      },
+      "caranddriver-5": {
+        "blocks": 12,
+        "images": 5,
+        "captions": 1
+      },
+      "caranddriver-6": {
+        "blocks": 24,
+        "images": 7,
+        "captions": 1
+      },
+      "caranddriver-7": {
+        "blocks": 25,
+        "images": 7,
+        "captions": 1
+      },
+      "ars-0": {
+        "blocks": 23,
+        "images": 1,
+        "captions": 1
+      },
+      "ars-1": {
+        "blocks": 13,
+        "images": 1,
+        "captions": 1
+      },
+      "ars-2": {
+        "blocks": 17,
+        "images": 1,
+        "captions": 1
+      },
+      "control-public": {
+        "blocks": 9,
+        "images": 0,
+        "captions": 0
+      },
+      "wired-live-0": {
+        "blocks": 105,
+        "images": 30,
+        "captions": 1
+      },
+      "wired-live-1": {
+        "blocks": 46,
+        "images": 12,
+        "captions": 1
+      },
+      "caranddriver-live-0": {
+        "blocks": 20,
+        "images": 6,
+        "captions": 1
+      },
+      "caranddriver-live-1": {
+        "blocks": 22,
+        "images": 9,
+        "captions": 1
+      },
+      "ars-live-0": {
+        "blocks": 12,
+        "images": 1,
+        "captions": 1
+      },
+      "ars-live-1": {
+        "blocks": 12,
+        "images": 1,
+        "captions": 1
+      },
+      "revalidated-wired-0": {
+        "blocks": 22,
+        "images": 1,
+        "captions": 1
+      },
+      "revalidated-wired-4": {
+        "blocks": 16,
+        "images": 1,
+        "captions": 1
+      },
+      "revalidated-wired-7": {
+        "blocks": 13,
+        "images": 1,
+        "captions": 1
+      },
+      "revalidated-wired-1": {
+        "blocks": 33,
+        "images": 11,
+        "captions": 1
+      },
+      "revalidated-caranddriver-5": {
+        "blocks": 14,
+        "images": 5,
+        "captions": 1
+      },
+      "revalidated-caranddriver-6": {
+        "blocks": 26,
+        "images": 7,
+        "captions": 1
+      },
+      "revalidated-caranddriver-7": {
+        "blocks": 27,
+        "images": 7,
+        "captions": 1
+      },
+      "revalidated-ars-0": {
+        "blocks": 23,
+        "images": 1,
+        "captions": 1
+      },
+      "revalidated-ars-1": {
+        "blocks": 13,
+        "images": 1,
+        "captions": 1
+      },
+      "revalidated-ars-2": {
+        "blocks": 17,
+        "images": 1,
+        "captions": 1
+      }
+    }
+  },
+  "id": "846962203695d7f7f4ee07bba7792ae95d185b4cde1128b5759fc2621b01d302"
 }

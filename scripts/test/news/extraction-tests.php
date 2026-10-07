@@ -12,7 +12,7 @@ function rejects(callable $call, string $message): void {
     try { $call(); } catch (Throwable $e) { return; }
     throw new RuntimeException($message);
 }
-const APP = '/repo/kubernetes/apps/news/graby/app';
+const APP = '/app';
 $phase = $argv[1] ?? 'all';
 if ($phase === 'initialization' || $phase === 'all') {
     check(is_file(APP . '/src/Release.php'), 'release verification is missing');

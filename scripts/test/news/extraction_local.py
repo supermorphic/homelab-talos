@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import secrets
 import shutil
 import subprocess
@@ -12,11 +13,13 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-APP = ROOT / "kubernetes/apps/news/graby/app"
+APP = Path(
+    os.environ.get("NEWS_EXTRACTION_CANDIDATE", str(ROOT / "kubernetes/apps/news/graby/app"))
+)
 IMAGE = "docker.io/thecodingmachine/php:8.4-v5-cli@sha256:16aceb03a41e9da89f03a3a6d9ad08fb226af6cd1312bc4a0603452a37ff9399"
 
 
-def container(command, *, network="none", app=APP, timeout=330, slow_dns=False):
+def container(command, *, network="none", app=APP, timeout=330, slow_dns=False, corpus=None):
     name = "news-extraction-" + secrets.token_hex(8)
     try:
         result = subprocess.run(
@@ -63,9 +66,10 @@ def container(command, *, network="none", app=APP, timeout=330, slow_dns=False):
                     if slow_dns
                     else []
                 ),
+                *(["-v", str(corpus) + ":/corpus:ro"] if corpus is not None else []),
                 "--entrypoint",
                 "/bin/sh",
-                IMAGE,
+                json.loads((app / "release.json").read_text())["image"],
                 "-c",
                 command,
             ],
@@ -167,6 +171,24 @@ echo package-outage-fallback-passed
     print(output, end="")
 
 
+def record_evidence(phase):
+    release = json.loads((APP / "release.json").read_text())
+    report = {
+        "schema": 1,
+        "phase": phase,
+        "status": "pass",
+        "release_id": release["id"],
+        "rules_commit": release["rules"]["commit"],
+    }
+    if phase == "runtime":
+        report["checks"] = ["fetch", "extraction", "service"]
+    run = os.environ.get("HOMELAB_TEST_RUN_DIR")
+    if run:
+        target = Path(run) / "diagnostics" / ("news-extraction-" + phase + ".json")
+        target.write_text(json.dumps(report, indent=2) + "\n")
+    return report
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -187,6 +209,7 @@ def main():
         from freshrss_integration import main as freshrss
 
         freshrss(extraction=True)
+        record_evidence("ingestion")
         return
     assert (APP / "scripts/initialize.sh").is_file(), "release initializer is missing"
     print(
@@ -213,6 +236,14 @@ def main():
             ),
             end="",
         )
+    if args.phase in ("initialization", "all"):
+        record_evidence("initialization")
+    if args.phase == "all":
+        record_evidence("runtime")
+        from freshrss_integration import main as freshrss
+
+        freshrss(extraction=True)
+        record_evidence("ingestion")
 
 
 if __name__ == "__main__":

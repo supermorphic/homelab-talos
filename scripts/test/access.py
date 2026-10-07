@@ -27,6 +27,7 @@ HOST_LOCAL_SUITES = {
     "test.news-postgresql-local-integration",
     "test.news-local-integration",
     "test.news-extraction-local-integration",
+    "test.news-extraction-corpus",
 }
 PHYSICAL_SUITE = "test.resilience.node-abrupt-loss"
 PURPOSE_PROFILES = {
