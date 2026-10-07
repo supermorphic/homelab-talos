@@ -13,13 +13,16 @@
     "scripts/archive.php": "3334d21690b209d1e2caa16b8b014bb53ff35e8fb0c55eea0397e29c4e7f4285",
     "scripts/initialize.php": "dc6cb35aaea4fe573afa3bd4b4a62f3ff6d90bb17d028c07b89456bc2c922b0c",
     "scripts/initialize.sh": "32524a6b2e89495053aa0c987a145cb6aff01e89205191d3b9bb254d93f386c2",
+    "scripts/job.php": "3003b299235e87308e14765874ca05c249a701a4f1f0dff024fe39859ca93f8b",
     "scripts/ready.php": "72222f8bb515351f01ff70f4af47d88c5730138805e04c3215db2f6a9861a06d",
     "scripts/release.php": "790755270b49d431d6f03238a4b89d48ebb79df95a4dc5c3ef51f181197d7282",
     "scripts/resolve.php": "f0be711f47e3a6388572bfa245228e55c98ca71d4cf41cac4e9342efe998bdd2",
     "scripts/runtime.php": "42dc10257c14b94b4dcfacc06c7816faaf7d5ef350c20b209bbb84951c306d40",
-    "scripts/smoke.php": "72a4a2a33f4113a8e37db75e02d02ece125d06884cc8de54ed64a89ccb46b256",
+    "scripts/smoke.php": "3cb681b8d60df77109ba5cc6dc06e4c5b62ddabeb109ce10f903d98a0fcde60f",
+    "src/Extractor.php": "8ad3f20388b556f6d2cd87e0fb907f144b23a4ce88d99f7991c010e49f92bb16",
     "src/Fetcher.php": "b5ae072e3ba05bb697b944a99db54d1b558bac5766fcabbd8c1470c3fcf23842",
-    "src/Release.php": "7a80116ad7e82518b3484d43357c50aac9f2125b8569e6a3e8d03ec876779cb1"
+    "src/Release.php": "7a80116ad7e82518b3484d43357c50aac9f2125b8569e6a3e8d03ec876779cb1",
+    "src/Sanitizer.php": "42b0339dcf31914a8d250a115ef6818cdbce83e4d23107fac88c90d733ed4f94"
   },
-  "id": "3c6a891591e922d3635fc1b39a17eb79494f691198248428cf3bf44455c41886"
+  "id": "bd8c76e51a670ca2a2d35683c6e9a42371f2488f62119b50f604288d0630f560"
 }

@@ -19,4 +19,14 @@ function smoke(string $current): void {
     if ($extractor->process('<html><body><p>Selector must miss.</p></body></html>', 'https://arstechnica.com/synthetic', $config)) {
         throw new RuntimeException('rule_policy_failed');
     }
+    require_once __DIR__.'/../src/Sanitizer.php';
+    require_once __DIR__.'/../src/Extractor.php';
+    $limits=json_decode(file_get_contents(__DIR__.'/../limits.json'),true,32,JSON_THROW_ON_ERROR);
+    $strict=new NewsExtraction\Extractor($current.'/rules',$limits);
+    $html='<html><body><article><p>'.str_repeat('Independent synthetic editorial paragraph. ',12).'</p></article><nav>Excluded navigation</nav></body></html>';
+    $accepted=$strict->extract('https://arstechnica.com/synthetic',$html);
+    $unknown=$strict->extract('https://unsupported.invalid/synthetic',$html);
+    if ($accepted['decision']!=='accepted' || str_contains($accepted['html'],'Excluded navigation') || $unknown['decision']!=='rejected' || isset($unknown['html'])) {
+        throw new RuntimeException('rule_policy_failed');
+    }
 }

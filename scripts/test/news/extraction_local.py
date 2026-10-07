@@ -184,9 +184,10 @@ def main():
     assert (APP / "scripts/initialize.sh").is_file(), "release initializer is missing"
     print(
         container(
-            "/usr/bin/php8.4 -d extension=tidy /repo/scripts/test/news/extraction-tests.php "
+            ("sh /app/scripts/initialize.sh && " if args.phase in ("extraction", "all") else "")
+            + "/usr/bin/php8.4 -d extension=tidy /repo/scripts/test/news/extraction-tests.php "
             + args.phase,
-            network="bridge" if args.phase in ("fetch", "all") else "none",
+            network="bridge" if args.phase in ("fetch", "extraction", "all") else "none",
         ),
         end="",
     )

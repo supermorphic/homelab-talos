@@ -48,6 +48,7 @@ if ($phase === 'initialization' || $phase === 'all') {
     echo "initialization release checks passed on " . PHP_VERSION . ' ' . php_uname('m') . "\n";
 }
 if ($phase === 'fetch' || $phase === 'all') { require __DIR__ . '/extraction-fetch-tests.php'; }
-if (!in_array($phase, ['initialization', 'fetch', 'all'], true)) {
+if ($phase === 'extraction' || $phase === 'all') { require __DIR__ . '/extraction-body-tests.php'; }
+if (!in_array($phase, ['initialization', 'fetch', 'extraction', 'all'], true)) {
     throw new RuntimeException('phase not implemented: ' . $phase);
 }
