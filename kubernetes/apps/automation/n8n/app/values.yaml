@@ -88,6 +88,9 @@ executions:
 config:
   timezone: America/Denver
   extraEnv:
+    # Leave 2 GiB of the existing container limit for buffers and native allocations.
+    - name: NODE_OPTIONS
+      value: --max-old-space-size=6144
     - name: NODE_FUNCTION_ALLOW_BUILTIN
       value: url
     - name: N8N_WEBHOOK_URL
