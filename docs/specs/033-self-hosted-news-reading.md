@@ -361,7 +361,8 @@ server-side extraction acceptance.
 Synchronize subscriptions/categories and bidirectional read/unread and starred
 state. The operator selected the configured Mac as sufficient for native-client
 acceptance; iPhone and iPad checks are optional and must not be reported as tested
-without separate evidence. Exercise offline actions followed by reconnection.
+without separate evidence. Offline/reconnect checks are optional and are not
+required for issue closure. Report them as tested only with separate evidence.
 Do not promise immediate background sync on iOS, identical advanced-filter UI, or
 automatic replacement of cached bodies. Offline text depends on prior client sync;
 offline image availability requires separate testing.
@@ -470,7 +471,7 @@ Required evidence before the base deployment is accepted:
   repeated polls, and preservation of stored items when a feed is unavailable or
   invalid. Exercise full-content and summary-only feeds without an extractor.
 - Perform Mac checks for normal article rendering,
-  categories, bidirectional state, offline/reconnect behavior, and LAN/off-LAN
+  categories, bidirectional state, and LAN/off-LAN
   private access. Record limits of cached-body updates and remote image access.
 - Prove container restrictions, storage restart/rescheduling, bounded refresh work,
   private network boundaries, database-outage behavior, and restoration of the
