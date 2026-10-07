@@ -11,7 +11,7 @@ NEWS = ROOT / "kubernetes/apps/news"
 
 
 class FreshRSSManifestsTests(unittest.TestCase):
-    def test_metrics_are_separate_from_gateway_and_alerts_remain_staged(self):
+    def test_metrics_are_separate_from_gateway_and_alerts_are_enabled(self):
         objects = list(
             yaml.safe_load_all(
                 subprocess.check_output(
@@ -51,7 +51,25 @@ class FreshRSSManifestsTests(unittest.TestCase):
                 self.assertEqual(
                     [p["port"] for t in rule["toPorts"] for p in t["ports"]], ["8080"]
                 )
-        self.assertTrue(yaml.safe_load((NEWS / "alerts/ks.yaml").read_text())["spec"]["suspend"])
+        self.assertFalse(yaml.safe_load((NEWS / "alerts/ks.yaml").read_text())["spec"]["suspend"])
+
+    def test_private_route_is_monitored_and_verification_is_enrolled(self):
+        route = yaml.safe_load((NEWS / "freshrss/app/httproute.yaml").read_text())
+        values = yaml.safe_load(
+            (ROOT / "kubernetes/apps/monitoring/gatus/app/values.yaml").read_text()
+        )
+        endpoints = [e for e in values["config"]["endpoints"] if e["name"] == "freshrss"]
+        self.assertEqual(len(endpoints), 1)
+        endpoint = endpoints[0]
+        self.assertEqual(endpoint["group"], "News")
+        self.assertEqual(endpoint["url"], "https://" + route["spec"]["hostnames"][0] + "/api/")
+        self.assertIn("[STATUS] == 200", endpoint["conditions"])
+        self.assertIn("[BODY] == pat(*scripts/api.js*)", endpoint["conditions"])
+        catalog = yaml.safe_load((ROOT / "tests/catalog.yaml").read_text())
+        for campaign in ("verification", "scoped-verification"):
+            self.assertEqual(
+                catalog["campaigns"][campaign]["members"].count("verification.news"), 1
+            )
 
     def test_paired_backup_has_read_only_source_and_separate_credentials(self):
         objects = list(
@@ -143,7 +161,7 @@ class FreshRSSManifestsTests(unittest.TestCase):
         )
         self.assertFalse(any(o["kind"] == "CronJob" for o in objects))
         ks = yaml.safe_load((NEWS / "freshrss/ks.yaml").read_text())
-        self.assertTrue(ks["spec"]["suspend"])
+        self.assertFalse(ks["spec"]["suspend"])
         self.assertIn({"name": "news-postgresql"}, ks["spec"]["dependsOn"])
 
 

@@ -1,4 +1,4 @@
-"""Rendered database contracts; the unfinished news stack remains unselected."""
+"""Rendered database contracts and complete base-platform deployment inputs."""
 
 import shutil
 import subprocess
@@ -118,14 +118,24 @@ class DatabaseManifestsTests(unittest.TestCase):
         )
         self.assertEqual(rule["toPorts"], [{"ports": [{"port": "5432", "protocol": "TCP"}]}])
 
-    def test_flux_cannot_activate_incomplete_news(self):
+    def test_base_flux_has_complete_deployment_inputs(self):
         self.assertTrue(BASE.is_dir(), "news Flux definitions are missing")
         root = yaml.safe_load((ROOT / "kubernetes/apps/kustomization.yaml").read_text())
-        self.assertNotIn("./news", root["resources"])
-        for path in (BASE / "namespace/ks.yaml", BASE / "postgresql/ks.yaml"):
+        self.assertEqual(root["resources"].count("./news"), 1)
+        for path in (
+            BASE / unit / "ks.yaml" for unit in ("namespace", "postgresql", "freshrss", "alerts")
+        ):
             spec = yaml.safe_load(path.read_text())["spec"]
-            self.assertIs(spec["suspend"], True)
+            self.assertIs(spec["suspend"], False)
             self.assertIs(spec["wait"], True)
+        for unit, secret in (
+            ("postgresql", "postgresql-credentials.sops.yaml"),
+            ("freshrss", "freshrss-runtime.sops.yaml"),
+        ):
+            app = BASE / unit / "app"
+            resources = yaml.safe_load((app / "kustomization.yaml").read_text())["resources"]
+            self.assertEqual(resources.count("./" + secret), 1)
+            self.assertTrue((app / secret).is_file())
         namespace = yaml.safe_load((BASE / "namespace/app/namespace.yaml").read_text())
         for mode in ("enforce", "warn", "audit"):
             self.assertEqual(

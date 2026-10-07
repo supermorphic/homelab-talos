@@ -123,7 +123,7 @@ class ExtractionManifestsTests(unittest.TestCase):
         )
         for name in ("freshrss", "graby"):
             ks = yaml.safe_load((NEWS / name / "ks.yaml").read_text())
-            self.assertTrue(ks["spec"]["suspend"])
+            self.assertEqual(ks["spec"]["suspend"], name == "graby")
             if name == "freshrss":
                 self.assertNotIn({"name": "news-graby"}, ks["spec"]["dependsOn"])
 
