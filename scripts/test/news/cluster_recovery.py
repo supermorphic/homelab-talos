@@ -112,15 +112,24 @@ def resources(run):
     return result
 
 
-def pod(run, phase, selected=""):
+def pod(run, phase, selected="", *, avoid_node=""):
     name = prefix(run)
     if (
-        phase not in {"source", "restored"}
+        phase not in {"source", "reattached", "restored"}
         or (phase == "restored" and not re.fullmatch(r"set-[0-9]{10}-[A-Za-z0-9]{6}", selected))
-        or (phase == "source" and selected)
+        or (phase != "restored" and selected)
+        or (
+            phase == "reattached"
+            and (
+                len(avoid_node) > 253
+                or not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", avoid_node)
+            )
+        )
+        or (phase != "reattached" and avoid_node)
     ):
         raise ValueError("invalid recovery phase or set")
     app_image, db_image = images()
+    storage_phase = "restored" if phase == "restored" else "source"
 
     def env(**values):
         return [
@@ -173,7 +182,7 @@ def pod(run, phase, selected=""):
         app_image,
         1000,
         "1Gi",
-        ["sh", "/opt/news/drill-start.sh", phase],
+        ["sh", "/opt/news/drill-start.sh", storage_phase],
         env(
             NEWS_DB_HOST="127.0.0.1",
             NEWS_OPERATOR_NAME="reader",
@@ -253,34 +262,37 @@ def pod(run, phase, selected=""):
         db_image,
         1000,
         "256Mi",
-        ["sh", "/opt/news/drill-helper.sh", phase],
+        ["sh", "/opt/news/drill-helper.sh", storage_phase],
         env(
             PGHOST="127.0.0.1",
             PGDATABASE="freshrss",
-            PGUSER="news_backup" if phase == "source" else "freshrss",
+            PGUSER="news_backup" if phase != "restored" else "freshrss",
             DATA_PATH="/data/instance",
             BACKUP_DIR="/backups/news",
             NEWS_SELECTED_SET=selected,
             NEWS_APP_IMAGE=app_image,
             NEWS_DATABASE_IMAGE=db_image,
         )
-        + [credential("PGPASSWORD", "backup-password" if phase == "source" else "db-password")],
+        + [credential("PGPASSWORD", "backup-password" if phase != "restored" else "db-password")],
         [
             scripts,
             mount("extraction-release", "/opt/news-extraction", True),
             mount("extraction-extension", "/opt/news-extraction/extension", True),
             runtime,
-            mount("app-data", "/data", phase == "source"),
+            mount("app-data", "/data", phase != "restored"),
             mount("backups", "/backups", phase == "restored"),
             mount("helper-tmp", "/tmp"),
             {**mount("httpd", "/opt/news-httpd.conf", True), "subPath": "httpd.conf"},
         ],
     )
     volumes = [
-        {"name": "app-data", "persistentVolumeClaim": {"claimName": name + "-" + phase + "-data"}},
+        {
+            "name": "app-data",
+            "persistentVolumeClaim": {"claimName": name + "-" + storage_phase + "-data"},
+        },
         {
             "name": "database-data",
-            "persistentVolumeClaim": {"claimName": name + "-" + phase + "-db"},
+            "persistentVolumeClaim": {"claimName": name + "-" + storage_phase + "-db"},
         },
         {
             "name": "backups",
@@ -325,7 +337,7 @@ def pod(run, phase, selected=""):
             "pg-run",
         )
     )
-    return {
+    result = {
         "apiVersion": "v1",
         "kind": "Pod",
         "metadata": metadata(run, phase),
@@ -340,6 +352,25 @@ def pod(run, phase, selected=""):
             "volumes": volumes,
         },
     }
+    if phase == "reattached":
+        result["spec"]["affinity"] = {
+            "nodeAffinity": {
+                "requiredDuringSchedulingIgnoredDuringExecution": {
+                    "nodeSelectorTerms": [
+                        {
+                            "matchFields": [
+                                {
+                                    "key": "metadata.name",
+                                    "operator": "NotIn",
+                                    "values": [avoid_node],
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        }
+    return result
 
 
 class Cluster:
@@ -433,8 +464,10 @@ class Cluster:
     def create_inputs(self):
         self.owned("create", content=json.dumps(resources(self.run)))
 
-    def create_pod(self, phase, selected=""):
-        self.owned("create", content=json.dumps(pod(self.run, phase, selected)))
+    def create_pod(self, phase, selected="", *, avoid_node=""):
+        self.owned(
+            "create", content=json.dumps(pod(self.run, phase, selected, avoid_node=avoid_node))
+        )
         self.call(
             self.kc
             + [
@@ -488,8 +521,91 @@ class Cluster:
                 time.sleep(1)
         return result
 
+    def snapshot(self, phase):
+        name = prefix(self.run) + "-" + phase
+        records = [json.loads(line) for line in self.ledger.read_text().splitlines()]
+        recorded = [r for r in records if r["kind"] == "Pod" and r["metadata"]["name"] == name]
+        if len(recorded) != 1:
+            raise RuntimeError("fixture Pod ownership is not recorded")
+        current = json.loads(self.call(self.kc + ["get", "pod", name, "--output=json"]))
+        if any(
+            current["metadata"].get(k) != recorded[0]["metadata"].get(k)
+            for k in ("name", "namespace", "uid", "labels")
+        ):
+            raise RuntimeError("fixture Pod ownership changed")
+        return current
+
+    def database_outage(self):
+        self.preflight()
+        source = self.snapshot("source")
+        node = source.get("spec", {}).get("nodeName", "")
+        # Use the constructor's bounded node validation before stopping anything.
+        pod(self.run, "reattached", avoid_node=node)
+        database = next(
+            c for c in source["status"]["containerStatuses"] if c["name"] == "database"
+        )
+        if "running" not in database.get("state", {}):
+            raise RuntimeError("disposable database was not running before the outage")
+        self.call(
+            self.kc
+            + [
+                "exec",
+                prefix(self.run) + "-source",
+                "--container=database",
+                "--",
+                "pg_ctl",
+                "--pgdata=/var/lib/postgresql/data/pgdata",
+                "--mode=fast",
+                "--no-wait",
+                "stop",
+            ],
+            timeout=90,
+        )
+        # Waiting pg_ctl can be killed along with PID1 before its exec result is
+        # returned. Request shutdown first, then independently observe completion.
+        deadline = time.monotonic() + 60
+        while True:
+            current = self.snapshot("source")
+            database = next(
+                c for c in current["status"]["containerStatuses"] if c["name"] == "database"
+            )
+            terminated = database.get("state", {}).get("terminated")
+            if terminated is not None:
+                if terminated.get("exitCode") != 0:
+                    raise RuntimeError("disposable database did not shut down cleanly")
+                break
+            if time.monotonic() >= deadline:
+                raise RuntimeError("disposable database shutdown timed out")
+            time.sleep(1)
+        self.preflight()
+        self.snapshot("source")
+        self.call(
+            self.kc
+            + [
+                "exec",
+                prefix(self.run) + "-source",
+                "--container=app",
+                "--",
+                "php",
+                "/opt/news/drill.php",
+                "unavailable",
+            ],
+            timeout=30,
+        )
+        return node
+
+    def verify_reattached(self, expected, old_node):
+        current = self.snapshot("reattached")
+        node = current.get("spec", {}).get("nodeName", "")
+        if not node or node == old_node:
+            raise RuntimeError("source claims were not rescheduled to a different node")
+        self.execute("reattached", expected)
+
     def delete_source(self):
         self.owned("delete", "Pod", prefix(self.run) + "-source")
+
+    def delete_reattached(self):
+        self.owned("delete", "Pod", prefix(self.run) + "-reattached")
 
     def cleanup(self):
         failures = 0
@@ -511,6 +627,8 @@ def run_drill(client):
         "assertions": "failed",
         "cleanup": "pending",
         "off_cluster": "not-tested",
+        "database_outage": "not-tested",
+        "storage_rescheduling": "not-tested",
         "phase": "preflight",
     }
     try:
@@ -539,9 +657,22 @@ def run_drill(client):
             or expected["subscriptions"] != 2
         ):
             raise ValueError("invalid synthetic capture outcome")
-        outcome["phase"] = "remove-source"
+        outcome["phase"] = "database-outage"
+        client.preflight()
+        old_node = client.database_outage()
+        outcome["database_outage"] = "passed"
+        outcome["phase"] = "reattach-source"
         client.preflight()
         client.delete_source()
+        client.preflight()
+        client.create_pod("reattached", avoid_node=old_node)
+        outcome["phase"] = "verify-reattached"
+        client.preflight()
+        client.verify_reattached(expected, old_node)
+        outcome["storage_rescheduling"] = "passed"
+        outcome["phase"] = "remove-reattached"
+        client.preflight()
+        client.delete_reattached()
         outcome["phase"] = "restore-start"
         client.preflight()
         client.create_pod("restored", expected["set"])

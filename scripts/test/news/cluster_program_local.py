@@ -65,7 +65,9 @@ def run_program():
     # Namespace projection differs in Podman: it ignores ConfigMap.items. Keep
     # the canonical Pod and split only each local ConfigMap projection.
     def local_pod(phase, selected=""):
-        obj = recovery.pod(marker, phase, selected)
+        obj = recovery.pod(
+            marker, phase, selected, avoid_node="node-a" if phase == "reattached" else ""
+        )
         obj["metadata"]["labels"]["homelab-talos.test-run"] = marker
         if phase == "restored":
             # Native directory volumes lack ext4's filesystem-root entry. Keep
@@ -110,8 +112,8 @@ def run_program():
                 }
         try:
             expected = None
-            for phase in ("source", "restored"):
-                obj, maps = local_pod(phase, "" if expected is None else expected["set"])
+            for phase in ("source", "reattached", "restored"):
+                obj, maps = local_pod(phase, expected["set"] if phase == "restored" else "")
                 name = obj["metadata"]["name"]
                 if inspect("pod", name) is not None:
                     raise RuntimeError("local recovery Pod already exists")
@@ -186,8 +188,32 @@ def run_program():
                         if result.returncode != 75 or time.monotonic() >= deadline:
                             raise RuntimeError("local capture did not finish")
                         time.sleep(1)
+                    command(
+                        "exec",
+                        name + "-database",
+                        "pg_ctl",
+                        "--pgdata=/var/lib/postgresql/data/pgdata",
+                        "--mode=fast",
+                        "--no-wait",
+                        "stop",
+                        timeout=90,
+                    )
+                    deadline = time.monotonic() + 60
+                    while True:
+                        status = inspect("container", name + "-database")["State"]
+                        if not status["Running"]:
+                            if status["ExitCode"] != 0:
+                                raise RuntimeError("local database did not shut down cleanly")
+                            break
+                        if time.monotonic() >= deadline:
+                            raise RuntimeError("local database shutdown timed out")
+                        time.sleep(1)
+                    command("exec", app, "php", "/opt/news/drill.php", "unavailable")
+                if phase != "restored":
                     remove(*owned[-1])
-            print("PASS: canonical recovery programs with source removed and fresh local targets")
+            print(
+                "PASS: database outage, source claim reuse and paired recovery; cross-node placement requires live acceptance"
+            )
         except (RuntimeError, subprocess.SubprocessError):
             diagnostics = recovery.ROOT / ".tmp/news/033-execution" / (base + "-failure.log")
             diagnostics.parent.mkdir(parents=True, exist_ok=True)

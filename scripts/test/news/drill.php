@@ -39,7 +39,16 @@ function state(string $auth): array {
 }
 
 try {
-    check(count($argv) === 2 && in_array($argv[1], ['source', 'restored'], true));
+    check(count($argv) === 2 && in_array($argv[1], ['source', 'unavailable', 'reattached', 'restored'], true));
+    if ($argv[1] === 'unavailable') {
+        $connection = @stream_socket_client('tcp://127.0.0.1:5432', $errno, $error, 1);
+        check($connection === false);
+        $output = [];
+        exec(escapeshellarg(PHP_BINARY) . ' /opt/news/ready.php 2>/dev/null', $output, $status);
+        check($status !== 0);
+        echo "News database outage confirmed; application readiness is unavailable\n";
+        exit(0);
+    }
     $login = api('/accounts/ClientLogin', ['Email' => 'reader', 'Passwd' => getenv('NEWS_API_PASSWORD')]);
     check(preg_match('/^Auth=(.+)$/m', $login, $matched) === 1);
     $auth = trim($matched[1]);
@@ -63,7 +72,9 @@ try {
         $expected = json_decode(stream_get_contents(STDIN, 4097), true, 32, JSON_THROW_ON_ERROR);
         check(is_array($expected) && state($auth) === array_diff_key($expected, ['set' => true]));
         check(!is_file('/run/news/last-refresh'));
-        echo "News isolated paired recovery passed; polling remains disabled\n";
+        echo $argv[1] === 'reattached'
+            ? "News source claim reuse passed; article and reading state preserved\n"
+            : "News isolated paired recovery passed; polling remains disabled\n";
     }
 } catch (Throwable $error) {
     fwrite(STDERR, "News recovery phase failed at fixture line " . ($error->getCode() ?: $error->getLine()) . "\n");

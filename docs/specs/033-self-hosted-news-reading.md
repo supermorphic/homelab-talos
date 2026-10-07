@@ -316,17 +316,22 @@ from a clean linked worktree with task-scoped credentials. This standalone suite
 uses `test-runner`, disposable credentials, and five fresh Longhorn claims in a
 restricted namespace with all ingress and egress denied. The app, database, and
 backup helper communicate over loopback. It captures two synthetic feeds and
-article/category/read/star state, removes the source Pod, restores the paired set
-into separate claims, and checks the saved state through fresh API authentication
-with polling disabled. Only the backup claim is shared with the restored Pod,
-where it is read-only. It never mounts production storage or credentials.
+article/category/read/star state, stops the disposable database, and verifies that
+FreshRSS readiness becomes unavailable. It removes the source Pod and reattaches
+its original claims in a separate Pod that excludes the previous node. The drill
+requires an actual node change and unchanged saved state before removing that Pod
+and restoring the paired set into fresh claims. It checks the recovered state
+through fresh API authentication with polling disabled. Only the backup claim is
+shared with the restored Pod, where it is read-only. It never mounts production
+storage or credentials.
 
 The result requires successful assertions and cleanup. The private run directory
 contains a sanitized outcome and creation-UID ownership ledger. If cleanup fails,
 retain that ledger and investigate the named run resources before retrying; do not
 adopt or delete replacement objects. Namespace policy and quota are checked before
 mutations. Deployed network-denial acceptance remains separate from these source
-and baseline checks. This drill proves logical recovery and fresh claim use;
+and baseline checks. This drill proves database-outage readiness, state preservation
+through cross-node claim reattachment, and logical recovery into fresh claims;
 confirmed Longhorn off-cluster recovery and native-client reconciliation remain
 required before primary use or issue closure.
 
@@ -361,7 +366,8 @@ server-side extraction acceptance.
 Synchronize subscriptions/categories and bidirectional read/unread and starred
 state. The operator selected the configured Mac as sufficient for native-client
 acceptance; iPhone and iPad checks are optional and must not be reported as tested
-without separate evidence. Exercise offline actions followed by reconnection.
+without separate evidence. Offline/reconnect checks are optional and are not
+required for issue closure. Report them as tested only with separate evidence.
 Do not promise immediate background sync on iOS, identical advanced-filter UI, or
 automatic replacement of cached bodies. Offline text depends on prior client sync;
 offline image availability requires separate testing.
@@ -470,7 +476,7 @@ Required evidence before the base deployment is accepted:
   repeated polls, and preservation of stored items when a feed is unavailable or
   invalid. Exercise full-content and summary-only feeds without an extractor.
 - Perform Mac checks for normal article rendering,
-  categories, bidirectional state, offline/reconnect behavior, and LAN/off-LAN
+  categories, bidirectional state, and LAN/off-LAN
   private access. Record limits of cached-body updates and remote image access.
 - Prove container restrictions, storage restart/rescheduling, bounded refresh work,
   private network boundaries, database-outage behavior, and restoration of the
