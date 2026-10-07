@@ -16,12 +16,6 @@
     - Docker Hub:
         - href: https://hub.docker.com
           icon: docker.svg
-    - Helm Charts:
-        - href: https://artifacthub.io
-          icon: artifacthub.svg
-    - Public KeyDB:
-        - href: http://fvonline-db.bplaced.net
-          icon: makemkv.png
 - Local Area Network:
     - Unifi Network:
         - href: https://udm.supermorphic.com
