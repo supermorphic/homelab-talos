@@ -35,6 +35,18 @@ final class Server {
         if ($pid!==null && posix_getpgid($pid)===$pid) { posix_kill(-$pid,SIGKILL); }
         $this->child->terminate(SIGKILL);
     }
+    private function reapGroup(int $group, \Closure $done): void {
+        // React has reaped the leader. Kill survivors and retain only this
+        // completed group until all adopted descendants have exited.
+        posix_kill(-$group, SIGKILL);
+        $timer=null;
+        $reap=function () use ($group,$done,&$timer): bool {
+            do { $result=pcntl_waitpid(-$group,$status,WNOHANG); } while ($result>0);
+            if ($result===-1 && pcntl_get_last_error()===PCNTL_ECHILD) { if ($timer!==null) { Loop::cancelTimer($timer); } $done(); return true; }
+            return false;
+        };
+        if (!$reap()) { $timer=Loop::addPeriodicTimer(0.01,$reap); }
+    }
     public function handle(ServerRequestInterface $request): ResponseInterface|PromiseInterface {
         if ($request->getUri()->getPath()==='/ready' && $request->getMethod()==='GET') {
             return self::response($this->stopping?503:200,['release_id'=>$this->release->id()]);
@@ -100,22 +112,23 @@ final class Server {
                 });
                 $child->stderr->on('data',function ($data) use (&$errBytes,&$forced): void { $errBytes+=strlen($data); if ($errBytes>8192) { $forced='job_failed'; $this->kill(); } });
                 $child->on('exit',function ($code) use (&$out,&$forced,&$timer,$origin,$finish,$pid): void {
-                    Loop::cancelTimer($timer); $this->child=null; $this->reserved=false;
-                    // When this server is PID 1 it adopts descendants after a
-                    // killed job. React has reaped the direct child already.
-                    if ($pid!==null) { while (pcntl_waitpid(-$pid,$status,WNOHANG)>0) {} }
-                    $reply=json_decode($out,true,32);
-                    if ($forced!==null || $code!==0 || !$this->validReply($reply)) { $reply=['decision'=>'rejected','reason'=>$forced??'reply_invalid','release_id'=>$this->release->id()]; }
-                    if (($reply['reason']??'')==='rate_limited') {
-                        if (count($this->origins)>=256) { array_shift($this->origins); }
-                        $this->origins[$origin]=self::now()+max(1,min($this->limits['max_retry_after_seconds'],(int)($reply['retry_after']??$this->limits['origin_cooldown_seconds'])));
-                        if (isset($reply['final_url'])) { $this->origins[self::origin($reply['final_url'])]=$this->origins[$origin]; }
-                        while (count($this->origins)>256) { array_shift($this->origins); }
-                        $temporary='/run/news-graby/origins-'.bin2hex(random_bytes(4));
-                        file_put_contents($temporary,json_encode($this->origins,JSON_THROW_ON_ERROR),LOCK_EX); chmod($temporary,0600); rename($temporary,'/run/news-graby/origins.json');
-                    }
-                    $finish($reply);
-                    if ($this->stopping) { Loop::stop(); }
+                    Loop::cancelTimer($timer); $this->child=null;
+                    $complete=function () use (&$out,$forced,$code,$origin,$finish): void {
+                        $this->reserved=false;
+                        $reply=json_decode($out,true,32);
+                        if ($forced!==null || $code!==0 || !$this->validReply($reply)) { $reply=['decision'=>'rejected','reason'=>$forced??'reply_invalid','release_id'=>$this->release->id()]; }
+                        if (($reply['reason']??'')==='rate_limited') {
+                            if (count($this->origins)>=256) { array_shift($this->origins); }
+                            $this->origins[$origin]=self::now()+max(1,min($this->limits['max_retry_after_seconds'],(int)($reply['retry_after']??$this->limits['origin_cooldown_seconds'])));
+                            if (isset($reply['final_url'])) { $this->origins[self::origin($reply['final_url'])]=$this->origins[$origin]; }
+                            while (count($this->origins)>256) { array_shift($this->origins); }
+                            $temporary='/run/news-graby/origins-'.bin2hex(random_bytes(4));
+                            file_put_contents($temporary,json_encode($this->origins,JSON_THROW_ON_ERROR),LOCK_EX); chmod($temporary,0600); rename($temporary,'/run/news-graby/origins.json');
+                        }
+                        $finish($reply);
+                        if ($this->stopping) { Loop::stop(); }
+                    };
+                    if ($pid!==null) { $this->reapGroup($pid,$complete); } else { $complete(); }
                 });
                 $child->stdin->end($raw);
             } catch (\Throwable $e) {
@@ -164,7 +177,7 @@ final class Server {
     }
     private function shutdown(): void {
         $this->stopping=true; $this->socket?->close(); $this->metricsSocket?->close(); $this->kill();
-        if ($this->child===null) { Loop::stop(); }
+        if ($this->child===null && !$this->reserved) { Loop::stop(); }
         else { Loop::addTimer(0.3,fn()=>Loop::stop()); }
     }
 }

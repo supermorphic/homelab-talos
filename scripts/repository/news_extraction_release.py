@@ -84,6 +84,11 @@ def verify_candidate(candidate: dict, evidence: dict) -> bool:
                     or case.get("missing_" + kind) != 0
                 ):
                     return False
+            if (
+                case.get("unexpected_blocks") != 0
+                or case.get("excluded_blocks_checked") != requirements["excluded"]
+            ):
+                return False
             if case.get("missing_structures") != 0:
                 return False
         retained = evidence["retention"]
@@ -121,6 +126,7 @@ def prepare(request: dict) -> Path:
                 "blocks": len(c["reference"]["blocks"]),
                 "images": len(c["reference"]["images"]),
                 "captions": len(c["reference"]["captions"]),
+                "excluded": len(c["reference"].get("excluded_blocks", [])),
             }
             for c in manifest["cases"]
             if c["expected"] == "accepted"

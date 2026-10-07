@@ -75,12 +75,20 @@ def assess(html: str, reference: dict) -> dict:
         if key in parsed.images
     ]
     order = positions == sorted(positions) and image_positions == sorted(image_positions)
+    excluded = reference.get("excluded_blocks", [])
+    unwanted = sum(normalize(block) in text for block in excluded)
+    unwanted += sum(
+        parsed.tags.count(tag)
+        for tag in ("nav", "header", "footer", "aside", "form", "script", "iframe")
+    )
     return {
-        "pass": not (missing or captions or images or structures) and order,
+        "pass": not (missing or captions or images or structures or unwanted) and order,
         "editorial_blocks": len(blocks),
         "editorial_images": len(reference.get("images", [])),
         "editorial_captions": len(reference.get("captions", [])),
         "missing_blocks": missing,
+        "unexpected_blocks": unwanted,
+        "excluded_blocks_checked": len(excluded),
         "missing_captions": captions,
         "missing_images": images,
         "missing_structures": structures,

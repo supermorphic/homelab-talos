@@ -150,3 +150,29 @@ class ExtractionManifestsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CandidateIngestionTests(unittest.TestCase):
+    def test_different_candidate_runtime_fails_before_any_container_start(self):
+        import importlib
+        import os
+        import sys
+        import tempfile
+        from unittest.mock import patch
+
+        with patch.object(sys, "path", [str(ROOT / "scripts/test/news"), *sys.path]):
+            integration = importlib.import_module("freshrss_integration")
+        metadata = json.loads((ROOT / "kubernetes/apps/news/graby/app/release.json").read_text())
+        metadata["freshrss_image"] = "docker.io/freshrss/freshrss@sha256:" + "0" * 64
+        with tempfile.TemporaryDirectory(dir=ROOT / ".tmp") as temporary:
+            Path(temporary, "release.json").write_text(json.dumps(metadata))
+            with (
+                patch.dict(os.environ, {"NEWS_EXTRACTION_CANDIDATE": temporary}),
+                patch.object(
+                    integration.subprocess,
+                    "run",
+                    side_effect=AssertionError("container operation before compatibility check"),
+                ),
+                self.assertRaisesRegex(ValueError, "FreshRSS.*image"),
+            ):
+                integration.main(extraction=True)

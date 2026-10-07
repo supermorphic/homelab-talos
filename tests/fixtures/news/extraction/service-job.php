@@ -2,6 +2,11 @@
 posix_setpgid(0,0);
 $request=json_decode(stream_get_contents(STDIN),true);
 file_put_contents('/work/job-pid',(string)getmypid());
+if (str_contains($request['url'],'/delayed-orphan')) {
+    $orphan=pcntl_fork();
+    if ($orphan===0) { fclose(STDIN); fclose(STDOUT); fclose(STDERR); usleep(200000); exit; }
+    file_put_contents('/work/descendant-pid',(string)$orphan);
+}
 if (str_contains($request['url'],'/hang')) {
     $child=proc_open(['/usr/bin/php8.4','-r','sleep(30);'],[0=>['file','/dev/null','r'],1=>['file','/dev/null','w'],2=>['file','/dev/null','w']],$pipes);
     file_put_contents('/work/descendant-pid',(string)proc_get_status($child)['pid']);

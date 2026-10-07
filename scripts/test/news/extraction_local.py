@@ -19,7 +19,9 @@ APP = Path(
 IMAGE = "docker.io/thecodingmachine/php:8.4-v5-cli@sha256:16aceb03a41e9da89f03a3a6d9ad08fb226af6cd1312bc4a0603452a37ff9399"
 
 
-def container(command, *, network="none", app=APP, timeout=330, slow_dns=False, corpus=None):
+def container(
+    command, *, network="none", app=APP, timeout=330, slow_dns=False, corpus=None, observer=None
+):
     name = "news-extraction-" + secrets.token_hex(8)
     try:
         result = subprocess.run(
@@ -27,6 +29,7 @@ def container(command, *, network="none", app=APP, timeout=330, slow_dns=False, 
                 "podman",
                 "run",
                 "--rm",
+                *(["--detach"] if observer is not None else []),
                 "--name",
                 name,
                 "--label",
@@ -50,7 +53,7 @@ def container(command, *, network="none", app=APP, timeout=330, slow_dns=False, 
                 "--tmpfs",
                 "/tmp:rw,size=256m",
                 "--tmpfs",
-                "/work:rw,mode=1777,size=512m",
+                "/work:rw,mode=1777,size=256m",
                 "--tmpfs",
                 "/run/news-graby:rw,mode=1777,size=16m",
                 "-v",
@@ -77,6 +80,8 @@ def container(command, *, network="none", app=APP, timeout=330, slow_dns=False, 
             timeout=timeout,
             check=False,
         )
+        if result.returncode == 0 and observer is not None:
+            return observer(name)
     finally:
         subprocess.run(
             ["podman", "rm", "--force", name], capture_output=True, timeout=30, check=False
@@ -84,6 +89,44 @@ def container(command, *, network="none", app=APP, timeout=330, slow_dns=False, 
     if result.returncode:
         raise AssertionError((result.stdout + result.stderr).decode(errors="replace")[-2400:])
     return result.stdout.decode()
+
+
+def pid1_service():
+    def observe(name):
+        result = subprocess.run(
+            [
+                "podman",
+                "exec",
+                name,
+                "/usr/bin/php8.4",
+                "/repo/scripts/test/news/extraction-pid1-tests.php",
+            ],
+            capture_output=True,
+            timeout=340,
+            check=False,
+        )
+        if result.returncode:
+            raise AssertionError((result.stdout + result.stderr).decode(errors="replace")[-1800:])
+        return result.stdout.decode()
+
+    print(
+        container(
+            "sh /app/scripts/initialize.sh >/work/init.log 2>&1 && exec /usr/bin/php8.4 -d extension=tidy /repo/scripts/test/news/extraction-service-bootstrap.php",
+            network="bridge",
+            observer=observe,
+        ),
+        end="",
+    )
+
+
+def initialization_lifecycle():
+    print(
+        container(
+            "/usr/bin/php8.4 -d extension=tidy /repo/scripts/test/news/extraction-initialization-lifecycle.php",
+            network="bridge",
+        ),
+        end="",
+    )
 
 
 def initialization():
@@ -107,10 +150,11 @@ def initialization():
         print(
             container(
                 """set -eu
-mkdir /work/staging-interrupted
+mkdir /work/staging-aaaaaaaaaaaaaaaa
 if /usr/bin/php8.4 -d extension=tidy /app/scripts/ready.php; then exit 1; fi
 sh /app/scripts/initialize.sh
 test ! -e /work/script-executed
+test ! -e /work/staging-aaaaaaaaaaaaaaaa
 sh /app/scripts/initialize.sh
 /usr/bin/php8.4 -d extension=tidy /app/scripts/ready.php
 if /usr/bin/php8.4 /app/scripts/ready.php; then exit 1; fi
@@ -229,8 +273,11 @@ def main():
         ),
         end="",
     )
+    if args.phase in ("service", "all"):
+        pid1_service()
     if args.phase in ("initialization", "all"):
         initialization()
+        initialization_lifecycle()
     if args.phase in ("fetch", "all"):
         print(
             container(

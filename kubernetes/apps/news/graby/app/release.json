@@ -14,7 +14,7 @@
     "kustomization.yaml": "d5eac35af26a6e44dd2d822d498384d47daabc6bf2e4caab91317050dc1b5236",
     "limits.json": "6a776c97dfcb242c272a535905a80eef79380416cbcabd5f846a9fd92dd32966",
     "scripts/archive.php": "3334d21690b209d1e2caa16b8b014bb53ff35e8fb0c55eea0397e29c4e7f4285",
-    "scripts/initialize.php": "dc6cb35aaea4fe573afa3bd4b4a62f3ff6d90bb17d028c07b89456bc2c922b0c",
+    "scripts/initialize.php": "0435316ad85550aef5dda5bdbcdb790e2c851692692d180efc8672cc563bc2cd",
     "scripts/initialize.sh": "32524a6b2e89495053aa0c987a145cb6aff01e89205191d3b9bb254d93f386c2",
     "scripts/job.php": "de8b434713edc44245ef7d5260a2175a370580e1c5afff05a35a79d5b7b5e358",
     "scripts/ready.php": "72222f8bb515351f01ff70f4af47d88c5730138805e04c3215db2f6a9861a06d",
@@ -29,7 +29,7 @@
     "src/Fetcher.php": "8cb2e580ceee180821595eca316ed9bbf5552907a0abeaf262af41ca2d0f6451",
     "src/Release.php": "7a80116ad7e82518b3484d43357c50aac9f2125b8569e6a3e8d03ec876779cb1",
     "src/Sanitizer.php": "42b0339dcf31914a8d250a115ef6818cdbce83e4d23107fac88c90d733ed4f94",
-    "src/Server.php": "891803d203b4577f1ffcd76ea25084fc300188571f0627d49270dd7bd2fea8e1"
+    "src/Server.php": "fd5b0834d1f05ed9a0904ea5bf36f6fb0427794ebee85b3448b25301b608ac7a"
   },
   "extension_files": {
     "Client.php": "cff021e68560391fe74e2bdf4895ae16b862618741568479ec1734e1444f923f",
@@ -39,7 +39,7 @@
     "metadata.json": "afc4aea5c80937e49c7de21b04b69dcb42f5505d72d89b51dec239ccadbdc8c9"
   },
   "corpus": {
-    "sha256": "39b36d691e71e0563c49ae420754c20fdb38f4d481b39de35b50e262e8a1aa77",
+    "sha256": "7f0b05f965495c072e0ab949ec0398f6ae4c34ce7483e999e1efc72539df2c00",
     "cases": [
       "9to5mac-live-0",
       "9to5mac-live-1",
@@ -108,139 +108,166 @@
       "wired-0": {
         "blocks": 21,
         "images": 1,
-        "captions": 1
+        "captions": 1,
+        "excluded": 8
       },
       "wired-4": {
         "blocks": 16,
         "images": 1,
-        "captions": 1
+        "captions": 1,
+        "excluded": 8
       },
       "wired-7": {
         "blocks": 13,
         "images": 1,
-        "captions": 1
+        "captions": 1,
+        "excluded": 8
       },
       "wired-1": {
         "blocks": 31,
         "images": 11,
-        "captions": 1
+        "captions": 1,
+        "excluded": 8
       },
       "caranddriver-5": {
         "blocks": 12,
         "images": 5,
-        "captions": 1
+        "captions": 1,
+        "excluded": 9
       },
       "caranddriver-6": {
         "blocks": 24,
         "images": 7,
-        "captions": 1
+        "captions": 1,
+        "excluded": 9
       },
       "caranddriver-7": {
         "blocks": 25,
         "images": 7,
-        "captions": 1
+        "captions": 1,
+        "excluded": 9
       },
       "ars-0": {
         "blocks": 23,
         "images": 1,
-        "captions": 1
+        "captions": 1,
+        "excluded": 4
       },
       "ars-1": {
         "blocks": 13,
         "images": 1,
-        "captions": 1
+        "captions": 1,
+        "excluded": 4
       },
       "ars-2": {
         "blocks": 17,
         "images": 1,
-        "captions": 1
+        "captions": 1,
+        "excluded": 4
       },
       "control-public": {
         "blocks": 9,
         "images": 0,
-        "captions": 0
+        "captions": 0,
+        "excluded": 0
       },
       "wired-live-0": {
         "blocks": 105,
         "images": 30,
-        "captions": 1
+        "captions": 1,
+        "excluded": 8
       },
       "wired-live-1": {
         "blocks": 46,
         "images": 12,
-        "captions": 1
+        "captions": 1,
+        "excluded": 8
       },
       "caranddriver-live-0": {
         "blocks": 20,
         "images": 6,
-        "captions": 1
+        "captions": 1,
+        "excluded": 9
       },
       "caranddriver-live-1": {
         "blocks": 22,
         "images": 9,
-        "captions": 1
+        "captions": 1,
+        "excluded": 9
       },
       "ars-live-0": {
         "blocks": 12,
         "images": 1,
-        "captions": 1
+        "captions": 1,
+        "excluded": 4
       },
       "ars-live-1": {
         "blocks": 12,
         "images": 1,
-        "captions": 1
+        "captions": 1,
+        "excluded": 4
       },
       "revalidated-wired-0": {
         "blocks": 22,
         "images": 1,
-        "captions": 1
+        "captions": 1,
+        "excluded": 8
       },
       "revalidated-wired-4": {
         "blocks": 16,
         "images": 1,
-        "captions": 1
+        "captions": 1,
+        "excluded": 8
       },
       "revalidated-wired-7": {
         "blocks": 13,
         "images": 1,
-        "captions": 1
+        "captions": 1,
+        "excluded": 8
       },
       "revalidated-wired-1": {
         "blocks": 33,
         "images": 11,
-        "captions": 1
+        "captions": 1,
+        "excluded": 8
       },
       "revalidated-caranddriver-5": {
         "blocks": 14,
         "images": 5,
-        "captions": 1
+        "captions": 1,
+        "excluded": 9
       },
       "revalidated-caranddriver-6": {
         "blocks": 26,
         "images": 7,
-        "captions": 1
+        "captions": 1,
+        "excluded": 9
       },
       "revalidated-caranddriver-7": {
         "blocks": 27,
         "images": 7,
-        "captions": 1
+        "captions": 1,
+        "excluded": 9
       },
       "revalidated-ars-0": {
         "blocks": 23,
         "images": 1,
-        "captions": 1
+        "captions": 1,
+        "excluded": 4
       },
       "revalidated-ars-1": {
         "blocks": 13,
         "images": 1,
-        "captions": 1
+        "captions": 1,
+        "excluded": 4
       },
       "revalidated-ars-2": {
         "blocks": 17,
         "images": 1,
-        "captions": 1
+        "captions": 1,
+        "excluded": 4
       }
     }
   },
-  "id": "7abe377b433b391103075917b0cc9df35a1efffb0421a4e20221994ce3fdfe84"
+  "id": "f45a1a81808cbde6ef4fc6e65ae008640c29ae06f37e6004598c26c817c2a13a"
 }

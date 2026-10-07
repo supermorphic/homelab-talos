@@ -9,9 +9,24 @@ function command(array $args, string $directory): void {
     if (!is_resource($process) || proc_close($process) !== 0) { throw new RuntimeException('installation_failed'); }
 }
 
+function removeStage(string $path): void {
+    if (is_link($path) || is_file($path)) { if (!unlink($path)) { throw new RuntimeException('staging_cleanup_failed'); } return; }
+    if (!is_dir($path)) { return; }
+    foreach (new FilesystemIterator($path, FilesystemIterator::SKIP_DOTS) as $entry) { removeStage($entry->getPathname()); }
+    if (!rmdir($path)) { throw new RuntimeException('staging_cleanup_failed'); }
+}
+$stage = null;
+
 try {
     $root = dirname(__DIR__);
     $release = NewsExtraction\Release::load($root . '/release.json', $root);
+    $lock = fopen('/work/.initialize.lock', 'c');
+    if ($lock === false || !flock($lock, LOCK_EX | LOCK_NB)) { throw new RuntimeException('initializer_busy'); }
+    chmod('/work/.initialize.lock', 0600);
+    // This volume belongs only to this initializer. Never follow stage symlinks.
+    foreach (glob('/work/staging-*') as $abandoned) {
+        if (preg_match('/^staging-[a-f0-9]{16}$/D', basename($abandoned))) { removeStage($abandoned); }
+    }
     // A warm reuse must pass all checks, never just a marker-file check.
     if (is_dir('/work/current')) {
         NewsExtraction\verifyRuntime('/work/current', $root);
@@ -47,7 +62,8 @@ try {
     if (!rename($stage, '/work/current')) { throw new RuntimeException('selection_failed'); }
     echo "initialization_ready\n";
 } catch (Throwable $e) {
-    $known = ['installation_failed', 'rule_archive_mismatch', 'unsafe_archive', 'archive_limit', 'rules_missing', 'runtime_mismatch', 'rules_mismatch', 'installed_lock_mismatch', 'platform_missing', 'rule_policy_failed'];
+    if ($stage !== null) { try { removeStage($stage); } catch (Throwable $cleanup) { /* Retry cleanup under the next initializer lock. */ } }
+    $known = ['initializer_busy', 'staging_cleanup_failed', 'installation_failed', 'rule_archive_mismatch', 'unsafe_archive', 'archive_limit', 'rules_missing', 'runtime_mismatch', 'rules_mismatch', 'installed_lock_mismatch', 'platform_missing', 'rule_policy_failed'];
     $reason = in_array($e->getMessage(), $known, true) ? $e->getMessage() : 'initialization_failed';
     fwrite(STDERR, $reason . "\n"); exit(1);
 }

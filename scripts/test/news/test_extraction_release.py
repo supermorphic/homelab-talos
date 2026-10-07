@@ -28,7 +28,9 @@ class ReleaseGateTests(unittest.TestCase):
             "corpus": {
                 "sha256": "c" * 64,
                 "cases": ["original-1", "broader-1"],
-                "quality": {"original-1": {"blocks": 2, "images": 1, "captions": 1}},
+                "quality": {
+                    "original-1": {"blocks": 2, "images": 1, "captions": 1, "excluded": 0}
+                },
             },
         }
         unsigned = {key: value for key, value in self.candidate.items() if key != "id"}
@@ -61,6 +63,8 @@ class ReleaseGateTests(unittest.TestCase):
                 "editorial_images": 1,
                 "editorial_captions": 1,
                 "missing_blocks": 0,
+                "unexpected_blocks": 0,
+                "excluded_blocks_checked": 0,
                 "missing_images": 0,
                 "missing_captions": 0,
                 "missing_structures": 0,
@@ -123,6 +127,24 @@ class ReleaseGateTests(unittest.TestCase):
             evidence = copy.deepcopy(self.evidence)
             evidence["retention"][field] = False
             self.assertFalse(verify_candidate(self.candidate, evidence))
+
+    def test_complete_article_with_reviewed_chrome_or_comments_fails(self):
+        reference = {
+            "blocks": [{"tag": "p", "text": "Complete editorial paragraph."}],
+            "excluded_blocks": [
+                "Synthetic navigation directory and account controls.",
+                "Off-topic reader discussion from the source page.",
+            ],
+        }
+        body = "<p>Complete editorial paragraph.</p>"
+        self.assertTrue(assess(body, reference)["pass"])
+        for extra in (
+            "<nav>Unrelated site directory</nav>",
+            "<p>Synthetic navigation directory and account controls.</p>",
+            "<p>Off-topic reader discussion from the source page.</p>",
+        ):
+            with self.subTest(extra=extra):
+                self.assertFalse(assess(body + extra, reference)["pass"])
 
     def test_editorial_oracle_rejects_successful_partial_body(self):
         reference = {

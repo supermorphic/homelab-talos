@@ -25,6 +25,17 @@ def main(*, extraction=False, extraction_recovery=False):
     assert (APP / "scripts/start.sh").is_file(), "FreshRSS restricted startup is missing"
     deployment = yaml.safe_load((APP / "deployment.yaml").read_text())
     image = deployment["spec"]["template"]["spec"]["containers"][0]["image"]
+    if extraction or extraction_recovery:
+        candidate = Path(
+            os.environ.get(
+                "NEWS_EXTRACTION_CANDIDATE", str(ROOT / "kubernetes/apps/news/graby/app")
+            )
+        )
+        declared = json.loads((candidate / "release.json").read_text())
+        if declared.get("freshrss_image") != image:
+            raise ValueError(
+                "FreshRSS candidate image differs from the configured compatibility runtime"
+            )
     database = yaml.safe_load((DB / "statefulset.yaml").read_text())
     db_image = database["spec"]["template"]["spec"]["containers"][0]["image"]
     marker = "news-app-" + secrets.token_hex(6)
