@@ -61,6 +61,38 @@ class ClusterRecoveryTests(unittest.TestCase):
         app = next(c for c in target["containers"] if c["name"] == "app")
         self.assertIn({"name": "NEWS_POLLING_ENABLED", "value": "false"}, app["env"])
 
+    def test_reattachment_reuses_only_source_claims_and_excludes_previous_node(self):
+        try:
+            target = self.module.pod("abcdef123456", "reattached", avoid_node="node-a")
+        except (TypeError, ValueError):
+            self.fail("the registered fixture cannot reattach its source claims")
+        source = self.module.pod("abcdef123456", "source")
+        self.assertEqual(
+            [v for v in target["spec"]["volumes"] if "persistentVolumeClaim" in v],
+            [v for v in source["spec"]["volumes"] if "persistentVolumeClaim" in v],
+        )
+        self.assertEqual(
+            target["spec"]["affinity"]["nodeAffinity"][
+                "requiredDuringSchedulingIgnoredDuringExecution"
+            ]["nodeSelectorTerms"],
+            [
+                {
+                    "matchFields": [
+                        {"key": "metadata.name", "operator": "NotIn", "values": ["node-a"]}
+                    ]
+                }
+            ],
+        )
+        self.assertNotIn("nodeName", target["spec"])
+        for phase, node in (
+            ("reattached", ""),
+            ("source", "node-a"),
+            ("restored", "node-a"),
+            ("reattached", "../node"),
+        ):
+            with self.subTest(phase=phase, node=node), self.assertRaises(ValueError):
+                self.module.pod("abcdef123456", phase, avoid_node=node)
+
     def test_fresh_filesystem_root_entries_are_outside_article_data(self):
         import tempfile
         from pathlib import Path, PurePosixPath
@@ -90,9 +122,12 @@ class ClusterRecoveryTests(unittest.TestCase):
             data["release.json"],
             (module.ROOT / "kubernetes/apps/news/graby/app/release.json").read_text(),
         )
-        for phase in ("source", "restored"):
+        for phase in ("source", "reattached", "restored"):
             spec = module.pod(
-                "abcdef123456", phase, "set-1234567890-ABC123" if phase == "restored" else ""
+                "abcdef123456",
+                phase,
+                "set-1234567890-ABC123" if phase == "restored" else "",
+                avoid_node="node-a" if phase == "reattached" else "",
             )["spec"]
             volumes = {v["name"]: v for v in spec["volumes"]}
             for name in ("app", "helper"):
@@ -188,8 +223,12 @@ class NewsAdmissionTests(unittest.TestCase):
     def test_fixed_pods_allow_phases_and_reject_boundary_changes(self):
         from scripts.test.news import cluster_recovery as module
 
-        for phase, selected in (("source", ""), ("restored", "set-1234567890-ABC123")):
-            obj = module.pod("abcdef123456", phase, selected)
+        for phase, selected, node in (
+            ("source", "", ""),
+            ("reattached", "", "node-a"),
+            ("restored", "set-1234567890-ABC123", ""),
+        ):
+            obj = module.pod("abcdef123456", phase, selected, avoid_node=node)
             self.assertTrue(self.admits("homelab-test-news-pods", obj))
             for key, value in (
                 ("hostNetwork", True),
@@ -227,8 +266,12 @@ class NewsAdmissionTests(unittest.TestCase):
                 check=True,
                 capture_output=True,
             )
-            for phase, selected in (("source", ""), ("restored", "set-1234567890-ABC123")):
-                pod = module.pod("abcdef123456", phase, selected)
+            for phase, selected, node in (
+                ("source", "", ""),
+                ("reattached", "", "node-a"),
+                ("restored", "set-1234567890-ABC123", ""),
+            ):
+                pod = module.pod("abcdef123456", phase, selected, avoid_node=node)
                 converted = json.loads(
                     subprocess.check_output([binary], input=json.dumps(pod).encode())
                 )
@@ -375,8 +418,190 @@ class NewsAdmissionTests(unittest.TestCase):
         obj.update(command=["php", "/opt/news/drill.php", "restored"], stdin=True)
         self.assertTrue(admits(obj))
 
+    def test_outage_and_retained_checks_allow_only_fixed_synthetic_commands(self):
+        from scripts.test.core.test_test_access_manifests import TestAccessPolicyTests
+
+        request = {
+            "operation": "CONNECT",
+            "namespace": "news-recovery-test",
+            "name": "news-drill-abcdef123456-source",
+            "subResource": "exec",
+            "resource": {"group": "", "version": "v1", "resource": "pods"},
+            "userInfo": {"username": "system:serviceaccount:kube-system:homelab-test-runner"},
+        }
+        obj = {
+            "container": "database",
+            "command": [
+                "pg_ctl",
+                "--pgdata=/var/lib/postgresql/data/pgdata",
+                "--mode=fast",
+                "--no-wait",
+                "stop",
+            ],
+            "stdout": True,
+            "stderr": True,
+            "stdin": False,
+            "tty": False,
+        }
+
+        def admits(o):
+            return TestAccessPolicyTests.admits(self, "homelab-test-news-exec", request, o, None)
+
+        self.assertTrue(admits(obj), "the disposable database outage is not admitted")
+        for command in (
+            ["sh"],
+            obj["command"][:-1] + ["start"],
+            ["pg_ctl", "--mode=immediate", "stop"],
+        ):
+            self.assertFalse(admits(dict(obj, command=command)))
+        self.assertFalse(admits(dict(obj, container="app")))
+        self.assertTrue(
+            admits(
+                dict(obj, container="app", command=["php", "/opt/news/drill.php", "unavailable"])
+            )
+        )
+        request["name"] = "news-drill-abcdef123456-reattached"
+        self.assertFalse(admits(obj))
+        obj.update(
+            container="app", command=["php", "/opt/news/drill.php", "reattached"], stdin=True
+        )
+        self.assertTrue(admits(obj))
+        self.assertFalse(admits(dict(obj, stdin=False)))
+        request["namespace"] = "news"
+        self.assertFalse(admits(obj))
+
+    def test_reattached_admission_rejects_other_scheduling_or_production_mounts(self):
+        from scripts.test.news import cluster_recovery as module
+
+        target = module.pod("abcdef123456", "source")
+        target["metadata"]["name"] = "news-drill-abcdef123456-reattached"
+        target["spec"]["affinity"] = {
+            "nodeAffinity": {
+                "requiredDuringSchedulingIgnoredDuringExecution": {
+                    "nodeSelectorTerms": [
+                        {
+                            "matchFields": [
+                                {"key": "metadata.name", "operator": "NotIn", "values": ["node-a"]}
+                            ]
+                        }
+                    ]
+                }
+            }
+        }
+        self.assertTrue(self.admits("homelab-test-news-pods", target))
+        for change in ("operator", "extra-node", "host", "claim"):
+            bad = copy.deepcopy(target)
+            fields = bad["spec"]["affinity"]["nodeAffinity"][
+                "requiredDuringSchedulingIgnoredDuringExecution"
+            ]["nodeSelectorTerms"][0]["matchFields"][0]
+            if change == "operator":
+                fields["operator"] = "In"
+            elif change == "extra-node":
+                fields["values"].append("node-b")
+            elif change == "host":
+                bad["spec"]["hostNetwork"] = True
+            else:
+                bad["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"] = "freshrss-data"
+            self.assertFalse(self.admits("homelab-test-news-pods", bad), change)
+
 
 class ControllerTests(unittest.TestCase):
+    def test_outage_observes_scheduled_node_and_clean_shutdown_before_readiness_check(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import Mock
+
+        from scripts.test.news import cluster_recovery as module
+
+        running = {
+            "spec": {"nodeName": "node-a"},
+            "status": {"containerStatuses": [{"name": "database", "state": {"running": {}}}]},
+        }
+        stopped = copy.deepcopy(running)
+        stopped["status"]["containerStatuses"][0]["state"] = {"terminated": {"exitCode": 0}}
+        with tempfile.TemporaryDirectory() as directory:
+            client = module.Cluster("synthetic-config", Path(directory))
+            client.preflight = Mock()
+            client.snapshot = Mock(side_effect=[running, stopped, stopped])
+            client.call = Mock(return_value="")
+            self.assertEqual(client.database_outage(), "node-a")
+            self.assertEqual(client.call.call_count, 2)
+            self.assertIn("--container=database", client.call.call_args_list[0].args[0])
+            self.assertEqual(client.call.call_args_list[1].args[0][-1], "unavailable")
+
+    def test_reattachment_requires_an_actual_different_scheduled_node(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import Mock
+
+        from scripts.test.news import cluster_recovery as module
+
+        with tempfile.TemporaryDirectory() as directory:
+            client = module.Cluster("synthetic-config", Path(directory))
+            client.execute = Mock()
+            for node in ("", "node-a"):
+                client.snapshot = Mock(return_value={"spec": {"nodeName": node}})
+                with self.subTest(node=node), self.assertRaises(RuntimeError):
+                    client.verify_reattached({}, "node-a")
+                client.execute.assert_not_called()
+            client.snapshot = Mock(return_value={"spec": {"nodeName": "node-b"}})
+            client.verify_reattached({}, "node-a")
+            client.execute.assert_called_once_with("reattached", {})
+
+    def test_outage_refuses_a_replaced_source_pod_before_exec(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import Mock
+
+        from scripts.test.news import cluster_recovery as module
+
+        with tempfile.TemporaryDirectory() as directory:
+            client = module.Cluster("synthetic-config", Path(directory))
+            meta = module.metadata(client.run, "source")
+            client.ledger.write_text(
+                json.dumps({"kind": "Pod", "metadata": dict(meta, uid="original")}) + "\n"
+            )
+            client.preflight = Mock()
+            client.call = Mock(
+                return_value=json.dumps(
+                    {"metadata": dict(meta, uid="replacement"), "spec": {"nodeName": "node-a"}}
+                )
+            )
+            self.assertTrue(
+                hasattr(client, "database_outage"), "outage ownership guard is missing"
+            )
+            with self.assertRaises(RuntimeError):
+                client.database_outage()
+            self.assertTrue(all("exec" not in c.args[0] for c in client.call.call_args_list))
+
+    def test_failed_database_outage_blocks_reattachment_and_restore(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import Mock
+
+        from scripts.test.news import cluster_recovery as module
+
+        with tempfile.TemporaryDirectory() as directory:
+            client = Mock(directory=Path(directory))
+            client.execute.return_value = json.dumps(
+                {
+                    "set": "set-1234567890-ABC123",
+                    "items_sha256": "a" * 64,
+                    "subscriptions_sha256": "b" * 64,
+                    "articles": 3,
+                    "subscriptions": 2,
+                }
+            )
+            client.database_outage.side_effect = RuntimeError("synthetic outage assertion failed")
+            with self.assertRaises(RuntimeError):
+                module.run_drill(client)
+            client.create_pod.assert_called_once_with("source")
+            client.cleanup.assert_called_once()
+            report = json.loads((client.directory / "diagnostics/news-recovery.json").read_text())
+            self.assertEqual(report["phase"], "database-outage")
+            self.assertEqual(report["assertions"], "failed")
+            self.assertEqual(report["cleanup"], "passed")
+
     def test_configmap_quota_leaves_room_for_the_automatic_namespace_ca(self):
         import yaml
 

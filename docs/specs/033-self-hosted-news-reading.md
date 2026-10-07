@@ -316,17 +316,22 @@ from a clean linked worktree with task-scoped credentials. This standalone suite
 uses `test-runner`, disposable credentials, and five fresh Longhorn claims in a
 restricted namespace with all ingress and egress denied. The app, database, and
 backup helper communicate over loopback. It captures two synthetic feeds and
-article/category/read/star state, removes the source Pod, restores the paired set
-into separate claims, and checks the saved state through fresh API authentication
-with polling disabled. Only the backup claim is shared with the restored Pod,
-where it is read-only. It never mounts production storage or credentials.
+article/category/read/star state, stops the disposable database, and verifies that
+FreshRSS readiness becomes unavailable. It removes the source Pod and reattaches
+its original claims in a separate Pod that excludes the previous node. The drill
+requires an actual node change and unchanged saved state before removing that Pod
+and restoring the paired set into fresh claims. It checks the recovered state
+through fresh API authentication with polling disabled. Only the backup claim is
+shared with the restored Pod, where it is read-only. It never mounts production
+storage or credentials.
 
 The result requires successful assertions and cleanup. The private run directory
 contains a sanitized outcome and creation-UID ownership ledger. If cleanup fails,
 retain that ledger and investigate the named run resources before retrying; do not
 adopt or delete replacement objects. Namespace policy and quota are checked before
 mutations. Deployed network-denial acceptance remains separate from these source
-and baseline checks. This drill proves logical recovery and fresh claim use;
+and baseline checks. This drill proves database-outage readiness, state preservation
+through cross-node claim reattachment, and logical recovery into fresh claims;
 confirmed Longhorn off-cluster recovery and native-client reconciliation remain
 required before primary use or issue closure.
 

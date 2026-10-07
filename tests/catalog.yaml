@@ -886,6 +886,7 @@ suites:
     native_results: {strategy: wrapper-junit}
     dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/news-local-integration.sh, args: [], selector: null}
   - metadata: {id: test.news-restore-drill, source: test, framework: bash, suite: platform, tier: integration, target: news, scenario: synthetic-paired-claims, scope: application, intent: resilience, mutates_cluster: true, execution_owner: shared}
+    description: Validates disposable database-outage readiness, cross-node reuse of source claims, and paired recovery into fresh claims; excludes production mounts, off-cluster recovery, and production network-denial acceptance.
     access: {profile: test-runner, prerequisites: []}
     confirmation: {type: exact, variable: NEWS_RESTORE_DRILL_CONFIRM, expected: "restore:news:disposable"}
     runner: {command: "NEWS_RESTORE_DRILL_CONFIRM=restore:news:disposable mise exec -- just kube news-restore-drill", implementation: scripts/test/scenarios/news-restore-drill.sh}

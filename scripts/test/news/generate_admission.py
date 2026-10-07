@@ -26,6 +26,8 @@ def literal(value):
         )
     if value == "set-1234567890-ABC123":
         return "variables.selected"
+    if value == "node-avoid-placeholder":
+        return "variables.avoidNode"
     return json.dumps(value)
 
 
@@ -99,14 +101,21 @@ def documents():
         )["spec"]
         for phase in ("source", "restored")
     }
+    templates["reattached"] = fixture.pod(
+        "000000000000", "reattached", avoid_node="node-avoid-placeholder"
+    )["spec"]
     pod_variables = {
         **owner,
         "restored": "variables.item.metadata.name == variables.prefix + '-restored'",
+        "reattached": "variables.item.metadata.name == variables.prefix + '-reattached'",
         "pod": "variables.item.spec",
+        "avoidNode": "variables.reattached ? variables.pod.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchFields[0].values[0] : ''",
         "selectionEnv": "variables.pod.containers[2].env.filter(e, e.name == 'NEWS_SELECTED_SET')[0]",
         "selected": "has(variables.selectionEnv.value) ? variables.selectionEnv.value : ''",
         "expected": "variables.restored ? "
         + literal(templates["restored"])
+        + " : variables.reattached ? "
+        + literal(templates["reattached"])
         + " : "
         + literal(templates["source"]),
         "defaults": literal(
@@ -140,12 +149,16 @@ def documents():
         [
             (
                 metadata
-                + " && variables.item.metadata.name in [variables.prefix + '-source', variables.prefix + '-restored']",
+                + " && variables.item.metadata.name in [variables.prefix + '-source', variables.prefix + '-reattached', variables.prefix + '-restored']",
                 "Only run-owned synthetic news Pods may be created or deleted.",
             ),
             (
                 "(variables.restored ? variables.selected.matches('^set-[0-9]{10}-[A-Za-z0-9]{6}$') : variables.selected == '')",
                 "The selected paired set must have a bounded directory name.",
+            ),
+            (
+                "!variables.reattached || (variables.avoidNode.size() <= 253 && variables.avoidNode.matches('^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$'))",
+                "Reattachment must exclude one bounded previous node name.",
             ),
             (
                 """variables.expected.all(k, k in variables.pod && (k in ['containers','volumes'] || variables.pod[k] == variables.expected[k])) &&
@@ -218,9 +231,12 @@ def documents():
         {},
         [
             (
-                """request.namespace == 'news-recovery-test' && request.name.matches('^news-drill-[0-9a-f]{12}-(source|restored)$') &&
-          ((object.container == 'app' && object.command == ['php','/opt/news/drill.php',request.name.endsWith('-source') ? 'source' : 'restored']) ||
-           (request.name.endsWith('-source') && object.container == 'helper' && object.command in [['sh','/opt/news/drill-helper.sh','capture'],['sh','/opt/news/drill-helper.sh','captured']])) &&
+                """request.namespace == 'news-recovery-test' && request.name.matches('^news-drill-[0-9a-f]{12}-(source|reattached|restored)$') &&
+          ((object.container == 'app' && object.command == ['php','/opt/news/drill.php',request.name.endsWith('-source') ? 'source' : request.name.endsWith('-reattached') ? 'reattached' : 'restored']) ||
+           (request.name.endsWith('-source') &&
+            ((object.container == 'app' && object.command == ['php','/opt/news/drill.php','unavailable']) ||
+             (object.container == 'database' && object.command == ['pg_ctl','--pgdata=/var/lib/postgresql/data/pgdata','--mode=fast','--no-wait','stop']) ||
+             (object.container == 'helper' && object.command in [['sh','/opt/news/drill-helper.sh','capture'],['sh','/opt/news/drill-helper.sh','captured']])))) &&
           (!has(object.tty) || !object.tty) && object.stdout && object.stderr &&
           (request.name.endsWith('-source') ? (!has(object.stdin) || !object.stdin) : object.stdin)""",
                 "Only non-interactive fixture phase commands may execute.",
