@@ -73,7 +73,7 @@ tests:
 - name: healthy signals remain quiet through fifty hours
   interval: 1m
   input_series:
-  - series: gatus_results_endpoint_success{group="News",name="freshrss"}
+  - series: gatus_results_endpoint_success{group="Media",name="freshrss"}
     values: 1x3200
   - series: news_database_up{namespace="news",service="freshrss"}
     values: 1x3200
@@ -117,7 +117,7 @@ tests:
 - name: available HTTP does not hide database failure
   interval: 1m
   input_series:
-  - series: gatus_results_endpoint_success{group="News",name="freshrss"}
+  - series: gatus_results_endpoint_success{group="Media",name="freshrss"}
     values: 1x3200
   - series: news_database_up{namespace="news",service="freshrss"}
     values: '0x3200'
@@ -165,7 +165,7 @@ tests:
 - name: local capture stale despite fresh off-cluster transfer
   interval: 1m
   input_series:
-  - series: gatus_results_endpoint_success{group="News",name="freshrss"}
+  - series: gatus_results_endpoint_success{group="Media",name="freshrss"}
     values: 1x3200
   - series: news_database_up{namespace="news",service="freshrss"}
     values: 1x3200
@@ -213,7 +213,7 @@ tests:
 - name: off-cluster transfer stale despite fresh local capture
   interval: 1m
   input_series:
-  - series: gatus_results_endpoint_success{group="News",name="freshrss"}
+  - series: gatus_results_endpoint_success{group="Media",name="freshrss"}
     values: 1x3200
   - series: news_database_up{namespace="news",service="freshrss"}
     values: 1x3200
@@ -261,7 +261,7 @@ tests:
 - name: never-completed timestamps cannot be treated as successful
   interval: 1m
   input_series:
-  - series: gatus_results_endpoint_success{group="News",name="freshrss"}
+  - series: gatus_results_endpoint_success{group="Media",name="freshrss"}
     values: 1x3200
   - series: news_database_up{namespace="news",service="freshrss"}
     values: 1x3200
@@ -317,7 +317,7 @@ tests:
 - name: successful scheduler and HTTP do not hide feed failures, then recovery
   interval: 1m
   input_series:
-  - series: gatus_results_endpoint_success{group="News",name="freshrss"}
+  - series: gatus_results_endpoint_success{group="Media",name="freshrss"}
     values: 1x3200
   - series: news_database_up{namespace="news",service="freshrss"}
     values: 1x3200
@@ -381,7 +381,7 @@ tests:
 - name: stopped scheduler is stale and later recovers
   interval: 1m
   input_series:
-  - series: gatus_results_endpoint_success{group="News",name="freshrss"}
+  - series: gatus_results_endpoint_success{group="Media",name="freshrss"}
     values: 1x3200
   - series: news_database_up{namespace="news",service="freshrss"}
     values: 1x3200

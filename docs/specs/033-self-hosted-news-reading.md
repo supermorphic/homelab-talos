@@ -205,6 +205,16 @@ while individual feeds fail, or skip recently refreshed feeds. The private Gatus
 probe checks the API landing page through the internal gateway, independently of
 ingestion. Diagnose individual publisher failures in FreshRSS's private feed UI.
 
+Homepage and Gatus place FreshRSS under **Media**. Homepage discovers the private
+HTTPRoute and shows only the subscription count; unread is hidden. Its native
+FreshRSS widget uses the existing API username and API password through the HTTPS
+route. Supply `NEWS_OPERATOR_NAME` and `NEWS_API_PASSWORD` privately, then run
+`HOMEPAGE_FRESHRSS_SECRETS_CONFIRM=write:monitoring:homepage-freshrss:sops mise exec -- just repo homepage-freshrss-secrets`.
+The writer encrypts a separate Homepage Secret, registers it, and stamps a rollout;
+commit those three changes together. This does not set or rotate the FreshRSS
+account's API password. The card can link to FreshRSS before credential setup,
+but its subscription count requires the Secret to be deployed.
+
 The backup helper publishes local freshness only after a paired set validates and
 is atomically completed. It reconstructs that observation from validated retained
 sets after restart and during periodic checks; capture failures do not advance it.

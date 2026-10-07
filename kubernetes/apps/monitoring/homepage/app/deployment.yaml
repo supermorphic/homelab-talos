@@ -38,6 +38,20 @@ spec:
           env:
             - name: HOMEPAGE_ALLOWED_HOSTS
               value: homepage.lab.supermorphic.com
+            # The operator-run writer registers the encrypted API credentials
+            # and stamps the rollout. The card needs no credentials to link to FreshRSS.
+            - name: HOMEPAGE_VAR_FRESHRSS_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: homepage-freshrss
+                  key: username
+                  optional: true
+            - name: HOMEPAGE_VAR_FRESHRSS_API_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: homepage-freshrss
+                  key: password
+                  optional: true
             # Grafana widget credentials (optional: the pod starts without the
             # Secret; the widget stays blank until `just repo homepage-grafana-secrets`).
             - name: HOMEPAGE_VAR_GRAFANA_USER

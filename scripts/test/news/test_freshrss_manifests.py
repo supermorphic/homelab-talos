@@ -61,7 +61,7 @@ class FreshRSSManifestsTests(unittest.TestCase):
         endpoints = [e for e in values["config"]["endpoints"] if e["name"] == "freshrss"]
         self.assertEqual(len(endpoints), 1)
         endpoint = endpoints[0]
-        self.assertEqual(endpoint["group"], "News")
+        self.assertEqual(endpoint["group"], "Media")
         self.assertEqual(endpoint["url"], "https://" + route["spec"]["hostnames"][0] + "/api/")
         self.assertIn("[STATUS] == 200", endpoint["conditions"])
         self.assertIn("[BODY] == pat(*scripts/api.js*)", endpoint["conditions"])
