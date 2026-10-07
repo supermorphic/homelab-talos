@@ -17,15 +17,19 @@ sanitization of extracted HTML, safe fallback, and extraction-quality acceptance
 No extraction engine or package is required for the base platform. The optional
 Graby integration has its own [extraction design](034-community-backed-news-extraction.md).
 
-Source selects FreshRSS and dedicated database workloads for private deployment,
-with retained storage, operator-encrypted bootstrap, and synthetic content fixtures. Local
-container acceptance exercises FreshRSS/PostgreSQL, its synchronization API, and
-paired backup/restore into disposable local targets. The initial private rollout
+Deploy FreshRSS and its dedicated database to production with retained storage
+and operator-encrypted bootstrap, then verify the running service. Production
 includes aggregate metrics, alerts, a private-route probe, and recurring read-only
-verification. It provides the running service needed for acceptance. An off-cluster
-restore drill, deployed monitoring acceptance, source/catalog checks, live
-routing/network/storage checks, and attended native synchronization are required
-before treating it as the primary reader or closing issue 274.
+verification. Keep the same deployment, account, subscriptions, and storage after
+acceptance; no teardown, reinstall, migration, or separate promotion is required.
+Private access describes the internal Gateway and Tailscale path.
+
+Local container acceptance uses synthetic content fixtures to exercise
+FreshRSS/PostgreSQL, its synchronization API, and paired backup/restore into
+disposable local targets. An off-cluster restore drill, deployed monitoring
+acceptance, source/catalog checks, live routing/network/storage checks, and
+attended native synchronization are required before treating the production
+service as the primary reader or closing issue 274.
 
 Assume one operator account, private access through the existing internal Gateway
 and Tailscale path, and a modest curated feed collection. Multiple users, public
@@ -210,7 +214,7 @@ off-cluster recovery drill.
 
 The base news Flux units, root application selection, Gatus endpoint, and
 verification campaign enrollment are enabled together through the reviewed
-private deployment change. After
+production deployment change. After
 `mise exec -- just kube kubeconfig`, run
 `mise exec -- just kube news-verify` with the scoped observer. While staged it
 checks that no news workload is running; after activation it requires current
@@ -474,13 +478,15 @@ Required evidence before the base deployment is accepted:
 
 These remain pending native/runtime acceptance, distinct from database-only tests,
 source inspection, and mechanical documentation validation. Local or hosted
-offline checks cannot prove the intended reading experience. The initial private
+offline checks cannot prove the intended reading experience. Production
 deployment requires admitted base-platform packages, encrypted bootstrap material,
 the complete recovery and workload lifecycle, and successful isolated cluster
 recovery. Its exact candidate and base must pass hosted validation and receive
 explicit authorization for the specific merge. Then verify the deployed route,
 monitoring, storage and network boundaries, confirm a paired set is recoverable
-from off-cluster storage, and complete the attended client checks above. Keep the
-service in acceptance until those checks pass; deployment alone does not authorize
-primary use or closing the issue. Graby remains suspended and new extraction
-requests remain disabled during base-platform acceptance.
+from off-cluster storage, and complete the attended client checks above. The
+production service remains deployed while these checks run and after they pass;
+only disposable recovery-test resources are removed. Complete the required checks
+before accepting it as the primary reader or closing issue 274. Graby remains
+suspended and new extraction requests remain disabled during base-platform
+acceptance.
