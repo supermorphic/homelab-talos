@@ -1,0 +1,19 @@
+{
+  "request_bytes": 8192,
+  "reply_bytes": 8388608,
+  "accepted_html_bytes": 2097152,
+  "publisher_bytes": 5242880,
+  "redirects": 5,
+  "dns_seconds": 1,
+  "connect_seconds": 2,
+  "fetch_seconds": 5,
+  "job_seconds": 9,
+  "client_seconds": 10,
+  "refresh_fraction": 0.2,
+  "active_jobs": 1,
+  "queue_jobs": 0,
+  "child_memory_bytes": 536870912,
+  "transport_cooldown_seconds": 60,
+  "origin_cooldown_seconds": 300,
+  "max_retry_after_seconds": 86400
+}

@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "image": "docker.io/thecodingmachine/php:8.4-v5-cli@sha256:16aceb03a41e9da89f03a3a6d9ad08fb226af6cd1312bc4a0603452a37ff9399",
+  "freshrss_image": "docker.io/freshrss/freshrss:1.30.1-alpine@sha256:b6ae27fb5f507ba5f2bff39ca78af90850b294c1e94bf21bae8d368133422b0e",
+  "rules": {
+    "commit": "e227f48750b4a497f3bf483902b228daea8a8ea8",
+    "sha256": "3400dfb4c61ea4cb9cc5c0be9e5a8666deb218a5d41db872a6ca8da2d3360556"
+  },
+  "files": {
+    "composer.json": "ddba80e309d77916daf52e9666674977cd47d03e90fc9426a06471e3ad5ce913",
+    "composer.lock": "3c1874561f35c3b7280e5fde589760f9dfe605b4fedfc22aeb55838337704100",
+    "limits.json": "24e565d397901f575c6e21d7e5f46b60d36479b30b687b8b41e3a09d7f1b5204",
+    "scripts/archive.php": "3334d21690b209d1e2caa16b8b014bb53ff35e8fb0c55eea0397e29c4e7f4285",
+    "scripts/initialize.php": "dc6cb35aaea4fe573afa3bd4b4a62f3ff6d90bb17d028c07b89456bc2c922b0c",
+    "scripts/initialize.sh": "32524a6b2e89495053aa0c987a145cb6aff01e89205191d3b9bb254d93f386c2",
+    "scripts/ready.php": "72222f8bb515351f01ff70f4af47d88c5730138805e04c3215db2f6a9861a06d",
+    "scripts/release.php": "790755270b49d431d6f03238a4b89d48ebb79df95a4dc5c3ef51f181197d7282",
+    "scripts/runtime.php": "42dc10257c14b94b4dcfacc06c7816faaf7d5ef350c20b209bbb84951c306d40",
+    "scripts/smoke.php": "72a4a2a33f4113a8e37db75e02d02ece125d06884cc8de54ed64a89ccb46b256",
+    "src/Release.php": "7a80116ad7e82518b3484d43357c50aac9f2125b8569e6a3e8d03ec876779cb1"
+  },
+  "id": "e0f01fe98f75da0a3a7fbf1019cbd5c22fa35a81432bb9352653e4b3ad1ebc1d"
+}

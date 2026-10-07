@@ -39,6 +39,10 @@ news-postgresql-local-integration-test: require-bash
       scripts/test/scenarios/news-postgresql-local-integration.sh
 
 # Exercise the pinned FreshRSS runtime and PostgreSQL on an isolated local network.
+news-extraction-local-integration-test phase='all': require-bash
+    @scripts/test/run-catalog-suite.sh test.news-extraction-local-integration -- \
+      scripts/test/scenarios/news-extraction-local-integration.sh {{quote(phase)}}
+
 news-local-integration-test: require-bash
     @scripts/test/run-catalog-suite.sh test.news-local-integration -- \
       scripts/test/scenarios/news-local-integration.sh

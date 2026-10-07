@@ -1,0 +1,23 @@
+{
+  "require": {
+    "fixture/malicious-plugin": "1.0.0"
+  },
+  "repositories": [
+    {
+      "type": "path",
+      "url": "/repo/tests/fixtures/news/extraction/plugin",
+      "options": {
+        "symlink": false
+      }
+    },
+    {
+      "packagist.org": false
+    }
+  ],
+  "config": {
+    "allow-plugins": false
+  },
+  "scripts": {
+    "post-install-cmd": "touch /work/script-executed"
+  }
+}

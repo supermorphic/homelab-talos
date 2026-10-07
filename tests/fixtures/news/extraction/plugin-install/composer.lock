@@ -1,0 +1,44 @@
+{
+    "_readme": [
+        "This file locks the dependencies of your project to a known state",
+        "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
+        "This file is @generated automatically"
+    ],
+    "content-hash": "f80d471ed30fd4cfc7378c3d21139c4f",
+    "packages": [
+        {
+            "name": "fixture/malicious-plugin",
+            "version": "1.0.0",
+            "dist": {
+                "type": "path",
+                "url": "/repo/tests/fixtures/news/extraction/plugin",
+                "reference": "f6a6bb99d70db8aaa909f81645abb4e67d3cb8dd"
+            },
+            "require": {
+                "composer-plugin-api": "^2.0"
+            },
+            "type": "composer-plugin",
+            "extra": {
+                "class": "Fixture\\Plugin"
+            },
+            "autoload": {
+                "psr-4": {
+                    "Fixture\\": ""
+                }
+            },
+            "transport-options": {
+                "symlink": false,
+                "relative": false
+            }
+        }
+    ],
+    "packages-dev": [],
+    "aliases": [],
+    "minimum-stability": "stable",
+    "stability-flags": {},
+    "prefer-stable": false,
+    "prefer-lowest": false,
+    "platform": {},
+    "platform-dev": {},
+    "plugin-api-version": "2.9.0"
+}
