@@ -130,6 +130,19 @@ def main(*, extraction=False, extraction_recovery=False):
             create("volume", names[key])
         with tempfile.TemporaryDirectory(prefix="news-runtime-") as temporary:
             tmp = Path(temporary)
+            # ConfigMap projections use key -> ..data/key -> timestamp/key links.
+            # Plain host files do not exercise Apache's symlink authorization.
+            scripts_volume = tmp / "scripts-volume"
+            payload = scripts_volume / "..2026_01_01_00_00_00.000000000"
+            payload.mkdir(parents=True)
+            scripts_volume.chmod(0o755)
+            payload.chmod(0o755)
+            (scripts_volume / "..data").symlink_to(payload.name)
+            for source in (APP / "scripts").iterdir():
+                target = payload / source.name
+                target.write_bytes(source.read_bytes())
+                target.chmod(0o444)
+                (scripts_volume / source.name).symlink_to("..data/" + source.name)
             drain_probe = tmp / "drain-probe.php"
             drain_probe.write_text(
                 "<?php $d=getenv('DATA_PATH'); "
@@ -337,7 +350,7 @@ def main(*, extraction=False, extraction_recovery=False):
                     "-v",
                     volume + ":/var/www/FreshRSS/data:U",
                     "-v",
-                    str(APP / "scripts") + ":/opt/news:ro",
+                    str(scripts_volume) + ":/opt/news:ro",
                     "-v",
                     str(APP / "httpd.conf") + ":/opt/news-httpd.conf:ro",
                     "-v",
@@ -415,6 +428,18 @@ def main(*, extraction=False, extraction_recovery=False):
             cold = metrics()
             assert cold["news_database_up"] == 1 and cold["news_feeds_active"] == 0
             assert cold["news_backup_last_success_timestamp_seconds"] == 0
+            metrics_port = (
+                run("port", names["app"], "9090/tcp").stdout.decode().strip().rsplit(":", 1)[1]
+            )
+            for path in ("/", "/backup.sh", "/bootstrap.php", "/..data/backup.sh"):
+                try:
+                    urllib.request.urlopen(
+                        "http://127.0.0.1:" + metrics_port + path, timeout=10
+                    ).close()
+                except urllib.error.HTTPError as error:
+                    assert error.code == 403, (path, error.code)
+                else:
+                    raise AssertionError("Metrics listener served a helper path: " + path)
             run("exec", names["app"], "touch", "/var/www/FreshRSS/data/.news-restore-incomplete")
             assert (
                 run(
