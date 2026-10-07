@@ -59,7 +59,7 @@ config:
     header: "Homelab"
   endpoints:
     - name: freshrss
-      group: News
+      group: Media
       url: "https://news.lab.supermorphic.com/api/"
       interval: 1m
       conditions:

@@ -24,6 +24,7 @@ spec:
         homepage-portainer-sops-hash: "58e54581cc4a050be953188b6e56fdcd779cda9f"
         homepage-mylar3-sops-hash: dae8502f0468d4e689fdabf3e1c2303c0b367185
         homepage-komga-sops-hash: 63238561b900c45916c2e52b62457d7247bfa4d2
+        homepage-freshrss-sops-hash: 7c80ceebca7397b276d8e8098693e56d6b46826b
       labels:
         app.kubernetes.io/name: homepage
     spec:
@@ -38,6 +39,20 @@ spec:
           env:
             - name: HOMEPAGE_ALLOWED_HOSTS
               value: homepage.lab.supermorphic.com
+            # The operator-run writer registers the encrypted API credentials
+            # and stamps the rollout. The card needs no credentials to link to FreshRSS.
+            - name: HOMEPAGE_VAR_FRESHRSS_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: homepage-freshrss
+                  key: username
+                  optional: true
+            - name: HOMEPAGE_VAR_FRESHRSS_API_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: homepage-freshrss
+                  key: password
+                  optional: true
             # Grafana widget credentials (optional: the pod starts without the
             # Secret; the widget stays blank until `just repo homepage-grafana-secrets`).
             - name: HOMEPAGE_VAR_GRAFANA_USER

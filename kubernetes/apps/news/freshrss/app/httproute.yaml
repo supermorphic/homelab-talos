@@ -5,6 +5,18 @@ metadata:
   name: freshrss
   annotations:
     external-dns.k8s.io/audience: internal
+    gethomepage.dev/enabled: "true"
+    gethomepage.dev/name: "FreshRSS"
+    gethomepage.dev/description: "RSS reading"
+    gethomepage.dev/pod-selector: "app.kubernetes.io/name=freshrss"
+    gethomepage.dev/group: "Media"
+    gethomepage.dev/icon: "freshrss.svg"
+    gethomepage.dev/href: "https://news.lab.supermorphic.com"
+    gethomepage.dev/widget.type: "freshrss"
+    gethomepage.dev/widget.url: "https://news.lab.supermorphic.com"
+    gethomepage.dev/widget.username: "{{HOMEPAGE_VAR_FRESHRSS_USERNAME}}"
+    gethomepage.dev/widget.password: "{{HOMEPAGE_VAR_FRESHRSS_API_PASSWORD}}"
+    gethomepage.dev/widget.fields: '["subscriptions"]'
 spec:
   hostnames:
     - news.lab.supermorphic.com

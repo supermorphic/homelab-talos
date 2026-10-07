@@ -310,6 +310,40 @@ fi
 # Exercise the writer without loading an age private key or application credential.
 scripts/test/homepage-komga-secrets-test.sh
 
+# FreshRSS uses the private HTTPS route and displays subscriptions only.
+freshrss_route='kubernetes/apps/news/freshrss/app/httproute.yaml'
+[[ "$(yq -r '[.metadata.annotations."gethomepage.dev/enabled",
+  .metadata.annotations."gethomepage.dev/group",
+  .metadata.annotations."gethomepage.dev/widget.type",
+  .metadata.annotations."gethomepage.dev/widget.url",
+  .metadata.annotations."gethomepage.dev/widget.username",
+  .metadata.annotations."gethomepage.dev/widget.password"] | join(",")' "$freshrss_route")" == \
+  'true,Media,freshrss,https://news.lab.supermorphic.com,{{HOMEPAGE_VAR_FRESHRSS_USERNAME}},{{HOMEPAGE_VAR_FRESHRSS_API_PASSWORD}}' ]]
+[[ "$(yq -r '.metadata.annotations."gethomepage.dev/widget.fields" | from_json | join(",")' \
+  "$freshrss_route")" == subscriptions ]]
+for entry in 'HOMEPAGE_VAR_FRESHRSS_USERNAME,username' 'HOMEPAGE_VAR_FRESHRSS_API_PASSWORD,password'; do
+  variable="${entry%,*}"
+  key="${entry#*,}"
+  [[ "$(VARIABLE="$variable" yq -r '[.spec.template.spec.containers[].env[] |
+    select(.name == strenv(VARIABLE)) | .valueFrom.secretKeyRef |
+    [.name, .key, .optional] | join(",")] | .[0]' "$dep")" == "homepage-freshrss,$key,true" ]]
+done
+freshrss_secret="$base/app/homepage-freshrss.sops.yaml"
+selected="$(yq -r '[.resources[] | select(. == "./homepage-freshrss.sops.yaml")] | length' "$app_kustomization")"
+if [[ -f "$freshrss_secret" ]]; then
+  [[ "$selected" == 1 ]]
+  [[ "$(sops filestatus "$freshrss_secret" | yq -r '.encrypted')" == true ]]
+  [[ "$(yq -r '[.metadata.name, .metadata.namespace] | join(",")' "$freshrss_secret")" == homepage-freshrss,homepage ]]
+  [[ "$(yq -r '.stringData | keys | sort | join(",")' "$freshrss_secret")" == password,username ]]
+  [[ "$(yq -r '[.stringData[] | test("^ENC\\[AES256_GCM,")] | all' "$freshrss_secret")" == true ]]
+  [[ "$(yq -r '.sops.age[].recipient' "$freshrss_secret")" == "$(yq -r '.creation_rules[1].age' .sops.yaml)" ]]
+  [[ "$(yq -r '.spec.template.metadata.annotations."homepage-freshrss-sops-hash"' "$dep")" == \
+    "$(git hash-object "$freshrss_secret")" ]]
+else
+  [[ "$selected" == 0 ]]
+  [[ "$(yq -r '.spec.template.metadata.annotations."homepage-freshrss-sops-hash" // ""' "$dep")" == '' ]]
+fi
+
 kustomize build "$base/app" >/dev/null
 
 echo 'Homepage source, wiring, namespace label, dependency graph, image, allowed-hosts, HTTPRoute, and split encrypted widget Secrets passed validation.'

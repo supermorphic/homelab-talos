@@ -10,8 +10,8 @@ spec:
       rules:
         - alert: NewsUnavailable
           expr: >-
-            max(gatus_results_endpoint_success{group="News",name="freshrss"}) == 0
-            or absent(max(gatus_results_endpoint_success{group="News",name="freshrss"}))
+            max(gatus_results_endpoint_success{group="Media",name="freshrss"}) == 0
+            or absent(max(gatus_results_endpoint_success{group="Media",name="freshrss"}))
           for: 15m
           labels: {severity: critical}
           annotations: {summary: FreshRSS is unavailable through the internal gateway}

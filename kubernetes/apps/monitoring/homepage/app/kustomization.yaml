@@ -20,6 +20,7 @@ resources:
   - ./service.yaml
   - ./homepage-mylar3.sops.yaml
   - ./homepage-komga.sops.yaml
+  - ./homepage-freshrss.sops.yaml
 configMapGenerator:
   - name: homepage-config
     namespace: homepage

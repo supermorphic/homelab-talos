@@ -283,7 +283,7 @@ grafana|Observability|https://grafana.lab.supermorphic.com/api/health|1m|[STATUS
 caddy|Platform|https://caddy.infra.supermorphic.com/healthz|1m|[STATUS] == 200
 semaphore|Platform|https://semaphore.infra.supermorphic.com/api/ping|1m|[STATUS] == 200
 forgejo|Platform|https://forgejo.infra.supermorphic.com/api/healthz|1m|[STATUS] == 200
-freshrss|News|https://news.lab.supermorphic.com/api/|1m|[STATUS] == 200|[BODY] == pat(*scripts/api.js*)
+freshrss|Media|https://news.lab.supermorphic.com/api/|1m|[STATUS] == 200|[BODY] == pat(*scripts/api.js*)
 prometheus|Observability|https://prometheus.lab.supermorphic.com/-/healthy|1m|[STATUS] == 200
 alertmanager|Observability|https://alertmanager.lab.supermorphic.com/-/healthy|1m|[STATUS] == 200
 test-reports|Observability|https://tests.lab.supermorphic.com/|1m|[STATUS] == 200

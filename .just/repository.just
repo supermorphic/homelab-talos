@@ -1594,6 +1594,11 @@ homepage-mylar3-secrets:
 homepage-komga-secrets:
     @scripts/repository/homepage-komga-secrets.sh
 
+# Encrypt operator-supplied FreshRSS username/API password for the Homepage widget,
+# register the Secret and stamp the rollout. Does not change FreshRSS credentials.
+homepage-freshrss-secrets:
+    @scripts/repository/homepage-freshrss-secrets.sh
+
 # Write ONLY the SOPS-encrypted Homepage Sonarr widget Secret
 # (homepage-sonarr in the homepage namespace) from SONARR_API_KEY.
 # Independent of the other Homepage widget credentials. Never echoes the value.
