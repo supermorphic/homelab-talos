@@ -16,7 +16,7 @@ APP = ROOT / "kubernetes/apps/news/graby/app"
 IMAGE = "docker.io/thecodingmachine/php:8.4-v5-cli@sha256:16aceb03a41e9da89f03a3a6d9ad08fb226af6cd1312bc4a0603452a37ff9399"
 
 
-def container(command, *, network="none", app=APP, timeout=330):
+def container(command, *, network="none", app=APP, timeout=330, slow_dns=False):
     name = "news-extraction-" + secrets.token_hex(8)
     try:
         result = subprocess.run(
@@ -43,6 +43,7 @@ def container(command, *, network="none", app=APP, timeout=330):
                 "64",
                 "--network",
                 network,
+                *(["--sysctl", "net.ipv4.ip_unprivileged_port_start=0"] if slow_dns else []),
                 "--tmpfs",
                 "/tmp:rw,size=256m",
                 "--tmpfs",
@@ -51,6 +52,15 @@ def container(command, *, network="none", app=APP, timeout=330):
                 str(ROOT) + ":/repo:ro",
                 "-v",
                 str(app) + ":/app:ro",
+                *(
+                    [
+                        "-v",
+                        str(ROOT / "tests/fixtures/news/extraction/resolv.conf")
+                        + ":/etc/resolv.conf:ro",
+                    ]
+                    if slow_dns
+                    else []
+                ),
                 "--entrypoint",
                 "/bin/sh",
                 IMAGE,
@@ -175,12 +185,20 @@ def main():
     print(
         container(
             "/usr/bin/php8.4 -d extension=tidy /repo/scripts/test/news/extraction-tests.php "
-            + args.phase
+            + args.phase,
+            network="bridge" if args.phase in ("fetch", "all") else "none",
         ),
         end="",
     )
     if args.phase in ("initialization", "all"):
         initialization()
+    if args.phase in ("fetch", "all"):
+        print(
+            container(
+                "/usr/bin/php8.4 /repo/scripts/test/news/extraction-dns-tests.php", slow_dns=True
+            ),
+            end="",
+        )
 
 
 if __name__ == "__main__":

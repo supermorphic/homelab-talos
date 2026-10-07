@@ -1,6 +1,9 @@
 <?php
 declare(strict_types=1);
-set_error_handler(function (int $severity, string $message): never { throw new ErrorException($message, 0, $severity); });
+set_error_handler(function (int $severity, string $message): bool {
+    if (error_reporting() & $severity) { throw new ErrorException($message, 0, $severity); }
+    return false;
+});
 
 function check(bool $condition, string $message): void {
     if (!$condition) { throw new RuntimeException($message); }
@@ -44,6 +47,7 @@ if ($phase === 'initialization' || $phase === 'all') {
     rejects(fn() => NewsExtraction\extractRules('/work/wrong.tar', '/work/wrong-rules', str_repeat('b',40)), 'wrong rule directory accepted');
     echo "initialization release checks passed on " . PHP_VERSION . ' ' . php_uname('m') . "\n";
 }
-if (!in_array($phase, ['initialization', 'all'], true)) {
+if ($phase === 'fetch' || $phase === 'all') { require __DIR__ . '/extraction-fetch-tests.php'; }
+if (!in_array($phase, ['initialization', 'fetch', 'all'], true)) {
     throw new RuntimeException('phase not implemented: ' . $phase);
 }

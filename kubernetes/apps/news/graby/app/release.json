@@ -15,9 +15,11 @@
     "scripts/initialize.sh": "32524a6b2e89495053aa0c987a145cb6aff01e89205191d3b9bb254d93f386c2",
     "scripts/ready.php": "72222f8bb515351f01ff70f4af47d88c5730138805e04c3215db2f6a9861a06d",
     "scripts/release.php": "790755270b49d431d6f03238a4b89d48ebb79df95a4dc5c3ef51f181197d7282",
+    "scripts/resolve.php": "f0be711f47e3a6388572bfa245228e55c98ca71d4cf41cac4e9342efe998bdd2",
     "scripts/runtime.php": "42dc10257c14b94b4dcfacc06c7816faaf7d5ef350c20b209bbb84951c306d40",
     "scripts/smoke.php": "72a4a2a33f4113a8e37db75e02d02ece125d06884cc8de54ed64a89ccb46b256",
+    "src/Fetcher.php": "b5ae072e3ba05bb697b944a99db54d1b558bac5766fcabbd8c1470c3fcf23842",
     "src/Release.php": "7a80116ad7e82518b3484d43357c50aac9f2125b8569e6a3e8d03ec876779cb1"
   },
-  "id": "e0f01fe98f75da0a3a7fbf1019cbd5c22fa35a81432bb9352653e4b3ad1ebc1d"
+  "id": "3c6a891591e922d3635fc1b39a17eb79494f691198248428cf3bf44455c41886"
 }
