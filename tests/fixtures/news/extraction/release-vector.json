@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "files": {
+    "code.php": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2"
+  },
+  "image": "example/php@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "freshrss_image": "example/rss@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "rules": {
+    "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "id": "f9d5e25cb6cd67836845ccb8ecfc43d00ef70cca6e2b11cfafd339acde1276ed"
+}

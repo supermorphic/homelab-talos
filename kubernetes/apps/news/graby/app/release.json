@@ -1,0 +1,273 @@
+{
+  "schema": 1,
+  "image": "docker.io/thecodingmachine/php:8.4-v5-cli@sha256:16aceb03a41e9da89f03a3a6d9ad08fb226af6cd1312bc4a0603452a37ff9399",
+  "freshrss_image": "docker.io/freshrss/freshrss:1.30.1-alpine@sha256:b6ae27fb5f507ba5f2bff39ca78af90850b294c1e94bf21bae8d368133422b0e",
+  "rules": {
+    "commit": "e227f48750b4a497f3bf483902b228daea8a8ea8",
+    "sha256": "3400dfb4c61ea4cb9cc5c0be9e5a8666deb218a5d41db872a6ca8da2d3360556"
+  },
+  "files": {
+    "ciliumnetworkpolicy.yaml": "a0803ae6216b579af9fcdf0700d0c450d1c809b0f43da2646467f364414e6abd",
+    "composer.json": "ddba80e309d77916daf52e9666674977cd47d03e90fc9426a06471e3ad5ce913",
+    "composer.lock": "3c1874561f35c3b7280e5fde589760f9dfe605b4fedfc22aeb55838337704100",
+    "deployment.yaml": "3546ba9fd99e54931feae9f923a7ff5b98463bacb47a557d91b4af2118a8cea1",
+    "kustomization.yaml": "d5eac35af26a6e44dd2d822d498384d47daabc6bf2e4caab91317050dc1b5236",
+    "limits.json": "6a776c97dfcb242c272a535905a80eef79380416cbcabd5f846a9fd92dd32966",
+    "scripts/archive.php": "3334d21690b209d1e2caa16b8b014bb53ff35e8fb0c55eea0397e29c4e7f4285",
+    "scripts/initialize.php": "0435316ad85550aef5dda5bdbcdb790e2c851692692d180efc8672cc563bc2cd",
+    "scripts/initialize.sh": "32524a6b2e89495053aa0c987a145cb6aff01e89205191d3b9bb254d93f386c2",
+    "scripts/job.php": "de8b434713edc44245ef7d5260a2175a370580e1c5afff05a35a79d5b7b5e358",
+    "scripts/ready.php": "72222f8bb515351f01ff70f4af47d88c5730138805e04c3215db2f6a9861a06d",
+    "scripts/release.php": "790755270b49d431d6f03238a4b89d48ebb79df95a4dc5c3ef51f181197d7282",
+    "scripts/resolve.php": "f0be711f47e3a6388572bfa245228e55c98ca71d4cf41cac4e9342efe998bdd2",
+    "scripts/runtime.php": "42dc10257c14b94b4dcfacc06c7816faaf7d5ef350c20b209bbb84951c306d40",
+    "scripts/serve.php": "086814fc57908c345d98481dc6935ef662f7f2e05652cbab024a67dafb248c2b",
+    "scripts/smoke.php": "3cb681b8d60df77109ba5cc6dc06e4c5b62ddabeb109ce10f903d98a0fcde60f",
+    "service.yaml": "36bbc34406cbcdabf139e028da01690b2f8dc080cbe51904fa4a5f4bd2ca9be2",
+    "servicemonitor.yaml": "b34a6da52f915516f714b9a262e1ca91ead6cb303103051ab4bd4ab0a72f1e37",
+    "src/Extractor.php": "8ad3f20388b556f6d2cd87e0fb907f144b23a4ce88d99f7991c010e49f92bb16",
+    "src/Fetcher.php": "8cb2e580ceee180821595eca316ed9bbf5552907a0abeaf262af41ca2d0f6451",
+    "src/Release.php": "7a80116ad7e82518b3484d43357c50aac9f2125b8569e6a3e8d03ec876779cb1",
+    "src/Sanitizer.php": "42b0339dcf31914a8d250a115ef6818cdbce83e4d23107fac88c90d733ed4f94",
+    "src/Server.php": "fd5b0834d1f05ed9a0904ea5bf36f6fb0427794ebee85b3448b25301b608ac7a"
+  },
+  "extension_files": {
+    "Client.php": "cff021e68560391fe74e2bdf4895ae16b862618741568479ec1734e1444f923f",
+    "Preservation.php": "ae25dd062369ac494f974075a7ad5f2f143fd462519a881bbceca90bd91d1bdf",
+    "configure.php": "f0025af3b8d62d31e0c8418c1cb9a6036eb303c092abbb91af0d6264bd6f5b16",
+    "extension.php": "c9eb62d76f0fcb0048105d35887ee871c08f4f9ebdab2952b2e3bcf216e74228",
+    "metadata.json": "afc4aea5c80937e49c7de21b04b69dcb42f5505d72d89b51dec239ccadbdc8c9"
+  },
+  "corpus": {
+    "sha256": "7f0b05f965495c072e0ab949ec0398f6ae4c34ce7483e999e1efc72539df2c00",
+    "cases": [
+      "9to5mac-live-0",
+      "9to5mac-live-1",
+      "ars-0",
+      "ars-1",
+      "ars-2",
+      "ars-live-0",
+      "ars-live-1",
+      "bbc-live-0",
+      "bbc-live-1",
+      "bleepingcomputer-live-0",
+      "bleepingcomputer-live-1",
+      "caranddriver-1",
+      "caranddriver-5",
+      "caranddriver-6",
+      "caranddriver-7",
+      "caranddriver-live-0",
+      "caranddriver-live-1",
+      "coloradosun-live-0",
+      "coloradosun-live-1",
+      "control-empty",
+      "control-malformed",
+      "control-public",
+      "control-restricted",
+      "decoder-live-0",
+      "decoder-live-1",
+      "engadget-live-0",
+      "engadget-live-1",
+      "guardian-live-0",
+      "guardian-live-1",
+      "milehighreport-0",
+      "milehighreport-1",
+      "milehighreport-3",
+      "newsline-0",
+      "newsline-1",
+      "newsline-2",
+      "no-rule-ars-0",
+      "no-rule-caranddriver-5",
+      "no-rule-wired-0",
+      "npr-live-0",
+      "npr-live-1",
+      "outside-live-1",
+      "revalidated-ars-0",
+      "revalidated-ars-1",
+      "revalidated-ars-2",
+      "revalidated-caranddriver-1",
+      "revalidated-caranddriver-5",
+      "revalidated-caranddriver-6",
+      "revalidated-caranddriver-7",
+      "revalidated-wired-0",
+      "revalidated-wired-1",
+      "revalidated-wired-4",
+      "revalidated-wired-7",
+      "sciencenews-live-0",
+      "sciencenews-live-1",
+      "techcrunch-live-0",
+      "techcrunch-live-1",
+      "wired-0",
+      "wired-1",
+      "wired-4",
+      "wired-7",
+      "wired-live-0",
+      "wired-live-1"
+    ],
+    "quality": {
+      "wired-0": {
+        "blocks": 21,
+        "images": 1,
+        "captions": 1,
+        "excluded": 8
+      },
+      "wired-4": {
+        "blocks": 16,
+        "images": 1,
+        "captions": 1,
+        "excluded": 8
+      },
+      "wired-7": {
+        "blocks": 13,
+        "images": 1,
+        "captions": 1,
+        "excluded": 8
+      },
+      "wired-1": {
+        "blocks": 31,
+        "images": 11,
+        "captions": 1,
+        "excluded": 8
+      },
+      "caranddriver-5": {
+        "blocks": 12,
+        "images": 5,
+        "captions": 1,
+        "excluded": 9
+      },
+      "caranddriver-6": {
+        "blocks": 24,
+        "images": 7,
+        "captions": 1,
+        "excluded": 9
+      },
+      "caranddriver-7": {
+        "blocks": 25,
+        "images": 7,
+        "captions": 1,
+        "excluded": 9
+      },
+      "ars-0": {
+        "blocks": 23,
+        "images": 1,
+        "captions": 1,
+        "excluded": 4
+      },
+      "ars-1": {
+        "blocks": 13,
+        "images": 1,
+        "captions": 1,
+        "excluded": 4
+      },
+      "ars-2": {
+        "blocks": 17,
+        "images": 1,
+        "captions": 1,
+        "excluded": 4
+      },
+      "control-public": {
+        "blocks": 9,
+        "images": 0,
+        "captions": 0,
+        "excluded": 0
+      },
+      "wired-live-0": {
+        "blocks": 105,
+        "images": 30,
+        "captions": 1,
+        "excluded": 8
+      },
+      "wired-live-1": {
+        "blocks": 46,
+        "images": 12,
+        "captions": 1,
+        "excluded": 8
+      },
+      "caranddriver-live-0": {
+        "blocks": 20,
+        "images": 6,
+        "captions": 1,
+        "excluded": 9
+      },
+      "caranddriver-live-1": {
+        "blocks": 22,
+        "images": 9,
+        "captions": 1,
+        "excluded": 9
+      },
+      "ars-live-0": {
+        "blocks": 12,
+        "images": 1,
+        "captions": 1,
+        "excluded": 4
+      },
+      "ars-live-1": {
+        "blocks": 12,
+        "images": 1,
+        "captions": 1,
+        "excluded": 4
+      },
+      "revalidated-wired-0": {
+        "blocks": 22,
+        "images": 1,
+        "captions": 1,
+        "excluded": 8
+      },
+      "revalidated-wired-4": {
+        "blocks": 16,
+        "images": 1,
+        "captions": 1,
+        "excluded": 8
+      },
+      "revalidated-wired-7": {
+        "blocks": 13,
+        "images": 1,
+        "captions": 1,
+        "excluded": 8
+      },
+      "revalidated-wired-1": {
+        "blocks": 33,
+        "images": 11,
+        "captions": 1,
+        "excluded": 8
+      },
+      "revalidated-caranddriver-5": {
+        "blocks": 14,
+        "images": 5,
+        "captions": 1,
+        "excluded": 9
+      },
+      "revalidated-caranddriver-6": {
+        "blocks": 26,
+        "images": 7,
+        "captions": 1,
+        "excluded": 9
+      },
+      "revalidated-caranddriver-7": {
+        "blocks": 27,
+        "images": 7,
+        "captions": 1,
+        "excluded": 9
+      },
+      "revalidated-ars-0": {
+        "blocks": 23,
+        "images": 1,
+        "captions": 1,
+        "excluded": 4
+      },
+      "revalidated-ars-1": {
+        "blocks": 13,
+        "images": 1,
+        "captions": 1,
+        "excluded": 4
+      },
+      "revalidated-ars-2": {
+        "blocks": 17,
+        "images": 1,
+        "captions": 1,
+        "excluded": 4
+      }
+    }
+  },
+  "id": "f45a1a81808cbde6ef4fc6e65ae008640c29ae06f37e6004598c26c817c2a13a"
+}

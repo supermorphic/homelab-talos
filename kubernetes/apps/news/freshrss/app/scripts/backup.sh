@@ -42,8 +42,15 @@ timeout -s TERM -k 10 180 pg_dump --format=custom --no-owner --no-privileges --l
 timeout -s TERM -k 10 180 tar -czf "$stage/data.tar.gz" -C "$DATA_PATH" . >/dev/null 2>&1
 config_hash=$(cat /opt/news/* /opt/news-httpd.conf | sha256sum)
 config_hash=${config_hash%% *}
-printf 'format=news-paired-v1\ncreated_epoch=%s\napp_image=%s\ndatabase_image=%s\nconfig_sha256=%s\n' \
-    "$stamp" "$NEWS_APP_IMAGE" "$NEWS_DATABASE_IMAGE" "$config_hash" > "$stage/manifest"
+format=news-paired-v1
+if [ -f /opt/news-extraction/release.json ]; then format=news-paired-v2; fi
+printf 'format=%s\ncreated_epoch=%s\napp_image=%s\ndatabase_image=%s\nconfig_sha256=%s\n' \
+    "$format" "$stamp" "$NEWS_APP_IMAGE" "$NEWS_DATABASE_IMAGE" "$config_hash" > "$stage/manifest"
+if [ "$format" = news-paired-v2 ]; then
+    release_id=$(sh /opt/news/extraction-inputs.sh id)
+    extraction_hash=$(sh /opt/news/extraction-inputs.sh hash)
+    printf 'extraction_release_id=%s\nextraction_inputs_sha256=%s\n' "$release_id" "$extraction_hash" >> "$stage/manifest"
+fi
 (cd "$stage" && sha256sum database.dump data.tar.gz manifest > SHA256SUMS)
 timeout -s TERM -k 10 180 sh /opt/news/validate-backup.sh "$stage" >/dev/null 2>&1
 # The directory rename is the sole completion signal; partial sets stay hidden.

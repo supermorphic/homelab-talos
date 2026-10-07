@@ -93,6 +93,8 @@ STANDALONE_SUITES = {
     # cluster campaign. Electrical loss requires attended physical target input.
     "test.nocodb-local-integration",
     "test.news-postgresql-local-integration",
+    "test.news-extraction-local-integration",
+    "test.news-extraction-corpus",
     "test.news-local-integration",
     "test.news-restore-drill",
     "test.web-research-live-contract",

@@ -9,6 +9,7 @@ resources:
   - ./persistentvolumeclaims.yaml
   - ./service.yaml
   - ./servicemonitor.yaml
+  - ../../graby
 configMapGenerator:
   - name: freshrss-scripts
     files:
@@ -23,9 +24,18 @@ configMapGenerator:
       - restore.sh=scripts/restore.sh
       - metrics.php=scripts/metrics.php
       - backup-status.sh=scripts/backup-status.sh
+      - extraction-inputs.sh=scripts/extraction-inputs.sh
   - name: freshrss-httpd
     files:
       - httpd.conf
+  - name: freshrss-extraction-extension
+    files:
+      - Client.php=extensions/xExtension-CommunityExtraction/Client.php
+      - Preservation.php=extensions/xExtension-CommunityExtraction/Preservation.php
+      - configure.php=extensions/xExtension-CommunityExtraction/configure.php
+      - extension.php=extensions/xExtension-CommunityExtraction/extension.php
+      - metadata.json=extensions/xExtension-CommunityExtraction/metadata.json
 generatorOptions:
   labels:
     reconcile.fluxcd.io/watch: Enabled
+  immutable: true

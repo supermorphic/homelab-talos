@@ -48,6 +48,14 @@ def images():
 
 def config_data():
     data = {p.name: p.read_text() for p in sorted((APP / "scripts").iterdir())}
+    data["release.json"] = (ROOT / "kubernetes/apps/news/graby/app/release.json").read_text()
+    data.update(
+        {
+            p.name: p.read_text()
+            for p in sorted((APP / "extensions/xExtension-CommunityExtraction").iterdir())
+            if p.is_file()
+        }
+    )
     data["httpd.conf"] = (APP / "httpd.conf").read_text()
     data["init-news.sh"] = (DB / "scripts/init-news.sh").read_text()
     for name in ("drill-start.sh", "drill-helper.sh", "drill.php"):
@@ -184,6 +192,13 @@ def pod(run, phase, selected=""):
         ],
         [
             scripts,
+            mount("extraction-release", "/opt/news-extraction", True),
+            mount("extraction-extension", "/opt/news-extraction/extension", True),
+            mount(
+                "extraction-extension",
+                "/var/www/FreshRSS/extensions/xExtension-CommunityExtraction",
+                True,
+            ),
             runtime,
             mount("app-data", "/var/www/FreshRSS/data"),
             mount("app-tmp", "/tmp"),
@@ -252,6 +267,8 @@ def pod(run, phase, selected=""):
         + [credential("PGPASSWORD", "backup-password" if phase == "source" else "db-password")],
         [
             scripts,
+            mount("extraction-release", "/opt/news-extraction", True),
+            mount("extraction-extension", "/opt/news-extraction/extension", True),
             runtime,
             mount("app-data", "/data", phase == "source"),
             mount("backups", "/backups", phase == "restored"),
@@ -275,6 +292,15 @@ def pod(run, phase, selected=""):
     ]
     for volume, keys in (
         ("scripts", list(config_data())),
+        ("extraction-release", ["release.json"]),
+        (
+            "extraction-extension",
+            [
+                p.name
+                for p in sorted((APP / "extensions/xExtension-CommunityExtraction").iterdir())
+                if p.is_file()
+            ],
+        ),
         ("httpd", ["httpd.conf"]),
         ("fixtures", ["full-feed.xml", "truncated-feed.xml"]),
         ("init", ["init-news.sh"]),

@@ -3,8 +3,8 @@ declare(strict_types=1);
 header('Content-Type: text/plain; version=0.0.4; charset=utf-8');
 header('Cache-Control: no-store');
 // Fixed names and aggregate values only: never expose account/feed/article identity.
-function metric(string $name, int $value, string $help): void {
-    echo "# HELP $name $help\n# TYPE $name gauge\n$name $value\n";
+function metric(string $name, int $value, string $help, string $type = 'gauge'): void {
+    echo "# HELP $name $help\n# TYPE $name $type\n$name $value\n";
 }
 function timestamp(string $path): int {
     $value = @file_get_contents($path);
@@ -15,6 +15,15 @@ metric('news_refresh_last_completed_timestamp_seconds', timestamp('/run/news/las
     'Last completed scheduler invocation; does not imply successful feed fetching.');
 metric('news_backup_last_success_timestamp_seconds', timestamp('/run/news/last-backup'),
     'Capture time of the newest validated local paired set; not off-cluster confirmation.');
+metric('news_extraction_requests_enabled', getenv('NEWS_EXTRACTION_REQUESTS_ENABLED') === 'true' ? 1 : 0,
+    'Whether new article extraction requests are enabled; preservation remains enabled.');
+$circuit = @file_get_contents('/run/news/extraction-circuit.json', false, null, 0, 8193);
+$counters = is_string($circuit) && strlen($circuit) <= 8192 ? json_decode($circuit, true) : [];
+foreach (['accepted', 'fallback', 'budget_exhausted', 'worker_unavailable'] as $kind) {
+    $value = $counters[$kind] ?? 0;
+    metric('news_extraction_' . $kind . '_total', is_int($value) && $value >= 0 ? min(2147483647, $value) : 0,
+        'Aggregate article extraction ' . $kind . ' observations in the current temporary runtime.', 'counter');
+}
 try {
     $config = require getenv('DATA_PATH') . '/config.php';
     $user = $config['default_user'];
