@@ -1,0 +1,8 @@
+{
+  "name": "CommunityExtraction",
+  "entrypoint": "CommunityExtraction",
+  "type": "system",
+  "version": "1.0.0",
+  "description": "Select and preserve tested community article extraction during ingestion.",
+  "author": "Homelab contributors"
+}

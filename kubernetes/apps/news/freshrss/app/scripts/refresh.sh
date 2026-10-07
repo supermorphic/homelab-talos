@@ -11,6 +11,8 @@ flock -sn 8 || exit 0
 # A single lock bounds scheduler/manual refresh concurrency and future maintenance.
 exec 9>/run/news/refresh.lock
 flock -n 9 || exit 0
+NEWS_REFRESH_DEADLINE=$(( $(date +%s) + 300 ))
+export NEWS_REFRESH_DEADLINE
 if timeout -s TERM -k 10 300 php /var/www/FreshRSS/app/actualize_script.php >/dev/null 2>&1; then
     date +%s > /run/news/last-refresh
 else

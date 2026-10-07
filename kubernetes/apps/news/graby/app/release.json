@@ -26,5 +26,12 @@
     "src/Sanitizer.php": "42b0339dcf31914a8d250a115ef6818cdbce83e4d23107fac88c90d733ed4f94",
     "src/Server.php": "891803d203b4577f1ffcd76ea25084fc300188571f0627d49270dd7bd2fea8e1"
   },
-  "id": "0bd385e961553589781ded9daaea1b7501953a52b92d3165231e5b2bae7a7965"
+  "extension_files": {
+    "Client.php": "767b8ed3b75c30633897975205360fe7dee7b76efb9fdcd160c50c2ff16fc1ed",
+    "Preservation.php": "0abf522f03a834d725be61f1f8ddb22ac1b698891e8978249b272444eac23702",
+    "configure.php": "25fc1f0b00cc73cd1d4ebba92145f8281ee6726428ec66b38bbaff5e17a1b0b8",
+    "extension.php": "c9eb62d76f0fcb0048105d35887ee871c08f4f9ebdab2952b2e3bcf216e74228",
+    "metadata.json": "afc4aea5c80937e49c7de21b04b69dcb42f5505d72d89b51dec239ccadbdc8c9"
+  },
+  "id": "e020bf904f25db37ac238c15104d0dc576e880aad495b6c79afe6c07d61a93fd"
 }

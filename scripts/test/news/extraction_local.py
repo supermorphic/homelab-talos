@@ -183,6 +183,11 @@ def main():
         default="all",
     )
     args = parser.parse_args()
+    if args.phase == "ingestion":
+        from freshrss_integration import main as freshrss
+
+        freshrss(extraction=True)
+        return
     assert (APP / "scripts/initialize.sh").is_file(), "release initializer is missing"
     print(
         container(

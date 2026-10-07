@@ -57,6 +57,7 @@ try {
         'allow_anonymous_refresh' => false, 'allow_robots' => false, 'disable_update' => true,
         'pubsubhubbub_enabled' => false, 'simplepie_syslog_enabled' => false,
         'nb_parallel_refresh' => 1, 'internal_host_allowlist' => [],
+        'extensions_enabled' => ['CommunityExtraction' => true],
         'limits' => ['timeout' => 15, 'max_feeds' => 100, 'max_registrations' => 1,
                      'cache_duration_min' => 300, 'retry_after_default' => 1800],
         'curl_options' => [CURLOPT_CONNECTTIMEOUT => 5, CURLOPT_TIMEOUT => 15,

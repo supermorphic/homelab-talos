@@ -20,7 +20,7 @@ APP = ROOT / "kubernetes/apps/news/freshrss/app"
 DB = ROOT / "kubernetes/apps/news/postgresql/app"
 
 
-def main():
+def main(*, extraction=False):
     assert (APP / "scripts/start.sh").is_file(), "FreshRSS restricted startup is missing"
     deployment = yaml.safe_load((APP / "deployment.yaml").read_text())
     image = deployment["spec"]["template"]["spec"]["containers"][0]["image"]
@@ -110,8 +110,9 @@ def main():
 
     try:
         run("info")
-        run("pull", "--platform", "linux/amd64", image)
-        run("pull", "--platform", "linux/amd64", db_image)
+        for required_image in (image, db_image):
+            if run("image", "exists", required_image, success=False).returncode:
+                run("pull", "--platform", "linux/amd64", required_image)
         create("network", names["network"], "--internal")
         for key in ("data", "dbdata", "runtime", "backups"):
             create("volume", names[key])
@@ -227,6 +228,20 @@ def main():
                 "1000:1000",
                 "--network-alias",
                 "news-fixtures",
+                *(
+                    [
+                        "--network-alias",
+                        "news-graby.news.svc.cluster.local",
+                        "-v",
+                        str(ROOT / "tests/fixtures/news/extraction/client-router.php")
+                        + ":/client-router.php:ro",
+                        "-v",
+                        str(ROOT / "kubernetes/apps/news/graby/app/release.json")
+                        + ":/release.json:ro",
+                    ]
+                    if extraction
+                    else []
+                ),
                 "--tmpfs",
                 "/tmp:rw,size=16m",
                 "-v",
@@ -276,6 +291,23 @@ def main():
                     str(APP / "httpd.conf") + ":/opt/news-httpd.conf:ro",
                     "-v",
                     str(drain_probe) + ":/var/www/FreshRSS/p/drain-probe.php:ro",
+                    *(
+                        [
+                            "-v",
+                            str(Path(__file__).with_name("extraction-ingestion-tests.php"))
+                            + ":/extraction-tests.php:ro",
+                        ]
+                        + [
+                            "-v",
+                            str(APP / "extensions/xExtension-CommunityExtraction")
+                            + ":/var/www/FreshRSS/extensions/xExtension-CommunityExtraction:ro",
+                            "-v",
+                            str(ROOT / "kubernetes/apps/news/graby/app/release.json")
+                            + ":/opt/news-extraction/release.json:ro",
+                        ]
+                        if extraction
+                        else []
+                    ),
                     "-p",
                     "127.0.0.1::8080",
                     "-p",
@@ -290,6 +322,19 @@ def main():
                 return "http://127.0.0.1:" + port
 
             base = start_app()
+            if extraction:
+                run(
+                    "exec",
+                    "--detach",
+                    names["feeds"],
+                    "php",
+                    "-S",
+                    "0.0.0.0:8080",
+                    "/client-router.php",
+                )
+                result = run("exec", names["app"], "php", "/extraction-tests.php")
+                print(result.stdout.decode(), end="")
+                return
 
             def metrics():
                 port = (
