@@ -26,11 +26,15 @@ refresh_pid=''
 if [ "${NEWS_POLLING_ENABLED-true}" = true ]; then
     (
         exec 8>&- 7>&-
+        echo 'FreshRSS scheduler started' >&2
         while sleep 900; do
             sh /opt/news/refresh.sh || true
         done
+        echo 'FreshRSS scheduler stopped' >&2
     ) &
     refresh_pid=$!
+else
+    echo 'FreshRSS scheduler disabled' >&2
 fi
 web_pid=''
 cleanup() {
