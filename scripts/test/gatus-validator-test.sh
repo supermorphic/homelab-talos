@@ -341,4 +341,9 @@ reset_tree
 yq -i 'del(.stringData.prowlarr_api_key)' "$secret"
 expect_fail 'missing media API-key Secret data key' 'Gatus media API-key Secret stringData keys:'
 
+reset_tree
+yq -i '(.config.endpoints[] | select(.name == "freshrss") | .conditions) = ["[STATUS] == 200"]' "$values"
+expect_fail 'FreshRSS response without API readiness marker' \
+  'Existing Level 1 endpoint freshrss conditions:'
+
 echo 'Gatus source validator tests passed: status-only Servarr contract and mutation guards.'

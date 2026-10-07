@@ -253,7 +253,7 @@ check_media_endpoint 'seerr-radarr-service-read' \
 require_equal 'Media Integration endpoint methods and bodies' \
   "$(yq -r '[.config.endpoints[] | select(.group == "Media Integration") | select(.method != "GET" or has("body"))] | length' "$values")" '0'
 
-legacy_endpoint_names='alertmanager,caddy,echo,flaresolverr,forgejo,grafana,komga,letsencrypt-acme,lidarr,longhorn-ui,mylar3,nocodb,ntfy,openbao,plex,portainer,prometheus,prowlarr,qbittorrent-vpn,radarr,seerr,semaphore,sonarr,tautulli,test-reports'
+legacy_endpoint_names='alertmanager,caddy,echo,flaresolverr,forgejo,freshrss,grafana,komga,letsencrypt-acme,lidarr,longhorn-ui,mylar3,nocodb,ntfy,openbao,plex,portainer,prometheus,prowlarr,qbittorrent-vpn,radarr,seerr,semaphore,sonarr,tautulli,test-reports'
 require_equal 'Existing Level 1 endpoint names' \
   "$(yq -r '[.config.endpoints[] | select(.group != "Media Integration" and
     .name != "n8n-readiness" and .name != "n8n-webhook-e2e" and
@@ -283,6 +283,7 @@ grafana|Observability|https://grafana.lab.supermorphic.com/api/health|1m|[STATUS
 caddy|Platform|https://caddy.infra.supermorphic.com/healthz|1m|[STATUS] == 200
 semaphore|Platform|https://semaphore.infra.supermorphic.com/api/ping|1m|[STATUS] == 200
 forgejo|Platform|https://forgejo.infra.supermorphic.com/api/healthz|1m|[STATUS] == 200
+freshrss|News|https://news.lab.supermorphic.com/api/|1m|[STATUS] == 200|[BODY] == pat(*scripts/api.js*)
 prometheus|Observability|https://prometheus.lab.supermorphic.com/-/healthy|1m|[STATUS] == 200
 alertmanager|Observability|https://alertmanager.lab.supermorphic.com/-/healthy|1m|[STATUS] == 200
 test-reports|Observability|https://tests.lab.supermorphic.com/|1m|[STATUS] == 200

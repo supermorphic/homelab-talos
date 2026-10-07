@@ -595,7 +595,7 @@ class ControllerTests(unittest.TestCase):
                 client.preflight()
             self.assertEqual(client.call.call_count, 3)
 
-    def test_recovery_namespace_has_no_external_network_or_production_activation(self):
+    def test_recovery_namespace_has_no_external_network_or_production_access(self):
         import yaml
 
         from scripts.test.news import cluster_recovery as module
@@ -617,7 +617,7 @@ class ControllerTests(unittest.TestCase):
         )
         root = yaml.safe_load((module.ROOT / "kubernetes/apps/kustomization.yaml").read_text())
         self.assertIn("./news/recovery/ks.yaml", root["resources"])
-        self.assertNotIn("./news", root["resources"])
+        self.assertNotEqual(module.NAMESPACE, "news")
         role_objects = list(
             yaml.safe_load_all(
                 (

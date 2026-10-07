@@ -58,6 +58,13 @@ config:
     title: "Homelab Status"
     header: "Homelab"
   endpoints:
+    - name: freshrss
+      group: News
+      url: "https://news.lab.supermorphic.com/api/"
+      interval: 1m
+      conditions:
+        - "[STATUS] == 200"
+        - "[BODY] == pat(*scripts/api.js*)"
     # Observability UIs (black-box, through the internal gateway).
     - name: grafana
       group: Observability

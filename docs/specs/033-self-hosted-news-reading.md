@@ -17,15 +17,19 @@ sanitization of extracted HTML, safe fallback, and extraction-quality acceptance
 No extraction engine or package is required for the base platform. The optional
 Graby integration has its own [extraction design](034-community-backed-news-extraction.md).
 
-Source defines suspended FreshRSS and dedicated database workloads, retained
-storage, encrypted bootstrap generation, and synthetic content fixtures. Local
-container acceptance exercises FreshRSS/PostgreSQL, its synchronization API, and
-paired backup/restore into disposable local targets. Source also stages aggregate
-metrics, alerts, a private-route probe, and read-only verification. The news
-namespace is not selected by the root application list. An off-cluster restore
-drill, deployed monitoring acceptance, real bootstrap ciphertext, the initial source catalog,
-live routing/network/storage checks, and attended native synchronization remain
-required before activation and completion.
+Deploy FreshRSS and its dedicated database to production with retained storage
+and operator-encrypted bootstrap, then verify the running service. Production
+includes aggregate metrics, alerts, a private-route probe, and recurring read-only
+verification. Keep the same deployment, account, subscriptions, and storage after
+acceptance; no teardown, reinstall, migration, or separate promotion is required.
+Private access describes the internal Gateway and Tailscale path.
+
+Local container acceptance uses synthetic content fixtures to exercise
+FreshRSS/PostgreSQL, its synchronization API, and paired backup/restore into
+disposable local targets. An off-cluster restore drill, deployed monitoring
+acceptance, source/catalog checks, live routing/network/storage checks, and
+attended native synchronization are required before treating the production
+service as the primary reader or closing issue 274.
 
 Assume one operator account, private access through the existing internal Gateway
 and Tailscale path, and a modest curated feed collection. Multiple users, public
@@ -208,16 +212,17 @@ Longhorn transfer freshness is a separate off-cluster observation. A current
 transfer timestamp cannot prove which paired set it contains or replace the
 off-cluster recovery drill.
 
-News alerts remain suspended with the application, and its verifier is registered
-without recurring campaign enrollment. Activate the news Flux units, root
-application selection, retained Gatus endpoint definition, and verification
-campaign enrollment together through the reviewed deployment change. After
+The base news Flux units, root application selection, Gatus endpoint, and
+verification campaign enrollment are enabled together through the reviewed
+production deployment change. After
 `mise exec -- just kube kubeconfig`, run
 `mise exec -- just kube news-verify` with the scoped observer. While staged it
 checks that no news workload is running; after activation it requires current
 workload readiness and healthy refresh, feed, local-backup, and Longhorn-transfer
 observations. These are observational checks, not network-denial, restore, or
-native-client acceptance.
+native-client acceptance. Initial verification can remain incomplete until the
+first scheduled refresh, validated local capture, and Longhorn transfer finish.
+An available route alone does not establish service acceptance.
 
 FreshRSS still needs its own retained claim for filesystem configuration and user
 settings. Use a single FreshRSS replica with `Recreate` for that `ReadWriteOnce`
@@ -323,7 +328,7 @@ adopt or delete replacement objects. Namespace policy and quota are checked befo
 mutations. Deployed network-denial acceptance remains separate from these source
 and baseline checks. This drill proves logical recovery and fresh claim use;
 confirmed Longhorn off-cluster recovery and native-client reconciliation remain
-activation gates.
+required before primary use or issue closure.
 
 An isolated restore drill is required before treating this as the primary reader.
 Capacity, retention, backup frequency, and concrete guarded recovery commands belong
@@ -473,6 +478,15 @@ Required evidence before the base deployment is accepted:
 
 These remain pending native/runtime acceptance, distinct from database-only tests,
 source inspection, and mechanical documentation validation. Local or hosted
-offline checks cannot prove the intended reading experience. Activation requires
-admitted base-platform packages, the complete recovery and workload lifecycle,
-hosted validation, and explicit authorization for the specific merge.
+offline checks cannot prove the intended reading experience. Production
+deployment requires admitted base-platform packages, encrypted bootstrap material,
+the complete recovery and workload lifecycle, and successful isolated cluster
+recovery. Its exact candidate and base must pass hosted validation and receive
+explicit authorization for the specific merge. Then verify the deployed route,
+monitoring, storage and network boundaries, confirm a paired set is recoverable
+from off-cluster storage, and complete the attended client checks above. The
+production service remains deployed while these checks run and after they pass;
+only disposable recovery-test resources are removed. Complete the required checks
+before accepting it as the primary reader or closing issue 274. Graby remains
+suspended and new extraction requests remain disabled during base-platform
+acceptance.
