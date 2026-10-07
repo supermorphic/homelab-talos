@@ -171,6 +171,41 @@ def main(*, extraction=False, extraction_recovery=False):
                 path = fakebin / name
                 path.write_text("#!/bin/sh\n" + body)
                 path.chmod(0o755)
+            # Real flock ownership must report a skip without running PHP or
+            # claiming a successful refresh; each skipped boundary is distinct.
+            target = names["scheduler"] + "-skips"
+            container(
+                target,
+                "--user",
+                "1000:1000",
+                "--tmpfs",
+                "/tmp:rw,size=16m",
+                "--tmpfs",
+                "/run/news:rw,mode=1777,size=16m",
+                "-v",
+                str(fakebin) + ":/testbin:ro",
+                "-v",
+                str(APP / "scripts") + ":/opt/news:ro",
+                "-e",
+                "PATH=/testbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "--entrypoint",
+                "/bin/sh",
+                image,
+                "-ec",
+                "exec 6>/run/news/service.lock; flock -x 6\n"
+                "sh /opt/news/refresh.sh; flock -u 6\n"
+                "touch /run/news/maintenance-request\n"
+                "sh /opt/news/refresh.sh; rm /run/news/maintenance-request\n"
+                "exec 6>/run/news/refresh.lock; flock -x 6\n"
+                "sh /opt/news/refresh.sh; flock -u 6\n"
+                "[ ! -e /tmp/attempt ] && [ ! -e /run/news/last-refresh ]\n",
+            )
+            assert run("wait", target, timeout=15).stdout.strip() == b"0"
+            diagnostics = run("logs", target).stderr.decode()
+            for reason in ("service lock busy", "maintenance requested", "refresh lock busy"):
+                assert f"FreshRSS refresh skipped: {reason}" in diagnostics, (
+                    f"refresh did not report the {reason} boundary"
+                )
             for polling in ("true", "false"):
                 target = names["scheduler"] + "-" + polling
                 container(
@@ -196,6 +231,18 @@ def main(*, extraction=False, extraction_recovery=False):
                 assert run("wait", target, timeout=15).stdout.strip() == b"0", (
                     "scheduler ignored polling intent or stopped after a failed refresh"
                 )
+                diagnostics = run("logs", target).stderr.decode()
+                if polling == "true":
+                    assert "FreshRSS scheduler started" in diagnostics
+                    assert "FreshRSS refresh started" in diagnostics
+                    assert "FreshRSS refresh failed or exceeded its time budget" in diagnostics
+                    assert "FreshRSS refresh completed" in diagnostics
+                    assert diagnostics.index("FreshRSS refresh failed") < diagnostics.index(
+                        "FreshRSS refresh completed"
+                    ), "scheduler did not recover after the controlled failure"
+                else:
+                    assert "FreshRSS scheduler disabled" in diagnostics
+                    assert "FreshRSS refresh started" not in diagnostics
             db_env = tmp / "db.env"
             db_env.touch(mode=0o600)
             db_env.write_text(
