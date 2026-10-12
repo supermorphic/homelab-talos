@@ -18,6 +18,7 @@ spec:
       resources:
       - pods
       - pods/ephemeralcontainers
+      - pods/resize
     - apiGroups:
       - apps
       apiVersions:
@@ -61,6 +62,16 @@ spec:
       == ''cv-prepare'' ? [''cv-prepare-source''] : []'
   - name: containers
     expression: variables.pod.containers
+  - name: bounds
+    expression: 'variables.account == ''cv-prepare'' ? {''cpu'':''2'', ''memory'':''4Gi'', ''ephemeral-storage'':''4Gi''}
+      : variables.coordinator ? {''cpu'':''1'', ''memory'':''2Gi'', ''ephemeral-storage'':''2Gi''} : {''cpu'':''1'',
+      ''memory'':''1Gi'', ''ephemeral-storage'':''2Gi''}'
+  - name: volumes
+    expression: 'has(variables.pod.volumes) ? variables.pod.volumes : []'
+  - name: mounts
+    expression: 'has(variables.containers[0].volumeMounts) ? variables.containers[0].volumeMounts : []'
+  - name: oldPod
+    expression: 'oldObject == null ? {} : variables.item.kind == ''Pod'' ? dyn(oldObject).spec : dyn(oldObject).spec.template.spec'
   validations:
   - expression: request.operation == 'DELETE' || (variables.item.kind in ['Pod','Deployment','ReplicaSet','Job'])
     message: Only enrolled workload controllers are allowed.
@@ -119,6 +130,53 @@ spec:
       == 0 && (!has(variables.item.spec.parallelism) || variables.item.spec.parallelism == 1) && (!has(variables.item.spec.completions)
       || variables.item.spec.completions == 1) && variables.pod.restartPolicy == 'Never'))
     message: Offline Jobs use one-shot containers with controller retries disabled.
+  - expression: request.operation == 'DELETE' || (variables.containers.all(c, has(c.resources) && has(c.resources.requests)
+      && has(c.resources.limits) && !has(c.resources.claims) && c.resources.requests.all(k, k in variables.bounds)
+      && c.resources.limits.all(k, k in variables.bounds) && ['cpu','memory','ephemeral-storage'].all(k,
+      k in c.resources.requests && k in c.resources.limits && isQuantity(c.resources.requests[k]) && isQuantity(c.resources.limits[k])
+      && quantity(c.resources.requests[k]).compareTo(quantity('0')) > 0 && quantity(c.resources.requests[k]).compareTo(quantity(c.resources.limits[k]))
+      <= 0 && quantity(c.resources.limits[k]).compareTo(quantity(variables.bounds[k])) <= 0)))
+    message: Explicit positive requests and per-profile limits are required.
+  - expression: request.operation == 'DELETE' || (variables.volumes.all(v, !has(v.emptyDir) || (has(v.emptyDir.sizeLimit)
+      && isQuantity(v.emptyDir.sizeLimit) && quantity(v.emptyDir.sizeLimit).compareTo(quantity('0')) >
+      0 && quantity(v.emptyDir.sizeLimit).compareTo(quantity('1Gi')) <= 0 && (!has(v.emptyDir.medium)
+      || v.emptyDir.medium == ''))))
+    message: Temporary workspace must be disk-backed and at most 1 GiB.
+  - expression: request.operation == 'DELETE' || (variables.volumes.filter(v, has(v.emptyDir)).size()
+      <= 1)
+    message: Only one bounded temporary workspace is enrolled.
+  - expression: 'request.operation == ''DELETE'' || (variables.volumes.all(v, !has(v.persistentVolumeClaim)
+      || (v.persistentVolumeClaim.claimName in (variables.coordinator ? [''cv-releases'',''cv-requests'',''cv-artifacts'']
+      : variables.account == ''cv-prepare'' ? [''cv-releases''] : variables.account == ''cv-renderer''
+      ? [''cv-releases'',''cv-requests''] : []))))'
+    message: Claims are restricted by runtime identity.
+  - expression: request.operation == 'DELETE' || (variables.containers.all(c, !has(c.volumeDevices)) &&
+      variables.mounts.all(m, !has(m.subPathExpr) && (!has(m.mountPropagation) || m.mountPropagation ==
+      'None') && variables.volumes.exists(v, v.name == m.name)))
+    message: Mounts must reference declared volumes without dynamic paths or propagation.
+  - expression: request.operation == 'DELETE' || (!variables.coordinator || variables.mounts.all(m, variables.volumes.all(v,
+      v.name != m.name || !has(v.persistentVolumeClaim) || (!has(m.subPath) && ((v.persistentVolumeClaim.claimName
+      == 'cv-releases' && m.mountPath == '/releases' && has(m.readOnly) && m.readOnly) || (v.persistentVolumeClaim.claimName
+      == 'cv-requests' && m.mountPath == '/requests') || (v.persistentVolumeClaim.claimName == 'cv-artifacts'
+      && m.mountPath == '/artifacts'))))))
+    message: Coordinator claims use the enrolled mount paths.
+  - expression: request.operation == 'DELETE' || (variables.account != 'cv-prepare' || variables.mounts.all(m,
+      variables.volumes.all(v, v.name != m.name || !has(v.persistentVolumeClaim) || (m.mountPath == '/releases'
+      && has(m.subPath) && m.subPath.startsWith('candidates/') && m.subPath.matches('^[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)+$')))))
+    message: Preparation may mount only a candidate release directory.
+  - expression: request.operation == 'DELETE' || (variables.account != 'cv-renderer' || variables.mounts.all(m,
+      variables.volumes.all(v, v.name != m.name || !has(v.persistentVolumeClaim) || (has(m.subPath) &&
+      m.subPath.matches('^[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)+$') && ((v.persistentVolumeClaim.claimName ==
+      'cv-releases' && m.mountPath == '/releases' && m.subPath.startsWith('published/') && has(m.readOnly)
+      && m.readOnly && has(v.persistentVolumeClaim.readOnly) && v.persistentVolumeClaim.readOnly) || (v.persistentVolumeClaim.claimName
+      == 'cv-requests' && m.subPath.startsWith('requests/') && ((m.mountPath == '/input' && m.subPath.endsWith('/input')
+      && has(m.readOnly) && m.readOnly && has(v.persistentVolumeClaim.readOnly) && v.persistentVolumeClaim.readOnly)
+      || (m.mountPath == '/staging' && m.subPath.matches('^requests/[A-Za-z0-9_-]+/attempts/[A-Za-z0-9_-]+/pods/[A-Za-z0-9_-]+$')
+      && (!has(m.readOnly) || !m.readOnly)))))))))
+    message: Workers mount published releases/input read-only and only assigned staging writable.
+  - expression: request.operation != 'UPDATE' || (has(variables.oldPod.serviceAccountName) && variables.account
+      == variables.oldPod.serviceAccountName)
+    message: Runtime identity changes require a separately admitted new workload.
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

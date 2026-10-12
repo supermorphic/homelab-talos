@@ -29,6 +29,23 @@ class AdmissionCompileTests(unittest.TestCase):
             [self.binary], input=json.dumps(policies), capture_output=True, text=True, check=False
         )
 
+    def test_native_quantity_evaluation(self):
+        for expression, expected in [
+            ('quantity("1024Mi").compareTo(quantity("1Gi")) == 0', True),
+            ('quantity("1001m").compareTo(quantity("1")) <= 0', False),
+            ('isQuantity("bad")', False),
+        ]:
+            with self.subTest(expression=expression):
+                result = subprocess.run(
+                    [self.binary, "--evaluate"],
+                    input=json.dumps({"expression": expression, "activation": {}}),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), expected)
+
     def test_rendered_admission_policies_compile(self):
         policies = []
         for relative in (

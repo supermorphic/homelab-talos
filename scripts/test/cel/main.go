@@ -76,6 +76,13 @@ func (e annotationExpression) ReturnTypes() []*cel.Type {
 }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--evaluate" {
+		if err := evaluateFixture(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	var policies []v1.ValidatingAdmissionPolicy
 	if err := json.NewDecoder(os.Stdin).Decode(&policies); err != nil {
 		fmt.Fprintln(os.Stderr, err)

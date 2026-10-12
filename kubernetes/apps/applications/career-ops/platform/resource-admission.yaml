@@ -155,3 +155,55 @@ spec:
   policyName: career-ops-routes
   validationActions:
   - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: career-ops-storage
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: career-ops
+    resourceRules:
+    - apiGroups:
+      - ''
+      apiVersions:
+      - v1
+      resources:
+      - persistentvolumeclaims
+      operations:
+      - CREATE
+      - UPDATE
+      - DELETE
+  variables:
+  - name: item
+    expression: 'request.operation == ''DELETE'' ? dyn(oldObject) : dyn(object)'
+  validations:
+  - expression: 'request.operation == ''DELETE'' || (variables.item.metadata.name in [''cv-releases'',''cv-requests'',''cv-artifacts'']
+      && variables.item.spec.storageClassName == ''career-ops-retain'' && variables.item.spec.accessModes
+      == [''ReadWriteMany''] && (!has(variables.item.spec.volumeMode) || variables.item.spec.volumeMode
+      == ''Filesystem'') && (!has(variables.item.spec.volumeName) || (request.operation == ''UPDATE''
+      && has(oldObject.spec.volumeName) && variables.item.spec.volumeName == oldObject.spec.volumeName))
+      && !has(variables.item.spec.selector) && !has(variables.item.spec.dataSource) && !has(variables.item.spec.dataSourceRef)
+      && (!has(variables.item.metadata.ownerReferences) || variables.item.metadata.ownerReferences.size()
+      == 0) && has(variables.item.metadata.annotations) && ''kustomize.toolkit.fluxcd.io/prune'' in variables.item.metadata.annotations
+      && variables.item.metadata.annotations[''kustomize.toolkit.fluxcd.io/prune''] == ''disabled'' &&
+      isQuantity(variables.item.spec.resources.requests.storage) && quantity(variables.item.spec.resources.requests.storage).compareTo(quantity(variables.item.metadata.name
+      == ''cv-releases'' ? ''8Gi'' : variables.item.metadata.name == ''cv-requests'' ? ''16Gi'' : ''32Gi''))
+      == 0)'
+    message: Only enrolled RWX claims with prune protection and no clone/restore/prebinding are admitted.
+  matchConditions:
+  - name: exclude-volume-binding
+    expression: request.userInfo.username != 'system:kube-controller-manager' && request.userInfo.username
+      != 'system:serviceaccount:kube-system:persistent-volume-binder'
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: career-ops-storage
+spec:
+  policyName: career-ops-storage
+  validationActions:
+  - Deny

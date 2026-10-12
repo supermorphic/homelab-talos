@@ -1,7 +1,9 @@
 """Rendered application authority and independent admission request cases."""
 
 import copy
+import json
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -115,17 +117,40 @@ def workload(account="cv-renderer", kind="Job"):
     return {"kind": kind, "metadata": metadata, "spec": spec}
 
 
-class ApplicationAuthorityTests(unittest.TestCase):
+class ApplicationFixture:
     @classmethod
     def setUpClass(cls):
         cls.documents = render(PLATFORM)
         cls.env = celpy.Environment()
         cls.programs = {}
+        cls.temporary = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.temporary.cleanup)
+        cls.native = str(Path(cls.temporary.name) / "admission")
+        subprocess.run(
+            ["go", "build", "-mod=readonly", "-o", cls.native, "."],
+            cwd=ROOT / "scripts/test/cel",
+            check=True,
+        )
 
     from scripts.test.core.test_test_access_manifests import TestAccessPolicyTests as _helpers
 
     policy = _helpers.policy
-    evaluate = _helpers.evaluate
+
+    def evaluate(self, expression, activation):
+        if "quantity(" not in expression and "isQuantity(" not in expression:
+            return self._helpers.evaluate(self, expression, activation)
+        result = subprocess.run(
+            [self.native, "--evaluate"],
+            input=json.dumps(
+                {"expression": expression, "activation": json.loads(json.dumps(activation))}
+            ),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
     admits = _helpers.admits
 
     def admission(
@@ -149,6 +174,8 @@ class ApplicationAuthorityTests(unittest.TestCase):
             old,
         )
 
+
+class ApplicationAuthorityTests(ApplicationFixture, unittest.TestCase):
     def test_effective_reconciler_permissions(self):
         roles = {d["metadata"]["name"]: d for d in self.documents if d["kind"] == "Role"}
         self.assertIn("career-ops-reconciler", list(roles))
@@ -284,6 +311,11 @@ class ApplicationAuthorityTests(unittest.TestCase):
             )
         )
 
+    def test_runtime_identity_cannot_change_during_update(self):
+        old = workload("career-ops-service", "Deployment")
+        new = workload("cv-coordinator", "Deployment")
+        self.assertFalse(self.admission(new, operation="UPDATE", old=old))
+
     def test_coordinator_job_authority_includes_old_object_on_delete(self):
         for operation in ["CREATE", "UPDATE", "DELETE"]:
             for account, expected in [
@@ -358,7 +390,7 @@ class ApplicationAuthorityTests(unittest.TestCase):
             self.assertFalse(self.admission(bad, policy="career-ops-resources"))
 
 
-class ApplicationNetworkTests(ApplicationAuthorityTests):
+class ApplicationNetworkTests(ApplicationFixture, unittest.TestCase):
     def test_network_capabilities_follow_service_account_identity(self):
         policies = {
             d["metadata"]["name"]: d["spec"]
@@ -500,6 +532,214 @@ class ApplicationNetworkTests(ApplicationAuthorityTests):
             "metadata": {"name": "redirect", "namespace": "career-ops"},
         }
         self.assertFalse(self.admission(endpoints, policy="career-ops-resources"))
+
+
+class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
+    def test_retention_storage_and_capacity(self):
+        storage = next((d for d in self.documents if d["kind"] == "StorageClass"), None)
+        self.assertIsNotNone(storage, "retaining storage class is missing")
+        self.assertEqual(storage["metadata"]["name"], "career-ops-retain")
+        self.assertEqual(storage["reclaimPolicy"], "Retain")
+        self.assertEqual(storage["provisioner"], "driver.longhorn.io")
+        self.assertEqual(storage["parameters"]["numberOfReplicas"], "2")
+        self.assertEqual(
+            json.loads(storage["parameters"]["recurringJobSelector"]),
+            [{"name": "default", "isGroup": True}],
+        )
+        self.assertIs(storage["allowVolumeExpansion"], True)
+        self.assertNotEqual(
+            storage["metadata"]
+            .get("annotations", {})
+            .get("storageclass.kubernetes.io/is-default-class"),
+            "true",
+        )
+        quota = next(d["spec"]["hard"] for d in self.documents if d["kind"] == "ResourceQuota")
+        self.assertEqual(
+            quota,
+            {
+                "requests.cpu": "6",
+                "limits.cpu": "16",
+                "requests.memory": "12Gi",
+                "limits.memory": "24Gi",
+                "requests.ephemeral-storage": "16Gi",
+                "limits.ephemeral-storage": "32Gi",
+                "pods": "16",
+                "count/jobs.batch": "64",
+                "count/deployments.apps": "4",
+                "services": "8",
+                "count/httproutes.gateway.networking.k8s.io": "4",
+                "configmaps": "64",
+                "count/serviceaccounts": "16",
+                "count/rolebindings.rbac.authorization.k8s.io": "16",
+                "persistentvolumeclaims": "10",
+                "requests.storage": "64Gi",
+            },
+        )
+
+    def test_enrolled_pvc_declarations_and_retention_denials(self):
+        for name, size in [
+            ("cv-releases", "8Gi"),
+            ("cv-requests", "16Gi"),
+            ("cv-artifacts", "32Gi"),
+        ]:
+            obj = {
+                "kind": "PersistentVolumeClaim",
+                "metadata": {
+                    "name": name,
+                    "namespace": "career-ops",
+                    "annotations": {"kustomize.toolkit.fluxcd.io/prune": "disabled"},
+                },
+                "spec": {
+                    "accessModes": ["ReadWriteMany"],
+                    "storageClassName": "career-ops-retain",
+                    "resources": {"requests": {"storage": size}},
+                    "volumeMode": "Filesystem",
+                },
+            }
+            self.assertTrue(self.admission(obj, policy="career-ops-storage"))
+            self.assertFalse(
+                self.admission(None, policy="career-ops-resources", operation="DELETE", old=obj)
+            )
+            cases = [
+                ("storageClassName", "longhorn"),
+                ("accessModes", ["ReadWriteOnce"]),
+                ("volumeName", "arbitrary-pv"),
+                ("dataSource", {"kind": "PersistentVolumeClaim", "name": "private"}),
+                ("resources", {"requests": {"storage": "64Gi"}}),
+                ("volumeMode", "Block"),
+                ("selector", {"matchLabels": {"private": "true"}}),
+            ]
+            for field, value in cases:
+                bad = copy.deepcopy(obj)
+                bad["spec"][field] = value
+                self.assertFalse(self.admission(bad, policy="career-ops-storage"))
+            bad = copy.deepcopy(obj)
+            bad["metadata"]["annotations"] = {}
+            self.assertFalse(
+                self.admission(bad, policy="career-ops-storage", operation="UPDATE", old=obj)
+            )
+            bad = copy.deepcopy(obj)
+            bad["metadata"]["ownerReferences"] = [
+                {"kind": "Job", "name": "fixture", "uid": "synthetic"}
+            ]
+            self.assertFalse(self.admission(bad, policy="career-ops-storage"))
+
+    def test_profile_mounts_and_alternate_mount_rejections(self):
+        for account, claim, readonly, path, sub in [
+            ("cv-prepare", "cv-releases", False, "/releases", "candidates/release-fixture"),
+            ("cv-renderer", "cv-releases", True, "/releases", "published/release-fixture"),
+            ("cv-renderer", "cv-requests", True, "/input", "requests/request-fixture/input"),
+            (
+                "cv-renderer",
+                "cv-requests",
+                False,
+                "/staging",
+                "requests/request-fixture/attempts/attempt-fixture/pods/pod-fixture",
+            ),
+            ("cv-coordinator", "cv-artifacts", False, "/artifacts", ""),
+            ("cv-coordinator", "cv-requests", False, "/requests", ""),
+        ]:
+            obj = workload(account)
+            pod = obj["spec"]["template"]["spec"]
+            pod["volumes"] = [
+                {
+                    "name": "data",
+                    "persistentVolumeClaim": {"claimName": claim, "readOnly": readonly},
+                }
+            ]
+            mount = {"name": "data", "mountPath": path, "readOnly": readonly}
+            if sub:
+                mount["subPath"] = sub
+            pod["containers"][0]["volumeMounts"] = [mount]
+            self.assertTrue(self.admission(obj), (account, claim, path))
+            if readonly:
+                bad = copy.deepcopy(obj)
+                bad["spec"]["template"]["spec"]["containers"][0]["volumeMounts"][0]["readOnly"] = (
+                    False
+                )
+                self.assertFalse(self.admission(bad))
+            bad = copy.deepcopy(obj)
+            bad["spec"]["template"]["spec"]["containers"][0]["volumeMounts"][0]["subPathExpr"] = (
+                "$(PRIVATE_PATH)"
+            )
+            self.assertFalse(self.admission(bad))
+            if account != "cv-coordinator":
+                bad = copy.deepcopy(obj)
+                bad["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"][
+                    "claimName"
+                ] = "cv-artifacts"
+                self.assertFalse(self.admission(bad))
+        obj = workload("cv-prepare")
+        obj["spec"]["template"]["spec"]["volumes"] = [
+            {"name": "data", "persistentVolumeClaim": {"claimName": "cv-requests"}}
+        ]
+        self.assertFalse(self.admission(obj))
+
+    def test_bound_pvc_updates_and_pod_resize_are_guarded(self):
+        obj = {
+            "kind": "PersistentVolumeClaim",
+            "metadata": {
+                "name": "cv-releases",
+                "namespace": "career-ops",
+                "annotations": {"kustomize.toolkit.fluxcd.io/prune": "disabled"},
+            },
+            "spec": {
+                "accessModes": ["ReadWriteMany"],
+                "storageClassName": "career-ops-retain",
+                "resources": {"requests": {"storage": "8Gi"}},
+                "volumeName": "fixture-bound-pv",
+            },
+        }
+        self.assertTrue(
+            self.admission(obj, policy="career-ops-storage", operation="UPDATE", old=obj)
+        )
+        bad = copy.deepcopy(obj)
+        bad["spec"]["volumeName"] = "another-pv"
+        self.assertFalse(
+            self.admission(bad, policy="career-ops-storage", operation="UPDATE", old=obj)
+        )
+        rules = self.policy("career-ops-workloads")["matchConstraints"]["resourceRules"]
+        self.assertIn("pods/resize", [r for rule in rules for r in rule["resources"]])
+        obj = workload(kind="Pod")
+        obj["spec"]["containers"][0]["resources"]["limits"]["cpu"] = "2"
+        self.assertFalse(
+            self.admission(obj, operation="UPDATE", old=workload(kind="Pod"), sub="resize")
+        )
+
+    def test_per_profile_resources_and_temporary_workspace(self):
+        for account, cpu, memory, ephemeral in [
+            ("cv-renderer", "1001m", "1025Mi", "2049Mi"),
+            ("cv-coordinator", "1001m", "2049Mi", "2049Mi"),
+            ("cv-prepare", "2001m", "4097Mi", "4097Mi"),
+        ]:
+            for resource, over in [
+                ("cpu", cpu),
+                ("memory", memory),
+                ("ephemeral-storage", ephemeral),
+            ]:
+                obj = workload(account)
+                obj["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"][
+                    resource
+                ] = over
+                self.assertFalse(self.admission(obj), (account, resource))
+        for resources in [
+            {},
+            {"limits": {"cpu": "1", "memory": "1Gi"}},
+            {
+                "requests": {"cpu": "2", "memory": "128Mi", "ephemeral-storage": "128Mi"},
+                "limits": {"cpu": "1", "memory": "1Gi", "ephemeral-storage": "2Gi"},
+            },
+        ]:
+            obj = workload()
+            obj["spec"]["template"]["spec"]["containers"][0]["resources"] = resources
+            self.assertFalse(self.admission(obj))
+        obj = workload()
+        pod = obj["spec"]["template"]["spec"]
+        pod["volumes"] = [{"name": "tmp", "emptyDir": {"sizeLimit": "1Gi"}}]
+        pod["containers"][0]["volumeMounts"] = [{"name": "tmp", "mountPath": "/tmp"}]
+        self.assertTrue(self.admission(obj))
+        pod["volumes"][0]["emptyDir"]["sizeLimit"] = "1025Mi"
+        self.assertFalse(self.admission(obj))
 
 
 if __name__ == "__main__":
