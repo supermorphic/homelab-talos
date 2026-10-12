@@ -3,6 +3,7 @@
 set -euo pipefail
 [[ "$#" -eq 1 ]] || { echo 'Usage: application-boundary.sh <task-scoped-kubeconfig>' >&2; exit 2; }
 uv run --locked python - "$1" <<'PY'
+import copy
 import json
 import subprocess
 import sys
@@ -46,10 +47,25 @@ def ready(item):
         c.get('type') == 'Ready' and c.get('status') == 'True' and c.get('observedGeneration') == g
         for c in item.get('status',{}).get('conditions',[]))
 
+def controlled(item):
+    item=copy.deepcopy(item)
+    if item['kind'] == 'LimitRange':
+        # The API derives Container defaults from max when not explicitly set.
+        # Preserve explicit values so drift in defaults still fails observation.
+        for limit in item['spec']['limits']:
+            if limit['type'] == 'Container':
+                defaults=limit.setdefault('default',{})
+                requests=limit.setdefault('defaultRequest',{})
+                for resource,value in limit.get('max',{}).items():
+                    defaults.setdefault(resource,value)
+                for resource,value in defaults.items():
+                    requests.setdefault(resource,value)
+    return _controlled_body(item)
+
 rendered=subprocess.check_output(['kustomize','build','kubernetes/apps/applications/career-ops/platform'],text=True)
 for expected in yaml.safe_load_all(rendered):
     actual=get(expected)
-    if _controlled_body(expected) != _controlled_body(actual):
+    if controlled(expected) != controlled(actual):
         sys.exit('An installed application control differs from the reviewed source: '+expected['kind']+'/'+expected['metadata']['name'])
     if expected['kind'] == 'Namespace' and any(actual['metadata'].get('labels',{}).get(k) != v for k,v in expected['metadata']['labels'].items()):
         sys.exit('Application namespace restriction labels differ from source.')

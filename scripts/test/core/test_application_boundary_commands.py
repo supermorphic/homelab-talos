@@ -80,6 +80,17 @@ class ApplicationCommandTests(unittest.TestCase):
         self.assertTrue(all(c[0] in ["get", "auth"] for c in self.calls()))
         self.assertFalse(any("secret" in c[1].lower() for c in self.calls() if c[0] == "get"))
 
+    def test_observer_accepts_api_defaulted_limit_range_but_rejects_changed_defaults(self):
+        limit = self.objects["limitrange/career-ops-container-bounds"]["spec"]["limits"][0]
+        limit["default"] = copy.deepcopy(limit["max"])
+        limit["defaultRequest"] = copy.deepcopy(limit["max"])
+        result = self.run_command()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        limit["defaultRequest"]["cpu"] = "1"
+        result = self.run_command()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("differs from the reviewed source", result.stderr)
+
     def test_observation_rejects_controller_without_remote_base_guard(self):
         self.objects["deployment/kustomize-controller"]["spec"]["template"]["spec"]["containers"][
             0
