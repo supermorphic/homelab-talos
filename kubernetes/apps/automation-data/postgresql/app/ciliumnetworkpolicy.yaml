@@ -8,32 +8,35 @@ spec:
     matchLabels:
       app.kubernetes.io/name: automation-data-postgresql
   ingress:
-    - fromEndpoints:
-        - matchLabels:
-            k8s:io.kubernetes.pod.namespace: automation
-            app.kubernetes.io/name: n8n
-        - matchLabels:
-            k8s:io.kubernetes.pod.namespace: automation-data
-            app.kubernetes.io/name: automation-data-postgresql-backup
-        - matchLabels:
-            k8s:io.kubernetes.pod.namespace: automation-data
-            app.kubernetes.io/name: nocodb
-        - matchLabels:
-            k8s:io.kubernetes.pod.namespace: automation-data
-            app.kubernetes.io/name: nocodb-metadata-bootstrap
-      toPorts:
-        - ports:
-            - port: "5432"
-              protocol: TCP
-    - fromEndpoints:
-        - matchLabels:
-            k8s:io.kubernetes.pod.namespace: monitoring
-            app.kubernetes.io/name: prometheus
-            operator.prometheus.io/name: kube-prometheus-stack-prometheus
-      toPorts:
-        - ports:
-            - port: "9399"
-              protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: automation
+        app.kubernetes.io/name: n8n
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: automation-data
+        app.kubernetes.io/name: automation-data-postgresql-backup
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: automation-data
+        app.kubernetes.io/name: nocodb
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: automation-data
+        app.kubernetes.io/name: nocodb-metadata-bootstrap
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: career-ops
+        k8s:io.cilium.k8s.policy.serviceaccount: cv-coordinator
+    toPorts:
+    - ports:
+      - port: '5432'
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: monitoring
+        app.kubernetes.io/name: prometheus
+        operator.prometheus.io/name: kube-prometheus-stack-prometheus
+    toPorts:
+    - ports:
+      - port: '9399'
+        protocol: TCP
   egress: []
 ---
 apiVersion: cilium.io/v2
@@ -46,21 +49,21 @@ spec:
       app.kubernetes.io/name: automation-data-postgresql-backup
   ingress: []
   egress:
-    - toEndpoints:
-        - matchLabels:
-            k8s:io.kubernetes.pod.namespace: kube-system
-            k8s:k8s-app: kube-dns
-      toPorts:
-        - ports:
-            - port: "53"
-              protocol: UDP
-            - port: "53"
-              protocol: TCP
-    - toEndpoints:
-        - matchLabels:
-            k8s:io.kubernetes.pod.namespace: automation-data
-            app.kubernetes.io/name: automation-data-postgresql
-      toPorts:
-        - ports:
-            - port: "5432"
-              protocol: TCP
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+        k8s:k8s-app: kube-dns
+    toPorts:
+    - ports:
+      - port: '53'
+        protocol: UDP
+      - port: '53'
+        protocol: TCP
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: automation-data
+        app.kubernetes.io/name: automation-data-postgresql
+    toPorts:
+    - ports:
+      - port: '5432'
+        protocol: TCP

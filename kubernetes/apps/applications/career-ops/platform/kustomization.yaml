@@ -6,3 +6,4 @@ resources:
 - ./rbac.yaml
 - ./workload-admission.yaml
 - ./resource-admission.yaml
+- ./network-policy.yaml

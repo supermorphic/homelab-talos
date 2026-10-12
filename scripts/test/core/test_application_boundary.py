@@ -358,5 +358,149 @@ class ApplicationAuthorityTests(unittest.TestCase):
             self.assertFalse(self.admission(bad, policy="career-ops-resources"))
 
 
+class ApplicationNetworkTests(ApplicationAuthorityTests):
+    def test_network_capabilities_follow_service_account_identity(self):
+        policies = {
+            d["metadata"]["name"]: d["spec"]
+            for d in self.documents
+            if d["kind"] == "CiliumNetworkPolicy"
+        }
+        self.assertIn("career-ops-deny", list(policies))
+        self.assertEqual(policies["career-ops-deny"]["endpointSelector"], {})
+        self.assertEqual(policies["career-ops-deny"]["ingress"], [])
+        self.assertEqual(policies["career-ops-deny"]["egress"], [])
+        self.assertEqual(set(policies), {"career-ops-deny", "career-ops-coordinator"})
+        coordinator = policies["career-ops-coordinator"]
+        self.assertEqual(
+            coordinator["endpointSelector"]["matchLabels"],
+            {"k8s:io.cilium.k8s.policy.serviceaccount": "cv-coordinator"},
+        )
+        self.assertEqual(
+            [p["port"] for r in coordinator["ingress"] for p in r["toPorts"][0]["ports"]],
+            ["8080", "9090"],
+        )
+        self.assertEqual(len(coordinator["egress"]), 3)
+        self.assertEqual(coordinator["egress"][2]["toEntities"], ["kube-apiserver"])
+        self.assertEqual(
+            coordinator["egress"][1]["toPorts"][0]["ports"], [{"port": "5432", "protocol": "TCP"}]
+        )
+        db = next(
+            iter(
+                yaml.safe_load_all(
+                    (
+                        ROOT
+                        / "kubernetes/apps/automation-data/postgresql/app/ciliumnetworkpolicy.yaml"
+                    ).read_text()
+                )
+            )
+        )
+        peers = db["spec"]["ingress"][0]["fromEndpoints"]
+        self.assertIn(
+            {
+                "matchLabels": {
+                    "k8s:io.kubernetes.pod.namespace": "career-ops",
+                    "k8s:io.cilium.k8s.policy.serviceaccount": "cv-coordinator",
+                }
+            },
+            peers,
+        )
+
+    def test_route_allocation_and_escape_rejection(self):
+        route = {
+            "kind": "HTTPRoute",
+            "metadata": {"name": "cv-coordinator", "namespace": "career-ops"},
+            "spec": {
+                "hostnames": ["cv.lab.supermorphic.com"],
+                "parentRefs": [
+                    {
+                        "name": "internal",
+                        "namespace": "networking",
+                        "sectionName": "https",
+                        "kind": "Gateway",
+                        "group": "gateway.networking.k8s.io",
+                    }
+                ],
+                "rules": [
+                    {
+                        "backendRefs": [
+                            {
+                                "name": "cv-coordinator",
+                                "port": 8080,
+                                "kind": "Service",
+                                "group": "",
+                                "weight": 1,
+                            }
+                        ]
+                    }
+                ],
+            },
+        }
+        self.assertTrue(self.admission(route, policy="career-ops-routes"))
+        mutations = [
+            ("hostnames", ["elsewhere.example"]),
+            ("parentRefs", [{"name": "external", "namespace": "networking"}]),
+            (
+                "rules",
+                [
+                    {
+                        "backendRefs": [
+                            {"name": "cv-coordinator", "namespace": "other", "port": 8080}
+                        ]
+                    }
+                ],
+            ),
+            ("rules", [{"backendRefs": [{"name": "other", "port": 8080}]}]),
+            ("rules", [{"backendRefs": [{"name": "cv-coordinator", "port": 9090}]}]),
+            (
+                "rules",
+                [
+                    {
+                        "filters": [{"type": "RequestRedirect"}],
+                        "backendRefs": [{"name": "cv-coordinator", "port": 8080}],
+                    }
+                ],
+            ),
+        ]
+        for field, value in mutations:
+            bad = copy.deepcopy(route)
+            bad["spec"][field] = value
+            self.assertFalse(self.admission(bad, policy="career-ops-routes"))
+
+    def test_service_cannot_redirect_route_metrics_or_external_endpoints(self):
+        service = {
+            "kind": "Service",
+            "metadata": {
+                "name": "cv-coordinator",
+                "namespace": "career-ops",
+                "labels": {"app.kubernetes.io/name": "cv-coordinator"},
+            },
+            "spec": {
+                "type": "ClusterIP",
+                "selector": {"app.kubernetes.io/name": "cv-coordinator"},
+                "ports": [
+                    {"name": "http", "port": 8080, "targetPort": 8080, "protocol": "TCP"},
+                    {"name": "metrics", "port": 9090, "targetPort": 9090, "protocol": "TCP"},
+                ],
+            },
+        }
+        self.assertTrue(self.admission(service, policy="career-ops-services"))
+        for field, value in [
+            ("type", "ExternalName"),
+            ("type", "LoadBalancer"),
+            ("type", "NodePort"),
+            ("selector", {"app.kubernetes.io/name": "cv-prepare"}),
+            ("externalIPs", ["192.0.2.1"]),
+            ("ports", [{"name": "http", "port": 8080, "targetPort": 9090}]),
+        ]:
+            bad = copy.deepcopy(service)
+            bad["spec"][field] = value
+            self.assertFalse(self.admission(bad, policy="career-ops-services"))
+        endpoints = {
+            "kind": "EndpointSlice",
+            "metadata": {"name": "redirect", "namespace": "career-ops"},
+        }
+        self.assertFalse(self.admission(endpoints, policy="career-ops-resources"))
+
+
 if __name__ == "__main__":
     unittest.main()

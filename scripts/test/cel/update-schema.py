@@ -86,8 +86,42 @@ def main():
 
     for ref in roots:
         collect(ref)
+    # Envoy owns the Gateway API CRDs; use its actual pinned chart schema.
+    envoy = yaml.safe_load(
+        (ROOT / "kubernetes/apps/networking/envoy-gateway/app/ocirepository.yaml").read_text()
+    )["spec"]
+    chart, tag = envoy["url"], envoy["ref"]["tag"]
+    crds = subprocess.check_output(["helm", "show", "crds", chart, "--version", tag])
+    route = next(
+        doc
+        for doc in yaml.safe_load_all(crds)
+        if doc
+        and doc.get("kind") == "CustomResourceDefinition"
+        and doc["metadata"]["name"] == "httproutes.gateway.networking.k8s.io"
+    )
+    route_schema = next(
+        v["schema"]["openAPIV3Schema"] for v in route["spec"]["versions"] if v["name"] == "v1"
+    )
+    ref = "gateway.networking.k8s.io.v1.HTTPRoute"
+    kept[ref] = strip_prose(route_schema)
+    resources.append(
+        {
+            "group": "gateway.networking.k8s.io",
+            "version": "v1",
+            "kind": "HTTPRoute",
+            "resource": "httproutes",
+            "definition": ref,
+        }
+    )
     fixture = {
         "source": source,
+        "crd_sources": [
+            {
+                "source": chart + ":" + tag,
+                "source_sha256": hashlib.sha256(crds).hexdigest(),
+                "resource": "httproutes.gateway.networking.k8s.io",
+            }
+        ],
         "source_sha256": hashlib.sha256(raw).hexdigest(),
         "license": "Apache-2.0",
         "transformation": "Selected built-in policy resource schemas and transitive references; descriptions omitted.",
