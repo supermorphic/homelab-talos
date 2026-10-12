@@ -809,6 +809,38 @@ class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
                 bad["spec"]["template"]["spec"]["containers"][0]["volumeMounts"][0][field] = value
                 self.assertFalse(self.admission(bad))
 
+    def test_secret_environment_and_partial_directory_delivery_are_denied(self):
+        for account, secret in [
+            ("cv-coordinator", "cv-render-database"),
+            ("cv-coordinator", "cv-api-auth"),
+            ("cv-prepare", "cv-prepare-source"),
+        ]:
+            obj = workload(account)
+            pod = obj["spec"]["template"]["spec"]
+            pod["containers"][0]["env"] = [
+                {
+                    "name": "CREDENTIAL",
+                    "valueFrom": {"secretKeyRef": {"name": secret, "key": "password"}},
+                }
+            ]
+            with self.subTest(account=account, delivery="environment"):
+                self.assertFalse(self.admission(obj))
+            pod["containers"][0].pop("env")
+            pod["volumes"] = [
+                {
+                    "name": "credential",
+                    "secret": {
+                        "secretName": secret,
+                        "items": [{"key": "password", "path": "renamed"}],
+                    },
+                }
+            ]
+            pod["containers"][0]["volumeMounts"] = [
+                {"name": "credential", "mountPath": "/run/secrets/" + secret, "readOnly": True}
+            ]
+            with self.subTest(account=account, delivery="partial-directory"):
+                self.assertFalse(self.admission(obj))
+
     def test_per_profile_resources_and_temporary_workspace(self):
         for account, cpu, memory, ephemeral in [
             ("cv-renderer", "1001m", "1025Mi", "2049Mi"),

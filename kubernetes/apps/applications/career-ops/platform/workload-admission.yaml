@@ -110,16 +110,16 @@ spec:
       || p.hostPort == 0))))
     message: Every container must use the restricted execution profile.
   - expression: request.operation == 'DELETE' || (variables.containers.all(c, !has(c.envFrom) && (!has(c.env)
-      || c.env.all(e, !has(e.valueFrom) || (has(e.valueFrom.secretKeyRef) && e.valueFrom.secretKeyRef.name
-      in variables.secrets) || (has(e.valueFrom.configMapKeyRef) && !e.valueFrom.configMapKeyRef.name.startsWith('career-ops-'))
+      || c.env.all(e, !has(e.valueFrom) || (has(e.valueFrom.configMapKeyRef) && !e.valueFrom.configMapKeyRef.name.startsWith('career-ops-'))
       || (has(e.valueFrom.fieldRef) && e.valueFrom.fieldRef.fieldPath in ['metadata.name','metadata.namespace','metadata.uid'])))))
-    message: Secret references are restricted by runtime identity.
+    message: Credentials must use complete mounted directories, never environment references.
   - expression: request.operation == 'DELETE' || (!has(variables.pod.imagePullSecrets) || variables.pod.imagePullSecrets.size()
       == 0)
     message: Private image credentials require enrollment.
   - expression: request.operation == 'DELETE' || (!has(variables.pod.volumes) || variables.pod.volumes.all(v,
       v.all(k, k in ['name','emptyDir','persistentVolumeClaim','secret','configMap','projected']) && (has(v.emptyDir)
-      || has(v.persistentVolumeClaim) || (has(v.secret) && v.secret.secretName in variables.secrets) ||
+      || has(v.persistentVolumeClaim) || (has(v.secret) && v.secret.secretName in variables.secrets
+      && (!has(v.secret.items) || v.secret.items.size() == 0)) ||
       (has(v.configMap) && !v.configMap.name.startsWith('career-ops-')) || (has(v.projected) && variables.coordinator
       && variables.item.kind == 'Pod' && v.name.startsWith('kube-api-access-') && v.projected.sources.all(s,
       s.all(k, k in ['serviceAccountToken','configMap','downwardAPI']) && (!has(s.serviceAccountToken)
