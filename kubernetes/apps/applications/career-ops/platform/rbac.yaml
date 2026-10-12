@@ -94,3 +94,66 @@ rules:
   - get
   - list
   - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: career-ops-boundary-test
+  namespace: career-ops
+rules:
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: career-ops-boundary-test
+  namespace: career-ops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: career-ops-boundary-test
+subjects:
+- kind: ServiceAccount
+  name: homelab-test-runner
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: career-ops-boundary-observer
+rules:
+- apiGroups:
+  - admissionregistration.k8s.io
+  resources:
+  - validatingadmissionpolicies
+  - validatingadmissionpolicybindings
+  resourceNames:
+  - career-ops-workloads
+  - career-ops-resources
+  - career-ops-services
+  - career-ops-routes
+  - career-ops-storage
+  - career-ops-boundary-test
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: career-ops-boundary-observer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: career-ops-boundary-observer
+subjects:
+- kind: ServiceAccount
+  name: homelab-observer
+  namespace: kube-system
+- kind: ServiceAccount
+  name: homelab-test-runner
+  namespace: kube-system

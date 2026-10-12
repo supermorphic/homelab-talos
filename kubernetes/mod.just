@@ -1357,3 +1357,17 @@ kubeconfig profile="observer": require-bash
 # Attended profile/caller acceptance with isolated temporary workstation identities.
 agent-credentials-test: require-bash
     @scripts/test/run-catalog-suite.sh test.agent-credentials -- uv run --locked python -m scripts.test.scenarios.agent_credentials
+
+# Compile/evaluate application controls and test the shipped monitoring rules offline.
+application-boundary-validate: require-bash
+    @scripts/validate/application-boundary.sh
+
+# Observe installed platform controls and suspended or enrolled source metadata.
+application-boundary-verify: require-bash
+    @scripts/test/run-catalog-suite.sh verification.application-boundary -- \
+      scripts/verify/application-boundary.sh {{quote(test_kubeconfig)}}
+
+# Submit only fixed server-side admission dry runs; native storage/network proof is separate.
+application-boundary-test: require-bash
+    @scripts/test/run-catalog-suite.sh test.application-boundary-admission -- \
+      scripts/test/scenarios/application-boundary.sh {{quote(test_kubeconfig)}}

@@ -20,4 +20,4 @@ promtool test rules "$temp_dir/bootstrap_test.yaml"
 yq -i '(.groups[].rules[] | select(.record == "career_ops_coordinator_expected") | .expr) = "vector(1)"' "$temp_dir/career-ops.yaml"
 cp tests/prometheus/career-ops-alerts_test.yaml "$temp_dir/alerts_test.yaml"
 promtool test rules "$temp_dir/alerts_test.yaml"
-echo 'Application boundary offline checks passed; source enrollment, signal schema and native acceptance remain pending.'
+echo 'Application boundary offline checks passed; source enrollment, monitoring activation and native acceptance remain pending.'

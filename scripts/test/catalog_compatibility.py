@@ -218,8 +218,8 @@ def existing_negative_contract(root: Path, canonical: dict[str, Any]) -> None:
         "@@ -1,4 +1,3 @@\n"
         "-verification.agent-access\n"
         " verification.alertmanager-ntfy\n"
-        " verification.automation-data\n"
-        " verification.cilium\n",
+        " verification.application-boundary\n"
+        " verification.automation-data\n",
         normalize_diff=True,
     )
     expect_rejection(

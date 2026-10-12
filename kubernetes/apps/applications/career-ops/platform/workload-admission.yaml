@@ -85,7 +85,9 @@ spec:
     message: Host networking is forbidden.
   - expression: request.operation == 'DELETE' || ((!has(variables.pod.hostPID) || !variables.pod.hostPID)
       && (!has(variables.pod.hostIPC) || !variables.pod.hostIPC) && !has(variables.pod.hostAliases) &&
-      !has(variables.pod.nodeName) && (!has(variables.pod.os) || variables.pod.os.name == 'linux'))
+      (!has(variables.pod.nodeName) || (variables.item.kind == 'Pod' && request.operation == 'UPDATE'
+      && has(variables.oldPod.nodeName) && variables.pod.nodeName == variables.oldPod.nodeName)) && (!has(variables.pod.os)
+      || variables.pod.os.name == 'linux'))
     message: Host namespaces and host overrides are forbidden.
   - expression: request.operation == 'DELETE' || (has(variables.pod.automountServiceAccountToken) && variables.pod.automountServiceAccountToken
       == variables.coordinator)
@@ -156,9 +158,9 @@ spec:
     message: Mounts must reference declared volumes without dynamic paths or propagation.
   - expression: request.operation == 'DELETE' || (!variables.coordinator || variables.mounts.all(m, variables.volumes.all(v,
       v.name != m.name || !has(v.persistentVolumeClaim) || (!has(m.subPath) && ((v.persistentVolumeClaim.claimName
-      == 'cv-releases' && m.mountPath == '/releases' && has(m.readOnly) && m.readOnly) || (v.persistentVolumeClaim.claimName
-      == 'cv-requests' && m.mountPath == '/requests') || (v.persistentVolumeClaim.claimName == 'cv-artifacts'
-      && m.mountPath == '/artifacts'))))))
+      == 'cv-releases' && m.mountPath == '/releases') || (v.persistentVolumeClaim.claimName == 'cv-requests'
+      && m.mountPath == '/requests') || (v.persistentVolumeClaim.claimName == 'cv-artifacts' && m.mountPath
+      == '/artifacts'))))))
     message: Coordinator claims use the enrolled mount paths.
   - expression: request.operation == 'DELETE' || (variables.account != 'cv-prepare' || variables.mounts.all(m,
       variables.volumes.all(v, v.name != m.name || !has(v.persistentVolumeClaim) || (m.mountPath == '/releases'
@@ -167,16 +169,25 @@ spec:
   - expression: request.operation == 'DELETE' || (variables.account != 'cv-renderer' || variables.mounts.all(m,
       variables.volumes.all(v, v.name != m.name || !has(v.persistentVolumeClaim) || (has(m.subPath) &&
       m.subPath.matches('^[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)+$') && ((v.persistentVolumeClaim.claimName ==
-      'cv-releases' && m.mountPath == '/releases' && m.subPath.startsWith('published/') && has(m.readOnly)
-      && m.readOnly && has(v.persistentVolumeClaim.readOnly) && v.persistentVolumeClaim.readOnly) || (v.persistentVolumeClaim.claimName
-      == 'cv-requests' && m.subPath.startsWith('requests/') && ((m.mountPath == '/input' && m.subPath.endsWith('/input')
+      'cv-releases' && m.mountPath == '/releases' && (m.subPath.startsWith('published/') || m.subPath.startsWith('candidates/'))
       && has(m.readOnly) && m.readOnly && has(v.persistentVolumeClaim.readOnly) && v.persistentVolumeClaim.readOnly)
-      || (m.mountPath == '/staging' && m.subPath.matches('^requests/[A-Za-z0-9_-]+/attempts/[A-Za-z0-9_-]+/pods/[A-Za-z0-9_-]+$')
+      || (v.persistentVolumeClaim.claimName == 'cv-requests' && m.subPath.startsWith('requests/') && ((m.mountPath
+      == '/input' && m.subPath.endsWith('/input') && has(m.readOnly) && m.readOnly && has(v.persistentVolumeClaim.readOnly)
+      && v.persistentVolumeClaim.readOnly) || (m.mountPath == '/staging' && m.subPath.matches('^requests/[A-Za-z0-9_-]+/attempts/[A-Za-z0-9_-]+/pods/[A-Za-z0-9_-]+$')
       && (!has(m.readOnly) || !m.readOnly)))))))))
-    message: Workers mount published releases/input read-only and only assigned staging writable.
+    message: Workers mount candidate/published releases and input read-only; only assigned staging is
+      writable.
   - expression: request.operation != 'UPDATE' || (has(variables.oldPod.serviceAccountName) && variables.account
       == variables.oldPod.serviceAccountName)
     message: Runtime identity changes require a separately admitted new workload.
+  - expression: request.operation == 'DELETE' || variables.mounts.all(m, variables.volumes.all(v, v.name
+      != m.name || !has(v.secret) || (m.mountPath == '/run/secrets/' + v.secret.secretName && has(m.readOnly)
+      && m.readOnly && !has(m.subPath))))
+    message: Credential directories use the enrolled path and read-only complete mounts.
+  - expression: request.operation == 'DELETE' || variables.containers.all(c, (!has(c.terminationMessagePath)
+      || c.terminationMessagePath == '/dev/termination-log') && (!has(c.terminationMessagePolicy) || c.terminationMessagePolicy
+      == 'File'))
+    message: Termination metadata must not read credential files or capture container logs.
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

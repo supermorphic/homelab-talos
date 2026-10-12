@@ -289,3 +289,17 @@ contracts:
       - tests/prometheus/news-alerts_test.yaml
     required_tests:
       - catalog:validation.news
+  application-boundary:
+    changed_inputs:
+      - kubernetes/apps/applications/career-ops/platform/workload-admission.yaml
+      - scripts/validate/application-boundary.sh
+      - scripts/test/core/test_application_boundary.py
+    required_tests:
+      - catalog:validation.application-boundary
+      - python:scripts/test/core/test_application_boundary.py
+  application-boundary-commands:
+    changed_inputs:
+      - scripts/verify/application-boundary.sh
+      - scripts/test/scenarios/application-boundary.sh
+    required_tests:
+      - python:scripts/test/core/test_application_boundary_commands.py

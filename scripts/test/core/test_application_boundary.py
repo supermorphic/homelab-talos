@@ -225,7 +225,11 @@ class ApplicationAuthorityTests(ApplicationFixture, unittest.TestCase):
                 for v in verbs
             },
         )
-        bindings = [d for d in self.documents if d["kind"] == "RoleBinding"]
+        bindings = [
+            d
+            for d in self.documents
+            if d["kind"] == "RoleBinding" and d["metadata"]["name"] == "career-ops-reconciler"
+        ]
         self.assertEqual(len(bindings), 1)
         self.assertEqual(
             bindings[0]["subjects"],
@@ -310,6 +314,25 @@ class ApplicationAuthorityTests(ApplicationFixture, unittest.TestCase):
                 obj, operation="UPDATE", old=workload(kind="Pod"), sub="ephemeralcontainers"
             )
         )
+
+    def test_scheduled_pod_update_preserves_node_assignment(self):
+        old = workload(kind="Pod")
+        old["spec"]["nodeName"] = "synthetic-node"
+        obj = copy.deepcopy(old)
+        obj["spec"]["containers"][0]["resources"]["limits"]["cpu"] = "500m"
+        self.assertTrue(self.admission(obj, operation="UPDATE", old=old, sub="resize"))
+        obj["spec"]["nodeName"] = "another-node"
+        self.assertFalse(self.admission(obj, operation="UPDATE", old=old))
+        self.assertFalse(self.admission(old))
+
+    def test_termination_metadata_cannot_read_secret_files(self):
+        for field, value in [
+            ("terminationMessagePath", "/run/secrets/cv-render-database/password"),
+            ("terminationMessagePolicy", "FallbackToLogsOnError"),
+        ]:
+            obj = workload("cv-coordinator", "Deployment")
+            obj["spec"]["template"]["spec"]["containers"][0][field] = value
+            self.assertFalse(self.admission(obj))
 
     def test_runtime_identity_cannot_change_during_update(self):
         old = workload("career-ops-service", "Deployment")
@@ -675,6 +698,30 @@ class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
         ]
         self.assertFalse(self.admission(obj))
 
+    def test_pvc_attribute_classes_and_protection_removal_are_denied(self):
+        obj = {
+            "kind": "PersistentVolumeClaim",
+            "metadata": {
+                "name": "cv-releases",
+                "namespace": "career-ops",
+                "annotations": {"kustomize.toolkit.fluxcd.io/prune": "disabled"},
+                "finalizers": ["kubernetes.io/pvc-protection"],
+            },
+            "spec": {
+                "storageClassName": "career-ops-retain",
+                "accessModes": ["ReadWriteMany"],
+                "resources": {"requests": {"storage": "8Gi"}},
+            },
+        }
+        bad = copy.deepcopy(obj)
+        bad["spec"]["volumeAttributesClassName"] = "alternate-driver-options"
+        self.assertFalse(self.admission(bad, policy="career-ops-storage"))
+        bad = copy.deepcopy(obj)
+        bad["metadata"]["finalizers"] = []
+        self.assertFalse(
+            self.admission(bad, policy="career-ops-storage", operation="UPDATE", old=obj)
+        )
+
     def test_bound_pvc_updates_and_pod_resize_are_guarded(self):
         obj = {
             "kind": "PersistentVolumeClaim",
@@ -705,6 +752,62 @@ class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
         self.assertFalse(
             self.admission(obj, operation="UPDATE", old=workload(kind="Pod"), sub="resize")
         )
+
+    def test_coordinator_promotion_and_read_only_candidate_qualification(self):
+        for account, sub in [
+            ("cv-coordinator", None),
+            ("cv-renderer", "candidates/release-fixture"),
+        ]:
+            obj = workload(account)
+            pod = obj["spec"]["template"]["spec"]
+            pod["volumes"] = [
+                {
+                    "name": "release",
+                    "persistentVolumeClaim": {
+                        "claimName": "cv-releases",
+                        "readOnly": account != "cv-coordinator",
+                    },
+                }
+            ]
+            mount = {
+                "name": "release",
+                "mountPath": "/releases",
+                "readOnly": account != "cv-coordinator",
+            }
+            if sub:
+                mount["subPath"] = sub
+            pod["containers"][0]["volumeMounts"] = [mount]
+            self.assertTrue(self.admission(obj), account)
+        obj = workload("cv-prepare")
+        pod = obj["spec"]["template"]["spec"]
+        pod["volumes"] = [
+            {"name": "release", "persistentVolumeClaim": {"claimName": "cv-releases"}}
+        ]
+        pod["containers"][0]["volumeMounts"] = [
+            {"name": "release", "mountPath": "/releases", "subPath": "published/release-fixture"}
+        ]
+        self.assertFalse(self.admission(obj))
+
+    def test_secret_files_are_read_only_at_the_enrolled_path(self):
+        for account, secret in [
+            ("cv-coordinator", "cv-render-database"),
+            ("cv-coordinator", "cv-api-auth"),
+            ("cv-prepare", "cv-prepare-source"),
+        ]:
+            obj = workload(account)
+            pod = obj["spec"]["template"]["spec"]
+            pod["volumes"] = [{"name": "credential", "secret": {"secretName": secret}}]
+            mount = {"name": "credential", "mountPath": "/run/secrets/" + secret, "readOnly": True}
+            pod["containers"][0]["volumeMounts"] = [mount]
+            self.assertTrue(self.admission(obj), secret)
+            for field, value in [
+                ("readOnly", False),
+                ("mountPath", "/tmp/credential"),
+                ("subPath", "password"),
+            ]:
+                bad = copy.deepcopy(obj)
+                bad["spec"]["template"]["spec"]["containers"][0]["volumeMounts"][0][field] = value
+                self.assertFalse(self.admission(bad))
 
     def test_per_profile_resources_and_temporary_workspace(self):
         for account, cpu, memory, ephemeral in [
@@ -742,25 +845,90 @@ class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
         self.assertFalse(self.admission(obj))
 
 
+class ApplicationAssuranceTests(ApplicationFixture, unittest.TestCase):
+    def test_test_runner_can_only_submit_fixed_server_dry_runs(self):
+        policies = render(ROOT / "kubernetes/apps/kube-system/agent-access/app")
+        generic = next(
+            d
+            for d in policies
+            if d["kind"] == "ValidatingAdmissionPolicy"
+            and d["metadata"]["name"] == "homelab-test-jobs"
+        )
+        self.assertIn(
+            "request.namespace != 'career-ops'",
+            [c["expression"] for c in generic["spec"]["matchConditions"]],
+        )
+        roles = [
+            d
+            for d in self.documents
+            if d["kind"] == "Role" and d["metadata"]["name"] == "career-ops-boundary-test"
+        ]
+        self.assertEqual(len(roles), 1)
+        self.assertEqual(
+            roles[0]["rules"],
+            [{"apiGroups": ["batch"], "resources": ["jobs"], "verbs": ["create"]}],
+        )
+        readers = [
+            d
+            for d in self.documents
+            if d["kind"] == "ClusterRole"
+            and d["metadata"]["name"] == "career-ops-boundary-observer"
+        ]
+        self.assertEqual(len(readers), 1)
+        self.assertEqual(readers[0]["rules"][0]["verbs"], ["get"])
+        self.assertEqual(
+            set(readers[0]["rules"][0]["resourceNames"]),
+            {
+                "career-ops-workloads",
+                "career-ops-resources",
+                "career-ops-services",
+                "career-ops-routes",
+                "career-ops-storage",
+                "career-ops-boundary-test",
+            },
+        )
+        obj = workload()
+        obj["metadata"]["name"] = "career-ops-boundary-admission"
+        req = {
+            "namespace": "career-ops",
+            "operation": "CREATE",
+            "dryRun": True,
+            "userInfo": {"username": "system:serviceaccount:kube-system:homelab-test-runner"},
+        }
+        self.assertTrue(self.admits("career-ops-boundary-test", req, obj))
+        for field, value in [("dryRun", False), ("operation", "UPDATE"), ("operation", "DELETE")]:
+            bad = dict(req)
+            bad[field] = value
+            self.assertFalse(self.admits("career-ops-boundary-test", bad, obj, old=obj))
+        bad = copy.deepcopy(obj)
+        bad["metadata"]["name"] = "another-job"
+        self.assertFalse(self.admits("career-ops-boundary-test", req, bad))
+
+
 class ApplicationConnectionTests(unittest.TestCase):
     def test_private_source_and_application_reconciliation_are_suspended(self):
-        docs=render(ROOT/'kubernetes/apps/applications/career-ops/connection')
-        self.assertEqual({d['kind'] for d in docs}, {'GitRepository','Kustomization'})
-        source=next(d for d in docs if d['kind']=='GitRepository')
-        self.assertEqual(source['metadata'], {'name':'career-ops','namespace':'career-ops'})
-        self.assertEqual(source['spec']['url'],'https://forgejo.infra.supermorphic.com/supermorphic/career-ops.git')
-        self.assertEqual(source['spec']['ref'], {'branch':'main'})
-        self.assertEqual(source['spec']['secretRef'], {'name':'career-ops-source'})
-        self.assertIs(source['spec']['suspend'], True)
-        application=next(d for d in docs if d['kind']=='Kustomization')
-        self.assertEqual(application['metadata']['name'],'career-ops-apps')
-        self.assertEqual(application['spec']['serviceAccountName'],'career-ops-reconciler')
-        self.assertEqual(application['spec']['sourceRef'], {'kind':'GitRepository','name':'career-ops'})
-        self.assertEqual(application['spec']['path'],'./deploy/')
-        self.assertEqual(application['spec']['targetNamespace'],'career-ops')
-        self.assertIs(application['spec']['suspend'], True)
-        for field in ['decryption','postBuild','patches','components','kubeConfig']:
-            self.assertNotIn(field, application['spec'])
+        docs = render(ROOT / "kubernetes/apps/applications/career-ops/connection")
+        self.assertEqual({d["kind"] for d in docs}, {"GitRepository", "Kustomization"})
+        source = next(d for d in docs if d["kind"] == "GitRepository")
+        self.assertEqual(source["metadata"], {"name": "career-ops", "namespace": "career-ops"})
+        self.assertEqual(
+            source["spec"]["url"],
+            "https://forgejo.infra.supermorphic.com/supermorphic/career-ops.git",
+        )
+        self.assertEqual(source["spec"]["ref"], {"branch": "main"})
+        self.assertEqual(source["spec"]["secretRef"], {"name": "career-ops-source"})
+        self.assertIs(source["spec"]["suspend"], True)
+        application = next(d for d in docs if d["kind"] == "Kustomization")
+        self.assertEqual(application["metadata"]["name"], "career-ops-apps")
+        self.assertEqual(application["spec"]["serviceAccountName"], "career-ops-reconciler")
+        self.assertEqual(
+            application["spec"]["sourceRef"], {"kind": "GitRepository", "name": "career-ops"}
+        )
+        self.assertEqual(application["spec"]["path"], "./deploy/")
+        self.assertEqual(application["spec"]["targetNamespace"], "career-ops")
+        self.assertIs(application["spec"]["suspend"], True)
+        for field in ["decryption", "postBuild", "patches", "components", "kubeConfig"]:
+            self.assertNotIn(field, application["spec"])
 
 
 class ApplicationMonitoringTests(unittest.TestCase):
@@ -774,7 +942,10 @@ class ApplicationMonitoringTests(unittest.TestCase):
         )
         self.assertEqual(monitor["spec"]["namespaceSelector"], {"matchNames": ["career-ops"]})
         self.assertEqual(
-            monitor["spec"]["endpoints"],
+            [
+                {k: v for k, v in e.items() if k != "metricRelabelings"}
+                for e in monitor["spec"]["endpoints"]
+            ],
             [{"port": "metrics", "path": "/metrics", "interval": "1m", "scrapeTimeout": "10s"}],
         )
         rule = next(d for d in docs if d["kind"] == "PrometheusRule")

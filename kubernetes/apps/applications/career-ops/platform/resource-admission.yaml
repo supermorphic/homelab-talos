@@ -194,6 +194,12 @@ spec:
       == ''cv-releases'' ? ''8Gi'' : variables.item.metadata.name == ''cv-requests'' ? ''16Gi'' : ''32Gi''))
       == 0)'
     message: Only enrolled RWX claims with prune protection and no clone/restore/prebinding are admitted.
+  - expression: request.operation == 'DELETE' || !has(variables.item.spec.volumeAttributesClassName)
+    message: Unenrolled volume attribute classes are forbidden.
+  - expression: request.operation != 'UPDATE' || !has(oldObject.metadata.finalizers) || !('kubernetes.io/pvc-protection'
+      in oldObject.metadata.finalizers) || (has(variables.item.metadata.finalizers) && 'kubernetes.io/pvc-protection'
+      in variables.item.metadata.finalizers)
+    message: Existing claim protection must be preserved.
   matchConditions:
   - name: exclude-volume-binding
     expression: request.userInfo.username != 'system:kube-controller-manager' && request.userInfo.username
@@ -205,5 +211,43 @@ metadata:
   name: career-ops-storage
 spec:
   policyName: career-ops-storage
+  validationActions:
+  - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: career-ops-boundary-test
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: career-ops
+    resourceRules:
+    - apiGroups:
+      - batch
+      apiVersions:
+      - v1
+      resources:
+      - jobs
+      operations:
+      - CREATE
+      - UPDATE
+      - DELETE
+  matchConditions:
+  - name: test-runner
+    expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+  validations:
+  - expression: request.namespace == 'career-ops' && request.operation == 'CREATE' && has(request.dryRun)
+      && request.dryRun && object.metadata.name == 'career-ops-boundary-admission'
+    message: Application boundary tests may submit only the fixed server-side dry-run Job.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: career-ops-boundary-test
+spec:
+  policyName: career-ops-boundary-test
   validationActions:
   - Deny

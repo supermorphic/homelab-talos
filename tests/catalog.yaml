@@ -14,6 +14,7 @@ executions:
     - validation.openbao
     - validation.metrics-server
     - validation.flux
+    - validation.application-boundary
     - validation.foundation
     - validation.storage
     - validation.csi-driver-smb
@@ -64,6 +65,7 @@ executions:
     - validation.openbao
     - validation.metrics-server
     - validation.flux
+    - validation.application-boundary
     - validation.foundation
     - validation.storage
     - validation.csi-driver-smb
@@ -124,6 +126,7 @@ campaigns:
       - verification.cilium
       - verification.openbao
       - verification.flux
+      - verification.application-boundary
       - verification.foundation
       - verification.n8n
       - verification.automation-data
@@ -191,6 +194,7 @@ campaigns:
       - verification.cilium
       - verification.openbao
       - verification.flux
+      - verification.application-boundary
       - verification.foundation
       - verification.n8n
       - verification.automation-data
@@ -1175,3 +1179,21 @@ suites:
     runner: {command: "mise exec -- just kube agent-credentials-test", implementation: scripts/test/scenarios/agent_credentials.py}
     native_results: {strategy: wrapper-junit}
     dispatch: {mode: direct, runtime: uv-python, path: scripts/test/scenarios/agent_credentials.py, args: [], selector: null}
+
+  - metadata: {id: validation.application-boundary, source: validation, framework: mixed, suite: ci, tier: offline, target: application-boundary, scenario: source, scope: application, intent: regression, mutates_cluster: false, execution_owner: shared}
+    access: {profile: null, prerequisites: []}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube application-boundary-validate", implementation: scripts/validate/application-boundary.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: verification.application-boundary, source: verification, framework: bash, suite: platform, tier: verification, target: application-boundary, scenario: controls-and-source, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: shared}
+    description: Observes exact installed controls, admission type checking, suspension/source binding and enrolled retained-volume metadata; excludes credential contents and native workload, network, mount, notification and recovery acceptance.
+    access: {profile: observer, prerequisites: []}
+    confirmation: {type: none, variable: null, expected: null}
+    runner: {command: "mise exec -- just kube application-boundary-verify", implementation: scripts/verify/application-boundary.sh}
+    native_results: {strategy: wrapper-junit}
+  - metadata: {id: test.application-boundary-admission, source: test, framework: bash, suite: platform, tier: integration, target: application-boundary, scenario: server-admission, scope: application, intent: acceptance, mutates_cluster: true, execution_owner: shared}
+    description: Submits fixed server-side Job dry runs with fresh installed-scope checks before each request; persists no objects and requires the intended workload-policy denial. Controller Pods, networking, cross-node RWX, retention/pruning, source workloads, notification delivery and isolated restore remain separate native acceptance.
+    access: {profile: test-runner, prerequisites: []}
+    confirmation: {type: exact, variable: APPLICATION_BOUNDARY_TEST_CONFIRM, expected: "test:application-boundary:server-admission"}
+    runner: {command: "APPLICATION_BOUNDARY_TEST_CONFIRM=test:application-boundary:server-admission mise exec -- just kube application-boundary-test", implementation: scripts/test/scenarios/application-boundary.sh}
+    native_results: {strategy: wrapper-junit}
