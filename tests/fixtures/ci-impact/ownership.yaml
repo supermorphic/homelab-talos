@@ -303,3 +303,8 @@ contracts:
       - scripts/test/scenarios/application-boundary.sh
     required_tests:
       - python:scripts/test/core/test_application_boundary_commands.py
+  application-boundary-mount-probe:
+    changed_inputs:
+      - tests/fixtures/application-boundary/mount-probe.py
+    required_tests:
+      - python:scripts/test/core/test_application_boundary_mount_probe.py
