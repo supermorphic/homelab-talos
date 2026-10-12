@@ -1,0 +1,10 @@
+rule_files:
+  - career-ops.yaml
+evaluation_interval: 1m
+tests:
+  - name: intentionally suspended bootstrap is quiet
+    interval: 1m
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: CareerOpsCoordinatorUnavailable
+        exp_alerts: []

@@ -93,7 +93,7 @@ done
 # activation follows bootstrap. Other PrometheusRules live in domain alerts apps.
 mapfile -t stray < <(rg --files kubernetes/apps | rg '\.yaml$' \
   | xargs rg -l '^kind: PrometheusRule' 2>/dev/null \
-  | rg -v '/alerts/app/|/security/openbao/monitoring/prometheusrule\.yaml$' | sort)
+  | rg -v '/alerts/app/|/security/openbao/monitoring/prometheusrule\.yaml$|/applications/career-ops/platform/monitoring\.yaml$' | sort)
 [[ "${#stray[@]}" -eq 0 ]] || {
   echo 'PrometheusRule files must live in domain alerts apps or the staged OpenBao monitoring unit:' >&2
   printf '  %s\n' "${stray[@]}" >&2

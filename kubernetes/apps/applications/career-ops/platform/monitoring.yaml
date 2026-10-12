@@ -1,0 +1,42 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: career-ops-coordinator
+  namespace: career-ops
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cv-coordinator
+  namespaceSelector:
+    matchNames:
+    - career-ops
+  endpoints:
+  - port: metrics
+    path: /metrics
+    interval: 1m
+    scrapeTimeout: 10s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: career-ops-coordinator
+  namespace: career-ops
+spec:
+  groups:
+  - name: career-ops.availability
+    interval: 1m
+    rules:
+    - record: career_ops_coordinator_expected
+      expr: vector(0)
+    - alert: CareerOpsCoordinatorUnavailable
+      expr: ((min(up{namespace="career-ops",service="cv-coordinator"}) or vector(0)) == 0) and on() (career_ops_coordinator_expected
+        == 1)
+      for: 5m
+      labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      annotations:
+        summary: Career Ops coordinator is unavailable
+        description: CV requests cannot progress. Check the private status and recovery endpoint.

@@ -742,5 +742,26 @@ class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
         self.assertFalse(self.admission(obj))
 
 
+class ApplicationMonitoringTests(unittest.TestCase):
+    def test_platform_monitoring_is_quiet_until_activation(self):
+        docs = render(PLATFORM)
+        monitor = next((d for d in docs if d["kind"] == "ServiceMonitor"), None)
+        self.assertIsNotNone(monitor, "platform monitoring is missing")
+        self.assertEqual(
+            monitor["spec"]["selector"],
+            {"matchLabels": {"app.kubernetes.io/name": "cv-coordinator"}},
+        )
+        self.assertEqual(monitor["spec"]["namespaceSelector"], {"matchNames": ["career-ops"]})
+        self.assertEqual(
+            monitor["spec"]["endpoints"],
+            [{"port": "metrics", "path": "/metrics", "interval": "1m", "scrapeTimeout": "10s"}],
+        )
+        rule = next(d for d in docs if d["kind"] == "PrometheusRule")
+        expected = next(r for g in rule["spec"]["groups"] for r in g["rules"] if "record" in r)
+        self.assertEqual(
+            expected, {"record": "career_ops_coordinator_expected", "expr": "vector(0)"}
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

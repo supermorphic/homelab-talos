@@ -1,0 +1,55 @@
+rule_files:
+  - career-ops.yaml
+evaluation_interval: 1m
+tests:
+  - name: healthy idle coordinator
+    interval: 1m
+    input_series:
+      - series: up{namespace="career-ops",service="cv-coordinator"}
+        values: 1x10
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: CareerOpsCoordinatorUnavailable
+        exp_alerts: []
+  - name: absent service or scrape target
+    interval: 1m
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: CareerOpsCoordinatorUnavailable
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: CareerOpsCoordinatorUnavailable
+        exp_alerts:
+          - exp_labels: {namespace: career-ops, service: cv-coordinator, severity: critical}
+            exp_annotations:
+              summary: Career Ops coordinator is unavailable
+              description: CV requests cannot progress. Check the private status and recovery endpoint.
+  - name: failed scrape then resolution
+    interval: 1m
+    input_series:
+      - series: up{namespace="career-ops",service="cv-coordinator"}
+        values: 0x6 1x5
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: CareerOpsCoordinatorUnavailable
+        exp_alerts:
+          - exp_labels: {namespace: career-ops, service: cv-coordinator, severity: critical}
+            exp_annotations:
+              summary: Career Ops coordinator is unavailable
+              description: CV requests cannot progress. Check the private status and recovery endpoint.
+      - eval_time: 8m
+        alertname: CareerOpsCoordinatorUnavailable
+        exp_alerts: []
+  - name: other service cannot hide target loss
+    interval: 1m
+    input_series:
+      - series: up{namespace="career-ops",service="another-service"}
+        values: 1x10
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: CareerOpsCoordinatorUnavailable
+        exp_alerts:
+          - exp_labels: {namespace: career-ops, service: cv-coordinator, severity: critical}
+            exp_annotations:
+              summary: Career Ops coordinator is unavailable
+              description: CV requests cannot progress. Check the private status and recovery endpoint.
