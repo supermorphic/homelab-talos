@@ -147,6 +147,24 @@ class ApplicationCommandTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("did not identify the intended", result.stderr)
 
+    def test_scenario_accepts_invalid_status_from_the_intended_admission_policy(self):
+        self.environment["APPLICATION_BOUNDARY_FIXTURE_DENIAL"] = (
+            'The jobs "career-ops-boundary-admission" is invalid: '
+            "ValidatingAdmissionPolicy 'career-ops-workloads' with binding "
+            "'career-ops-workloads' denied request: Host networking is forbidden."
+        )
+        result = self.run_command(scenario=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_scenario_rejects_a_different_policy_with_a_similar_name(self):
+        self.environment["APPLICATION_BOUNDARY_FIXTURE_DENIAL"] = (
+            "Error from server (Forbidden): ValidatingAdmissionPolicy "
+            "'career-ops-workloads-other' denied request"
+        )
+        result = self.run_command(scenario=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("did not identify the intended", result.stderr)
+
     def test_scenario_stops_before_request_when_scope_policy_changed(self):
         self.objects["validatingadmissionpolicy/career-ops-boundary-test"]["spec"]["validations"][
             0

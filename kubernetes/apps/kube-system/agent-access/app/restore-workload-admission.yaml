@@ -257,6 +257,8 @@ spec:
   matchConditions:
     - name: test-runner
       expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: outside-career-ops
+      expression: request.namespace != 'career-ops'
     - name: restore-database-family
       expression: >-
         (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/test'] in ['automation-data-restore-drill', 'nocodb-restore-drill'] &&
@@ -382,6 +384,8 @@ spec:
   matchConditions:
     - name: test-runner
       expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: outside-career-ops
+      expression: request.namespace != 'career-ops'
     - name: restore-request-family
       expression: >-
         (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/test'] in ['automation-data-restore-drill', 'nocodb-restore-drill'] &&
