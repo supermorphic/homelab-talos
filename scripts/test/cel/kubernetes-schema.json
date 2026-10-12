@@ -299,6 +299,123 @@
       },
       "type": "object"
     },
+    "io.k8s.api.apps.v1.ReplicaSet": {
+      "properties": {
+        "apiVersion": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "metadata": {
+          "$ref": "#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"
+        },
+        "spec": {
+          "$ref": "#/definitions/io.k8s.api.apps.v1.ReplicaSetSpec"
+        },
+        "status": {
+          "$ref": "#/definitions/io.k8s.api.apps.v1.ReplicaSetStatus"
+        }
+      },
+      "type": "object",
+      "x-kubernetes-group-version-kind": [
+        {
+          "group": "apps",
+          "kind": "ReplicaSet",
+          "version": "v1"
+        }
+      ]
+    },
+    "io.k8s.api.apps.v1.ReplicaSetCondition": {
+      "properties": {
+        "lastTransitionTime": {
+          "$ref": "#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.Time"
+        },
+        "message": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "status"
+      ],
+      "type": "object"
+    },
+    "io.k8s.api.apps.v1.ReplicaSetSpec": {
+      "properties": {
+        "minReadySeconds": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "replicas": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "selector": {
+          "$ref": "#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelector"
+        },
+        "template": {
+          "$ref": "#/definitions/io.k8s.api.core.v1.PodTemplateSpec"
+        }
+      },
+      "required": [
+        "selector"
+      ],
+      "type": "object"
+    },
+    "io.k8s.api.apps.v1.ReplicaSetStatus": {
+      "properties": {
+        "availableReplicas": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "conditions": {
+          "items": {
+            "$ref": "#/definitions/io.k8s.api.apps.v1.ReplicaSetCondition"
+          },
+          "type": "array",
+          "x-kubernetes-list-map-keys": [
+            "type"
+          ],
+          "x-kubernetes-list-type": "map",
+          "x-kubernetes-patch-merge-key": "type",
+          "x-kubernetes-patch-strategy": "merge"
+        },
+        "fullyLabeledReplicas": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "observedGeneration": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "readyReplicas": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "replicas": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "terminatingReplicas": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "replicas"
+      ],
+      "type": "object"
+    },
     "io.k8s.api.apps.v1.RollingUpdateDaemonSet": {
       "properties": {
         "maxSurge": {
@@ -5523,6 +5640,13 @@
       "group": "apps",
       "kind": "Deployment",
       "resource": "deployments",
+      "version": "v1"
+    },
+    {
+      "definition": "io.k8s.api.apps.v1.ReplicaSet",
+      "group": "apps",
+      "kind": "ReplicaSet",
+      "resource": "replicasets",
       "version": "v1"
     },
     {

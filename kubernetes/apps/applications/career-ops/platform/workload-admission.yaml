@@ -1,0 +1,130 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: career-ops-workloads
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:
+      - ''
+      apiVersions:
+      - v1
+      operations:
+      - CREATE
+      - UPDATE
+      - DELETE
+      resources:
+      - pods
+      - pods/ephemeralcontainers
+    - apiGroups:
+      - apps
+      apiVersions:
+      - v1
+      operations:
+      - CREATE
+      - UPDATE
+      - DELETE
+      resources:
+      - deployments
+      - replicasets
+      - statefulsets
+      - daemonsets
+    - apiGroups:
+      - batch
+      apiVersions:
+      - v1
+      operations:
+      - CREATE
+      - UPDATE
+      - DELETE
+      resources:
+      - jobs
+      - cronjobs
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: career-ops
+  variables:
+  - name: item
+    expression: 'request.operation == ''DELETE'' ? dyn(oldObject) : dyn(object)'
+  - name: pod
+    expression: 'variables.item.kind == ''Pod'' ? variables.item.spec : variables.item.spec.template.spec'
+  - name: meta
+    expression: 'variables.item.kind == ''Pod'' ? variables.item.metadata : variables.item.spec.template.metadata'
+  - name: account
+    expression: 'has(variables.pod.serviceAccountName) ? variables.pod.serviceAccountName : ''default'''
+  - name: coordinator
+    expression: variables.account == 'cv-coordinator'
+  - name: secrets
+    expression: 'variables.coordinator ? [''cv-render-database'', ''cv-api-auth''] : variables.account
+      == ''cv-prepare'' ? [''cv-prepare-source''] : []'
+  - name: containers
+    expression: variables.pod.containers
+  validations:
+  - expression: request.operation == 'DELETE' || (variables.item.kind in ['Pod','Deployment','ReplicaSet','Job'])
+    message: Only enrolled workload controllers are allowed.
+  - expression: request.operation == 'DELETE' || (variables.account in ['cv-prepare','cv-coordinator','cv-renderer','career-ops-service'])
+    message: Select an enrolled runtime service account.
+  - expression: request.operation == 'DELETE' || (has(variables.meta.labels) && variables.meta.labels['app.kubernetes.io/name']
+      == variables.account && variables.meta.labels.all(k, !k.startsWith('io.cilium.') && !k.startsWith('k8s:')
+      && !k.startsWith('career-ops.platform/')))
+    message: Workload identity and selectors must match the runtime account.
+  - expression: request.operation == 'DELETE' || (!has(variables.pod.hostNetwork) || !variables.pod.hostNetwork)
+    message: Host networking is forbidden.
+  - expression: request.operation == 'DELETE' || ((!has(variables.pod.hostPID) || !variables.pod.hostPID)
+      && (!has(variables.pod.hostIPC) || !variables.pod.hostIPC) && !has(variables.pod.hostAliases) &&
+      !has(variables.pod.nodeName) && (!has(variables.pod.os) || variables.pod.os.name == 'linux'))
+    message: Host namespaces and host overrides are forbidden.
+  - expression: request.operation == 'DELETE' || (has(variables.pod.automountServiceAccountToken) && variables.pod.automountServiceAccountToken
+      == variables.coordinator)
+    message: Only the coordinator may mount its Kubernetes token.
+  - expression: request.operation == 'DELETE' || (has(variables.pod.securityContext) && variables.pod.securityContext.runAsNonRoot
+      == true && variables.pod.securityContext.runAsUser > 0 && variables.pod.securityContext.seccompProfile.type
+      == 'RuntimeDefault' && !has(variables.pod.securityContext.sysctls))
+    message: Require a non-root user and RuntimeDefault seccomp.
+  - expression: request.operation == 'DELETE' || (variables.containers.size() == 1 && (!has(variables.pod.initContainers)
+      || variables.pod.initContainers.size() == 0) && (!has(variables.pod.ephemeralContainers) || variables.pod.ephemeralContainers.size()
+      == 0))
+    message: Sidecars, init and ephemeral containers require separate enrollment.
+  - expression: request.operation == 'DELETE' || (variables.containers.all(c, has(c.securityContext) &&
+      c.securityContext.readOnlyRootFilesystem == true && c.securityContext.allowPrivilegeEscalation ==
+      false && (!has(c.securityContext.privileged) || !c.securityContext.privileged) && (!has(c.securityContext.runAsUser)
+      || c.securityContext.runAsUser > 0) && (!has(c.securityContext.runAsNonRoot) || c.securityContext.runAsNonRoot)
+      && c.securityContext.capabilities.drop == ['ALL'] && (!has(c.securityContext.capabilities.add) ||
+      c.securityContext.capabilities.add.size() == 0) && (!has(c.securityContext.seccompProfile) || c.securityContext.seccompProfile.type
+      == 'RuntimeDefault') && !has(c.securityContext.procMount) && (!has(c.ports) || c.ports.all(p, !has(p.hostPort)
+      || p.hostPort == 0))))
+    message: Every container must use the restricted execution profile.
+  - expression: request.operation == 'DELETE' || (variables.containers.all(c, !has(c.envFrom) && (!has(c.env)
+      || c.env.all(e, !has(e.valueFrom) || (has(e.valueFrom.secretKeyRef) && e.valueFrom.secretKeyRef.name
+      in variables.secrets) || (has(e.valueFrom.configMapKeyRef) && !e.valueFrom.configMapKeyRef.name.startsWith('career-ops-'))
+      || (has(e.valueFrom.fieldRef) && e.valueFrom.fieldRef.fieldPath in ['metadata.name','metadata.namespace','metadata.uid'])))))
+    message: Secret references are restricted by runtime identity.
+  - expression: request.operation == 'DELETE' || (!has(variables.pod.imagePullSecrets) || variables.pod.imagePullSecrets.size()
+      == 0)
+    message: Private image credentials require enrollment.
+  - expression: request.operation == 'DELETE' || (!has(variables.pod.volumes) || variables.pod.volumes.all(v,
+      v.all(k, k in ['name','emptyDir','persistentVolumeClaim','secret','configMap','projected']) && (has(v.emptyDir)
+      || has(v.persistentVolumeClaim) || (has(v.secret) && v.secret.secretName in variables.secrets) ||
+      (has(v.configMap) && !v.configMap.name.startsWith('career-ops-')) || (has(v.projected) && variables.coordinator
+      && variables.item.kind == 'Pod' && v.name.startsWith('kube-api-access-') && v.projected.sources.all(s,
+      s.all(k, k in ['serviceAccountToken','configMap','downwardAPI']) && (!has(s.serviceAccountToken)
+      || s.serviceAccountToken.path == 'token') && (!has(s.configMap) || s.configMap.name == 'kube-root-ca.crt'))))))
+    message: Volume drivers, token projections and Secrets are restricted.
+  - expression: request.userInfo.username != 'system:serviceaccount:career-ops:cv-coordinator' || (variables.item.kind
+      == 'Job' && variables.account == 'cv-renderer')
+    message: Coordinator mutations are restricted to offline-worker Jobs, including deletion.
+  - expression: request.operation == 'DELETE' || (variables.item.kind != 'Job' || (variables.item.spec.backoffLimit
+      == 0 && (!has(variables.item.spec.parallelism) || variables.item.spec.parallelism == 1) && (!has(variables.item.spec.completions)
+      || variables.item.spec.completions == 1) && variables.pod.restartPolicy == 'Never'))
+    message: Offline Jobs use one-shot containers with controller retries disabled.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: career-ops-workloads
+spec:
+  policyName: career-ops-workloads
+  validationActions:
+  - Deny

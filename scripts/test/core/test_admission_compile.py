@@ -34,6 +34,7 @@ class AdmissionCompileTests(unittest.TestCase):
         for relative in (
             "kubernetes/apps/kube-system/agent-access/app",
             "kubernetes/apps/monitoring/test-reports/app",
+            "kubernetes/apps/applications/career-ops/platform",
         ):
             rendered = subprocess.run(
                 ["kustomize", "build", str(ROOT / relative)],

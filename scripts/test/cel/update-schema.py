@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[3]
 PACKAGES = (
     "kubernetes/apps/kube-system/agent-access/app",
     "kubernetes/apps/monitoring/test-reports/app",
+    "kubernetes/apps/applications/career-ops/platform",
 )
 
 
