@@ -742,6 +742,27 @@ class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
         self.assertFalse(self.admission(obj))
 
 
+class ApplicationConnectionTests(unittest.TestCase):
+    def test_private_source_and_application_reconciliation_are_suspended(self):
+        docs=render(ROOT/'kubernetes/apps/applications/career-ops/connection')
+        self.assertEqual({d['kind'] for d in docs}, {'GitRepository','Kustomization'})
+        source=next(d for d in docs if d['kind']=='GitRepository')
+        self.assertEqual(source['metadata'], {'name':'career-ops','namespace':'career-ops'})
+        self.assertEqual(source['spec']['url'],'https://forgejo.infra.supermorphic.com/supermorphic/career-ops.git')
+        self.assertEqual(source['spec']['ref'], {'branch':'main'})
+        self.assertEqual(source['spec']['secretRef'], {'name':'career-ops-source'})
+        self.assertIs(source['spec']['suspend'], True)
+        application=next(d for d in docs if d['kind']=='Kustomization')
+        self.assertEqual(application['metadata']['name'],'career-ops-apps')
+        self.assertEqual(application['spec']['serviceAccountName'],'career-ops-reconciler')
+        self.assertEqual(application['spec']['sourceRef'], {'kind':'GitRepository','name':'career-ops'})
+        self.assertEqual(application['spec']['path'],'./deploy/')
+        self.assertEqual(application['spec']['targetNamespace'],'career-ops')
+        self.assertIs(application['spec']['suspend'], True)
+        for field in ['decryption','postBuild','patches','components','kubeConfig']:
+            self.assertNotIn(field, application['spec'])
+
+
 class ApplicationMonitoringTests(unittest.TestCase):
     def test_platform_monitoring_is_quiet_until_activation(self):
         docs = render(PLATFORM)

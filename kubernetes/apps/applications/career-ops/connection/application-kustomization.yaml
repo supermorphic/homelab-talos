@@ -1,0 +1,23 @@
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: career-ops-apps
+  namespace: career-ops
+spec:
+  interval: 5m
+  retryInterval: 1m
+  timeout: 5m
+  path: ./deploy/
+  targetNamespace: career-ops
+  sourceRef:
+    kind: GitRepository
+    name: career-ops
+  serviceAccountName: career-ops-reconciler
+  dependsOn:
+  - name: career-ops-platform
+    namespace: flux-system
+  prune: true
+  deletionPolicy: Orphan
+  suspend: true
+  wait: true
