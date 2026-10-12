@@ -1355,6 +1355,29 @@ class TestAccessPolicyTests(unittest.TestCase):
                 with self.subTest(job=obj["metadata"]["name"], change=change):
                     self.assertFalse(allowed(bad, request))
 
+    def test_career_ops_admission_is_owned_by_its_dedicated_policies(self):
+        obj = yaml.safe_load((ROOT / "tests/fixtures/application-boundary/job.yaml").read_text())
+        req = self.request("jobs", "career-ops", name=obj["metadata"]["name"])
+        req["resource"]["group"] = "batch"
+        for operation in ("CREATE", "UPDATE", "DELETE"):
+            item = None if operation == "DELETE" else obj
+            old = obj if operation in ("UPDATE", "DELETE") else None
+            request = {**req, "operation": operation}
+            for policy in (
+                "homelab-test-jobs",
+                "homelab-test-n8n-restore-jobs",
+                "homelab-test-n8n-persistence-jobs",
+                "homelab-test-n8n-request-jobs",
+                "homelab-test-qbit-manage-jobs",
+                "homelab-test-restore-jobs",
+                "homelab-test-restore-request-jobs",
+                "homelab-test-nocodb-application-probe",
+                "homelab-test-provisioning-jobs",
+                "homelab-test-workload-security",
+            ):
+                with self.subTest(operation=operation, policy=policy):
+                    self.assertTrue(self.admits(policy, request, item, old))
+
     def test_restore_request_jobs_cannot_change_endpoints_programs_or_credentials(self):
         for obj in RestoreFixtureTests.render_restore_request_jobs():
             req = self.request("jobs", obj["metadata"]["namespace"], name=obj["metadata"]["name"])

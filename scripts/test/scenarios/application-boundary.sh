@@ -73,7 +73,9 @@ with tempfile.TemporaryDirectory(prefix='application-admission-') as directory:
         if allowed:
             if result.returncode or result.stdout.strip() != 'job.batch/career-ops-boundary-admission':
                 sys.exit('Permitted server admission failed; no scheduling or image-pull failure counts as a denial.')
-        elif result.returncode == 0 or 'career-ops-workloads' not in result.stderr or 'Forbidden' not in result.stderr:
+        elif (result.returncode == 0 or "ValidatingAdmissionPolicy 'career-ops-workloads'" not in result.stderr
+              or 'denied request' not in result.stderr
+              or not any(status in result.stderr for status in ['Forbidden', '(Invalid)', 'is invalid'])):
             sys.exit('Negative admission did not identify the intended application workload control: '+name)
         print('Server admission case passed: '+name)
 print('Server-side Job admission passed. No resources persisted; controller Pods, networking, RWX, pruning, source reconciliation, delivery and restore remain separate native acceptance.')

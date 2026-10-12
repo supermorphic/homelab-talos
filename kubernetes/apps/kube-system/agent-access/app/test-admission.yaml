@@ -261,6 +261,8 @@ spec:
   matchConditions:
     - name: test-runner
       expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: outside-career-ops
+      expression: request.namespace != 'career-ops'
     - name: n8n-database-helper
       expression: >-
         (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/test'] == 'n8n-restore-drill' &&
@@ -493,6 +495,8 @@ spec:
   matchConditions:
     - name: test-runner
       expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: outside-career-ops
+      expression: request.namespace != 'career-ops'
     - name: qbit-manage
       expression: >-
         (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/test'] == 'qbit-manage-policy'
@@ -621,6 +625,8 @@ spec:
   matchConditions:
     - name: test-runner
       expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: outside-career-ops
+      expression: request.namespace != 'career-ops'
     - name: n8n-persistence
       expression: >-
         (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/test'] == 'n8n-persistence'
@@ -693,6 +699,8 @@ spec:
   matchConditions:
     - name: test-runner
       expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: outside-career-ops
+      expression: request.namespace != 'career-ops'
     - name: n8n-request
       expression: >-
         (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/test'] == 'n8n-restore-drill' &&
@@ -829,6 +837,8 @@ spec:
   matchConditions:
     - name: test-runner
       expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: outside-career-ops
+      expression: request.namespace != 'career-ops'
     - name: common-families
       expression: >-
         (request.operation == 'DELETE' ? oldObject : object).metadata.labels['homelab-talos/test'] != 'qbit-manage-policy'
