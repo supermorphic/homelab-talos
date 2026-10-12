@@ -561,7 +561,9 @@ Use these initial detection objectives, and verify them during acceptance:
 
 Notification text identifies the service, condition, processing impact, and
 private status/recovery link. Group repeated signals through the existing Alertmanager policy
-and send resolution on verified recovery. Application deadlines must distinguish
+and send resolution on verified recovery. Missing state telemetry leaves the related
+condition unresolved or unknown until healthy telemetry returns; its existing
+alert hold interval still applies. Application deadlines must distinguish
 ordinary queueing, active rendering, backoff, and infrastructure outage before
 activation. Do not send raw errors, CV contents, or credentials. The n8n
 [workflow failure handler](023-n8n-workflow-automation-platform.md#shared-workflow-failure-notifications)

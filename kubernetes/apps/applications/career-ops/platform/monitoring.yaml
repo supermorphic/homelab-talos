@@ -76,9 +76,10 @@ spec:
         summary: Career Ops required telemetry is missing
         description: 'Coordinator progress and recovery cannot be verified. Status: https://cv.lab.supermorphic.com/readyz'
     - alert: CareerOpsReconciliationStale
-      expr: ((max(cv_render_reconciliation_last_success_timestamp_seconds{namespace="career-ops",service="cv-coordinator"})
+      expr: (((max(cv_render_reconciliation_last_success_timestamp_seconds{namespace="career-ops",service="cv-coordinator"})
         > 0) and (time() - max(cv_render_reconciliation_last_success_timestamp_seconds{namespace="career-ops",service="cv-coordinator"})
-        > 300)) and on() (career_ops_coordinator_expected == 1)
+        > 300)) or (max(absent(cv_render_reconciliation_last_success_timestamp_seconds{namespace="career-ops",service="cv-coordinator"}))
+        == 1)) and on() (career_ops_coordinator_expected == 1)
       for: 0m
       labels:
         namespace: career-ops
@@ -86,10 +87,12 @@ spec:
         severity: critical
       annotations:
         summary: Career Ops reconciliation is stale
-        description: 'Idle or active work has not received a successful reconciliation pass. Status: https://cv.lab.supermorphic.com/readyz'
+        description: 'Idle or active work has not received a successful reconciliation pass. Status: https://cv.lab.supermorphic.com/readyz
+          Missing telemetry leaves recovery unverified.'
     - alert: CareerOpsReconciliationNotStarted
-      expr: (max(cv_render_reconciliation_last_success_timestamp_seconds{namespace="career-ops",service="cv-coordinator"})
-        == 0) and on() (career_ops_coordinator_expected == 1)
+      expr: ((max(cv_render_reconciliation_last_success_timestamp_seconds{namespace="career-ops",service="cv-coordinator"})
+        == 0) or (max(absent(cv_render_reconciliation_last_success_timestamp_seconds{namespace="career-ops",service="cv-coordinator"}))
+        == 1)) and on() (career_ops_coordinator_expected == 1)
       for: 5m
       labels:
         namespace: career-ops
@@ -97,10 +100,11 @@ spec:
         severity: critical
       annotations:
         summary: Career Ops reconciliation has not succeeded
-        description: 'Coordinator progress has not been established. Status: https://cv.lab.supermorphic.com/readyz'
+        description: 'Coordinator progress has not been established. Status: https://cv.lab.supermorphic.com/readyz
+          Missing telemetry leaves recovery unverified.'
     - alert: CareerOpsWorkOverdue
-      expr: (max(cv_render_overdue_work{namespace="career-ops",service="cv-coordinator"}) > 0) and on()
-        (career_ops_coordinator_expected == 1)
+      expr: ((max(cv_render_overdue_work{namespace="career-ops",service="cv-coordinator"}) or vector(1))
+        > 0) and on() (career_ops_coordinator_expected == 1)
       for: 2m
       labels:
         namespace: career-ops
@@ -108,10 +112,11 @@ spec:
         severity: warning
       annotations:
         summary: Career Ops work is overdue
-        description: 'Render or repair operations have exceeded their durable deadline. Status: https://cv.lab.supermorphic.com/readyz'
+        description: 'Render or repair operations have exceeded their durable deadline. Status: https://cv.lab.supermorphic.com/readyz
+          Missing telemetry leaves recovery unverified.'
     - alert: CareerOpsRetriesExhausted
-      expr: (max(cv_render_exhausted_retries{namespace="career-ops",service="cv-coordinator"}) > 0) and
-        on() (career_ops_coordinator_expected == 1)
+      expr: ((max(cv_render_exhausted_retries{namespace="career-ops",service="cv-coordinator"}) or vector(1))
+        > 0) and on() (career_ops_coordinator_expected == 1)
       for: 1m
       labels:
         namespace: career-ops
@@ -119,10 +124,11 @@ spec:
         severity: warning
       annotations:
         summary: Career Ops retries are exhausted
-        description: 'Automatic attempts are exhausted and operator review is required. Status: https://cv.lab.supermorphic.com/readyz'
+        description: 'Automatic attempts are exhausted and operator review is required. Status: https://cv.lab.supermorphic.com/readyz
+          Missing telemetry leaves recovery unverified.'
     - alert: CareerOpsArtifactsUnavailable
-      expr: (max(cv_render_unavailable_artifacts{namespace="career-ops",service="cv-coordinator"}) > 0)
-        and on() (career_ops_coordinator_expected == 1)
+      expr: ((max(cv_render_unavailable_artifacts{namespace="career-ops",service="cv-coordinator"}) or
+        vector(1)) > 0) and on() (career_ops_coordinator_expected == 1)
       for: 1m
       labels:
         namespace: career-ops
@@ -130,10 +136,11 @@ spec:
         severity: warning
       annotations:
         summary: Career Ops artifacts are unavailable
-        description: 'Accepted results have no available verified artifact bundle. Status: https://cv.lab.supermorphic.com/readyz'
+        description: 'Accepted results have no available verified artifact bundle. Status: https://cv.lab.supermorphic.com/readyz
+          Missing telemetry leaves recovery unverified.'
     - alert: CareerOpsArtifactsUnrepairable
-      expr: (max(cv_render_unrepairable_artifacts{namespace="career-ops",service="cv-coordinator"}) >
-        0) and on() (career_ops_coordinator_expected == 1)
+      expr: ((max(cv_render_unrepairable_artifacts{namespace="career-ops",service="cv-coordinator"}) or
+        vector(1)) > 0) and on() (career_ops_coordinator_expected == 1)
       for: 1m
       labels:
         namespace: career-ops
@@ -141,10 +148,11 @@ spec:
         severity: warning
       annotations:
         summary: Career Ops artifacts cannot be repaired automatically
-        description: 'Accepted artifact lineages require operator review. Status: https://cv.lab.supermorphic.com/readyz'
+        description: 'Accepted artifact lineages require operator review. Status: https://cv.lab.supermorphic.com/readyz
+          Missing telemetry leaves recovery unverified.'
     - alert: CareerOpsRecoveryUnsafe
-      expr: (max(cv_render_unsafe_recovery{namespace="career-ops",service="cv-coordinator"}) > 0) and
-        on() (career_ops_coordinator_expected == 1)
+      expr: ((max(cv_render_unsafe_recovery{namespace="career-ops",service="cv-coordinator"}) or vector(1))
+        > 0) and on() (career_ops_coordinator_expected == 1)
       for: 1m
       labels:
         namespace: career-ops
@@ -153,4 +161,4 @@ spec:
       annotations:
         summary: Career Ops recovery is unsafe
         description: 'Uncertain workers or unresolved restore consistency block safe replacement work.
-          Status: https://cv.lab.supermorphic.com/readyz'
+          Status: https://cv.lab.supermorphic.com/readyz Missing telemetry leaves recovery unverified.'
