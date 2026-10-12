@@ -1,0 +1,37 @@
+rule_files:
+- career-ops.yaml
+evaluation_interval: 1m
+tests:
+- name: intentionally suspended bootstrap
+  interval: 1m
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: CareerOpsCoordinatorUnavailable
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: CareerOpsDatabaseNotReady
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: CareerOpsTelemetryMissing
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: CareerOpsReconciliationStale
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: CareerOpsReconciliationNotStarted
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: CareerOpsWorkOverdue
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: CareerOpsRetriesExhausted
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: CareerOpsArtifactsUnavailable
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: CareerOpsArtifactsUnrepairable
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: CareerOpsRecoveryUnsafe
+    exp_alerts: []

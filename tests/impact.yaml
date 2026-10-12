@@ -27,6 +27,7 @@ full_paths:
   - tests/fixtures/ci-impact/**
   - scripts/lib/**
   - scripts/repository/github_protection.py
+  - scripts/test/cel/**
   - scripts/test/actions/**
   - scripts/test/diagnostics/**
   - scripts/test/safety/**
@@ -84,6 +85,8 @@ full_paths:
   - tests/fixtures/disruption-admission/**
 conditional_paths:
   observability:
+    - kubernetes/apps/applications/career-ops/platform/monitoring.yaml
+    - tests/prometheus/career-ops*_test.yaml
     - .sops.yaml
     - kubernetes/apps/testing/echo/app/httproute.yaml
     - kubernetes/apps/testing/echo/app/service.yaml
@@ -197,6 +200,9 @@ conditional_paths:
     - scripts/test/test_repository_secret_scan.py
     - scripts/test/test_repository_shell_validation.py
 core_paths:
+  - scripts/test/scenarios/application-boundary.sh
+  - kubernetes/apps/applications/**
+  - tests/fixtures/application-boundary/**
   - README.md
   - .just/cluster.just
   - .just/node.just

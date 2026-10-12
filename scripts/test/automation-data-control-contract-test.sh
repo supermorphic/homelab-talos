@@ -453,12 +453,13 @@ postgres_ingress_contract="$(yq ea -o=json -I=0 '
   .spec.ingress[] | select(.toPorts[0].ports[0].port == "5432") |
   [.fromEndpoints[].matchLabels | {
     "namespace": ."k8s:io.kubernetes.pod.namespace",
-    "workload": ."app.kubernetes.io/name"
+    "workload": ."app.kubernetes.io/name",
+    "serviceAccount": ."k8s:io.cilium.k8s.policy.serviceaccount"
   }] | sort_by(.namespace, .workload)
 ' "$temp_dir/postgresql.yaml")"
 [[ "$postgres_ingress_contract" == \
-  '[{"namespace":"automation","workload":"n8n"},{"namespace":"automation-data","workload":"automation-data-postgresql-backup"},{"namespace":"automation-data","workload":"nocodb"},{"namespace":"automation-data","workload":"nocodb-metadata-bootstrap"}]' ]] || \
-  fail 'PostgreSQL port 5432 ingress is not limited to approved n8n, backup, and NocoDB workloads'
+  '[{"namespace":"automation","workload":"n8n","serviceAccount":null},{"namespace":"automation-data","workload":"automation-data-postgresql-backup","serviceAccount":null},{"namespace":"automation-data","workload":"nocodb","serviceAccount":null},{"namespace":"automation-data","workload":"nocodb-metadata-bootstrap","serviceAccount":null},{"namespace":"career-ops","workload":null,"serviceAccount":"cv-coordinator"}]' ]] || \
+  fail 'PostgreSQL port 5432 ingress is not limited to approved workloads and the CV coordinator identity'
 
 postgres_nocodb_ingress_tuples="$(yq ea -o=json -I=0 '
   select(.kind == "CiliumNetworkPolicy" and .metadata.name == "automation-data-postgresql") |

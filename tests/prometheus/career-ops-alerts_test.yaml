@@ -1,0 +1,941 @@
+rule_files:
+- career-ops.yaml
+evaluation_interval: 1m
+tests:
+- name: healthy idle
+  interval: 1m
+  input_series:
+  - &id001
+    series: up{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - &id010
+    series: cv_render_metrics_schema_info{namespace="career-ops",service="cv-coordinator",version="1"}
+    values: 1x20
+  - &id002
+    series: cv_render_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - &id003
+    series: cv_render_database_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - &id004
+    series: cv_render_reconciliation_last_success_timestamp_seconds{namespace="career-ops",service="cv-coordinator"}
+    values: 1+60x20
+  - &id005
+    series: cv_render_overdue_work{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - &id006
+    series: cv_render_exhausted_retries{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - &id007
+    series: cv_render_unavailable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - &id008
+    series: cv_render_unrepairable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - &id009
+    series: cv_render_unsafe_recovery{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: CareerOpsCoordinatorUnavailable
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: CareerOpsDatabaseNotReady
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: CareerOpsTelemetryMissing
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: CareerOpsReconciliationStale
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: CareerOpsReconciliationNotStarted
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: CareerOpsWorkOverdue
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: CareerOpsRetriesExhausted
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: CareerOpsArtifactsUnavailable
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: CareerOpsArtifactsUnrepairable
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: CareerOpsRecoveryUnsafe
+    exp_alerts: []
+- name: up failure and resolution
+  interval: 1m
+  input_series:
+  - series: up{namespace="career-ops",service="cv-coordinator"}
+    values: 0x6 1x14
+  - series: cv_render_metrics_schema_info{namespace="career-ops",service="cv-coordinator",version="1"}
+    values: 1x20
+  - series: cv_render_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_database_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_reconciliation_last_success_timestamp_seconds{namespace="career-ops",service="cv-coordinator"}
+    values: 1+60x20
+  - series: cv_render_overdue_work{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_exhausted_retries{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unavailable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unrepairable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unsafe_recovery{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: CareerOpsCoordinatorUnavailable
+    exp_alerts: []
+  - eval_time: 5m
+    alertname: CareerOpsCoordinatorUnavailable
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops coordinator is unavailable
+        description: 'CV requests cannot progress. Status: https://cv.lab.supermorphic.com/readyz'
+  - eval_time: 9m
+    alertname: CareerOpsCoordinatorUnavailable
+    exp_alerts: []
+- name: cv_render_ready failure and resolution
+  interval: 1m
+  input_series:
+  - series: up{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_metrics_schema_info{namespace="career-ops",service="cv-coordinator",version="1"}
+    values: 1x20
+  - series: cv_render_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 0x6 1x14
+  - series: cv_render_database_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_reconciliation_last_success_timestamp_seconds{namespace="career-ops",service="cv-coordinator"}
+    values: 1+60x20
+  - series: cv_render_overdue_work{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_exhausted_retries{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unavailable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unrepairable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unsafe_recovery{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: CareerOpsCoordinatorUnavailable
+    exp_alerts: []
+  - eval_time: 5m
+    alertname: CareerOpsCoordinatorUnavailable
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops coordinator is unavailable
+        description: 'CV requests cannot progress. Status: https://cv.lab.supermorphic.com/readyz'
+  - eval_time: 9m
+    alertname: CareerOpsCoordinatorUnavailable
+    exp_alerts: []
+- name: cv_render_database_ready failure and resolution
+  interval: 1m
+  input_series:
+  - series: up{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_metrics_schema_info{namespace="career-ops",service="cv-coordinator",version="1"}
+    values: 1x20
+  - series: cv_render_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_database_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 0x6 1x14
+  - series: cv_render_reconciliation_last_success_timestamp_seconds{namespace="career-ops",service="cv-coordinator"}
+    values: 1+60x20
+  - series: cv_render_overdue_work{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_exhausted_retries{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unavailable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unrepairable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unsafe_recovery{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: CareerOpsDatabaseNotReady
+    exp_alerts: []
+  - eval_time: 5m
+    alertname: CareerOpsDatabaseNotReady
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops database is not ready
+        description: 'New requests and publication are blocked. Status: https://cv.lab.supermorphic.com/readyz'
+  - eval_time: 9m
+    alertname: CareerOpsDatabaseNotReady
+    exp_alerts: []
+- name: cv_render_reconciliation_last_success_timestamp_seconds failure and resolution
+  interval: 1m
+  input_series:
+  - series: up{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_metrics_schema_info{namespace="career-ops",service="cv-coordinator",version="1"}
+    values: 1x20
+  - series: cv_render_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_database_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_reconciliation_last_success_timestamp_seconds{namespace="career-ops",service="cv-coordinator"}
+    values: 0x6 421+60x14
+  - series: cv_render_overdue_work{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_exhausted_retries{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unavailable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unrepairable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unsafe_recovery{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: CareerOpsReconciliationNotStarted
+    exp_alerts: []
+  - eval_time: 5m
+    alertname: CareerOpsReconciliationNotStarted
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops reconciliation has not succeeded
+        description: 'Coordinator progress has not been established. Status: https://cv.lab.supermorphic.com/readyz
+          Missing telemetry leaves recovery unverified.'
+  - eval_time: 9m
+    alertname: CareerOpsReconciliationNotStarted
+    exp_alerts: []
+- name: cv_render_overdue_work failure and resolution
+  interval: 1m
+  input_series:
+  - series: up{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_metrics_schema_info{namespace="career-ops",service="cv-coordinator",version="1"}
+    values: 1x20
+  - series: cv_render_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_database_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_reconciliation_last_success_timestamp_seconds{namespace="career-ops",service="cv-coordinator"}
+    values: 1+60x20
+  - series: cv_render_overdue_work{namespace="career-ops",service="cv-coordinator"}
+    values: 1x3 0x17
+  - series: cv_render_exhausted_retries{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unavailable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unrepairable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unsafe_recovery{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  alert_rule_test:
+  - eval_time: 1m
+    alertname: CareerOpsWorkOverdue
+    exp_alerts: []
+  - eval_time: 2m
+    alertname: CareerOpsWorkOverdue
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: warning
+      exp_annotations:
+        summary: Career Ops work is overdue
+        description: 'Render or repair operations have exceeded their durable deadline. Status: https://cv.lab.supermorphic.com/readyz
+          Missing telemetry leaves recovery unverified.'
+  - eval_time: 9m
+    alertname: CareerOpsWorkOverdue
+    exp_alerts: []
+- name: cv_render_exhausted_retries failure and resolution
+  interval: 1m
+  input_series:
+  - series: up{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_metrics_schema_info{namespace="career-ops",service="cv-coordinator",version="1"}
+    values: 1x20
+  - series: cv_render_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_database_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_reconciliation_last_success_timestamp_seconds{namespace="career-ops",service="cv-coordinator"}
+    values: 1+60x20
+  - series: cv_render_overdue_work{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_exhausted_retries{namespace="career-ops",service="cv-coordinator"}
+    values: 1x2 0x18
+  - series: cv_render_unavailable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unrepairable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unsafe_recovery{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  alert_rule_test:
+  - eval_time: 0m
+    alertname: CareerOpsRetriesExhausted
+    exp_alerts: []
+  - eval_time: 1m
+    alertname: CareerOpsRetriesExhausted
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: warning
+      exp_annotations:
+        summary: Career Ops retries are exhausted
+        description: 'Automatic attempts are exhausted and operator review is required. Status: https://cv.lab.supermorphic.com/readyz
+          Missing telemetry leaves recovery unverified.'
+  - eval_time: 9m
+    alertname: CareerOpsRetriesExhausted
+    exp_alerts: []
+- name: cv_render_unavailable_artifacts failure and resolution
+  interval: 1m
+  input_series:
+  - series: up{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_metrics_schema_info{namespace="career-ops",service="cv-coordinator",version="1"}
+    values: 1x20
+  - series: cv_render_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_database_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_reconciliation_last_success_timestamp_seconds{namespace="career-ops",service="cv-coordinator"}
+    values: 1+60x20
+  - series: cv_render_overdue_work{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_exhausted_retries{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unavailable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: 1x2 0x18
+  - series: cv_render_unrepairable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unsafe_recovery{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  alert_rule_test:
+  - eval_time: 0m
+    alertname: CareerOpsArtifactsUnavailable
+    exp_alerts: []
+  - eval_time: 1m
+    alertname: CareerOpsArtifactsUnavailable
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: warning
+      exp_annotations:
+        summary: Career Ops artifacts are unavailable
+        description: 'Accepted results have no available verified artifact bundle. Status: https://cv.lab.supermorphic.com/readyz
+          Missing telemetry leaves recovery unverified.'
+  - eval_time: 9m
+    alertname: CareerOpsArtifactsUnavailable
+    exp_alerts: []
+- name: cv_render_unrepairable_artifacts failure and resolution
+  interval: 1m
+  input_series:
+  - series: up{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_metrics_schema_info{namespace="career-ops",service="cv-coordinator",version="1"}
+    values: 1x20
+  - series: cv_render_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_database_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_reconciliation_last_success_timestamp_seconds{namespace="career-ops",service="cv-coordinator"}
+    values: 1+60x20
+  - series: cv_render_overdue_work{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_exhausted_retries{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unavailable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unrepairable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: 1x2 0x18
+  - series: cv_render_unsafe_recovery{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  alert_rule_test:
+  - eval_time: 0m
+    alertname: CareerOpsArtifactsUnrepairable
+    exp_alerts: []
+  - eval_time: 1m
+    alertname: CareerOpsArtifactsUnrepairable
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: warning
+      exp_annotations:
+        summary: Career Ops artifacts cannot be repaired automatically
+        description: 'Accepted artifact lineages require operator review. Status: https://cv.lab.supermorphic.com/readyz
+          Missing telemetry leaves recovery unverified.'
+  - eval_time: 9m
+    alertname: CareerOpsArtifactsUnrepairable
+    exp_alerts: []
+- name: cv_render_unsafe_recovery failure and resolution
+  interval: 1m
+  input_series:
+  - series: up{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_metrics_schema_info{namespace="career-ops",service="cv-coordinator",version="1"}
+    values: 1x20
+  - series: cv_render_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_database_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_reconciliation_last_success_timestamp_seconds{namespace="career-ops",service="cv-coordinator"}
+    values: 1+60x20
+  - series: cv_render_overdue_work{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_exhausted_retries{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unavailable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unrepairable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unsafe_recovery{namespace="career-ops",service="cv-coordinator"}
+    values: 1x2 0x18
+  alert_rule_test:
+  - eval_time: 0m
+    alertname: CareerOpsRecoveryUnsafe
+    exp_alerts: []
+  - eval_time: 1m
+    alertname: CareerOpsRecoveryUnsafe
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops recovery is unsafe
+        description: 'Uncertain workers or unresolved restore consistency block safe replacement work.
+          Status: https://cv.lab.supermorphic.com/readyz Missing telemetry leaves recovery unverified.'
+  - eval_time: 9m
+    alertname: CareerOpsRecoveryUnsafe
+    exp_alerts: []
+- name: stale durable progress survives coordinator restart
+  interval: 1m
+  input_series:
+  - series: up{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_metrics_schema_info{namespace="career-ops",service="cv-coordinator",version="1"}
+    values: 1x20
+  - series: cv_render_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_database_ready{namespace="career-ops",service="cv-coordinator"}
+    values: 1x20
+  - series: cv_render_reconciliation_last_success_timestamp_seconds{namespace="career-ops",service="cv-coordinator"}
+    values: 1x6 421+60x14
+  - series: cv_render_overdue_work{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_exhausted_retries{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unavailable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unrepairable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  - series: cv_render_unsafe_recovery{namespace="career-ops",service="cv-coordinator"}
+    values: '0x20'
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: CareerOpsReconciliationStale
+    exp_alerts: []
+  - eval_time: 6m
+    alertname: CareerOpsReconciliationStale
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops reconciliation is stale
+        description: 'Idle or active work has not received a successful reconciliation pass. Status: https://cv.lab.supermorphic.com/readyz
+          Missing telemetry leaves recovery unverified.'
+  - eval_time: 9m
+    alertname: CareerOpsReconciliationStale
+    exp_alerts: []
+- name: missing cv_render_metrics_schema_info
+  interval: 1m
+  input_series:
+  - *id001
+  - *id002
+  - *id003
+  - *id004
+  - *id005
+  - *id006
+  - *id007
+  - *id008
+  - *id009
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: CareerOpsTelemetryMissing
+    exp_alerts: []
+  - eval_time: 5m
+    alertname: CareerOpsTelemetryMissing
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops required telemetry is missing
+        description: 'Coordinator progress and recovery cannot be verified. Status: https://cv.lab.supermorphic.com/readyz'
+- name: missing cv_render_ready
+  interval: 1m
+  input_series:
+  - *id001
+  - *id010
+  - *id003
+  - *id004
+  - *id005
+  - *id006
+  - *id007
+  - *id008
+  - *id009
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: CareerOpsTelemetryMissing
+    exp_alerts: []
+  - eval_time: 5m
+    alertname: CareerOpsTelemetryMissing
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops required telemetry is missing
+        description: 'Coordinator progress and recovery cannot be verified. Status: https://cv.lab.supermorphic.com/readyz'
+- name: missing cv_render_database_ready
+  interval: 1m
+  input_series:
+  - *id001
+  - *id010
+  - *id002
+  - *id004
+  - *id005
+  - *id006
+  - *id007
+  - *id008
+  - *id009
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: CareerOpsTelemetryMissing
+    exp_alerts: []
+  - eval_time: 5m
+    alertname: CareerOpsTelemetryMissing
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops required telemetry is missing
+        description: 'Coordinator progress and recovery cannot be verified. Status: https://cv.lab.supermorphic.com/readyz'
+- name: missing cv_render_reconciliation_last_success_timestamp_seconds
+  interval: 1m
+  input_series:
+  - *id001
+  - *id010
+  - *id002
+  - *id003
+  - *id005
+  - *id006
+  - *id007
+  - *id008
+  - *id009
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: CareerOpsTelemetryMissing
+    exp_alerts: []
+  - eval_time: 5m
+    alertname: CareerOpsTelemetryMissing
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops required telemetry is missing
+        description: 'Coordinator progress and recovery cannot be verified. Status: https://cv.lab.supermorphic.com/readyz'
+- name: missing cv_render_overdue_work
+  interval: 1m
+  input_series:
+  - *id001
+  - *id010
+  - *id002
+  - *id003
+  - *id004
+  - *id006
+  - *id007
+  - *id008
+  - *id009
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: CareerOpsTelemetryMissing
+    exp_alerts: []
+  - eval_time: 5m
+    alertname: CareerOpsTelemetryMissing
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops required telemetry is missing
+        description: 'Coordinator progress and recovery cannot be verified. Status: https://cv.lab.supermorphic.com/readyz'
+- name: missing cv_render_exhausted_retries
+  interval: 1m
+  input_series:
+  - *id001
+  - *id010
+  - *id002
+  - *id003
+  - *id004
+  - *id005
+  - *id007
+  - *id008
+  - *id009
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: CareerOpsTelemetryMissing
+    exp_alerts: []
+  - eval_time: 5m
+    alertname: CareerOpsTelemetryMissing
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops required telemetry is missing
+        description: 'Coordinator progress and recovery cannot be verified. Status: https://cv.lab.supermorphic.com/readyz'
+- name: missing cv_render_unavailable_artifacts
+  interval: 1m
+  input_series:
+  - *id001
+  - *id010
+  - *id002
+  - *id003
+  - *id004
+  - *id005
+  - *id006
+  - *id008
+  - *id009
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: CareerOpsTelemetryMissing
+    exp_alerts: []
+  - eval_time: 5m
+    alertname: CareerOpsTelemetryMissing
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops required telemetry is missing
+        description: 'Coordinator progress and recovery cannot be verified. Status: https://cv.lab.supermorphic.com/readyz'
+- name: missing cv_render_unrepairable_artifacts
+  interval: 1m
+  input_series:
+  - *id001
+  - *id010
+  - *id002
+  - *id003
+  - *id004
+  - *id005
+  - *id006
+  - *id007
+  - *id009
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: CareerOpsTelemetryMissing
+    exp_alerts: []
+  - eval_time: 5m
+    alertname: CareerOpsTelemetryMissing
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops required telemetry is missing
+        description: 'Coordinator progress and recovery cannot be verified. Status: https://cv.lab.supermorphic.com/readyz'
+- name: missing cv_render_unsafe_recovery
+  interval: 1m
+  input_series:
+  - *id001
+  - *id010
+  - *id002
+  - *id003
+  - *id004
+  - *id005
+  - *id006
+  - *id007
+  - *id008
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: CareerOpsTelemetryMissing
+    exp_alerts: []
+  - eval_time: 5m
+    alertname: CareerOpsTelemetryMissing
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops required telemetry is missing
+        description: 'Coordinator progress and recovery cannot be verified. Status: https://cv.lab.supermorphic.com/readyz'
+- name: absent service
+  interval: 1m
+  alert_rule_test:
+  - eval_time: 5m
+    alertname: CareerOpsCoordinatorUnavailable
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops coordinator is unavailable
+        description: 'CV requests cannot progress. Status: https://cv.lab.supermorphic.com/readyz'
+- name: wrong service cannot mask loss
+  interval: 1m
+  input_series:
+  - series: up{namespace="career-ops",service="another-service"}
+    values: 1x20
+  - series: cv_render_metrics_schema_info{namespace="career-ops",service="another-service",version="1"}
+    values: 1x20
+  - series: cv_render_ready{namespace="career-ops",service="another-service"}
+    values: 1x20
+  - series: cv_render_database_ready{namespace="career-ops",service="another-service"}
+    values: 1x20
+  - series: cv_render_reconciliation_last_success_timestamp_seconds{namespace="career-ops",service="another-service"}
+    values: 1+60x20
+  - series: cv_render_overdue_work{namespace="career-ops",service="another-service"}
+    values: '0x20'
+  - series: cv_render_exhausted_retries{namespace="career-ops",service="another-service"}
+    values: '0x20'
+  - series: cv_render_unavailable_artifacts{namespace="career-ops",service="another-service"}
+    values: '0x20'
+  - series: cv_render_unrepairable_artifacts{namespace="career-ops",service="another-service"}
+    values: '0x20'
+  - series: cv_render_unsafe_recovery{namespace="career-ops",service="another-service"}
+    values: '0x20'
+  alert_rule_test:
+  - eval_time: 5m
+    alertname: CareerOpsCoordinatorUnavailable
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops coordinator is unavailable
+        description: 'CV requests cannot progress. Status: https://cv.lab.supermorphic.com/readyz'
+  - eval_time: 5m
+    alertname: CareerOpsTelemetryMissing
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops required telemetry is missing
+        description: 'Coordinator progress and recovery cannot be verified. Status: https://cv.lab.supermorphic.com/readyz'
+- name: CareerOpsWorkOverdue remains unresolved through missing telemetry
+  interval: 1m
+  input_series:
+  - series: cv_render_overdue_work{namespace="career-ops",service="cv-coordinator"}
+    values: 1x6 stale _ _ 0
+  alert_rule_test:
+  - eval_time: 2m
+    alertname: CareerOpsWorkOverdue
+    exp_alerts:
+    - &id011
+      exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: warning
+      exp_annotations:
+        summary: Career Ops work is overdue
+        description: 'Render or repair operations have exceeded their durable deadline. Status: https://cv.lab.supermorphic.com/readyz
+          Missing telemetry leaves recovery unverified.'
+  - eval_time: 8m
+    alertname: CareerOpsWorkOverdue
+    exp_alerts:
+    - *id011
+  - eval_time: 11m
+    alertname: CareerOpsWorkOverdue
+    exp_alerts: []
+- name: CareerOpsRetriesExhausted remains unresolved through missing telemetry
+  interval: 1m
+  input_series:
+  - series: cv_render_exhausted_retries{namespace="career-ops",service="cv-coordinator"}
+    values: 1x6 stale _ _ 0
+  alert_rule_test:
+  - eval_time: 1m
+    alertname: CareerOpsRetriesExhausted
+    exp_alerts:
+    - &id012
+      exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: warning
+      exp_annotations:
+        summary: Career Ops retries are exhausted
+        description: 'Automatic attempts are exhausted and operator review is required. Status: https://cv.lab.supermorphic.com/readyz
+          Missing telemetry leaves recovery unverified.'
+  - eval_time: 8m
+    alertname: CareerOpsRetriesExhausted
+    exp_alerts:
+    - *id012
+  - eval_time: 11m
+    alertname: CareerOpsRetriesExhausted
+    exp_alerts: []
+- name: CareerOpsArtifactsUnavailable remains unresolved through missing telemetry
+  interval: 1m
+  input_series:
+  - series: cv_render_unavailable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: 1x6 stale _ _ 0
+  alert_rule_test:
+  - eval_time: 1m
+    alertname: CareerOpsArtifactsUnavailable
+    exp_alerts:
+    - &id013
+      exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: warning
+      exp_annotations:
+        summary: Career Ops artifacts are unavailable
+        description: 'Accepted results have no available verified artifact bundle. Status: https://cv.lab.supermorphic.com/readyz
+          Missing telemetry leaves recovery unverified.'
+  - eval_time: 8m
+    alertname: CareerOpsArtifactsUnavailable
+    exp_alerts:
+    - *id013
+  - eval_time: 11m
+    alertname: CareerOpsArtifactsUnavailable
+    exp_alerts: []
+- name: CareerOpsArtifactsUnrepairable remains unresolved through missing telemetry
+  interval: 1m
+  input_series:
+  - series: cv_render_unrepairable_artifacts{namespace="career-ops",service="cv-coordinator"}
+    values: 1x6 stale _ _ 0
+  alert_rule_test:
+  - eval_time: 1m
+    alertname: CareerOpsArtifactsUnrepairable
+    exp_alerts:
+    - &id014
+      exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: warning
+      exp_annotations:
+        summary: Career Ops artifacts cannot be repaired automatically
+        description: 'Accepted artifact lineages require operator review. Status: https://cv.lab.supermorphic.com/readyz
+          Missing telemetry leaves recovery unverified.'
+  - eval_time: 8m
+    alertname: CareerOpsArtifactsUnrepairable
+    exp_alerts:
+    - *id014
+  - eval_time: 11m
+    alertname: CareerOpsArtifactsUnrepairable
+    exp_alerts: []
+- name: CareerOpsRecoveryUnsafe remains unresolved through missing telemetry
+  interval: 1m
+  input_series:
+  - series: cv_render_unsafe_recovery{namespace="career-ops",service="cv-coordinator"}
+    values: 1x6 stale _ _ 0
+  alert_rule_test:
+  - eval_time: 1m
+    alertname: CareerOpsRecoveryUnsafe
+    exp_alerts:
+    - &id015
+      exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops recovery is unsafe
+        description: 'Uncertain workers or unresolved restore consistency block safe replacement work.
+          Status: https://cv.lab.supermorphic.com/readyz Missing telemetry leaves recovery unverified.'
+  - eval_time: 8m
+    alertname: CareerOpsRecoveryUnsafe
+    exp_alerts:
+    - *id015
+  - eval_time: 11m
+    alertname: CareerOpsRecoveryUnsafe
+    exp_alerts: []
+- name: CareerOpsReconciliationStale remains unresolved through missing telemetry
+  interval: 1m
+  input_series:
+  - series: cv_render_reconciliation_last_success_timestamp_seconds{namespace="career-ops",service="cv-coordinator"}
+    values: 1x6 stale _ _ 601+60x10
+  alert_rule_test:
+  - eval_time: 6m
+    alertname: CareerOpsReconciliationStale
+    exp_alerts:
+    - &id016
+      exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops reconciliation is stale
+        description: 'Idle or active work has not received a successful reconciliation pass. Status: https://cv.lab.supermorphic.com/readyz
+          Missing telemetry leaves recovery unverified.'
+  - eval_time: 8m
+    alertname: CareerOpsReconciliationStale
+    exp_alerts:
+    - *id016
+  - eval_time: 11m
+    alertname: CareerOpsReconciliationStale
+    exp_alerts: []
+- name: CareerOpsReconciliationNotStarted remains unresolved through missing telemetry
+  interval: 1m
+  input_series:
+  - series: cv_render_reconciliation_last_success_timestamp_seconds{namespace="career-ops",service="cv-coordinator"}
+    values: 0x6 stale _ _ 601+60x10
+  alert_rule_test:
+  - eval_time: 5m
+    alertname: CareerOpsReconciliationNotStarted
+    exp_alerts:
+    - &id017
+      exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops reconciliation has not succeeded
+        description: 'Coordinator progress has not been established. Status: https://cv.lab.supermorphic.com/readyz
+          Missing telemetry leaves recovery unverified.'
+  - eval_time: 8m
+    alertname: CareerOpsReconciliationNotStarted
+    exp_alerts:
+    - *id017
+  - eval_time: 11m
+    alertname: CareerOpsReconciliationNotStarted
+    exp_alerts: []

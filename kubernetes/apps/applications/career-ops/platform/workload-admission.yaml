@@ -1,0 +1,199 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: career-ops-workloads
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:
+      - ''
+      apiVersions:
+      - v1
+      operations:
+      - CREATE
+      - UPDATE
+      - DELETE
+      resources:
+      - pods
+      - pods/ephemeralcontainers
+      - pods/resize
+    - apiGroups:
+      - apps
+      apiVersions:
+      - v1
+      operations:
+      - CREATE
+      - UPDATE
+      - DELETE
+      resources:
+      - deployments
+      - replicasets
+      - statefulsets
+      - daemonsets
+    - apiGroups:
+      - batch
+      apiVersions:
+      - v1
+      operations:
+      - CREATE
+      - UPDATE
+      - DELETE
+      resources:
+      - jobs
+      - cronjobs
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: career-ops
+  variables:
+  - name: item
+    expression: 'request.operation == ''DELETE'' ? dyn(oldObject) : dyn(object)'
+  - name: pod
+    expression: 'variables.item.kind == ''Pod'' ? variables.item.spec : variables.item.spec.template.spec'
+  - name: meta
+    expression: 'variables.item.kind == ''Pod'' ? variables.item.metadata : variables.item.spec.template.metadata'
+  - name: account
+    expression: 'has(variables.pod.serviceAccountName) ? variables.pod.serviceAccountName : ''default'''
+  - name: coordinator
+    expression: variables.account == 'cv-coordinator'
+  - name: secrets
+    expression: 'variables.coordinator ? [''cv-render-database'', ''cv-api-auth''] : variables.account
+      == ''cv-prepare'' ? [''cv-prepare-source''] : []'
+  - name: containers
+    expression: variables.pod.containers
+  - name: bounds
+    expression: 'variables.account == ''cv-prepare'' ? {''cpu'':''2'', ''memory'':''4Gi'', ''ephemeral-storage'':''4Gi''}
+      : variables.coordinator ? {''cpu'':''1'', ''memory'':''2Gi'', ''ephemeral-storage'':''2Gi''} : {''cpu'':''1'',
+      ''memory'':''1Gi'', ''ephemeral-storage'':''2Gi''}'
+  - name: volumes
+    expression: 'has(variables.pod.volumes) ? variables.pod.volumes : []'
+  - name: mounts
+    expression: 'has(variables.containers[0].volumeMounts) ? variables.containers[0].volumeMounts : []'
+  - name: oldPod
+    expression: 'oldObject == null ? {} : variables.item.kind == ''Pod'' ? dyn(oldObject).spec : dyn(oldObject).spec.template.spec'
+  validations:
+  - expression: request.operation == 'DELETE' || (variables.item.kind in ['Pod','Deployment','ReplicaSet','Job'])
+    message: Only enrolled workload controllers are allowed.
+  - expression: request.operation == 'DELETE' || (variables.account in ['cv-prepare','cv-coordinator','cv-renderer','career-ops-service'])
+    message: Select an enrolled runtime service account.
+  - expression: request.operation == 'DELETE' || (has(variables.meta.labels) && variables.meta.labels['app.kubernetes.io/name']
+      == variables.account && variables.meta.labels.all(k, !k.startsWith('io.cilium.') && !k.startsWith('k8s:')
+      && !k.startsWith('career-ops.platform/')))
+    message: Workload identity and selectors must match the runtime account.
+  - expression: request.operation == 'DELETE' || (!has(variables.pod.hostNetwork) || !variables.pod.hostNetwork)
+    message: Host networking is forbidden.
+  - expression: request.operation == 'DELETE' || ((!has(variables.pod.hostPID) || !variables.pod.hostPID)
+      && (!has(variables.pod.hostIPC) || !variables.pod.hostIPC) && !has(variables.pod.hostAliases) &&
+      (!has(variables.pod.nodeName) || (variables.item.kind == 'Pod' && request.operation == 'UPDATE'
+      && has(variables.oldPod.nodeName) && variables.pod.nodeName == variables.oldPod.nodeName)) && (!has(variables.pod.os)
+      || variables.pod.os.name == 'linux'))
+    message: Host namespaces and host overrides are forbidden.
+  - expression: request.operation == 'DELETE' || (has(variables.pod.automountServiceAccountToken) && variables.pod.automountServiceAccountToken
+      == variables.coordinator)
+    message: Only the coordinator may mount its Kubernetes token.
+  - expression: request.operation == 'DELETE' || (has(variables.pod.securityContext) && variables.pod.securityContext.runAsNonRoot
+      == true && variables.pod.securityContext.runAsUser > 0 && variables.pod.securityContext.seccompProfile.type
+      == 'RuntimeDefault' && !has(variables.pod.securityContext.sysctls))
+    message: Require a non-root user and RuntimeDefault seccomp.
+  - expression: request.operation == 'DELETE' || (variables.containers.size() == 1 && (!has(variables.pod.initContainers)
+      || variables.pod.initContainers.size() == 0) && (!has(variables.pod.ephemeralContainers) || variables.pod.ephemeralContainers.size()
+      == 0))
+    message: Sidecars, init and ephemeral containers require separate enrollment.
+  - expression: request.operation == 'DELETE' || (variables.containers.all(c, has(c.securityContext) &&
+      c.securityContext.readOnlyRootFilesystem == true && c.securityContext.allowPrivilegeEscalation ==
+      false && (!has(c.securityContext.privileged) || !c.securityContext.privileged) && (!has(c.securityContext.runAsUser)
+      || c.securityContext.runAsUser > 0) && (!has(c.securityContext.runAsNonRoot) || c.securityContext.runAsNonRoot)
+      && c.securityContext.capabilities.drop == ['ALL'] && (!has(c.securityContext.capabilities.add) ||
+      c.securityContext.capabilities.add.size() == 0) && (!has(c.securityContext.seccompProfile) || c.securityContext.seccompProfile.type
+      == 'RuntimeDefault') && !has(c.securityContext.procMount) && (!has(c.ports) || c.ports.all(p, !has(p.hostPort)
+      || p.hostPort == 0))))
+    message: Every container must use the restricted execution profile.
+  - expression: request.operation == 'DELETE' || (variables.containers.all(c, !has(c.envFrom) && (!has(c.env)
+      || c.env.all(e, !has(e.valueFrom) || (has(e.valueFrom.configMapKeyRef) && !e.valueFrom.configMapKeyRef.name.startsWith('career-ops-'))
+      || (has(e.valueFrom.fieldRef) && e.valueFrom.fieldRef.fieldPath in ['metadata.name','metadata.namespace','metadata.uid'])))))
+    message: Credentials must use complete mounted directories, never environment references.
+  - expression: request.operation == 'DELETE' || (!has(variables.pod.imagePullSecrets) || variables.pod.imagePullSecrets.size()
+      == 0)
+    message: Private image credentials require enrollment.
+  - expression: request.operation == 'DELETE' || (!has(variables.pod.volumes) || variables.pod.volumes.all(v,
+      v.all(k, k in ['name','emptyDir','persistentVolumeClaim','secret','configMap','projected']) && (has(v.emptyDir)
+      || has(v.persistentVolumeClaim) || (has(v.secret) && v.secret.secretName in variables.secrets
+      && (!has(v.secret.items) || v.secret.items.size() == 0)) ||
+      (has(v.configMap) && !v.configMap.name.startsWith('career-ops-')) || (has(v.projected) && variables.coordinator
+      && variables.item.kind == 'Pod' && v.name.startsWith('kube-api-access-') && v.projected.sources.all(s,
+      s.all(k, k in ['serviceAccountToken','configMap','downwardAPI']) && (!has(s.serviceAccountToken)
+      || s.serviceAccountToken.path == 'token') && (!has(s.configMap) || s.configMap.name == 'kube-root-ca.crt'))))))
+    message: Volume drivers, token projections and Secrets are restricted.
+  - expression: request.userInfo.username != 'system:serviceaccount:career-ops:cv-coordinator' || (variables.item.kind
+      == 'Job' && variables.account == 'cv-renderer')
+    message: Coordinator mutations are restricted to offline-worker Jobs, including deletion.
+  - expression: request.operation == 'DELETE' || (variables.item.kind != 'Job' || (variables.item.spec.backoffLimit
+      == 0 && (!has(variables.item.spec.parallelism) || variables.item.spec.parallelism == 1) && (!has(variables.item.spec.completions)
+      || variables.item.spec.completions == 1) && variables.pod.restartPolicy == 'Never'))
+    message: Offline Jobs use one-shot containers with controller retries disabled.
+  - expression: request.operation == 'DELETE' || (variables.containers.all(c, has(c.resources) && has(c.resources.requests)
+      && has(c.resources.limits) && !has(c.resources.claims) && c.resources.requests.all(k, k in variables.bounds)
+      && c.resources.limits.all(k, k in variables.bounds) && ['cpu','memory','ephemeral-storage'].all(k,
+      k in c.resources.requests && k in c.resources.limits && isQuantity(c.resources.requests[k]) && isQuantity(c.resources.limits[k])
+      && quantity(c.resources.requests[k]).compareTo(quantity('0')) > 0 && quantity(c.resources.requests[k]).compareTo(quantity(c.resources.limits[k]))
+      <= 0 && quantity(c.resources.limits[k]).compareTo(quantity(variables.bounds[k])) <= 0)))
+    message: Explicit positive requests and per-profile limits are required.
+  - expression: request.operation == 'DELETE' || (variables.volumes.all(v, !has(v.emptyDir) || (has(v.emptyDir.sizeLimit)
+      && isQuantity(v.emptyDir.sizeLimit) && quantity(v.emptyDir.sizeLimit).compareTo(quantity('0')) >
+      0 && quantity(v.emptyDir.sizeLimit).compareTo(quantity('1Gi')) <= 0 && (!has(v.emptyDir.medium)
+      || v.emptyDir.medium == ''))))
+    message: Temporary workspace must be disk-backed and at most 1 GiB.
+  - expression: request.operation == 'DELETE' || (variables.volumes.filter(v, has(v.emptyDir)).size()
+      <= 1)
+    message: Only one bounded temporary workspace is enrolled.
+  - expression: 'request.operation == ''DELETE'' || (variables.volumes.all(v, !has(v.persistentVolumeClaim)
+      || (v.persistentVolumeClaim.claimName in (variables.coordinator ? [''cv-releases'',''cv-requests'',''cv-artifacts'']
+      : variables.account == ''cv-prepare'' ? [''cv-releases''] : variables.account == ''cv-renderer''
+      ? [''cv-releases'',''cv-requests''] : []))))'
+    message: Claims are restricted by runtime identity.
+  - expression: request.operation == 'DELETE' || (variables.containers.all(c, !has(c.volumeDevices)) &&
+      variables.mounts.all(m, !has(m.subPathExpr) && (!has(m.mountPropagation) || m.mountPropagation ==
+      'None') && variables.volumes.exists(v, v.name == m.name)))
+    message: Mounts must reference declared volumes without dynamic paths or propagation.
+  - expression: request.operation == 'DELETE' || (!variables.coordinator || variables.mounts.all(m, variables.volumes.all(v,
+      v.name != m.name || !has(v.persistentVolumeClaim) || (!has(m.subPath) && ((v.persistentVolumeClaim.claimName
+      == 'cv-releases' && m.mountPath == '/releases') || (v.persistentVolumeClaim.claimName == 'cv-requests'
+      && m.mountPath == '/requests') || (v.persistentVolumeClaim.claimName == 'cv-artifacts' && m.mountPath
+      == '/artifacts'))))))
+    message: Coordinator claims use the enrolled mount paths.
+  - expression: request.operation == 'DELETE' || (variables.account != 'cv-prepare' || variables.mounts.all(m,
+      variables.volumes.all(v, v.name != m.name || !has(v.persistentVolumeClaim) || (m.mountPath == '/releases'
+      && has(m.subPath) && m.subPath.startsWith('candidates/') && m.subPath.matches('^[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)+$')))))
+    message: Preparation may mount only a candidate release directory.
+  - expression: request.operation == 'DELETE' || (variables.account != 'cv-renderer' || variables.mounts.all(m,
+      variables.volumes.all(v, v.name != m.name || !has(v.persistentVolumeClaim) || (has(m.subPath) &&
+      m.subPath.matches('^[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)+$') && ((v.persistentVolumeClaim.claimName ==
+      'cv-releases' && m.mountPath == '/releases' && (m.subPath.startsWith('published/') || m.subPath.startsWith('candidates/'))
+      && has(m.readOnly) && m.readOnly && has(v.persistentVolumeClaim.readOnly) && v.persistentVolumeClaim.readOnly)
+      || (v.persistentVolumeClaim.claimName == 'cv-requests' && m.subPath.startsWith('requests/') && ((m.mountPath
+      == '/input' && m.subPath.endsWith('/input') && has(m.readOnly) && m.readOnly && has(v.persistentVolumeClaim.readOnly)
+      && v.persistentVolumeClaim.readOnly) || (m.mountPath == '/staging' && m.subPath.matches('^requests/[A-Za-z0-9_-]+/attempts/[A-Za-z0-9_-]+/pods/[A-Za-z0-9_-]+$')
+      && (!has(m.readOnly) || !m.readOnly)))))))))
+    message: Workers mount candidate/published releases and input read-only; only assigned staging is
+      writable.
+  - expression: request.operation != 'UPDATE' || (has(variables.oldPod.serviceAccountName) && variables.account
+      == variables.oldPod.serviceAccountName)
+    message: Runtime identity changes require a separately admitted new workload.
+  - expression: request.operation == 'DELETE' || variables.mounts.all(m, variables.volumes.all(v, v.name
+      != m.name || !has(v.secret) || (m.mountPath == '/run/secrets/' + v.secret.secretName && has(m.readOnly)
+      && m.readOnly && !has(m.subPath))))
+    message: Credential directories use the enrolled path and read-only complete mounts.
+  - expression: request.operation == 'DELETE' || variables.containers.all(c, (!has(c.terminationMessagePath)
+      || c.terminationMessagePath == '/dev/termination-log') && (!has(c.terminationMessagePolicy) || c.terminationMessagePolicy
+      == 'File'))
+    message: Termination metadata must not read credential files or capture container logs.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: career-ops-workloads
+spec:
+  policyName: career-ops-workloads
+  validationActions:
+  - Deny

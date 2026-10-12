@@ -1,0 +1,66 @@
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: career-ops-deny
+  namespace: career-ops
+spec:
+  endpointSelector: {}
+  ingress: []
+  egress: []
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: career-ops-coordinator
+  namespace: career-ops
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:io.cilium.k8s.policy.serviceaccount: cv-coordinator
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: envoy-gateway-system
+        gateway.envoyproxy.io/owning-gateway-name: internal
+        gateway.envoyproxy.io/owning-gateway-namespace: networking
+    toPorts:
+    - ports:
+      - port: '8080'
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: monitoring
+        app.kubernetes.io/name: prometheus
+        operator.prometheus.io/name: kube-prometheus-stack-prometheus
+    toPorts:
+    - ports:
+      - port: '9090'
+        protocol: TCP
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+        k8s:k8s-app: kube-dns
+    toPorts:
+    - ports:
+      - port: '53'
+        protocol: TCP
+      - port: '53'
+        protocol: UDP
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: automation-data
+        app.kubernetes.io/name: automation-data-postgresql
+    toPorts:
+    - ports:
+      - port: '5432'
+        protocol: TCP
+  - toEntities:
+    - kube-apiserver
+    toPorts:
+    - ports:
+      - port: '6443'
+        protocol: TCP
+      - port: '443'
+        protocol: TCP

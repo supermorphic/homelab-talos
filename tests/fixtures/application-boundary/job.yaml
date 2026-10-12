@@ -1,0 +1,45 @@
+---
+kind: Job
+metadata:
+  name: career-ops-boundary-admission
+  namespace: career-ops
+  labels:
+    app.kubernetes.io/name: cv-renderer
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cv-renderer
+    spec:
+      serviceAccountName: cv-renderer
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: main
+        image: example.invalid/fixture@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+            ephemeral-storage: 128Mi
+          limits:
+            cpu: '1'
+            memory: 1Gi
+            ephemeral-storage: 2Gi
+      restartPolicy: Never
+  backoffLimit: 0
+  parallelism: 1
+  completions: 1
+apiVersion: batch/v1

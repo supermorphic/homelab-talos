@@ -1,0 +1,159 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: career-ops-reconciler
+  namespace: career-ops
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: career-ops-reconciler
+  namespace: career-ops
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - services
+  - configmaps
+  - persistentvolumeclaims
+  - serviceaccounts
+  verbs: &id001
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs: *id001
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs: *id001
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - httproutes
+  verbs: *id001
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  verbs: *id001
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  resourceNames:
+  - cv-render-jobs
+  verbs:
+  - bind
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: career-ops-reconciler
+  namespace: career-ops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: career-ops-reconciler
+subjects:
+- kind: ServiceAccount
+  name: career-ops-reconciler
+  namespace: career-ops
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cv-render-jobs
+  namespace: career-ops
+rules:
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+  - delete
+- apiGroups:
+  - ''
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: career-ops-boundary-test
+  namespace: career-ops
+rules:
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: career-ops-boundary-test
+  namespace: career-ops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: career-ops-boundary-test
+subjects:
+- kind: ServiceAccount
+  name: homelab-test-runner
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: career-ops-boundary-observer
+rules:
+- apiGroups:
+  - admissionregistration.k8s.io
+  resources:
+  - validatingadmissionpolicies
+  - validatingadmissionpolicybindings
+  resourceNames:
+  - career-ops-workloads
+  - career-ops-resources
+  - career-ops-services
+  - career-ops-routes
+  - career-ops-storage
+  - career-ops-boundary-test
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: career-ops-boundary-observer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: career-ops-boundary-observer
+subjects:
+- kind: ServiceAccount
+  name: homelab-observer
+  namespace: kube-system
+- kind: ServiceAccount
+  name: homelab-test-runner
+  namespace: kube-system

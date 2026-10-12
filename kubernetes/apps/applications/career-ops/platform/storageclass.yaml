@@ -1,0 +1,14 @@
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: career-ops-retain
+provisioner: driver.longhorn.io
+allowVolumeExpansion: true
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+parameters:
+  numberOfReplicas: '2'
+  staleReplicaTimeout: '30'
+  fsType: ext4
+  recurringJobSelector: '[{"name":"default","isGroup":true}]'

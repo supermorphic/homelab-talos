@@ -1,0 +1,253 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: career-ops-resources
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:
+      - '*'
+      apiVersions:
+      - '*'
+      resources:
+      - '*'
+      operations:
+      - CREATE
+      - UPDATE
+      - DELETE
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: career-ops
+  variables:
+  - name: item
+    expression: 'request.operation == ''DELETE'' ? dyn(oldObject) : dyn(object)'
+  - name: application
+    expression: request.userInfo.username == 'system:serviceaccount:career-ops:career-ops-reconciler'
+  - name: coordinator
+    expression: request.userInfo.username == 'system:serviceaccount:career-ops:cv-coordinator'
+  validations:
+  - expression: '!variables.application || (variables.item.kind in [''Deployment'',''Job'',''Service'',''HTTPRoute'',''ConfigMap'',''PersistentVolumeClaim'',''ServiceAccount'',''RoleBinding''])'
+    message: Application Flux may manage only enrolled resource kinds.
+  - expression: '!variables.application || ((!variables.item.metadata.name.startsWith(''career-ops-'')
+      || (variables.item.kind == ''ServiceAccount'' && variables.item.metadata.name == ''career-ops-service''))
+      && variables.item.metadata.name != ''kube-root-ca.crt'' && (!has(variables.item.metadata.ownerReferences)
+      || variables.item.metadata.ownerReferences.size() == 0))'
+    message: Platform objects and ownership are reserved.
+  - expression: '!variables.application || request.operation != ''UPDATE'' || !has(oldObject.metadata.name)
+      || ((!oldObject.metadata.name.startsWith(''career-ops-'') || (variables.item.kind == ''ServiceAccount''
+      && oldObject.metadata.name == ''career-ops-service'')) && oldObject.metadata.name != ''kube-root-ca.crt'')'
+    message: Ownership transfer cannot bypass reserved names.
+  - expression: '!variables.application || variables.item.kind != ''ServiceAccount'' || (variables.item.metadata.name
+      in [''cv-prepare'',''cv-coordinator'',''cv-renderer'',''career-ops-service''] && (request.operation
+      == ''DELETE'' || (has(variables.item.automountServiceAccountToken) && variables.item.automountServiceAccountToken
+      == false && !has(variables.item.secrets))))'
+    message: Runtime accounts are tokenless and explicitly enrolled.
+  - expression: '!variables.application || variables.item.kind != ''RoleBinding'' || (variables.item.metadata.name
+      == ''cv-coordinator-jobs'' && variables.item.roleRef == {''apiGroup'':''rbac.authorization.k8s.io'',''kind'':''Role'',''name'':''cv-render-jobs''}
+      && variables.item.subjects == [{''kind'':''ServiceAccount'',''name'':''cv-coordinator'',''namespace'':''career-ops''}])'
+    message: Only the fixed coordinator-to-Job RoleBinding is admitted.
+  - expression: '!variables.application || variables.item.kind != ''PersistentVolumeClaim'' || request.operation
+      != ''DELETE'''
+    message: Retained claims cannot be deleted by application reconciliation.
+  - expression: '!variables.coordinator || (variables.item.kind == ''Job'' && variables.item.spec.template.spec.serviceAccountName
+      == ''cv-renderer'')'
+    message: Coordinator may mutate only offline-worker Jobs.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: career-ops-resources
+spec:
+  policyName: career-ops-resources
+  validationActions:
+  - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: career-ops-services
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:
+      - ''
+      apiVersions:
+      - v1
+      operations:
+      - CREATE
+      - UPDATE
+      - DELETE
+      resources:
+      - services
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: career-ops
+  variables:
+  - name: item
+    expression: 'request.operation == ''DELETE'' ? dyn(oldObject) : dyn(object)'
+  validations:
+  - expression: request.operation == 'DELETE' || (variables.item.spec.type == 'ClusterIP' && !has(variables.item.spec.externalName)
+      && (!has(variables.item.spec.externalIPs) || variables.item.spec.externalIPs.size() == 0) && has(variables.item.spec.selector)
+      && ((variables.item.metadata.name == 'cv-coordinator' && variables.item.metadata.labels['app.kubernetes.io/name']
+      == 'cv-coordinator' && variables.item.spec.selector == {'app.kubernetes.io/name':'cv-coordinator'}
+      && variables.item.spec.ports.size() == 2 && variables.item.spec.ports.all(p, (p.name == 'http' &&
+      p.port == 8080 && p.targetPort == 8080) || (p.name == 'metrics' && p.port == 9090 && p.targetPort
+      == 9090))) || (variables.item.metadata.name != 'cv-coordinator' && (!has(variables.item.metadata.labels)
+      || !('app.kubernetes.io/name' in variables.item.metadata.labels) || variables.item.metadata.labels['app.kubernetes.io/name']
+      != 'cv-coordinator') && variables.item.spec.selector == {'app.kubernetes.io/name':'career-ops-service'}
+      && variables.item.spec.ports.all(p, p.port == 8080 && p.targetPort == 8080))) && variables.item.spec.ports.all(p,
+      p.protocol == 'TCP' && (!has(p.nodePort) || p.nodePort == 0)))
+    message: Services must use enrolled selectors and private ports.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: career-ops-services
+spec:
+  policyName: career-ops-services
+  validationActions:
+  - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: career-ops-routes
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:
+      - gateway.networking.k8s.io
+      apiVersions:
+      - v1
+      operations:
+      - CREATE
+      - UPDATE
+      - DELETE
+      resources:
+      - httproutes
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: career-ops
+  variables:
+  - name: item
+    expression: 'request.operation == ''DELETE'' ? dyn(oldObject) : dyn(object)'
+  validations:
+  - expression: request.operation == 'DELETE' || (variables.item.metadata.name == 'cv-coordinator' &&
+      variables.item.spec.hostnames == ['cv.lab.supermorphic.com'] && variables.item.spec.parentRefs.size()
+      == 1 && variables.item.spec.parentRefs.all(p, p.name == 'internal' && p.namespace == 'networking'
+      && p.sectionName == 'https' && (!has(p.kind) || p.kind == 'Gateway') && (!has(p.group) || p.group
+      == 'gateway.networking.k8s.io') && !has(p.port)) && variables.item.spec.rules.size() == 1 && variables.item.spec.rules.all(r,
+      r.all(k, k in ['matches','backendRefs']) && (!has(r.matches) || r.matches == [{'path':{'type':'PathPrefix','value':'/'}}])
+      && r.backendRefs.size() == 1 && r.backendRefs.all(b, b.name == 'cv-coordinator' && b.port == 8080
+      && (!has(b.namespace) || b.namespace == 'career-ops') && (!has(b.kind) || b.kind == 'Service') &&
+      (!has(b.group) || b.group == '') && (!has(b.weight) || b.weight == 1) && !has(b.filters))))
+    message: Only the allocated internal coordinator route is admitted.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: career-ops-routes
+spec:
+  policyName: career-ops-routes
+  validationActions:
+  - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: career-ops-storage
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: career-ops
+    resourceRules:
+    - apiGroups:
+      - ''
+      apiVersions:
+      - v1
+      resources:
+      - persistentvolumeclaims
+      operations:
+      - CREATE
+      - UPDATE
+      - DELETE
+  variables:
+  - name: item
+    expression: 'request.operation == ''DELETE'' ? dyn(oldObject) : dyn(object)'
+  validations:
+  - expression: 'request.operation == ''DELETE'' || (variables.item.metadata.name in [''cv-releases'',''cv-requests'',''cv-artifacts'']
+      && variables.item.spec.storageClassName == ''career-ops-retain'' && variables.item.spec.accessModes
+      == [''ReadWriteMany''] && (!has(variables.item.spec.volumeMode) || variables.item.spec.volumeMode
+      == ''Filesystem'') && (!has(variables.item.spec.volumeName) || (request.operation == ''UPDATE''
+      && has(oldObject.spec.volumeName) && variables.item.spec.volumeName == oldObject.spec.volumeName))
+      && !has(variables.item.spec.selector) && !has(variables.item.spec.dataSource) && !has(variables.item.spec.dataSourceRef)
+      && (!has(variables.item.metadata.ownerReferences) || variables.item.metadata.ownerReferences.size()
+      == 0) && has(variables.item.metadata.annotations) && ''kustomize.toolkit.fluxcd.io/prune'' in variables.item.metadata.annotations
+      && variables.item.metadata.annotations[''kustomize.toolkit.fluxcd.io/prune''] == ''disabled'' &&
+      isQuantity(variables.item.spec.resources.requests.storage) && quantity(variables.item.spec.resources.requests.storage).compareTo(quantity(variables.item.metadata.name
+      == ''cv-releases'' ? ''8Gi'' : variables.item.metadata.name == ''cv-requests'' ? ''16Gi'' : ''32Gi''))
+      == 0)'
+    message: Only enrolled RWX claims with prune protection and no clone/restore/prebinding are admitted.
+  - expression: request.operation == 'DELETE' || !has(variables.item.spec.volumeAttributesClassName)
+    message: Unenrolled volume attribute classes are forbidden.
+  - expression: request.operation != 'UPDATE' || !has(oldObject.metadata.finalizers) || !('kubernetes.io/pvc-protection'
+      in oldObject.metadata.finalizers) || (has(variables.item.metadata.finalizers) && 'kubernetes.io/pvc-protection'
+      in variables.item.metadata.finalizers)
+    message: Existing claim protection must be preserved.
+  matchConditions:
+  - name: exclude-volume-binding
+    expression: request.userInfo.username != 'system:kube-controller-manager' && request.userInfo.username
+      != 'system:serviceaccount:kube-system:persistent-volume-binder'
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: career-ops-storage
+spec:
+  policyName: career-ops-storage
+  validationActions:
+  - Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: career-ops-boundary-test
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: career-ops
+    resourceRules:
+    - apiGroups:
+      - batch
+      apiVersions:
+      - v1
+      resources:
+      - jobs
+      operations:
+      - CREATE
+      - UPDATE
+      - DELETE
+  matchConditions:
+  - name: test-runner
+    expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+  validations:
+  - expression: request.namespace == 'career-ops' && request.operation == 'CREATE' && has(request.dryRun)
+      && request.dryRun && object.metadata.name == 'career-ops-boundary-admission'
+    message: Application boundary tests may submit only the fixed server-side dry-run Job.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: career-ops-boundary-test
+spec:
+  policyName: career-ops-boundary-test
+  validationActions:
+  - Deny

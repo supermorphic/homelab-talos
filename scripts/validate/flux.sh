@@ -67,6 +67,7 @@ canary_ks='kubernetes/apps/flux-system/flux-canary/ks.yaml'
 
 kustomize build kubernetes/apps >"$temp_dir/apps.yaml"
 kustomize build kubernetes/flux/clusters/prod/flux-system >"$temp_dir/bootstrap.yaml"
+[[ "$(yq -r 'select(.kind == "Deployment" and .metadata.name == "kustomize-controller") | .spec.template.spec.containers[0].args[]' "$temp_dir/bootstrap.yaml" | rg -x -- '--no-remote-bases=true')" == '--no-remote-bases=true' ]]
 kustomize build kubernetes/apps/kube-system >"$temp_dir/kube-system.yaml"
 kustomize build kubernetes/apps/flux-system >"$temp_dir/flux-system.yaml"
 kustomize build kubernetes/apps/kube-system/cilium/app >"$temp_dir/cilium.yaml"
