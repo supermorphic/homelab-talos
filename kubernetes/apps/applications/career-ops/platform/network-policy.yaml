@@ -6,8 +6,15 @@ metadata:
   namespace: career-ops
 spec:
   endpointSelector: {}
-  ingress: []
-  egress: []
+  enableDefaultDeny:
+    ingress: true
+    egress: true
+  ingress:
+  - fromEntities:
+    - none
+  egress:
+  - toEntities:
+    - none
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy

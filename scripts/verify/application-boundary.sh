@@ -73,6 +73,10 @@ for expected in yaml.safe_load_all(rendered):
         sys.exit('An installed application control differs from the reviewed source: '+expected['kind']+'/'+expected['metadata']['name'])
     if expected['kind'] == 'Namespace' and any(actual['metadata'].get('labels',{}).get(k) != v for k,v in expected['metadata']['labels'].items()):
         sys.exit('Application namespace restriction labels differ from source.')
+    if expected['kind'] == 'CiliumNetworkPolicy' and not any(
+        c.get('type') == 'Valid' and c.get('status') == 'True'
+        for c in actual.get('status',{}).get('conditions',[])):
+        sys.exit('An installed Cilium policy has not reported valid: '+expected['metadata']['name'])
     if expected['kind'] == 'PersistentVolumeClaim':
         if actual.get('status',{}).get('phase') != 'Bound' or actual['metadata'].get('annotations',{}).get('kustomize.toolkit.fluxcd.io/prune') != 'disabled':
             sys.exit('A fixture volume is not Bound and prune protected.')

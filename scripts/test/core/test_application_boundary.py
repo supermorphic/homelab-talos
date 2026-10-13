@@ -432,6 +432,17 @@ class ApplicationAuthorityTests(ApplicationFixture, unittest.TestCase):
 
 
 class ApplicationNetworkTests(ApplicationFixture, unittest.TestCase):
+    def test_namespace_policy_enables_both_directions_without_allowing_peers(self):
+        policy = next(
+            d["spec"]
+            for d in self.documents
+            if d["kind"] == "CiliumNetworkPolicy" and d["metadata"]["name"] == "career-ops-deny"
+        )
+        # Cilium's none entity never exists, but makes both rule sections valid.
+        self.assertEqual(policy.get("enableDefaultDeny"), {"ingress": True, "egress": True})
+        self.assertEqual(policy.get("ingress"), [{"fromEntities": ["none"]}])
+        self.assertEqual(policy.get("egress"), [{"toEntities": ["none"]}])
+
     def test_network_capabilities_follow_service_account_identity(self):
         policies = {
             d["metadata"]["name"]: d["spec"]
@@ -440,8 +451,6 @@ class ApplicationNetworkTests(ApplicationFixture, unittest.TestCase):
         }
         self.assertIn("career-ops-deny", list(policies))
         self.assertEqual(policies["career-ops-deny"]["endpointSelector"], {})
-        self.assertEqual(policies["career-ops-deny"]["ingress"], [])
-        self.assertEqual(policies["career-ops-deny"]["egress"], [])
         self.assertEqual(
             set(policies),
             {"career-ops-deny", "career-ops-coordinator", "career-ops-boundary-coordinator"},

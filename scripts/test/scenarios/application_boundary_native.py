@@ -174,6 +174,11 @@ class NativeRunner:
             actual = self.read(*args)
             if controlled(expected) != controlled(actual):
                 raise RuntimeError("Installed fixture controls differ from reviewed source")
+            if expected["kind"] == "CiliumNetworkPolicy" and not any(
+                c.get("type") == "Valid" and c.get("status") == "True"
+                for c in actual.get("status", {}).get("conditions", [])
+            ):
+                raise RuntimeError("An installed Cilium policy has not reported valid")
             if expected["kind"] == "Namespace" and any(
                 actual["metadata"]["labels"].get(k) != v
                 for k, v in expected["metadata"]["labels"].items()

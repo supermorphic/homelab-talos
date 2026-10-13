@@ -34,6 +34,8 @@ class ApplicationCommandTests(unittest.TestCase):
                 "typeChecking": {},
                 "conditions": [{"type": "Ready", "status": "True", "observedGeneration": 1}],
             }
+            if obj["kind"] == "CiliumNetworkPolicy":
+                obj["status"]["conditions"] = [{"type": "Valid", "status": "True"}]
             self.objects[obj["kind"].lower() + "/" + obj["metadata"]["name"]] = obj
         for obj in self.objects.values():
             if obj["kind"] != "PersistentVolumeClaim":
@@ -155,6 +157,14 @@ class ApplicationCommandTests(unittest.TestCase):
         result = self.run_command()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("type checking is incomplete", result.stderr)
+
+    def test_observation_rejects_invalid_or_unvalidated_cilium_policy(self):
+        policy = self.objects["ciliumnetworkpolicy/career-ops-deny"]
+        for status in [{}, {"conditions": [{"type": "Valid", "status": "False"}]}]:
+            policy["status"] = status
+            result = self.run_command()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Cilium policy", result.stderr)
 
     def test_observation_rejects_elevated_identity(self):
         self.environment["APPLICATION_BOUNDARY_FIXTURE_IDENTITY"] = "operator-admin"
@@ -291,6 +301,19 @@ class ApplicationCommandTests(unittest.TestCase):
                 (self.path / "objects.json").write_text(json.dumps(self.objects))
                 with self.assertRaisesRegex(RuntimeError, "exact deployed|reported Ready"):
                     runner.precondition()
+        self.assertTrue(all(c[0] in {"get", "auth"} for c in self.calls()))
+
+    def test_native_stops_before_mutation_for_invalid_or_unvalidated_cilium_policy(self):
+        self.environment["APPLICATION_BOUNDARY_FIXTURE_IDENTITY"] = (
+            "system:serviceaccount:kube-system:homelab-test-runner"
+        )
+        with patch.dict(os.environ, self.environment):
+            runner = self.native_runner()
+            for status in [{}, {"conditions": [{"type": "Valid", "status": "False"}]}]:
+                self.objects["ciliumnetworkpolicy/career-ops-deny"]["status"] = status
+                (self.path / "objects.json").write_text(json.dumps(self.objects))
+                with self.assertRaisesRegex(RuntimeError, "Cilium policy"):
+                    runner.mutate_owned("create", "seed")
         self.assertTrue(all(c[0] in {"get", "auth"} for c in self.calls()))
 
     def test_native_cli_reaches_its_confirmation_guard_without_pythonpath(self):
