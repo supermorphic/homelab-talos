@@ -94,10 +94,11 @@ for expected in units:
     actual=get(expected)
     if actual['spec'].get('suspend',False) != expected['spec']['suspend']:
         sys.exit('Application source consumption differs from reviewed suspension intent.')
-    if expected['metadata']['name'] in ('career-ops-platform','career-ops-fixture-storage') and not ready(actual):
+    if not expected['spec']['suspend'] and not ready(actual):
         sys.exit('Application platform has not reported Ready for its current generation.')
 
 connection=list(yaml.safe_load_all(subprocess.check_output(['kustomize','build','kubernetes/apps/applications/career-ops/connection'],text=True)))
+enrolled={}
 for expected in connection:
     # Credential delivery has separate acceptance; the observer never reads Secrets.
     if expected['kind'] == 'Secret':
@@ -116,16 +117,46 @@ for expected in connection:
         sys.exit('Application source has an unapproved reconciliation capability.')
     if not expected['spec']['suspend'] and not ready(actual):
         sys.exit('Enrolled application source has not reported current Ready.')
+    enrolled[expected['kind']]=actual
 
 if units[1]['spec']['suspend']:
     print('Application boundary observations passed: controls installed; enrollment suspended. No runtime, storage, database or delivery acceptance claimed.')
 else:
-    for name in ('cv-releases','cv-requests','cv-artifacts'):
+    revision=enrolled['GitRepository'].get('status',{}).get('artifact',{}).get('revision')
+    if not revision or enrolled['Kustomization'].get('status',{}).get('lastAppliedRevision') != revision:
+        sys.exit('Application has not applied the current source revision.')
+    for name,size in (('cv-releases','8Gi'),('cv-requests','16Gi'),('cv-artifacts','32Gi')):
         claim=read('get','persistentvolumeclaim',name,'-n','career-ops','-o','json')
-        if claim.get('status',{}).get('phase') != 'Bound' or claim['spec'].get('storageClassName') != 'career-ops-retain':
-            sys.exit('An enrolled retained claim is not Bound to the approved class.')
+        if (claim.get('status',{}).get('phase') != 'Bound' or claim['spec'].get('storageClassName') != 'career-ops-retain'
+            or claim['spec'].get('accessModes') != ['ReadWriteMany'] or claim['spec'].get('volumeMode') != 'Filesystem'
+            or claim['spec'].get('resources',{}).get('requests',{}).get('storage') != size
+            or claim['metadata'].get('annotations',{}).get('kustomize.toolkit.fluxcd.io/prune') != 'disabled'
+            or claim['metadata'].get('ownerReferences')):
+            sys.exit('An enrolled retained claim lacks its approved Bound, RWX, size or retention controls.')
         pv=read('get','persistentvolume',claim['spec']['volumeName'],'-o','json')
-        if pv['spec'].get('persistentVolumeReclaimPolicy') != 'Retain':
-            sys.exit('An enrolled volume lacks Retain reclamation.')
-    print('Application source and retained-volume observations passed. Native network, mounts, credentials, signal correctness and recovery need separate acceptance.')
+        if (pv['spec'].get('persistentVolumeReclaimPolicy') != 'Retain' or pv['spec'].get('storageClassName') != 'career-ops-retain'
+            or pv['spec'].get('claimRef',{}).get('uid') != claim['metadata']['uid'] or pv['spec'].get('csi',{}).get('driver') != 'driver.longhorn.io'):
+            sys.exit('An enrolled volume lacks its owned Longhorn Retain binding.')
+        print('Retained claim '+name+': '+claim['metadata']['uid'])
+    job=read('get','job','cv-bootstrap-smoke','-n','career-ops','-o','json')
+    if job.get('status',{}).get('succeeded') != 1 or not any(
+        c.get('type') == 'Complete' and c.get('status') == 'True' for c in job.get('status',{}).get('conditions',[])):
+        sys.exit('Application bootstrap has not completed successfully.')
+    pods=read('get','pods','-n','career-ops','-l','batch.kubernetes.io/job-name=cv-bootstrap-smoke','-o','json')['items']
+    succeeded=[]
+    for pod in pods:
+        if not any(o.get('apiVersion') == 'batch/v1' and o.get('kind') == 'Job' and o.get('name') == 'cv-bootstrap-smoke'
+                   and o.get('uid') == job['metadata']['uid'] and o.get('controller') is True
+                   for o in pod['metadata'].get('ownerReferences',[])):
+            continue
+        statuses=pod.get('status',{}).get('containerStatuses',[])
+        terminated=statuses[0].get('state',{}).get('terminated',{}) if len(statuses) == 1 else {}
+        if (pod['metadata'].get('namespace') == 'career-ops' and pod.get('status',{}).get('phase') == 'Succeeded'
+            and pod['spec'].get('serviceAccountName') == 'cv-renderer' and pod['spec'].get('automountServiceAccountToken') is False
+            and len(statuses) == 1 and statuses[0].get('name') == 'bootstrap'
+            and terminated.get('exitCode') == 0 and terminated.get('message','').strip() == 'bootstrap-ok'):
+            succeeded.append(pod)
+    if len(succeeded) != 1:
+        sys.exit('Application bootstrap lacks its current owned Pod with exit0 and bootstrap-ok.')
+    print('Application source revision '+revision+'; bootstrap and retained-volume observations passed. Runtime, credentials, signal correctness and recovery need separate acceptance.')
 PY
