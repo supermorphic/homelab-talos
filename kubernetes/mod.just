@@ -1371,3 +1371,8 @@ application-boundary-verify: require-bash
 application-boundary-test: require-bash
     @scripts/test/run-catalog-suite.sh test.application-boundary-admission -- \
       scripts/test/scenarios/application-boundary.sh {{quote(test_kubeconfig)}}
+
+# Fixed tokenless fixtures; separate synthetic claims, controller Pods and two-node RWX.
+application-boundary-native-test: require-bash
+    @scripts/test/run-catalog-suite.sh test.application-boundary-storage-network -- \
+      uv run --locked python scripts/test/scenarios/application_boundary_native.py {{quote(test_kubeconfig)}}

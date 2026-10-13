@@ -181,7 +181,7 @@ spec:
   - name: item
     expression: 'request.operation == ''DELETE'' ? dyn(oldObject) : dyn(object)'
   validations:
-  - expression: 'request.operation == ''DELETE'' || (variables.item.metadata.name in [''cv-releases'',''cv-requests'',''cv-artifacts'']
+  - expression: 'request.operation == ''DELETE'' || (variables.item.metadata.name in [''cv-releases'',''cv-requests'',''cv-artifacts'',''career-ops-boundary-releases'',''career-ops-boundary-requests'',''career-ops-boundary-artifacts'']
       && variables.item.spec.storageClassName == ''career-ops-retain'' && variables.item.spec.accessModes
       == [''ReadWriteMany''] && (!has(variables.item.spec.volumeMode) || variables.item.spec.volumeMode
       == ''Filesystem'') && (!has(variables.item.spec.volumeName) || (request.operation == ''UPDATE''
@@ -191,7 +191,7 @@ spec:
       == 0) && has(variables.item.metadata.annotations) && ''kustomize.toolkit.fluxcd.io/prune'' in variables.item.metadata.annotations
       && variables.item.metadata.annotations[''kustomize.toolkit.fluxcd.io/prune''] == ''disabled'' &&
       isQuantity(variables.item.spec.resources.requests.storage) && quantity(variables.item.spec.resources.requests.storage).compareTo(quantity(variables.item.metadata.name
-      == ''cv-releases'' ? ''8Gi'' : variables.item.metadata.name == ''cv-requests'' ? ''16Gi'' : ''32Gi''))
+      .startsWith(''career-ops-boundary-'') ? ''1Gi'' : variables.item.metadata.name == ''cv-releases'' ? ''8Gi'' : variables.item.metadata.name == ''cv-requests'' ? ''16Gi'' : ''32Gi''))
       == 0)'
     message: Only enrolled RWX claims with prune protection and no clone/restore/prebinding are admitted.
   - expression: request.operation == 'DELETE' || !has(variables.item.spec.volumeAttributesClassName)
@@ -239,9 +239,11 @@ spec:
   - name: test-runner
     expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
   validations:
-  - expression: request.namespace == 'career-ops' && request.operation == 'CREATE' && has(request.dryRun)
-      && request.dryRun && object.metadata.name == 'career-ops-boundary-admission'
-    message: Application boundary tests may submit only the fixed server-side dry-run Job.
+  - expression: "request.namespace == 'career-ops' && ((request.operation == 'CREATE' && has(request.dryRun)
+      && request.dryRun && object.metadata.name == 'career-ops-boundary-admission') ||
+      (request.operation in ['CREATE','DELETE'] && (request.operation == 'DELETE' ? oldObject : object).metadata.name
+      in ['career-ops-boundary-seed','career-ops-boundary-write','career-ops-boundary-read','career-ops-boundary-cleanup']))"
+    message: Application boundary tests may submit the fixed dry-run Job or owned native fixture Jobs.
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

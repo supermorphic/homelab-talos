@@ -612,9 +612,29 @@ fixtures. `verification.application-boundary` observes installed controls and
 source/retained-volume metadata without reading Secrets or volume contents.
 `test.application-boundary-admission` submits only a fixed server-side dry-run Job;
 its result is admission evidence, not the complete native acceptance below. The
-full boundary suite remains unenrolled until separately reviewed synthetic mounts,
-network/delivery fixtures and application-source workloads are ready. Do not treat
-the admission-only result as completion of issue 593.
+`test.application-boundary-storage-network` uses fixed tokenless test identities
+and a platform-owned program. It shares the production execution/mount profiles
+and coordinator egress destinations, but cannot mount application claims or
+Secrets. Its three separately enrolled 1 GiB RWX claims remain platform-owned
+and retained across Job removal. A fresh reader on another node verifies stored
+data after the writer is removed; Hubble `POLICY_DENIED` counters attributed to
+each fixture run/phase and positive
+connectivity before and after worker checks distinguish denial from an unavailable
+destination. The existing private Prometheus read path supplies the drop evidence;
+missing telemetry never counts as a denial. These fixtures establish TCP database/API connectivity, not database
+grants or authenticated application behavior.
+
+The test creates only the named Jobs and records their API ownership before
+cleanup. Its fixed program removes only synthetic directories whose run markers
+match. It never deletes PVCs or PVs. A failed ownership or cleanup check preserves
+the local ledger and requires scoped follow-up; no broader credential fallback is
+allowed. Removing the fixture claims themselves requires a separately reviewed, attended
+reclamation action. They consume 3 GiB of the namespace storage
+budget while enrolled.
+
+The full boundary suite remains unenrolled until application-source workloads,
+ingress, notification delivery and isolated restore acceptance are ready. Neither
+partial suite establishes application pruning or completion of issue 593.
 
 Offline validation must compile and evaluate the actual admission policies, render
 the manifests, and exercise independent positive/negative cases. Include forbidden

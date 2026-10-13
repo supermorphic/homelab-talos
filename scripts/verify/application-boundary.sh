@@ -49,6 +49,8 @@ def ready(item):
 
 def controlled(item):
     item=copy.deepcopy(item)
+    if item['kind'] == 'PersistentVolumeClaim':
+        item['spec'].pop('volumeName',None)
     if item['kind'] == 'LimitRange':
         # The API derives Container defaults from max when not explicitly set.
         # Preserve explicit values so drift in defaults still fails observation.
@@ -69,6 +71,13 @@ for expected in yaml.safe_load_all(rendered):
         sys.exit('An installed application control differs from the reviewed source: '+expected['kind']+'/'+expected['metadata']['name'])
     if expected['kind'] == 'Namespace' and any(actual['metadata'].get('labels',{}).get(k) != v for k,v in expected['metadata']['labels'].items()):
         sys.exit('Application namespace restriction labels differ from source.')
+    if expected['kind'] == 'PersistentVolumeClaim':
+        if actual.get('status',{}).get('phase') != 'Bound' or actual['metadata'].get('annotations',{}).get('kustomize.toolkit.fluxcd.io/prune') != 'disabled':
+            sys.exit('A fixture volume is not Bound and prune protected.')
+        pv=read('get','persistentvolume',actual['spec']['volumeName'],'-o','json')
+        if (pv['spec'].get('persistentVolumeReclaimPolicy') != 'Retain' or pv['spec'].get('storageClassName') != 'career-ops-retain'
+            or pv['spec'].get('claimRef',{}).get('uid') != actual['metadata']['uid'] or pv['spec'].get('csi',{}).get('driver') != 'driver.longhorn.io'):
+            sys.exit('A fixture volume lacks its owned Longhorn Retain binding.')
     if expected['kind'] == 'ValidatingAdmissionPolicy':
         status=actual.get('status',{})
         if status.get('observedGeneration') != actual['metadata']['generation'] or status.get('typeChecking',{}).get('expressionWarnings'):

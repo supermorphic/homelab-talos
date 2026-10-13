@@ -1,4 +1,4 @@
-"""Fixed synthetic data only; native fixture claims/Jobs are not yet enrolled.
+"""Fixed synthetic data only; shared by the native fixture program.
 
 The runner must mount a separately enrolled synthetic claim, run publication on
 one node and a fresh reader on another, then perform the read-only check through

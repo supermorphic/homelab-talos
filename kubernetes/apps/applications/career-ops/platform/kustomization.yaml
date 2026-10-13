@@ -10,3 +10,12 @@ resources:
 - ./storageclass.yaml
 - ./quota.yaml
 - ./monitoring.yaml
+- ./native-fixtures.yaml
+configMapGenerator:
+- name: career-ops-boundary-program
+  namespace: career-ops
+  files:
+  - probe.py=native-probe.py
+  - mount-probe.py
+  options:
+    disableNameSuffixHash: true

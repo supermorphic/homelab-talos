@@ -424,8 +424,18 @@ class ApplicationNetworkTests(ApplicationFixture, unittest.TestCase):
         self.assertEqual(policies["career-ops-deny"]["endpointSelector"], {})
         self.assertEqual(policies["career-ops-deny"]["ingress"], [])
         self.assertEqual(policies["career-ops-deny"]["egress"], [])
-        self.assertEqual(set(policies), {"career-ops-deny", "career-ops-coordinator"})
+        self.assertEqual(
+            set(policies),
+            {"career-ops-deny", "career-ops-coordinator", "career-ops-boundary-coordinator"},
+        )
         coordinator = policies["career-ops-coordinator"]
+        native = policies["career-ops-boundary-coordinator"]
+        self.assertEqual(native["egress"], coordinator["egress"])
+        self.assertEqual(native["ingress"], [])
+        self.assertEqual(
+            native["endpointSelector"]["matchLabels"],
+            {"k8s:io.cilium.k8s.policy.serviceaccount": "career-ops-boundary-coordinator"},
+        )
         self.assertEqual(
             coordinator["endpointSelector"]["matchLabels"],
             {"k8s:io.cilium.k8s.policy.serviceaccount": "cv-coordinator"},
@@ -898,7 +908,18 @@ class ApplicationAssuranceTests(ApplicationFixture, unittest.TestCase):
         self.assertEqual(len(roles), 1)
         self.assertEqual(
             roles[0]["rules"],
-            [{"apiGroups": ["batch"], "resources": ["jobs"], "verbs": ["create"]}],
+            [
+                {"apiGroups": ["batch"], "resources": ["jobs"], "verbs": ["create"]},
+                {
+                    "apiGroups": ["batch"],
+                    "resources": ["jobs"],
+                    "resourceNames": [
+                        "career-ops-boundary-" + phase
+                        for phase in ["seed", "write", "read", "cleanup"]
+                    ],
+                    "verbs": ["get", "delete"],
+                },
+            ],
         )
         readers = [
             d
@@ -917,6 +938,7 @@ class ApplicationAssuranceTests(ApplicationFixture, unittest.TestCase):
                 "career-ops-routes",
                 "career-ops-storage",
                 "career-ops-boundary-test",
+                "career-ops-boundary-fixtures",
             },
         )
         obj = workload()
