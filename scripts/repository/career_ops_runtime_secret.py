@@ -91,7 +91,9 @@ def runtime_credential():
     if profile["passfile"] != str(expected_passfile):
         raise EnrollmentError("The CV application password generation is not valid")
     assert_profile_unchanged(selected)
-    with private_database_tunnel(None, selected.local_port) as port:
+    configured = os.environ.get("AUTOMATION_DATA_KUBECONFIG")
+    kubeconfig = Path(configured) if configured else None
+    with private_database_tunnel(kubeconfig, selected.local_port) as port:
         authenticate_candidate(port, "career_ops", ROLE, profile["password"])
         yield binding, profile["password"]
         revalidate_connection_profile("career_ops", "application/cv_render", selected)
