@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Secret
+metadata:
+    name: cv-render-database
+    namespace: career-ops
+stringData:
+    binding.json: ENC[AES256_GCM,data:k2CR40UmcI+82mhevLwBIOg6k2yPS+hJ3inD0KYeiHSXqKMEikO96E+f75SYSedzqc9T7HXrMd/1GBWSn4eH5Xi1zZUrJha7oU4YI05dMfROqbc4iLazSXVnpGYoVUZ66b+u2f6isjDCoKjMotobYsrbCueRUbRnr1IuweA8epQSz0nvjIy8IX7dSxYKzEqTaxxJTNIknyCd8N+q1495mMwsq9+P2KP/mi6/SgjAo/WKVCYmEGUdCD+csrY=,iv:dMp/x6nuYqNt3KeKtyWpLeP0qrNxbUqTOjqEE726TrE=,tag:b0+WmCSuWn72TVoBIYgfBg==,type:str]
+    password: ENC[AES256_GCM,data:l8lPXGOx9/OhxbMY+M0LVoq0nwL/EMLYhN9Zay+f5Ae6ws+5DJdCOLgG2gQJmLHXRKc1Q9AsYOfv5oBvo1hB+g==,iv:MgCGl8Lv5TxoCoqWJXXghNOlTLX1Wj4gK61SSjJgbbw=,tag:sV9X0mZGy4lTlMUAB5ZEvw==,type:str]
+    username: ENC[AES256_GCM,data:SI4FwEAcFXhr62vgT7WTr7u5Y2jhCmmyEnf1j/G5ZSaPwqYVaP0x8CSa150IsZaq,iv:UpSp9xVLTlYn1OxxbuP5ECSSjACkBebSsNeOv0EAKdc=,tag:uGDB98nhDnzh4cz6iKPdAQ==,type:str]
+type: Opaque
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBZa0dLK1RNTGdER3VKQUlY
+            VUkvcVBIZHAvYW84NU9zSEk4SVh4eWowWmhzClIwS0Fsc1ZZRkhLVzdsdHZlckVr
+            a0lSeVl1cE9jYkhJRWxrSjgwK2thMTgKLS0tIEV4SitURHFBQlhVTW9LWmtPQXRC
+            am5HNTNGTGJtMHR6TXNJc2hOeDdZQzAKsFv0GJZmTVbXT1J4PQ4N+hkZsSf0YKI2
+            tSkyJgXcJciMx42zzOb5y13JUhSFUF0xI2seT6Ih40916zh3c0yV2w==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age1da2cywfkg9hp6v39jvj9qcmqz4n8w3gm6nqj5vygu7e0zzgnp5psne9wlx
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-10-13T23:08:02Z"
+    mac: ENC[AES256_GCM,data:4tgASW4JIaHiDLeA76YyyDH7QgcKuxiM3VRbwlJVpAS88KpnrzS0paXOTNWdm+myzXVsXdKsZvLTj80p7PS3j8kl8bSQUR7gVRqJHvadLX+sZjWpwBEMnwDKsEMTQZdzNXjb9vq7XyPWGmy1VIvILM9JX5gwpVg9pFfjflt2K9E=,iv:ozvu3Zj0x+8f/C7v3Eniv7vyc/b04jcOojH94VTRYGY=,tag:GfK00KX0KDa2qddqnMHxWg==,type:str]
+    version: 3.13.2

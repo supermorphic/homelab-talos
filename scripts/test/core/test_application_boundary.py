@@ -1038,16 +1038,17 @@ class ApplicationAssuranceTests(ApplicationFixture, unittest.TestCase):
 class ApplicationConnectionTests(unittest.TestCase):
     def test_reviewed_private_source_and_application_reconciliation_are_enabled(self):
         docs = render(ROOT / "kubernetes/apps/applications/career-ops/connection")
-        self.assertEqual(len(docs), 3)
+        self.assertEqual(len(docs), 4)
         self.assertEqual(
             {(d["kind"], d["metadata"]["namespace"], d["metadata"]["name"]) for d in docs},
             {
                 ("GitRepository", "career-ops", "career-ops"),
                 ("Kustomization", "career-ops", "career-ops-apps"),
                 ("Secret", "career-ops", "career-ops-source"),
+                ("Secret", "career-ops", "cv-render-database"),
             },
         )
-        credential = next(d for d in docs if d["kind"] == "Secret")
+        credential = next(d for d in docs if d["metadata"]["name"] == "career-ops-source")
         self.assertEqual(credential["type"], "Opaque")
         self.assertEqual(set(credential["stringData"]), {"username", "password"})
         self.assertTrue(
@@ -1074,6 +1075,21 @@ class ApplicationConnectionTests(unittest.TestCase):
         self.assertIs(application["spec"]["suspend"], False)
         for field in ["decryption", "postBuild", "patches", "components", "kubeConfig"]:
             self.assertNotIn(field, application["spec"])
+
+    def test_runtime_database_secret_is_selected_by_the_platform_connection(self):
+        docs = render(ROOT / "kubernetes/apps/applications/career-ops/connection")
+        credential = next(
+            (d for d in docs if d["metadata"]["name"] == "cv-render-database"), None
+        )
+        self.assertIsNotNone(credential)
+        self.assertEqual(credential["kind"], "Secret")
+        self.assertEqual(credential["metadata"]["namespace"], "career-ops")
+        self.assertEqual(credential["type"], "Opaque")
+        self.assertEqual(set(credential["stringData"]), {"username", "password", "binding.json"})
+        self.assertTrue(
+            all(value.startswith("ENC[AES256_GCM,") for value in credential["stringData"].values())
+        )
+        self.assertEqual(credential["sops"]["encrypted_regex"], "^(data|stringData)$")
 
 
 class ApplicationMonitoringTests(unittest.TestCase):
