@@ -36,6 +36,10 @@ metadata:
 spec:
   dependsOn:
   - name: career-ops-platform
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age
   interval: 1h
   path: ./kubernetes/apps/applications/career-ops/connection
   prune: false

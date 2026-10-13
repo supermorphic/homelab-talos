@@ -61,6 +61,19 @@ class ApplicationScaffoldTests(unittest.TestCase):
         self.assertIn("career-ops-connection", list(units))
         self.assertIs(units["career-ops-connection"]["spec"]["suspend"], True)
 
+    def test_source_secret_decryption_stays_with_platform(self):
+        units = {d["metadata"]["name"]: d for d in render(ROOT / "kubernetes/apps")}
+        connection = units["career-ops-connection"]["spec"]
+        self.assertEqual(
+            connection.get("decryption"),
+            {"provider": "sops", "secretRef": {"name": "sops-age"}},
+        )
+        application = next(
+            d for d in render(PLATFORM.parent / "connection") if d["kind"] == "Kustomization"
+        )
+        self.assertNotIn("decryption", application["spec"])
+        self.assertTrue(application["spec"]["suspend"])
+
     def test_namespace_restricts_pods_and_gateway_access(self):
         self.assertTrue(PLATFORM.is_dir(), "platform boundary is missing")
         namespace = next(d for d in render(PLATFORM) if d["kind"] == "Namespace")
