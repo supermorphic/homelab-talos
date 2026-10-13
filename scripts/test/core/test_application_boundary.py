@@ -1014,7 +1014,22 @@ class ApplicationAssuranceTests(ApplicationFixture, unittest.TestCase):
 class ApplicationConnectionTests(unittest.TestCase):
     def test_private_source_and_application_reconciliation_are_suspended(self):
         docs = render(ROOT / "kubernetes/apps/applications/career-ops/connection")
-        self.assertEqual({d["kind"] for d in docs}, {"GitRepository", "Kustomization"})
+        self.assertEqual(len(docs), 3)
+        self.assertEqual(
+            {(d["kind"], d["metadata"]["namespace"], d["metadata"]["name"]) for d in docs},
+            {
+                ("GitRepository", "career-ops", "career-ops"),
+                ("Kustomization", "career-ops", "career-ops-apps"),
+                ("Secret", "career-ops", "career-ops-source"),
+            },
+        )
+        credential = next(d for d in docs if d["kind"] == "Secret")
+        self.assertEqual(credential["type"], "Opaque")
+        self.assertEqual(set(credential["stringData"]), {"username", "password"})
+        self.assertTrue(
+            all(value.startswith("ENC[AES256_GCM,") for value in credential["stringData"].values())
+        )
+        self.assertEqual(credential["sops"]["encrypted_regex"], "^(data|stringData)$")
         source = next(d for d in docs if d["kind"] == "GitRepository")
         self.assertEqual(source["metadata"], {"name": "career-ops", "namespace": "career-ops"})
         self.assertEqual(

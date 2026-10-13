@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: Secret
+metadata:
+    name: career-ops-source
+    namespace: career-ops
+stringData:
+    password: ENC[AES256_GCM,data:N+SnbUsTg6u2FA82JDohU8esbwvD51mKC7mOeJEhthinV9BTW1ZYdw==,iv:URYRnMj/c23GLL2VBPPbf+OmtQAn/MLER6qRzD/Cn8A=,tag:zseSloiKJ7DzdFwgEpfD4A==,type:str]
+    username: ENC[AES256_GCM,data:JSMRV3e0g8g56xzt,iv:5xIcPOxNHsCgaLzvgNVRwJoqZxBJdWsCfgkwEjFmD6c=,tag:KKEybL09QirzBLUgGBtYlA==,type:str]
+type: Opaque
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBFSGwrcm1uT1NCeUxoT0ts
+            QU1FaFg3eVpaVDlOUEJYTU0xRExMWE54cUdZCmY0eFNncVY1WDl4UWhZbCtIV1Q0
+            VDRlMFh1SmxubWk5OXA2WUwzZXJXS1EKLS0tIC9MZjFIWnlGNEJRSDUwOUhyM292
+            a08xWjgrQU8rZmxaM3NvMmgwd1h3UzAKany61OZ2oHpUYmMq1dQ2eamVGvYhr4aS
+            pX69ANW9JAAkH0DfPPzvmtQCyeolQ+iLEec746Kd2QR0oU9HJKu8Dw==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age1da2cywfkg9hp6v39jvj9qcmqz4n8w3gm6nqj5vygu7e0zzgnp5psne9wlx
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-10-13T16:31:22Z"
+    mac: ENC[AES256_GCM,data:6hRQnNOm+w14d2yM0fpK+OGHUK8xqi+gyc6cBgleiOHc7t0hFOdeIhSl++KFTmJaFnjth9SrQlbHyNPdi2hm5X5MFG8wzCfqajxeKEUBZcs3Yc3+yDvvfT3pKhZZGlYpAfwQTD5fkoncz1S39aeS53dstlk4KfzWD2mUtTCRSO4=,iv:iH+iShY7LIy6S4Npwz6trhi2PdqpeMpJ5Wig8MaVb2E=,tag:HuDcEaN8oIflutiR5q6iOw==,type:str]
+    version: 3.13.2

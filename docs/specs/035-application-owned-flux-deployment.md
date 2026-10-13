@@ -67,6 +67,18 @@ approved workloads can be included without changing the platform's source path.
 The application repository must provide and review this root before activation.
 The exact repository binding and credential scope are checked during enrollment.
 
+Use a dedicated Forgejo repository-specific token with `read:repository` for
+Flux, separate from preparation's read identity. Forgejo's
+[token scope contract](https://forgejo.org/docs/v15.0/user/authentication/token-scope/)
+also permits public repository reads. Guarded enrollment verifies the binding
+and effective access, writes only SOPS ciphertext using the public recipient,
+and retains a non-secret receipt for recovery.
+
+Enrollment leaves reconciliation suspended and cannot replace an existing
+credential. Delivery retries reuse the pending token. Rotation retains the old
+token until replacement access is verified. Neither credential creation nor
+ciphertext merge authorizes activation.
+
 Create a platform-owned GitRepository and application Kustomization in
 `career-ops`. Use a dedicated namespace-local service account for Flux
 impersonation. The application cannot change its source, revision policy,

@@ -114,6 +114,12 @@ secrets:
 crawl4ai-secrets:
     uv run --locked --no-dev python scripts/repository/crawl4ai_secrets.py
 
+# Discover or receive a new repository-specific, read-only Flux source token.
+# Requires an authenticated Forgejo browser session; no private age key is needed.
+# Guard: --confirm enroll:career-ops:flux-source. Never activates or rotates Flux.
+career-ops-source-credentials *args:
+    uv run --locked --no-dev python scripts/repository/career_ops_source_credentials.py {{args}}
+
 # Encrypt operator-supplied NEWS_{POSTGRES,DB,BACKUP,MONITORING,OPERATOR,API}_PASSWORD
 # and NEWS_OPERATOR_NAME. Use distinct passwords, including the separate API password.
 # Guard: NEWS_SECRETS_CONFIRM='write:news:bootstrap:sops'. No private age key is needed.
