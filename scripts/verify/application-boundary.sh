@@ -99,6 +99,9 @@ for expected in units:
 
 connection=list(yaml.safe_load_all(subprocess.check_output(['kustomize','build','kubernetes/apps/applications/career-ops/connection'],text=True)))
 for expected in connection:
+    # Credential delivery has separate acceptance; the observer never reads Secrets.
+    if expected['kind'] == 'Secret':
+        continue
     actual=get(expected, optional=True)
     if actual is None:
         if not units[1]['spec']['suspend']:
