@@ -137,11 +137,13 @@ class NativeRunner:
         self.directory = ROOT / ".tmp/issue-593/native" / self.run
         self.directory.mkdir(parents=True, mode=0o700)
         self.ledger = self.directory / "owned.jsonl"
-        self.controls = list(
-            yaml.safe_load_all(
-                subprocess.check_output(["kustomize", "build", str(PLATFORM)], text=True)
+        self.controls = []
+        for root in [PLATFORM, PLATFORM.parent / "fixture-storage"]:
+            self.controls.extend(
+                yaml.safe_load_all(
+                    subprocess.check_output(["kustomize", "build", str(root)], text=True)
+                )
             )
-        )
         self.revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
         self.claim_uids = {}
 
@@ -206,9 +208,21 @@ class NativeRunner:
                     raise RuntimeError(
                         "Synthetic volumes lack their owned Longhorn Retain binding"
                     )
-        platform = self.read("kustomization", "career-ops-platform", "-n", "flux-system")
-        if not platform.get("status", {}).get("lastAppliedRevision", "").endswith(self.revision):
-            raise RuntimeError("Native acceptance requires this exact deployed platform revision")
+        for name in ["career-ops-platform", "career-ops-fixture-storage"]:
+            unit = self.read("kustomization", name, "-n", "flux-system")
+            status = unit.get("status", {})
+            if not status.get("lastAppliedRevision", "").endswith(self.revision):
+                raise RuntimeError(
+                    "Native acceptance requires this exact deployed platform revision"
+                )
+            generation = unit["metadata"]["generation"]
+            if status.get("observedGeneration") != generation or not any(
+                c.get("type") == "Ready"
+                and c.get("status") == "True"
+                and c.get("observedGeneration") == generation
+                for c in status.get("conditions", [])
+            ):
+                raise RuntimeError("Native fixture prerequisites have not reported Ready")
         connection = self.read("kustomization", "career-ops-connection", "-n", "flux-system")
         if connection["spec"].get("suspend") is not True:
             raise RuntimeError(

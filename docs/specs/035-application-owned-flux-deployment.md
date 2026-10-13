@@ -616,7 +616,9 @@ its result is admission evidence, not the complete native acceptance below. The
 and a platform-owned program. It shares the production execution/mount profiles
 and coordinator egress destinations, but cannot mount application claims or
 Secrets. Its three separately enrolled 1 GiB RWX claims remain platform-owned
-and retained across Job removal. A fresh reader on another node verifies stored
+and retained across Job removal. Flux reconciles the fixture claims in a separate
+unit that depends on the platform controls. This installs admission policy changes
+before Flux dry-runs claims that need those changes. A fresh reader on another node verifies stored
 data after the writer is removed; Hubble `POLICY_DENIED` counters attributed to
 each fixture run/phase and positive
 connectivity before and after worker checks distinguish denial from an unavailable

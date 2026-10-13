@@ -7,6 +7,8 @@ platform='kubernetes/apps/applications/career-ops/platform'
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-application-boundary.XXXXXX")"
 trap 'rm -rf -- "$temp_dir"' EXIT
 kustomize build "$platform" >"$temp_dir/platform.yaml"
+printf '\n---\n' >>"$temp_dir/platform.yaml"
+kustomize build kubernetes/apps/applications/career-ops/fixture-storage >>"$temp_dir/platform.yaml"
 kustomize build kubernetes/apps/applications/career-ops/connection >"$temp_dir/connection.yaml"
 kustomize build kubernetes/flux/clusters/prod/flux-system >/dev/null
 kubernetes_version="$(yq -r '.kubernetesVersion' talos/talconfig.yaml)"
