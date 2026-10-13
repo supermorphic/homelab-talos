@@ -67,6 +67,48 @@ approved workloads can be included without changing the platform's source path.
 The application repository must provide and review this root before activation.
 The exact repository binding and credential scope are checked during enrollment.
 
+The source credential is created for this connection; it is not recovered from
+an operator password manager or copied from the cluster bootstrap source.
+Forgejo's repository-specific access tokens select only the application
+repository and `read:repository`. These tokens can also read public repositories,
+as defined by [Forgejo's token scope contract](https://forgejo.org/docs/v15.0/user/authentication/token-scope/).
+Preparation uses a separately issued identity.
+
+Run `mise exec -- just repo career-ops-source-credentials discover` to inspect
+local enrollment metadata. For first enrollment, run
+`mise exec -- just repo career-ops-source-credentials receive --confirm enroll:career-ops:flux-source`.
+This command first checks the suspended source and application bindings, then
+prints the paths of a one-shot receipt FIFO and a generated browser expression.
+An operator signs in normally to Forgejo in the agent's connected browser;
+the configured repository client cannot issue account tokens. Execute the
+generated expression with the native browser evaluation tool, setting its
+`filename` to the printed FIFO path. **Never evaluate it with inline result
+output or save its result to a regular file.** The expression creates one token,
+checks the server-stored scope and repository selection, and verifies a private
+repository read using the new token without session cookies. It streams the
+one-time receipt to the waiting native command without displaying the token.
+Account passwords stay in the normal sign-in flow.
+
+The receiver uses the repository's public SOPS recipient; it does not require
+an age private key. It installs only encrypted Secret data and its resource
+selection, leaving reconciliation suspended. Preserve the private, non-secret
+receipt printed on success for token identification and recovery. After success,
+clear `window.__careerOpsSourceEnrollment` in the connected browser. Review and
+merge the encrypted selection before platform reconciliation consumes it.
+
+Bootstrap refuses to replace an existing credential. A timed-out or failed
+creation can leave a token on the Forgejo account; inspect its recorded name
+before retrying, because Forgejo cannot return an existing raw token. A verified
+receipt stays in browser memory for delivery retries within the same session.
+If encryption or verification fails, retain the browser session and inspect local
+ciphertext state. Restart the receiver with the same confirmation and
+`--resume <original-token-name>`, then use its new expression and FIFO. Resume
+requires the retained private creation intent and pending browser receipt; it
+can repeat the read check but cannot create another token. Credential rotation is a separate attended
+replacement: retain the old token until the new source read is proved, then
+revoke the old token through Forgejo. Neither token creation nor ciphertext
+merge authorizes activation.
+
 Create a platform-owned GitRepository and application Kustomization in
 `career-ops`. Use a dedicated namespace-local service account for Flux
 impersonation. The application cannot change its source, revision policy,
