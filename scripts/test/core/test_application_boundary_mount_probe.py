@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from scripts.test.core.test_application_boundary import ROOT
 
-PROBE = ROOT / "tests/fixtures/application-boundary/mount-probe.py"
+PROBE = ROOT / "kubernetes/apps/applications/career-ops/platform/mount-probe.py"
 
 
 class SyntheticMountProbeTests(unittest.TestCase):

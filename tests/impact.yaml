@@ -201,6 +201,7 @@ conditional_paths:
     - scripts/test/test_repository_shell_validation.py
 core_paths:
   - scripts/test/scenarios/application-boundary.sh
+  - scripts/test/scenarios/application_boundary_native.py
   - kubernetes/apps/applications/**
   - tests/fixtures/application-boundary/**
   - README.md

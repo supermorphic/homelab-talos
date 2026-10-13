@@ -458,7 +458,7 @@ postgres_ingress_contract="$(yq ea -o=json -I=0 '
   }] | sort_by(.namespace, .workload)
 ' "$temp_dir/postgresql.yaml")"
 [[ "$postgres_ingress_contract" == \
-  '[{"namespace":"automation","workload":"n8n","serviceAccount":null},{"namespace":"automation-data","workload":"automation-data-postgresql-backup","serviceAccount":null},{"namespace":"automation-data","workload":"nocodb","serviceAccount":null},{"namespace":"automation-data","workload":"nocodb-metadata-bootstrap","serviceAccount":null},{"namespace":"career-ops","workload":null,"serviceAccount":"cv-coordinator"}]' ]] || \
+  '[{"namespace":"automation","workload":"n8n","serviceAccount":null},{"namespace":"automation-data","workload":"automation-data-postgresql-backup","serviceAccount":null},{"namespace":"automation-data","workload":"nocodb","serviceAccount":null},{"namespace":"automation-data","workload":"nocodb-metadata-bootstrap","serviceAccount":null},{"namespace":"career-ops","workload":null,"serviceAccount":"cv-coordinator"},{"namespace":"career-ops","workload":null,"serviceAccount":"career-ops-boundary-coordinator"}]' ]] || \
   fail 'PostgreSQL port 5432 ingress is not limited to approved workloads and the CV coordinator identity'
 
 postgres_nocodb_ingress_tuples="$(yq ea -o=json -I=0 '

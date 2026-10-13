@@ -1197,3 +1197,10 @@ suites:
     confirmation: {type: exact, variable: APPLICATION_BOUNDARY_TEST_CONFIRM, expected: "test:application-boundary:server-admission"}
     runner: {command: "APPLICATION_BOUNDARY_TEST_CONFIRM=test:application-boundary:server-admission mise exec -- just kube application-boundary-test", implementation: scripts/test/scenarios/application-boundary.sh}
     native_results: {strategy: wrapper-junit}
+  - metadata: {id: test.application-boundary-storage-network, source: test, framework: python, suite: platform, tier: integration, target: application-boundary, scenario: storage-network, scope: application, intent: acceptance, mutates_cluster: true, execution_owner: shared}
+    description: Uses fixed tokenless Jobs and separately enrolled synthetic claims on the exact deployed revision. Proves controller Pods, paired API/database/DNS connectivity and enforced worker denial, two-node RWX, EROFS read-only mounts, exclusive creation and retention after owned Job removal. Cleans only recorded Jobs and marked synthetic directories. Excludes source reconciliation/pruning, authenticated grants, ingress, preparation downloads, notification delivery and isolated backup restore.
+    access: {profile: test-runner, prerequisites: []}
+    confirmation: {type: exact, variable: APPLICATION_BOUNDARY_NATIVE_CONFIRM, expected: "test:application-boundary:storage-network"}
+    runner: {command: "APPLICATION_BOUNDARY_NATIVE_CONFIRM=test:application-boundary:storage-network mise exec -- just kube application-boundary-native-test", implementation: scripts/test/scenarios/application_boundary_native.py}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: direct, runtime: uv-python, path: scripts/test/scenarios/application_boundary_native.py, args: ["@test-kubeconfig@"], selector: null}

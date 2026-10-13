@@ -55,15 +55,27 @@ spec:
     expression: 'variables.item.kind == ''Pod'' ? variables.item.metadata : variables.item.spec.template.metadata'
   - name: account
     expression: 'has(variables.pod.serviceAccountName) ? variables.pod.serviceAccountName : ''default'''
+  - name: fixture
+    expression: variables.account in ['career-ops-boundary-coordinator','career-ops-boundary-renderer']
+  - name: profile
+    expression: "variables.fixture ? (variables.account == 'career-ops-boundary-coordinator' ? 'cv-coordinator' : 'cv-renderer') : variables.account"
+  - name: releaseClaim
+    expression: "variables.fixture ? 'career-ops-boundary-releases' : 'cv-releases'"
+  - name: requestClaim
+    expression: "variables.fixture ? 'career-ops-boundary-requests' : 'cv-requests'"
+  - name: artifactClaim
+    expression: "variables.fixture ? 'career-ops-boundary-artifacts' : 'cv-artifacts'"
   - name: coordinator
+    expression: variables.profile == 'cv-coordinator'
+  - name: token
     expression: variables.account == 'cv-coordinator'
   - name: secrets
-    expression: 'variables.coordinator ? [''cv-render-database'', ''cv-api-auth''] : variables.account
+    expression: 'variables.token ? [''cv-render-database'', ''cv-api-auth''] : variables.account
       == ''cv-prepare'' ? [''cv-prepare-source''] : []'
   - name: containers
     expression: variables.pod.containers
   - name: bounds
-    expression: 'variables.account == ''cv-prepare'' ? {''cpu'':''2'', ''memory'':''4Gi'', ''ephemeral-storage'':''4Gi''}
+    expression: 'variables.profile == ''cv-prepare'' ? {''cpu'':''2'', ''memory'':''4Gi'', ''ephemeral-storage'':''4Gi''}
       : variables.coordinator ? {''cpu'':''1'', ''memory'':''2Gi'', ''ephemeral-storage'':''2Gi''} : {''cpu'':''1'',
       ''memory'':''1Gi'', ''ephemeral-storage'':''2Gi''}'
   - name: volumes
@@ -75,8 +87,10 @@ spec:
   validations:
   - expression: request.operation == 'DELETE' || (variables.item.kind in ['Pod','Deployment','ReplicaSet','Job'])
     message: Only enrolled workload controllers are allowed.
-  - expression: request.operation == 'DELETE' || (variables.account in ['cv-prepare','cv-coordinator','cv-renderer','career-ops-service'])
+  - expression: request.operation == 'DELETE' || (variables.account in ['cv-prepare','cv-coordinator','cv-renderer','career-ops-service','career-ops-boundary-coordinator','career-ops-boundary-renderer'])
     message: Select an enrolled runtime service account.
+  - expression: request.operation == 'DELETE' || !variables.fixture || variables.item.kind in ['Job','Pod']
+    message: Native test identities may run only the fixed Jobs and their controller Pods.
   - expression: request.operation == 'DELETE' || (has(variables.meta.labels) && variables.meta.labels['app.kubernetes.io/name']
       == variables.account && variables.meta.labels.all(k, !k.startsWith('io.cilium.') && !k.startsWith('k8s:')
       && !k.startsWith('career-ops.platform/')))
@@ -90,7 +104,7 @@ spec:
       || variables.pod.os.name == 'linux'))
     message: Host namespaces and host overrides are forbidden.
   - expression: request.operation == 'DELETE' || (has(variables.pod.automountServiceAccountToken) && variables.pod.automountServiceAccountToken
-      == variables.coordinator)
+      == variables.token)
     message: Only the coordinator may mount its Kubernetes token.
   - expression: request.operation == 'DELETE' || (has(variables.pod.securityContext) && variables.pod.securityContext.runAsNonRoot
       == true && variables.pod.securityContext.runAsUser > 0 && variables.pod.securityContext.seccompProfile.type
@@ -120,7 +134,7 @@ spec:
       v.all(k, k in ['name','emptyDir','persistentVolumeClaim','secret','configMap','projected']) && (has(v.emptyDir)
       || has(v.persistentVolumeClaim) || (has(v.secret) && v.secret.secretName in variables.secrets
       && (!has(v.secret.items) || v.secret.items.size() == 0)) ||
-      (has(v.configMap) && !v.configMap.name.startsWith('career-ops-')) || (has(v.projected) && variables.coordinator
+      (has(v.configMap) && ((variables.fixture && v.configMap.name == 'career-ops-boundary-program' && !has(v.configMap.items) && !has(v.configMap.optional)) || (!variables.fixture && !v.configMap.name.startsWith('career-ops-')))) || (has(v.projected) && variables.token
       && variables.item.kind == 'Pod' && v.name.startsWith('kube-api-access-') && v.projected.sources.all(s,
       s.all(k, k in ['serviceAccountToken','configMap','downwardAPI']) && (!has(s.serviceAccountToken)
       || s.serviceAccountToken.path == 'token') && (!has(s.configMap) || s.configMap.name == 'kube-root-ca.crt'))))))
@@ -148,9 +162,9 @@ spec:
       <= 1)
     message: Only one bounded temporary workspace is enrolled.
   - expression: 'request.operation == ''DELETE'' || (variables.volumes.all(v, !has(v.persistentVolumeClaim)
-      || (v.persistentVolumeClaim.claimName in (variables.coordinator ? [''cv-releases'',''cv-requests'',''cv-artifacts'']
-      : variables.account == ''cv-prepare'' ? [''cv-releases''] : variables.account == ''cv-renderer''
-      ? [''cv-releases'',''cv-requests''] : []))))'
+      || (v.persistentVolumeClaim.claimName in (variables.coordinator ? [variables.releaseClaim,variables.requestClaim,variables.artifactClaim]
+      : variables.account == ''cv-prepare'' ? [variables.releaseClaim] : variables.profile == ''cv-renderer''
+      ? [variables.releaseClaim,variables.requestClaim] : []))))'
     message: Claims are restricted by runtime identity.
   - expression: request.operation == 'DELETE' || (variables.containers.all(c, !has(c.volumeDevices)) &&
       variables.mounts.all(m, !has(m.subPathExpr) && (!has(m.mountPropagation) || m.mountPropagation ==
@@ -158,20 +172,20 @@ spec:
     message: Mounts must reference declared volumes without dynamic paths or propagation.
   - expression: request.operation == 'DELETE' || (!variables.coordinator || variables.mounts.all(m, variables.volumes.all(v,
       v.name != m.name || !has(v.persistentVolumeClaim) || (!has(m.subPath) && ((v.persistentVolumeClaim.claimName
-      == 'cv-releases' && m.mountPath == '/releases') || (v.persistentVolumeClaim.claimName == 'cv-requests'
-      && m.mountPath == '/requests') || (v.persistentVolumeClaim.claimName == 'cv-artifacts' && m.mountPath
+      == variables.releaseClaim && m.mountPath == '/releases') || (v.persistentVolumeClaim.claimName == variables.requestClaim
+      && m.mountPath == '/requests') || (v.persistentVolumeClaim.claimName == variables.artifactClaim && m.mountPath
       == '/artifacts'))))))
     message: Coordinator claims use the enrolled mount paths.
   - expression: request.operation == 'DELETE' || (variables.account != 'cv-prepare' || variables.mounts.all(m,
       variables.volumes.all(v, v.name != m.name || !has(v.persistentVolumeClaim) || (m.mountPath == '/releases'
       && has(m.subPath) && m.subPath.startsWith('candidates/') && m.subPath.matches('^[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)+$')))))
     message: Preparation may mount only a candidate release directory.
-  - expression: request.operation == 'DELETE' || (variables.account != 'cv-renderer' || variables.mounts.all(m,
+  - expression: request.operation == 'DELETE' || (variables.profile != 'cv-renderer' || variables.mounts.all(m,
       variables.volumes.all(v, v.name != m.name || !has(v.persistentVolumeClaim) || (has(m.subPath) &&
       m.subPath.matches('^[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)+$') && ((v.persistentVolumeClaim.claimName ==
-      'cv-releases' && m.mountPath == '/releases' && (m.subPath.startsWith('published/') || m.subPath.startsWith('candidates/'))
+      variables.releaseClaim && m.mountPath == '/releases' && (m.subPath.startsWith('published/') || m.subPath.startsWith('candidates/'))
       && has(m.readOnly) && m.readOnly && has(v.persistentVolumeClaim.readOnly) && v.persistentVolumeClaim.readOnly)
-      || (v.persistentVolumeClaim.claimName == 'cv-requests' && m.subPath.startsWith('requests/') && ((m.mountPath
+      || (v.persistentVolumeClaim.claimName == variables.requestClaim && m.subPath.startsWith('requests/') && ((m.mountPath
       == '/input' && m.subPath.endsWith('/input') && has(m.readOnly) && m.readOnly && has(v.persistentVolumeClaim.readOnly)
       && v.persistentVolumeClaim.readOnly) || (m.mountPath == '/staging' && m.subPath.matches('^requests/[A-Za-z0-9_-]+/attempts/[A-Za-z0-9_-]+/pods/[A-Za-z0-9_-]+$')
       && (!has(m.readOnly) || !m.readOnly)))))))))
@@ -180,6 +194,8 @@ spec:
   - expression: request.operation != 'UPDATE' || (has(variables.oldPod.serviceAccountName) && variables.account
       == variables.oldPod.serviceAccountName)
     message: Runtime identity changes require a separately admitted new workload.
+  - expression: request.operation == 'DELETE' || !variables.fixture || variables.mounts.all(m, variables.volumes.all(v, v.name != m.name || !has(v.configMap) || (m.mountPath == '/fixture' && has(m.readOnly) && m.readOnly && !has(m.subPath))))
+    message: Native fixture programs are complete read-only platform mounts.
   - expression: request.operation == 'DELETE' || variables.mounts.all(m, variables.volumes.all(v, v.name
       != m.name || !has(v.secret) || (m.mountPath == '/run/secrets/' + v.secret.secretName && has(m.readOnly)
       && m.readOnly && !has(m.subPath))))

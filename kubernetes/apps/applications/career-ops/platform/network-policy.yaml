@@ -64,3 +64,41 @@ spec:
         protocol: TCP
       - port: '443'
         protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: career-ops-boundary-coordinator
+  namespace: career-ops
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:io.cilium.k8s.policy.serviceaccount: career-ops-boundary-coordinator
+  ingress: []
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+        k8s:k8s-app: kube-dns
+    toPorts:
+    - ports:
+      - port: '53'
+        protocol: TCP
+      - port: '53'
+        protocol: UDP
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: automation-data
+        app.kubernetes.io/name: automation-data-postgresql
+    toPorts:
+    - ports:
+      - port: '5432'
+        protocol: TCP
+  - toEntities:
+    - kube-apiserver
+    toPorts:
+    - ports:
+      - port: '6443'
+        protocol: TCP
+      - port: '443'
+        protocol: TCP
