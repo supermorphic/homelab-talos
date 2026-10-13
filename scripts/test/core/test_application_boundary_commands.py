@@ -337,7 +337,8 @@ class ApplicationCommandTests(unittest.TestCase):
 
     def test_native_wait_uses_drop_evidence_without_deprecated_cep_policy(self):
         runner = self.native_runner()
-        runner.require_drops = lambda mode: None
+        witnesses = []
+        runner.require_drops = witnesses.append
         job = {"metadata": {"uid": "synthetic-owned-job"}, "status": {"succeeded": 1}}
         pod = {
             "metadata": {
@@ -353,7 +354,9 @@ class ApplicationCommandTests(unittest.TestCase):
                         "state": {
                             "terminated": {
                                 "exitCode": 0,
-                                "message": json.dumps({"result": "passed", "phase": "write"}),
+                                "message": json.dumps(
+                                    {"result": "passed", "phase": "network-write-api"}
+                                ),
                             }
                         }
                     }
@@ -362,60 +365,137 @@ class ApplicationCommandTests(unittest.TestCase):
         }
         runner.read = lambda kind, *args, **kwargs: job if kind == "job" else {"items": [pod]}
         try:
-            self.assertEqual(runner.wait("write"), "synthetic-node")
+            self.assertEqual(runner.wait("network-write-api"), "synthetic-node")
+            self.assertEqual(witnesses, ["network-write-api"])
         except RuntimeError as error:
             self.fail(str(error))
 
-    def test_drop_oracle_requires_current_run_phase_identity_and_all_targets(self):
-        from scripts.test.scenarios import application_boundary_native
+    def test_drop_oracle_requires_one_target_phase_run_identity_and_protocol(self):
+        from scripts.test.scenarios.application_boundary_native import denial_metrics
 
-        self.assertTrue(
-            hasattr(application_boundary_native, "denial_metrics"), "Hubble drop oracle is missing"
-        )
-        denial_metrics = application_boundary_native.denial_metrics
         run = "0123456789abcdef0123456789abcdef"
-        source = ",".join(
-            [
-                "k8s:homelab.supermorphic.com/test-run=" + run,
-                "k8s:homelab.supermorphic.com/test-phase=write",
-                "k8s:io.cilium.k8s.policy.serviceaccount=career-ops-boundary-renderer",
-                "k8s:io.kubernetes.pod.namespace=career-ops",
-            ]
-        )
-        pairs = [
-            ("", "TCP"),
-            ("automation-data/automation-data-postgresql", "TCP"),
-            ("kube-system/coredns", "TCP"),
-            ("kube-system/coredns", "UDP"),
+        for stage in ["write", "read"]:
+            for target in ["api", "database", "dns-tcp", "dns-udp"]:
+                phase = "network-" + stage + "-" + target
+                source = ",".join(
+                    [
+                        "k8s:homelab.supermorphic.com/test-run=" + run,
+                        "k8s:homelab.supermorphic.com/test-phase=" + phase,
+                        "k8s:io.cilium.k8s.policy.serviceaccount=career-ops-boundary-renderer",
+                        "k8s:io.kubernetes.pod.namespace=career-ops",
+                    ]
+                )
+                protocol = "UDP" if target == "dns-udp" else "TCP"
+                # Service-IP drops can omit destination workload context entirely.
+                response = {
+                    "status": "success",
+                    "data": {
+                        "resultType": "vector",
+                        "result": [
+                            {
+                                "metric": {
+                                    "source": source,
+                                    "reason": "POLICY_DENIED",
+                                    "protocol": protocol,
+                                },
+                                "value": [1, "2"],
+                            }
+                        ],
+                    },
+                }
+                self.assertTrue(denial_metrics(response, run, phase), phase)
+                self.assertFalse(denial_metrics(response, "f" * 32, phase))
+                self.assertFalse(denial_metrics(response, run, "network-unknown-api"))
+                self.assertFalse(denial_metrics(response, run, "read"))
+                for value in ["0", "-1", "NaN", "Inf", "invalid"]:
+                    bad = copy.deepcopy(response)
+                    bad["data"]["result"][0]["value"][1] = value
+                    self.assertFalse(denial_metrics(bad, run, phase))
+                for key, value in [
+                    ("reason", "NO_ROUTE"),
+                    ("protocol", "ICMPv6"),
+                    ("source", source.replace("test-phase=" + phase, "test-phase=write")),
+                    ("source", source.replace("career-ops-boundary-renderer", "cv-renderer")),
+                    ("source", source.replace("pod.namespace=career-ops", "pod.namespace=other")),
+                ]:
+                    bad = copy.deepcopy(response)
+                    bad["data"]["result"][0]["metric"][key] = value
+                    self.assertFalse(denial_metrics(bad, run, phase), (phase, key))
+
+    def test_native_execution_checks_every_target_on_both_worker_nodes(self):
+        runner = self.native_runner()
+        runner.precondition = lambda: None
+        events = []
+
+        def read(kind, name=None, *args, **kwargs):
+            if kind == "job":
+                return None
+            if kind == "service":
+                return {"spec": {"clusterIP": "192.0.2.1"}}
+            if kind == "nodes":
+                return {
+                    "items": [
+                        {
+                            "metadata": {"name": n, "labels": {"kubernetes.io/hostname": n}},
+                            "spec": {},
+                            "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                        }
+                        for n in ["node-a", "node-b"]
+                    ]
+                }
+            raise AssertionError(kind)
+
+        runner.read = read
+        runner.mutate_owned = lambda operation, mode: events.append((operation, mode))
+
+        def wait(mode):
+            pod = runner.templates[mode]["spec"]["template"]["spec"]
+            if mode.startswith("network-"):
+                events.append(("probe", mode, pod["nodeSelector"]["kubernetes.io/hostname"]))
+                self.assertEqual(len(pod["volumes"]), 1)
+            return pod.get("nodeSelector", {}).get("kubernetes.io/hostname", "node-a")
+
+        runner.wait = wait
+        with patch("subprocess.check_output", return_value=""):
+            runner.execute()
+        wanted = [
+            ("probe", "network-" + stage + "-" + target, node)
+            for stage, node in [("write", "node-b"), ("read", "node-a")]
+            for target in ["api", "database", "dns-tcp", "dns-udp"]
         ]
-        response = {
-            "status": "success",
-            "data": {
-                "resultType": "vector",
-                "result": [
-                    {
-                        "metric": {
-                            "source": source,
-                            "reason": "POLICY_DENIED",
-                            "destination": d,
-                            "protocol": p,
-                        },
-                        "value": [1, "1"],
-                    }
-                    for d, p in pairs
-                ],
-            },
-        }
-        self.assertTrue(denial_metrics(response, run, "write"))
-        self.assertFalse(denial_metrics(response, "f" * 32, "write"))
-        self.assertFalse(denial_metrics(response, run, "read"))
-        for index in range(4):
-            bad = copy.deepcopy(response)
-            bad["data"]["result"][index]["value"][1] = "0"
-            self.assertFalse(denial_metrics(bad, run, "write"))
-        bad = copy.deepcopy(response)
-        bad["data"]["result"][0]["metric"]["reason"] = "NO_ROUTE"
-        self.assertFalse(denial_metrics(bad, run, "write"))
+        self.assertEqual([e for e in events if e[0] == "probe"], wanted)
+        for _, mode, _ in wanted:
+            self.assertEqual(events.count(("create", mode)), 1)
+            self.assertIn(("delete", mode), events)
+
+    def test_native_rejects_writer_running_on_an_unselected_third_node(self):
+        runner = self.native_runner()
+        runner.precondition = lambda: None
+        nodes = [
+            {
+                "metadata": {"name": n, "labels": {"kubernetes.io/hostname": n}},
+                "spec": {},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            }
+            for n in ["node-a", "node-b"]
+        ]
+
+        def read(kind, *args, **kwargs):
+            if kind == "nodes":
+                return {"items": nodes}
+            if kind == "service":
+                return {"spec": {"clusterIP": "192.0.2.1"}}
+            return None
+
+        runner.read = read
+        runner.mutate_owned = lambda operation, mode: None
+        runner.wait = lambda mode: "node-c" if mode == "write" else "node-a"
+        runner.network_probes = lambda *args: self.fail("Probe ran on a different worker node")
+        with (
+            patch("subprocess.check_output", return_value=""),
+            self.assertRaisesRegex(RuntimeError, "Writer.*selected"),
+        ):
+            runner.execute()
 
 
 if __name__ == "__main__":

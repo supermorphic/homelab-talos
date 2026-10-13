@@ -618,15 +618,18 @@ and coordinator egress destinations, but cannot mount application claims or
 Secrets. Its three separately enrolled 1 GiB RWX claims remain platform-owned
 and retained across Job removal. Flux reconciles the fixture claims in a separate
 unit that depends on the platform controls. This installs admission policy changes
-before Flux dry-runs claims that need those changes. A fresh reader on another node verifies stored
-data after the writer is removed; Hubble `POLICY_DENIED` counters attributed to
-each fixture run/phase and positive
-connectivity before and after worker checks distinguish denial from an unavailable
+before Flux dry-runs claims that need those changes. A fresh reader on another
+node verifies stored data after the writer is removed. Fixed single-target Jobs on each worker node
+provide Hubble `POLICY_DENIED` counters attributed to the run and target phase.
+Each process attempts only its declared API, database, TCP DNS, or UDP DNS target;
+destination workload labels are not required because service-IP drops can omit
+them. The matching protocol and positive connectivity before and after worker
+checks distinguish denial from an unavailable
 destination. The existing private Prometheus read path supplies the drop evidence;
 missing telemetry never counts as a denial. These fixtures establish TCP database/API connectivity, not database
 grants or authenticated application behavior.
 
-The test creates only the named Jobs and records their API ownership before
+The test creates only its twelve named Jobs and records their API ownership before
 cleanup. Its fixed program removes only synthetic directories whose run markers
 match. It never deletes PVCs or PVs. A failed ownership or cleanup check preserves
 the local ledger and requires scoped follow-up; no broader credential fallback is

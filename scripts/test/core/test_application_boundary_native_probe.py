@@ -61,6 +61,26 @@ class NativeProbeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.probe.tcp([("127.0.0.1", port)], allowed=False)
 
+    def test_network_phase_attempts_only_its_selected_target(self):
+        self.assertTrue(hasattr(self.probe, "network_probe"))
+        calls = []
+        self.probe.tcp = lambda targets, allowed: calls.append(("tcp", targets, allowed))
+        self.probe.dns = lambda address, allowed: calls.append(("dns", address, allowed))
+        addresses = ["192.0.2.1", "192.0.2.2", "192.0.2.3"]
+        expected = {
+            "api": ("tcp", [(addresses[0], 443)], False),
+            "database": ("tcp", [(addresses[1], 5432)], False),
+            "dns-tcp": ("tcp", [(addresses[2], 53)], False),
+            "dns-udp": ("dns", addresses[2], False),
+        }
+        for stage in ["write", "read"]:
+            for target, wanted in expected.items():
+                calls.clear()
+                self.probe.network_probe("network-" + stage + "-" + target, addresses)
+                self.assertEqual(calls, [wanted])
+        with self.assertRaises(ValueError):
+            self.probe.network_probe("network-write-unknown", addresses)
+
 
 if __name__ == "__main__":
     unittest.main()

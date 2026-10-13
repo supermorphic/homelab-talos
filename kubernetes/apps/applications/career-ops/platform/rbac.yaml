@@ -116,6 +116,14 @@ rules:
   - career-ops-boundary-write
   - career-ops-boundary-read
   - career-ops-boundary-cleanup
+  - career-ops-boundary-network-write-api
+  - career-ops-boundary-network-write-database
+  - career-ops-boundary-network-write-dns-tcp
+  - career-ops-boundary-network-write-dns-udp
+  - career-ops-boundary-network-read-api
+  - career-ops-boundary-network-read-database
+  - career-ops-boundary-network-read-dns-tcp
+  - career-ops-boundary-network-read-dns-udp
   verbs:
   - get
   - delete

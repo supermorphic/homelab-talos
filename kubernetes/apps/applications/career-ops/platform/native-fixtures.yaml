@@ -60,18 +60,17 @@ spec:
       && variables.item.metadata.ownerReferences.size() == 1 ? variables.item.metadata.ownerReferences[0].name :
       '''')'
   - name: mode
-    expression: 'variables.jobName == ''career-ops-boundary-seed'' ? ''seed'' : variables.jobName == ''career-ops-boundary-write''
-      ? ''write'' : variables.jobName == ''career-ops-boundary-read'' ? ''read'' : ''cleanup'''
+    expression: 'variables.jobName.startsWith(''career-ops-boundary-'') ? variables.jobName.substring(20) : '''''
   - name: controller
     expression: request.userInfo.username in ['system:kube-controller-manager','system:serviceaccount:kube-system:job-controller','system:serviceaccount:kube-system:generic-garbage-collector']
   validations:
-  - expression: variables.item.kind != 'Job' || !(variables.item.metadata.name in ['career-ops-boundary-seed','career-ops-boundary-write','career-ops-boundary-read','career-ops-boundary-cleanup'])
+  - expression: variables.item.kind != 'Job' || !(variables.item.metadata.name in ['career-ops-boundary-seed','career-ops-boundary-write','career-ops-boundary-read','career-ops-boundary-cleanup','career-ops-boundary-network-write-api','career-ops-boundary-network-write-database','career-ops-boundary-network-write-dns-tcp','career-ops-boundary-network-write-dns-udp','career-ops-boundary-network-read-api','career-ops-boundary-network-read-database','career-ops-boundary-network-read-dns-tcp','career-ops-boundary-network-read-dns-udp'])
       || variables.fixture
     message: Native fixture Job names require their isolated identities.
-  - expression: '!variables.fixture || (variables.item.kind in [''Job'',''Pod''] && variables.jobName in [''career-ops-boundary-seed'',''career-ops-boundary-write'',''career-ops-boundary-read'',''career-ops-boundary-cleanup'']
+  - expression: '!variables.fixture || (variables.item.kind in [''Job'',''Pod''] && variables.jobName in [''career-ops-boundary-seed'',''career-ops-boundary-write'',''career-ops-boundary-read'',''career-ops-boundary-cleanup'',''career-ops-boundary-network-write-api'',''career-ops-boundary-network-write-database'',''career-ops-boundary-network-write-dns-tcp'',''career-ops-boundary-network-write-dns-udp'',''career-ops-boundary-network-read-api'',''career-ops-boundary-network-read-database'',''career-ops-boundary-network-read-dns-tcp'',''career-ops-boundary-network-read-dns-udp'']
       && variables.account == (variables.mode in [''seed'',''cleanup''] ? ''career-ops-boundary-coordinator'' :
       ''career-ops-boundary-renderer''))'
-    message: Native identities are limited to four named fixture Jobs and their Pods.
+    message: Native identities are limited to twelve named fixture Jobs and their Pods.
   - expression: '!variables.fixture || (variables.item.kind == ''Job'' ? ((request.userInfo.username == ''system:serviceaccount:kube-system:homelab-test-runner''
       && request.operation in [''CREATE'',''DELETE'']) || (variables.controller && request.operation == ''UPDATE''))
       && (!has(variables.item.metadata.ownerReferences) || variables.item.metadata.ownerReferences.size() == 0)
@@ -101,6 +100,8 @@ spec:
       ''program'' && has(v.configMap) && v.configMap.name == ''career-ops-boundary-program'') && variables.pod.volumes.all(v,
       has(v.configMap) || has(v.persistentVolumeClaim)))'
     message: Fixtures use only the platform program and isolated claims.
+  - expression: "!variables.fixture || !variables.mode.startsWith('network-') || variables.pod.volumes.size() == 1"
+    message: Single-target network fixtures cannot mount storage.
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

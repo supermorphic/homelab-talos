@@ -20,7 +20,11 @@ from scripts.openbao.guards import _controlled_body
 
 PLATFORM = ROOT / "kubernetes/apps/applications/career-ops/platform"
 PREFIX = "career-ops-boundary-"
-MODES = ["seed", "write", "read", "cleanup"]
+TARGETS = ["api", "database", "dns-tcp", "dns-udp"]
+NETWORK_MODES = [
+    "network-" + stage + "-" + target for stage in ["write", "read"] for target in TARGETS
+]
+MODES = ["seed", "write", "read", "cleanup", *NETWORK_MODES]
 IMAGE = (
     "python:3.13.14-slim@sha256:9662417aace5ae7b8e2609cce472b72a8958e134ba372808abe9cc1a0c0125e6"
 )
@@ -70,7 +74,7 @@ def job(mode, run, addresses, hostname=None):
     if mode in {"seed", "cleanup"}:
         for name in ["releases", "requests", "artifacts"]:
             mount(name, name, "/" + name)
-    else:
+    elif mode in {"write", "read"}:
         release = "candidates" if mode == "write" else "published"
         mount("releases", "releases", "/releases", f"{release}/{run}", True)
         request = f"requests/{run}"
@@ -108,13 +112,9 @@ def denial_metrics(response, run, phase):
         "k8s:io.cilium.k8s.policy.serviceaccount=career-ops-boundary-renderer",
         "k8s:io.kubernetes.pod.namespace=career-ops",
     }
-    required = {
-        ("", "TCP"),  # Reserved API identity has no Kubernetes workload context.
-        ("automation-data/automation-data-postgresql", "TCP"),
-        ("kube-system/coredns", "TCP"),
-        ("kube-system/coredns", "UDP"),
-    }
-    observed = set()
+    if phase not in NETWORK_MODES:
+        return False
+    protocol = "UDP" if phase.endswith("dns-udp") else "TCP"
     for series in response["data"].get("result", []):
         metric = series.get("metric", {})
         if metric.get("reason") != "POLICY_DENIED" or not identity.issubset(
@@ -125,9 +125,9 @@ def denial_metrics(response, run, phase):
             value = float(series["value"][1])
         except (KeyError, IndexError, TypeError, ValueError):
             continue
-        if math.isfinite(value) and value > 0:
-            observed.add((metric.get("destination"), metric.get("protocol")))
-    return required.issubset(observed)
+        if math.isfinite(value) and value > 0 and metric.get("protocol") == protocol:
+            return True
+    return False
 
 
 class NativeRunner:
@@ -363,9 +363,9 @@ class NativeRunner:
                     if node is None or current.get("status", {}).get("succeeded") != 1:
                         time.sleep(1)
                         continue
-                    if mode in {"write", "read"}:
+                    if mode in NETWORK_MODES:
                         self.require_drops(mode)
-                    print("Native fixture passed: " + mode)
+                    print("Native fixture passed: " + mode, flush=True)
                     return node
             if current.get("status", {}).get("failed", 0):
                 raise RuntimeError(
@@ -375,6 +375,22 @@ class NativeRunner:
         raise RuntimeError(
             "Controller fixture timed out; no scheduling or image failure counts as acceptance"
         )
+
+    def network_probes(self, stage, node, addresses):
+        # A fixed process sends traffic to one target only. Its phase label gives
+        # independent drop attribution even when service-IP workload labels are absent.
+        for target in TARGETS:
+            mode = "network-" + stage + "-" + target
+            self.templates[mode] = job(
+                mode, self.run, addresses, node["metadata"]["labels"]["kubernetes.io/hostname"]
+            )
+            self.mutate_owned("create", mode)
+        for target in TARGETS:
+            mode = "network-" + stage + "-" + target
+            actual_node = self.wait(mode)
+            if actual_node != node["metadata"]["name"]:
+                raise RuntimeError("Single-target probe did not run on its worker node")
+            self.mutate_owned("delete", mode)
 
     def execute(self):
         if subprocess.check_output(["git", "status", "--porcelain"], text=True):
@@ -427,9 +443,10 @@ class NativeRunner:
             )
             self.mutate_owned("create", "write")
             writer = self.wait("write")
-            if writer == first:
-                raise RuntimeError("Writer did not run on a different node")
+            if writer != other["metadata"]["name"]:
+                raise RuntimeError("Writer did not run on the selected other node")
             self.mutate_owned("delete", "write")
+            self.network_probes("write", other, addresses)
             self.mutate_owned("create", "read")
             reader = self.wait("read")
             if reader != first or reader == writer:
@@ -437,6 +454,7 @@ class NativeRunner:
                     "Fresh retained-data reader did not run on the required other node"
                 )
             self.mutate_owned("delete", "read")
+            self.network_probes("read", initial, addresses)
             self.mutate_owned("create", "cleanup")
             self.wait("cleanup")
             cleanup_done = True
