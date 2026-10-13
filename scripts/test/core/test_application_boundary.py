@@ -928,6 +928,30 @@ class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
         pod["volumes"][0]["emptyDir"]["sizeLimit"] = "1025Mi"
         self.assertFalse(self.admission(obj))
 
+    def test_workload_templates_reject_requests_below_namespace_minimums(self):
+        for kind in ("Job", "Deployment", "ReplicaSet", "Pod"):
+            for resource, value in (
+                ("cpu", "9m"),
+                ("memory", "31Mi"),
+                ("ephemeral-storage", "63Mi"),
+            ):
+                obj = workload(kind=kind)
+                pod = obj["spec"] if kind == "Pod" else obj["spec"]["template"]["spec"]
+                pod["containers"][0]["resources"]["requests"][resource] = value
+                with self.subTest(kind=kind, resource=resource):
+                    self.assertFalse(self.admission(obj))
+
+    def test_workload_templates_accept_exact_namespace_minimums(self):
+        limits = next(d for d in self.documents if d["kind"] == "LimitRange")
+        minimum = next(
+            item["min"] for item in limits["spec"]["limits"] if item["type"] == "Container"
+        )
+        for kind in ("Job", "Deployment", "ReplicaSet", "Pod"):
+            obj = workload(kind=kind)
+            pod = obj["spec"] if kind == "Pod" else obj["spec"]["template"]["spec"]
+            pod["containers"][0]["resources"]["requests"] = copy.deepcopy(minimum)
+            self.assertTrue(self.admission(obj), kind)
+
 
 class ApplicationAssuranceTests(ApplicationFixture, unittest.TestCase):
     def test_test_runner_can_only_submit_fixed_server_dry_runs(self):

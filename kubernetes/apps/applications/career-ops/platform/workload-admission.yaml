@@ -78,6 +78,8 @@ spec:
     expression: 'variables.profile == ''cv-prepare'' ? {''cpu'':''2'', ''memory'':''4Gi'', ''ephemeral-storage'':''4Gi''}
       : variables.coordinator ? {''cpu'':''1'', ''memory'':''2Gi'', ''ephemeral-storage'':''2Gi''} : {''cpu'':''1'',
       ''memory'':''1Gi'', ''ephemeral-storage'':''2Gi''}'
+  - name: minimums
+    expression: "{'cpu':'10m', 'memory':'32Mi', 'ephemeral-storage':'64Mi'}"
   - name: volumes
     expression: 'has(variables.pod.volumes) ? variables.pod.volumes : []'
   - name: mounts
@@ -150,9 +152,9 @@ spec:
       && has(c.resources.limits) && !has(c.resources.claims) && c.resources.requests.all(k, k in variables.bounds)
       && c.resources.limits.all(k, k in variables.bounds) && ['cpu','memory','ephemeral-storage'].all(k,
       k in c.resources.requests && k in c.resources.limits && isQuantity(c.resources.requests[k]) && isQuantity(c.resources.limits[k])
-      && quantity(c.resources.requests[k]).compareTo(quantity('0')) > 0 && quantity(c.resources.requests[k]).compareTo(quantity(c.resources.limits[k]))
+      && quantity(c.resources.requests[k]).compareTo(quantity(variables.minimums[k])) >= 0 && quantity(c.resources.requests[k]).compareTo(quantity(c.resources.limits[k]))
       <= 0 && quantity(c.resources.limits[k]).compareTo(quantity(variables.bounds[k])) <= 0)))
-    message: Explicit positive requests and per-profile limits are required.
+    message: Explicit requests must meet namespace minimums and per-profile limits.
   - expression: request.operation == 'DELETE' || (variables.volumes.all(v, !has(v.emptyDir) || (has(v.emptyDir.sizeLimit)
       && isQuantity(v.emptyDir.sizeLimit) && quantity(v.emptyDir.sizeLimit).compareTo(quantity('0')) >
       0 && quantity(v.emptyDir.sizeLimit).compareTo(quantity('1Gi')) <= 0 && (!has(v.emptyDir.medium)
