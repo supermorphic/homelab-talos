@@ -34,6 +34,29 @@ def native_job(mode="seed"):
 
 
 class NativeFixtureAdmissionTests(ApplicationFixture, unittest.TestCase):
+    def test_single_target_jobs_are_admitted_without_storage_or_other_authority(self):
+        from scripts.test.scenarios.application_boundary_native import job
+
+        for stage in ["write", "read"]:
+            for target in ["api", "database", "dns-tcp", "dns-udp"]:
+                mode = "network-" + stage + "-" + target
+                obj = job(mode, RUN, ["192.0.2.1", "192.0.2.2", "192.0.2.3"], "synthetic-node")
+                for policy in [
+                    "career-ops-workloads",
+                    PREFIX + "fixtures",
+                    "career-ops-resources",
+                    PREFIX + "test",
+                ]:
+                    self.assertTrue(self.admission(obj, policy, TEST_RUNNER), (mode, policy))
+                pod = obj["spec"]["template"]["spec"]
+                self.assertEqual(len(pod["volumes"]), 1)
+                self.assertIn("configMap", pod["volumes"][0])
+                bad = copy.deepcopy(obj)
+                bad["spec"]["template"]["spec"]["volumes"].append(
+                    {"name": "unused", "persistentVolumeClaim": {"claimName": PREFIX + "requests"}}
+                )
+                self.assertFalse(self.admission(bad, PREFIX + "fixtures", TEST_RUNNER))
+
     def test_runner_templates_pass_both_profile_and_fixture_guards(self):
         from scripts.test.core.test_application_boundary import ROOT
 

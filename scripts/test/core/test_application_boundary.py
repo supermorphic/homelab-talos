@@ -155,7 +155,9 @@ class ApplicationFixture:
     policy = _helpers.policy
 
     def evaluate(self, expression, activation):
-        if "quantity(" not in expression and "isQuantity(" not in expression:
+        if not any(
+            extension in expression for extension in ("quantity(", "isQuantity(", "substring(")
+        ):
             return self._helpers.evaluate(self, expression, activation)
         result = subprocess.run(
             [self.native, "--evaluate"],
@@ -942,7 +944,17 @@ class ApplicationAssuranceTests(ApplicationFixture, unittest.TestCase):
                     "resources": ["jobs"],
                     "resourceNames": [
                         "career-ops-boundary-" + phase
-                        for phase in ["seed", "write", "read", "cleanup"]
+                        for phase in [
+                            "seed",
+                            "write",
+                            "read",
+                            "cleanup",
+                            *[
+                                "network-" + stage + "-" + target
+                                for stage in ["write", "read"]
+                                for target in ["api", "database", "dns-tcp", "dns-udp"]
+                            ],
+                        ]
                     ],
                     "verbs": ["get", "delete"],
                 },

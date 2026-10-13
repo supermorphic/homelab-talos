@@ -105,6 +105,24 @@ def network(addresses, allowed):
     dns(addresses[2], allowed)
 
 
+def network_probe(mode, addresses):
+    phases = {
+        "network-" + stage + "-" + target
+        for stage in ["write", "read"]
+        for target in ["api", "database", "dns-tcp", "dns-udp"]
+    }
+    if mode not in phases or len(addresses) != 3:
+        raise ValueError("invalid single-target phase")
+    if any(ipaddress.ip_address(a).version != 4 for a in addresses):
+        raise ValueError("fixture requires observed IPv4 Service addresses")
+    target = mode.split("-", 2)[2]
+    if target == "dns-udp":
+        dns(addresses[2], allowed=False)
+    else:
+        index, port = {"api": (0, 443), "database": (1, 5432), "dns-tcp": (2, 53)}[target]
+        tcp([(addresses[index], port)], allowed=False)
+
+
 def worker(mode):
     for directory in [Path("/releases"), Path("/input")]:
         MOUNT["verify_bundle"](directory)
@@ -128,16 +146,21 @@ def main(argv):
     code = 1
     try:
         mode, run, *addresses = argv
-        if mode not in {"seed", "write", "read", "cleanup"} or len(addresses) != 3:
+        if mode not in {"seed", "write", "read", "cleanup"} and not mode.startswith("network-"):
+            raise ValueError("invalid fixed fixture invocation")
+        if len(addresses) != 3:
             raise ValueError("invalid fixed fixture invocation")
         roots = {name: Path("/" + name) for name in ["releases", "requests", "artifacts"]}
         directories(roots, run)
-        network(addresses, allowed=mode in {"seed", "cleanup"})
+        if mode.startswith("network-"):
+            network_probe(mode, addresses)
+        else:
+            network(addresses, allowed=mode in {"seed", "cleanup"})
         if mode == "seed":
             seed(roots, run)
         elif mode == "cleanup":
             cleanup(roots, run)
-        else:
+        elif mode in {"write", "read"}:
             worker(mode)
         result = {
             "result": "passed",
