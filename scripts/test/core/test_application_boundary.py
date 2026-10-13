@@ -21,6 +21,24 @@ def render(path):
 
 
 class ApplicationScaffoldTests(unittest.TestCase):
+    def test_fixture_storage_waits_for_its_admission_policy(self):
+        units = {d["metadata"]["name"]: d for d in render(ROOT / "kubernetes/apps/applications")}
+        platform = units["career-ops-platform"]
+        # Flux dry-runs a whole unit before applying any of its policy updates.
+        self.assertFalse(any(d["kind"] == "PersistentVolumeClaim" for d in render(PLATFORM)))
+        fixture = units["career-ops-fixture-storage"]
+        self.assertIn({"name": platform["metadata"]["name"]}, fixture["spec"]["dependsOn"])
+        self.assertTrue(platform["spec"]["wait"])
+        self.assertFalse(fixture["spec"]["prune"])
+        self.assertEqual(fixture["spec"]["deletionPolicy"], "Orphan")
+        claims = render(ROOT / fixture["spec"]["path"])
+        self.assertEqual(len(claims), 3)
+        self.assertTrue(all(d["kind"] == "PersistentVolumeClaim" for d in claims))
+        self.assertEqual(
+            {d["metadata"]["name"] for d in claims},
+            {"career-ops-boundary-" + name for name in ["releases", "requests", "artifacts"]},
+        )
+
     def test_platform_precedes_connection(self):
         units = {d["metadata"]["name"]: d for d in render(ROOT / "kubernetes/apps")}
         self.assertIn("career-ops-platform", list(units))

@@ -22,7 +22,11 @@ class ApplicationCommandTests(unittest.TestCase):
             ROOT / "tests/fixtures/application-boundary/fake-kubectl.py"
         )
         self.objects = {}
-        for doc in render(PLATFORM) + render(ROOT / "kubernetes/apps/applications"):
+        for doc in (
+            render(PLATFORM)
+            + render(PLATFORM.parent / "fixture-storage")
+            + render(ROOT / "kubernetes/apps/applications")
+        ):
             obj = copy.deepcopy(doc)
             obj["metadata"]["generation"] = 1
             obj["status"] = {
@@ -130,6 +134,13 @@ class ApplicationCommandTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("fixture volume", result.stderr)
 
+    def test_observer_preserves_monitor_check_when_storage_is_a_separate_root(self):
+        monitor = self.objects["servicemonitor/career-ops-coordinator"]
+        monitor["spec"]["endpoints"][0]["path"] = "/wrong-metrics"
+        result = self.run_command()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ServiceMonitor/career-ops-coordinator", result.stderr)
+
     def test_observation_detects_added_admission_exemptions(self):
         policy = self.objects["validatingadmissionpolicy/career-ops-workloads"]
         policy["spec"]["matchConditions"] = [{"name": "bypass", "expression": "false"}]
@@ -213,9 +224,10 @@ class ApplicationCommandTests(unittest.TestCase):
             mode: job(mode, runner.run, ["192.0.2.1", "192.0.2.2", "192.0.2.3"])
             for mode in ["seed", "write", "read", "cleanup"]
         }
-        self.objects["kustomization/career-ops-platform"]["status"]["lastAppliedRevision"] = (
-            "main@sha1:" + runner.revision
-        )
+        for name in ["career-ops-platform", "career-ops-fixture-storage"]:
+            self.objects["kustomization/" + name]["status"]["lastAppliedRevision"] = (
+                "main@sha1:" + runner.revision
+            )
         (self.path / "objects.json").write_text(json.dumps(self.objects))
         return runner
 
@@ -253,6 +265,33 @@ class ApplicationCommandTests(unittest.TestCase):
             runner = self.native_runner()
             with self.assertRaisesRegex(RuntimeError, "selected test-runner"):
                 runner.precondition()
+
+    def test_native_precondition_requires_current_ready_fixture_storage(self):
+        self.environment["APPLICATION_BOUNDARY_FIXTURE_IDENTITY"] = (
+            "system:serviceaccount:kube-system:homelab-test-runner"
+        )
+        with patch.dict(os.environ, self.environment):
+            runner = self.native_runner()
+            fixture = self.objects.setdefault(
+                "kustomization/career-ops-fixture-storage",
+                {
+                    "metadata": {"generation": 1},
+                    "status": {},
+                },
+            )
+            for status in [
+                {"lastAppliedRevision": "main@sha1:" + "0" * 40},
+                {
+                    "lastAppliedRevision": "main@sha1:" + runner.revision,
+                    "observedGeneration": 1,
+                    "conditions": [{"type": "Ready", "status": "False", "observedGeneration": 1}],
+                },
+            ]:
+                fixture["status"] = status
+                (self.path / "objects.json").write_text(json.dumps(self.objects))
+                with self.assertRaisesRegex(RuntimeError, "exact deployed|reported Ready"):
+                    runner.precondition()
+        self.assertTrue(all(c[0] in {"get", "auth"} for c in self.calls()))
 
     def test_native_cli_reaches_its_confirmation_guard_without_pythonpath(self):
         result = subprocess.run(

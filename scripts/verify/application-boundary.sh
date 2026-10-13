@@ -64,7 +64,9 @@ def controlled(item):
                     requests.setdefault(resource,value)
     return _controlled_body(item)
 
-rendered=subprocess.check_output(['kustomize','build','kubernetes/apps/applications/career-ops/platform'],text=True)
+rendered='\n---\n'.join(
+    subprocess.check_output(['kustomize','build','kubernetes/apps/applications/career-ops/'+root],text=True)
+    for root in ('platform','fixture-storage'))
 for expected in yaml.safe_load_all(rendered):
     actual=get(expected)
     if controlled(expected) != controlled(actual):
@@ -88,7 +90,7 @@ for expected in units:
     actual=get(expected)
     if actual['spec'].get('suspend',False) != expected['spec']['suspend']:
         sys.exit('Application source consumption differs from reviewed suspension intent.')
-    if expected['metadata']['name'] == 'career-ops-platform' and not ready(actual):
+    if expected['metadata']['name'] in ('career-ops-platform','career-ops-fixture-storage') and not ready(actual):
         sys.exit('Application platform has not reported Ready for its current generation.')
 
 connection=list(yaml.safe_load_all(subprocess.check_output(['kustomize','build','kubernetes/apps/applications/career-ops/connection'],text=True)))
