@@ -56,10 +56,10 @@ class ApplicationScaffoldTests(unittest.TestCase):
             <= {d["name"] for d in units["career-ops-platform"]["spec"]["dependsOn"]}
         )
 
-    def test_connection_starts_suspended(self):
+    def test_reviewed_bootstrap_connection_is_enabled(self):
         units = {d["metadata"]["name"]: d for d in render(ROOT / "kubernetes/apps")}
         self.assertIn("career-ops-connection", list(units))
-        self.assertIs(units["career-ops-connection"]["spec"]["suspend"], True)
+        self.assertIs(units["career-ops-connection"]["spec"]["suspend"], False)
 
     def test_source_secret_decryption_stays_with_platform(self):
         units = {d["metadata"]["name"]: d for d in render(ROOT / "kubernetes/apps")}
@@ -72,7 +72,7 @@ class ApplicationScaffoldTests(unittest.TestCase):
             d for d in render(PLATFORM.parent / "connection") if d["kind"] == "Kustomization"
         )
         self.assertNotIn("decryption", application["spec"])
-        self.assertTrue(application["spec"]["suspend"])
+        self.assertFalse(application["spec"]["suspend"])
 
     def test_namespace_restricts_pods_and_gateway_access(self):
         self.assertTrue(PLATFORM.is_dir(), "platform boundary is missing")
@@ -1012,7 +1012,7 @@ class ApplicationAssuranceTests(ApplicationFixture, unittest.TestCase):
 
 
 class ApplicationConnectionTests(unittest.TestCase):
-    def test_private_source_and_application_reconciliation_are_suspended(self):
+    def test_reviewed_private_source_and_application_reconciliation_are_enabled(self):
         docs = render(ROOT / "kubernetes/apps/applications/career-ops/connection")
         self.assertEqual(len(docs), 3)
         self.assertEqual(
@@ -1038,7 +1038,7 @@ class ApplicationConnectionTests(unittest.TestCase):
         )
         self.assertEqual(source["spec"]["ref"], {"branch": "main"})
         self.assertEqual(source["spec"]["secretRef"], {"name": "career-ops-source"})
-        self.assertIs(source["spec"]["suspend"], True)
+        self.assertIs(source["spec"]["suspend"], False)
         application = next(d for d in docs if d["kind"] == "Kustomization")
         self.assertEqual(application["metadata"]["name"], "career-ops-apps")
         self.assertEqual(application["spec"]["serviceAccountName"], "career-ops-reconciler")
@@ -1047,7 +1047,7 @@ class ApplicationConnectionTests(unittest.TestCase):
         )
         self.assertEqual(application["spec"]["path"], "./deploy/")
         self.assertEqual(application["spec"]["targetNamespace"], "career-ops")
-        self.assertIs(application["spec"]["suspend"], True)
+        self.assertIs(application["spec"]["suspend"], False)
         for field in ["decryption", "postBuild", "patches", "components", "kubeConfig"]:
             self.assertNotIn(field, application["spec"])
 

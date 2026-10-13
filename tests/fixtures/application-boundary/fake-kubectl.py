@@ -24,7 +24,7 @@ if args[:2] == ["auth", "whoami"]:
     )
 elif args[:1] == ["get"]:
     documents = json.loads((root / "objects.json").read_text())
-    key = args[1].lower() + "/" + args[2]
+    key = args[1].lower() if args[2].startswith("-") else args[1].lower() + "/" + args[2]
     item = documents.get(key)
     if item is None and "--ignore-not-found" in args:
         sys.exit(0)

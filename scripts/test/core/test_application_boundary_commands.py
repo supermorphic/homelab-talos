@@ -26,6 +26,7 @@ class ApplicationCommandTests(unittest.TestCase):
             render(PLATFORM)
             + render(PLATFORM.parent / "fixture-storage")
             + render(ROOT / "kubernetes/apps/applications")
+            + render(PLATFORM.parent / "connection")
         ):
             obj = copy.deepcopy(doc)
             obj["metadata"]["generation"] = 1
@@ -70,6 +71,80 @@ class ApplicationCommandTests(unittest.TestCase):
                 }
             },
         }
+        revision = "main@sha1:" + "a" * 40
+        self.objects["gitrepository/career-ops"]["status"]["artifact"] = {"revision": revision}
+        self.objects["kustomization/career-ops-apps"]["status"]["lastAppliedRevision"] = revision
+        for name, size in [
+            ("cv-releases", "8Gi"),
+            ("cv-requests", "16Gi"),
+            ("cv-artifacts", "32Gi"),
+        ]:
+            self.objects["persistentvolumeclaim/" + name] = {
+                "kind": "PersistentVolumeClaim",
+                "metadata": {
+                    "name": name,
+                    "namespace": "career-ops",
+                    "uid": "synthetic-" + name,
+                    "annotations": {"kustomize.toolkit.fluxcd.io/prune": "disabled"},
+                },
+                "spec": {
+                    "storageClassName": "career-ops-retain",
+                    "accessModes": ["ReadWriteMany"],
+                    "volumeMode": "Filesystem",
+                    "resources": {"requests": {"storage": size}},
+                    "volumeName": "synthetic-volume-" + name,
+                },
+                "status": {"phase": "Bound"},
+            }
+            self.objects["persistentvolume/synthetic-volume-" + name] = {
+                "spec": {
+                    "persistentVolumeReclaimPolicy": "Retain",
+                    "storageClassName": "career-ops-retain",
+                    "claimRef": {"uid": "synthetic-" + name},
+                    "csi": {"driver": "driver.longhorn.io"},
+                },
+            }
+        self.objects["job/cv-bootstrap-smoke"] = {
+            "metadata": {
+                "name": "cv-bootstrap-smoke",
+                "namespace": "career-ops",
+                "uid": "synthetic-bootstrap",
+            },
+            "status": {"succeeded": 1, "conditions": [{"type": "Complete", "status": "True"}]},
+        }
+        self.objects["pods"] = {
+            "items": [
+                {
+                    "metadata": {
+                        "namespace": "career-ops",
+                        "ownerReferences": [
+                            {
+                                "apiVersion": "batch/v1",
+                                "kind": "Job",
+                                "name": "cv-bootstrap-smoke",
+                                "uid": "synthetic-bootstrap",
+                                "controller": True,
+                            }
+                        ],
+                    },
+                    "spec": {
+                        "serviceAccountName": "cv-renderer",
+                        "automountServiceAccountToken": False,
+                    },
+                    "status": {
+                        "phase": "Succeeded",
+                        "containerStatuses": [
+                            {
+                                "name": "bootstrap",
+                                "state": {
+                                    "terminated": {"exitCode": 0, "message": "bootstrap-ok\n"}
+                                },
+                            }
+                        ],
+                    },
+                }
+            ]
+        }
         self.environment = {
             **os.environ,
             "PATH": str(self.path) + os.pathsep + os.environ["PATH"],
@@ -101,12 +176,55 @@ class ApplicationCommandTests(unittest.TestCase):
     def calls(self):
         return [json.loads(line) for line in (self.path / "calls.jsonl").read_text().splitlines()]
 
-    def test_observational_verifier_reports_suspended_enrollment(self):
+    def test_observational_verifier_checks_bootstrap_without_secret_reads_or_mutation(self):
         result = self.run_command()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("enrollment suspended", result.stdout)
+        self.assertIn("bootstrap", result.stdout)
         self.assertTrue(all(c[0] in ["get", "auth"] for c in self.calls()))
         self.assertFalse(any("secret" in c[1].lower() for c in self.calls() if c[0] == "get"))
+
+    def test_bootstrap_requires_current_job_ownership_and_exact_termination_result(self):
+        pod = self.objects["pods"]["items"][0]
+        for path, value in [
+            (("status", "containerStatuses", 0, "state", "terminated", "exitCode"), 1),
+            (("status", "containerStatuses", 0, "state", "terminated", "message"), "wrong-result"),
+            (("metadata", "ownerReferences", 0, "uid"), "stale-job"),
+            (("spec", "automountServiceAccountToken"), True),
+        ]:
+            target = pod
+            for key in path[:-1]:
+                target = target[key]
+            old = target[path[-1]]
+            target[path[-1]] = value
+            result = self.run_command()
+            self.assertNotEqual(result.returncode, 0, path)
+            self.assertIn("bootstrap", result.stderr)
+            target[path[-1]] = old
+
+    def test_application_must_apply_current_source_revision(self):
+        self.objects["kustomization/career-ops-apps"]["status"]["lastAppliedRevision"] = "stale"
+        result = self.run_command()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("revision", result.stderr)
+
+    def test_application_claims_require_retention_and_owned_volume_binding(self):
+        claim = self.objects["persistentvolumeclaim/cv-releases"]
+        for field, value in [
+            ("ownerReferences", [{"kind": "Job", "uid": "synthetic-bootstrap"}]),
+            ("annotations", {}),
+        ]:
+            claim["metadata"][field] = value
+            result = self.run_command()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("retained claim", result.stderr)
+            claim["metadata"].pop(field)
+            claim["metadata"]["annotations"] = {"kustomize.toolkit.fluxcd.io/prune": "disabled"}
+        self.objects["persistentvolume/synthetic-volume-cv-releases"]["spec"]["claimRef"][
+            "uid"
+        ] = "other"
+        result = self.run_command()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("volume", result.stderr)
 
     def test_observer_accepts_api_defaulted_limit_range_but_rejects_changed_defaults(self):
         limit = self.objects["limitrange/career-ops-container-bounds"]["spec"]["limits"][0]
@@ -228,6 +346,13 @@ class ApplicationCommandTests(unittest.TestCase):
     def native_runner(self):
         from scripts.test.scenarios.application_boundary_native import NativeRunner, job
 
+        # These retained-storage fixtures exercise the pre-enrollment phase.
+        for key in (
+            "kustomization/career-ops-connection",
+            "gitrepository/career-ops",
+            "kustomization/career-ops-apps",
+        ):
+            self.objects[key]["spec"]["suspend"] = True
         runner = NativeRunner(self.path / "config")
         self.addCleanup(__import__("shutil").rmtree, runner.directory)
         runner.templates = {

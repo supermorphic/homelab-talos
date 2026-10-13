@@ -264,7 +264,9 @@ installation. Platform activation follows effective-grant validation. Neither
 Flux nor the coordinator receives a migrator credential; existing guarded
 application migration procedures perform installation. Missing repository access,
 source artifacts, fonts or approved download destinations leave preparation and
-application reconciliation suspended; they do not justify broader egress.
+rendering suspended; they do not justify broader egress. A reviewed tokenless,
+non-rendering bootstrap may reconcile independently when it uses no database,
+private inputs or prepared release.
 
 The application-facing contract below belongs to 351. Its versioned
 API schema must freeze exact paths, fields, limits, and errors before integration.
@@ -703,7 +705,9 @@ API authentication, ten-way application admission, or accepted-artifact recovery
    dependency/font destinations, API authentication configuration and metric schema.
    Record the exact non-secret bindings. Register `cv_render`, have the application
    install its schema/grants through its guarded path, then validate and activate
-   the login. Missing prerequisites keep the connection suspended.
+   the login before database-dependent workloads. The harmless bootstrap requires
+   only its reviewed source, source credential and installed platform restrictions;
+   other missing prerequisites keep their dependent workloads suspended.
 3. After exact-candidate hosted validation and explicit merge authorization,
    deploy platform main through Flux. Register and run the approved scoped
    synthetic acceptance. Suspend reconciliation on a failed boundary check;
