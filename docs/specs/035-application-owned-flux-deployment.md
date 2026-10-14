@@ -2,10 +2,13 @@
 
 ## Status and scope
 
-Implementation design for platform issue 593. The namespace is `career-ops`.
+Platform contract for issue 593. The namespace is `career-ops`.
 This specification defines the initial boundary and its acceptance requirements;
 it does not establish deployed capability or authorize merge, credential enrollment,
-or live mutation. No application resources have been deployed or accepted by this work.
+or live mutation. The restricted source connection, retained claims and two
+non-rendering application workloads have passed deployed acceptance. Preparation,
+coordinator, monitoring delivery and isolated recovery still require native
+qualification; production rendering remains held.
 
 Provide one application domain with restricted Flux deployment from its own
 repository. Career Ops' offline CV renderer is the first consumer. Later Jobs
@@ -45,7 +48,11 @@ this public repository. Enroll credentials through guarded operator workflows
 that write only SOPS-encrypted artifacts. Flux's source credential and the
 preparation repository credential are separate, repository-scoped read identities.
 Application API authentication uses separate dedicated material; the application
-owns its authentication behavior and rotation procedure.
+owns its authentication behavior and rotation procedure. Initial qualification
+uses a separate caller principal with an owner-only local bearer file; the
+coordinator receives only its hash through `cv-api-auth`. Enrolling the production
+pipeline is a separate caller activation. Bootstrap enrollment preserves the
+bearer on delivery retries and cannot replace existing ciphertext.
 
 Use the existing Flux, Cilium, Gateway, Longhorn, and credential conventions in
 [the platform specification](010-talos-flux-platform.md). Group platform onboarding
@@ -74,8 +81,9 @@ also permits public repository reads. Guarded enrollment verifies the binding
 and effective access, writes only SOPS ciphertext using the public recipient,
 and retains a non-secret receipt for recovery.
 
-Enrollment leaves reconciliation suspended and cannot replace an existing
-credential. Delivery retries reuse the pending token. Rotation retains the old
+Initial Flux-source enrollment leaves reconciliation suspended. Separate
+preparation-source enrollment preserves the existing bootstrap connection and
+cannot replace either credential. Delivery retries reuse the pending token. Rotation retains the old
 token until replacement access is verified. Neither credential creation nor
 ciphertext merge authorizes activation.
 

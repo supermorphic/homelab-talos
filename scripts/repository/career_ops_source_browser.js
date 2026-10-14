@@ -5,13 +5,17 @@ async (options) => {
   const origin = 'https://forgejo.infra.supermorphic.com';
   const repository = 'supermorphic/career-ops';
   const settings = '/user/settings/applications';
-  const pendingKey = '__careerOpsSourceEnrollment';
+  const preparation = options.preparation === true;
+  const pendingKey = preparation ? '__careerOpsPreparationEnrollment' : '__careerOpsSourceEnrollment';
+  const confirmation = preparation ? 'enroll:career-ops:preparation-source' : 'enroll:career-ops:flux-source';
+  const namePattern = preparation ? /^career-ops-prepare-[a-z0-9-]{1,64}$/ : /^career-ops-flux-[a-z0-9-]{1,64}$/;
   const stop = () => { throw new Error('Enrollment stopped'); };
   try {
     if (location.origin !== origin || options.origin !== origin ||
         options.repository !== repository ||
-        options.confirmation !== 'enroll:career-ops:flux-source' ||
-        !/^career-ops-flux-[a-z0-9-]{1,64}$/.test(options.tokenName)) stop();
+        options.confirmation !== confirmation ||
+        (options.preparation !== undefined && typeof options.preparation !== 'boolean') ||
+        !namePattern.test(options.tokenName)) stop();
     const request = async (path, args = {}, expected = path) => {
       const response = await fetch(origin + path, {
         credentials: 'same-origin', redirect: 'follow',

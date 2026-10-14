@@ -109,3 +109,46 @@ spec:
         protocol: TCP
       - port: '443'
         protocol: TCP
+---
+# Shared HTTPS destinations: application download validation owns exact paths and hashes.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: career-ops-preparation
+  namespace: career-ops
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:io.cilium.k8s.policy.serviceaccount: cv-prepare
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+        k8s:k8s-app: kube-dns
+    toPorts:
+    - ports:
+      - port: '53'
+        protocol: TCP
+      - port: '53'
+        protocol: UDP
+      rules:
+        dns:
+        - matchName: corefonts.sourceforge.net
+        - matchName: deb.debian.org
+        - matchName: downloads.sourceforge.net
+        - matchName: files.pythonhosted.org
+        - matchName: forgejo.infra.supermorphic.com
+        - matchName: packages.typst.org
+        - matchName: psychz.dl.sourceforge.net
+  - toFQDNs:
+    - matchName: corefonts.sourceforge.net
+    - matchName: deb.debian.org
+    - matchName: downloads.sourceforge.net
+    - matchName: files.pythonhosted.org
+    - matchName: forgejo.infra.supermorphic.com
+    - matchName: packages.typst.org
+    - matchName: psychz.dl.sourceforge.net
+    toPorts:
+    - ports:
+      - port: '443'
+        protocol: TCP

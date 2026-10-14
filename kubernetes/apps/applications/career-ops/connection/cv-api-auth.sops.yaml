@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Secret
+metadata:
+    name: cv-api-auth
+    namespace: career-ops
+stringData:
+    principals.json: ENC[AES256_GCM,data:v50Dylc8iajG5+g3jks6vlD697dLzrbffO/RsYAISGgHmSfA9n2q0cUi+xr9SR6FIW3SsczwfxlqLIiUXcHfPWG7sqaRYANT7tAak81YgzdLoVKZs0ce/IQ3PWGjjYSxaxHbcXegjeLd5s9rz0DEZ2LEuxMUaHtjApC4LylKgqOjM5LxAi62XJQz3GJARcvD0J+lExSL30qWcca13LMuCA==,iv:nKLUFTIDFDvYv9BdY9bdaiTwdfRo6dNAOya3sNjr+x0=,tag:I7Mq8YsWBrA5MEm4FqvTEQ==,type:str]
+type: Opaque
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSB2dFoyYVFxZFpteDd6eTFV
+            cGxuc0U3QWRVM3hjTVltTzJST3BnakJYcm1VCi9mdXlGWUdQL1BnUEFuRnE2eVVo
+            WjMwWWVISzVxZzZMb2lYSWFnS0NrWUEKLS0tIDFhNFErbjgxZEk1UnZmaTBMS2pE
+            cFRNOW0wcUYyV3JsaG8xcXgyUUk0MFEKPhqDqx94oQ76mzvuDs/jvJ/DewndXekT
+            795sUCg1PVjA8yQptKS4qdO9z6N09dJ6+gXzyvFQeCfZNIt5DJZfEA==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age1da2cywfkg9hp6v39jvj9qcmqz4n8w3gm6nqj5vygu7e0zzgnp5psne9wlx
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-10-14T11:53:29Z"
+    mac: ENC[AES256_GCM,data:1BQ1ocEHTwMGrf+fFWSqihuldrpA/K+t7l3FTHz/p4KKx6588t6uRQ5JlcD54uA0p8I2gce1p3icBi0oquSHqJDa96jT+B0G1wF19pt1q9eABQiaq510nxwLPaskqhs305HUP/d013BmMExhdC91gErHzaOZI3Wwi2IyxGl8RaE=,iv:Mka9EWP5R7HQb7UbP77uuF79fDibHUy+yyryD1J73jU=,tag:u3YGMU3HUvqdTBbdY55i+Q==,type:str]
+    version: 3.13.2
