@@ -138,25 +138,39 @@ else:
             or pv['spec'].get('claimRef',{}).get('uid') != claim['metadata']['uid'] or pv['spec'].get('csi',{}).get('driver') != 'driver.longhorn.io'):
             sys.exit('An enrolled volume lacks its owned Longhorn Retain binding.')
         print('Retained claim '+name+': '+claim['metadata']['uid'])
-    job=read('get','job','cv-bootstrap-smoke','-n','career-ops','-o','json')
-    if job.get('status',{}).get('succeeded') != 1 or not any(
-        c.get('type') == 'Complete' and c.get('status') == 'True' for c in job.get('status',{}).get('conditions',[])):
-        sys.exit('Application bootstrap has not completed successfully.')
-    pods=read('get','pods','-n','career-ops','-l','batch.kubernetes.io/job-name=cv-bootstrap-smoke','-o','json')['items']
-    succeeded=[]
-    for pod in pods:
-        if not any(o.get('apiVersion') == 'batch/v1' and o.get('kind') == 'Job' and o.get('name') == 'cv-bootstrap-smoke'
-                   and o.get('uid') == job['metadata']['uid'] and o.get('controller') is True
-                   for o in pod['metadata'].get('ownerReferences',[])):
-            continue
-        statuses=pod.get('status',{}).get('containerStatuses',[])
-        terminated=statuses[0].get('state',{}).get('terminated',{}) if len(statuses) == 1 else {}
-        if (pod['metadata'].get('namespace') == 'career-ops' and pod.get('status',{}).get('phase') == 'Succeeded'
-            and pod['spec'].get('serviceAccountName') == 'cv-renderer' and pod['spec'].get('automountServiceAccountToken') is False
-            and len(statuses) == 1 and statuses[0].get('name') == 'bootstrap'
-            and terminated.get('exitCode') == 0 and terminated.get('message','').strip() == 'bootstrap-ok'):
-            succeeded.append(pod)
-    if len(succeeded) != 1:
-        sys.exit('Application bootstrap lacks its current owned Pod with exit0 and bootstrap-ok.')
+    def observe_smoke(name, account, container, message, source_owned=False):
+        job=read('get','job',name,'-n','career-ops','-o','json')
+        if source_owned and any(job['metadata'].get('labels',{}).get(k) != v for k,v in {
+            'kustomize.toolkit.fluxcd.io/name':'career-ops-apps',
+            'kustomize.toolkit.fluxcd.io/namespace':'career-ops',
+        }.items()):
+            sys.exit('Application '+name+' lacks its current source ownership.')
+        if job.get('status',{}).get('succeeded') != 1 or not any(
+            c.get('type') == 'Complete' and c.get('status') == 'True' for c in job.get('status',{}).get('conditions',[])):
+            sys.exit('Application '+name+' has not completed successfully.')
+        pods=read('get','pods','-n','career-ops','-l','batch.kubernetes.io/job-name='+name,'-o','json')['items']
+        succeeded=[]
+        for pod in pods:
+            if not any(o.get('apiVersion') == 'batch/v1' and o.get('kind') == 'Job' and o.get('name') == name
+                       and o.get('uid') == job['metadata']['uid'] and o.get('controller') is True
+                       for o in pod['metadata'].get('ownerReferences',[])):
+                continue
+            statuses=pod.get('status',{}).get('containerStatuses',[])
+            terminated=statuses[0].get('state',{}).get('terminated',{}) if len(statuses) == 1 else {}
+            if (pod['metadata'].get('namespace') == 'career-ops' and pod.get('status',{}).get('phase') == 'Succeeded'
+                and pod['spec'].get('serviceAccountName') == account and pod['spec'].get('automountServiceAccountToken') is False
+                and len(statuses) == 1 and statuses[0].get('name') == container
+                and terminated.get('exitCode') == 0 and terminated.get('message','').strip() == message):
+                succeeded.append(pod)
+        if len(succeeded) != 1:
+            sys.exit('Application '+name+' lacks its current owned tokenless Pod with exit0 and '+message+'.')
+        print('Application '+name+': passed; current Job-owned tokenless Pod exited0 with '+message+'.')
+
+    observe_smoke('cv-bootstrap-smoke','cv-renderer','bootstrap','bootstrap-ok')
+    inventory=enrolled['Kustomization'].get('status',{}).get('inventory',{}).get('entries',[])
+    if any(e.get('id') == 'career-ops_application-json-smoke_batch_Job' and e.get('v') == 'v1' for e in inventory):
+        observe_smoke('application-json-smoke','career-ops-service','json-check','application-json-ok',source_owned=True)
+    else:
+        print('Second non-rendering workload is not selected by the current application inventory; acceptance pending.')
     print('Application source revision '+revision+'; bootstrap and retained-volume observations passed. Runtime, credentials, signal correctness and recovery need separate acceptance.')
 PY
