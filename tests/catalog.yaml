@@ -1186,7 +1186,7 @@ suites:
     runner: {command: "mise exec -- just kube application-boundary-validate", implementation: scripts/validate/application-boundary.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.application-boundary, source: verification, framework: bash, suite: platform, tier: verification, target: application-boundary, scenario: controls-and-source, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: shared}
-    description: Observes exact installed controls, admission type checking, suspension/source binding and enrolled retained-volume metadata; excludes credential contents and native workload, network, mount, notification and recovery acceptance.
+    description: Observes installed controls, current source, retained-volume metadata and current Job-owned tokenless bootstrap success. Also checks the second non-rendering smoke when selected by the application inventory. Excludes credential contents, render runtime, network, mount, notification and recovery acceptance.
     access: {profile: observer, prerequisites: []}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube application-boundary-verify", implementation: scripts/verify/application-boundary.sh}

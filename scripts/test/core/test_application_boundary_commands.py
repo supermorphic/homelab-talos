@@ -201,6 +201,84 @@ class ApplicationCommandTests(unittest.TestCase):
             self.assertIn("bootstrap", result.stderr)
             target[path[-1]] = old
 
+    def enroll_second_smoke(self):
+        self.objects["kustomization/career-ops-apps"]["status"]["inventory"] = {
+            "entries": [{"id": "career-ops_application-json-smoke_batch_Job", "v": "v1"}]
+        }
+        self.objects["job/application-json-smoke"] = {
+            "metadata": {
+                "name": "application-json-smoke",
+                "namespace": "career-ops",
+                "uid": "synthetic-json",
+                "labels": {
+                    "kustomize.toolkit.fluxcd.io/name": "career-ops-apps",
+                    "kustomize.toolkit.fluxcd.io/namespace": "career-ops",
+                },
+            },
+            "status": {"succeeded": 1, "conditions": [{"type": "Complete", "status": "True"}]},
+        }
+        pod = copy.deepcopy(self.objects["pods"]["items"][0])
+        pod["metadata"]["ownerReferences"][0].update(
+            name="application-json-smoke", uid="synthetic-json"
+        )
+        pod["spec"]["serviceAccountName"] = "career-ops-service"
+        pod["status"]["containerStatuses"] = [
+            {
+                "name": "json-check",
+                "state": {"terminated": {"exitCode": 0, "message": "application-json-ok\n"}},
+            }
+        ]
+        self.objects["pods"]["items"].append(pod)
+        return pod
+
+    def test_second_workload_retains_current_owned_tokenless_success(self):
+        self.enroll_second_smoke()
+        result = self.run_command()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("application-json-smoke", result.stdout)
+        self.assertTrue(all(c[0] in ["get", "auth"] for c in self.calls()))
+        self.assertFalse(any("secret" in c[1].lower() for c in self.calls() if c[0] == "get"))
+
+    def test_second_workload_rejects_stale_owner_or_invalid_termination(self):
+        pod = self.enroll_second_smoke()
+        for path, value in [
+            (("metadata", "ownerReferences", 0, "uid"), "stale-job"),
+            (("spec", "serviceAccountName"), "cv-renderer"),
+            (("spec", "automountServiceAccountToken"), True),
+            (("status", "containerStatuses", 0, "name"), "other-container"),
+            (("status", "containerStatuses", 0, "state", "terminated", "exitCode"), 1),
+            (("status", "containerStatuses", 0, "state", "terminated", "message"), "bootstrap-ok"),
+        ]:
+            with self.subTest(path=path):
+                target = pod
+                for key in path[:-1]:
+                    target = target[key]
+                old = target[path[-1]]
+                target[path[-1]] = value
+                result = self.run_command()
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                target[path[-1]] = old
+
+    def test_selected_second_workload_requires_source_owned_complete_job(self):
+        self.enroll_second_smoke()
+        job = self.objects["job/application-json-smoke"]
+        for key, value in [("status", {}), ("metadata", {**job["metadata"], "labels": {}})]:
+            with self.subTest(key=key):
+                old = job[key]
+                job[key] = value
+                result = self.run_command()
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                job[key] = old
+        del self.objects["job/application-json-smoke"]
+        self.assertNotEqual(self.run_command().returncode, 0)
+
+    def test_unselected_second_workload_is_not_claimed_from_leftover_job(self):
+        self.enroll_second_smoke()
+        del self.objects["kustomization/career-ops-apps"]["status"]["inventory"]
+        result = self.run_command()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("application-json-smoke: passed", result.stdout)
+
     def test_application_must_apply_current_source_revision(self):
         self.objects["kustomization/career-ops-apps"]["status"]["lastAppliedRevision"] = "stale"
         result = self.run_command()
