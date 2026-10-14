@@ -120,6 +120,11 @@ crawl4ai-secrets:
 career-ops-source-credentials *args:
     uv run --locked --no-dev python scripts/repository/career_ops_source_credentials.py {{args}}
 
+# Stage ciphertext from the ready CV application profile; never activates or rotates it.
+# Guard: --confirm stage:career-ops:cv-render-database. Requires scoped debugger credentials.
+career-ops-runtime-secret *args:
+    uv run --locked --no-dev python -m scripts.repository.career_ops_runtime_secret {{args}}
+
 # Encrypt operator-supplied NEWS_{POSTGRES,DB,BACKUP,MONITORING,OPERATOR,API}_PASSWORD
 # and NEWS_OPERATOR_NAME. Use distinct passwords, including the separate API password.
 # Guard: NEWS_SECRETS_CONFIRM='write:news:bootstrap:sops'. No private age key is needed.

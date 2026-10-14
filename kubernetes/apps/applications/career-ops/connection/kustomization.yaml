@@ -4,3 +4,4 @@ resources:
 - ./gitrepository.yaml
 - ./application-kustomization.yaml
 - ./career-ops-source.sops.yaml
+- ./cv-render-database.sops.yaml
