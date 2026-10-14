@@ -458,6 +458,60 @@ class ApplicationNetworkTests(ApplicationFixture, unittest.TestCase):
         self.assertEqual(policy.get("ingress"), [{"fromEntities": ["none"]}])
         self.assertEqual(policy.get("egress"), [{"toEntities": ["none"]}])
 
+    def test_preparation_network_has_only_reviewed_dns_and_https_destinations(self):
+        policy = next(
+            d["spec"]
+            for d in self.documents
+            if d["kind"] == "CiliumNetworkPolicy"
+            and d["metadata"]["name"] == "career-ops-preparation"
+        )
+        self.assertEqual(set(policy), {"endpointSelector", "egress"})
+        self.assertEqual(
+            policy["endpointSelector"],
+            {"matchLabels": {"k8s:io.cilium.k8s.policy.serviceaccount": "cv-prepare"}},
+        )
+        dns, https = policy["egress"]
+        hosts = {
+            "corefonts.sourceforge.net",
+            "deb.debian.org",
+            "downloads.sourceforge.net",
+            "files.pythonhosted.org",
+            "forgejo.infra.supermorphic.com",
+            "packages.typst.org",
+            "psychz.dl.sourceforge.net",
+        }
+        self.assertEqual(set(dns), {"toEndpoints", "toPorts"})
+        self.assertEqual(
+            dns["toEndpoints"],
+            [
+                {
+                    "matchLabels": {
+                        "k8s:io.kubernetes.pod.namespace": "kube-system",
+                        "k8s:k8s-app": "kube-dns",
+                    }
+                }
+            ],
+        )
+        self.assertEqual(
+            dns["toPorts"],
+            [
+                {
+                    "ports": [
+                        {"port": "53", "protocol": "TCP"},
+                        {"port": "53", "protocol": "UDP"},
+                    ],
+                    "rules": {"dns": [{"matchName": h} for h in sorted(hosts)]},
+                }
+            ],
+        )
+        self.assertEqual(
+            https,
+            {
+                "toFQDNs": [{"matchName": h} for h in sorted(hosts)],
+                "toPorts": [{"ports": [{"port": "443", "protocol": "TCP"}]}],
+            },
+        )
+
     def test_network_capabilities_follow_service_account_identity(self):
         policies = {
             d["metadata"]["name"]: d["spec"]
@@ -468,7 +522,12 @@ class ApplicationNetworkTests(ApplicationFixture, unittest.TestCase):
         self.assertEqual(policies["career-ops-deny"]["endpointSelector"], {})
         self.assertEqual(
             set(policies),
-            {"career-ops-deny", "career-ops-coordinator", "career-ops-boundary-coordinator"},
+            {
+                "career-ops-deny",
+                "career-ops-coordinator",
+                "career-ops-boundary-coordinator",
+                "career-ops-preparation",
+            },
         )
         coordinator = policies["career-ops-coordinator"]
         native = policies["career-ops-boundary-coordinator"]
@@ -1038,7 +1097,7 @@ class ApplicationAssuranceTests(ApplicationFixture, unittest.TestCase):
 class ApplicationConnectionTests(unittest.TestCase):
     def test_reviewed_private_source_and_application_reconciliation_are_enabled(self):
         docs = render(ROOT / "kubernetes/apps/applications/career-ops/connection")
-        self.assertEqual(len(docs), 4)
+        self.assertEqual(len(docs), 6)
         self.assertEqual(
             {(d["kind"], d["metadata"]["namespace"], d["metadata"]["name"]) for d in docs},
             {
@@ -1046,6 +1105,8 @@ class ApplicationConnectionTests(unittest.TestCase):
                 ("Kustomization", "career-ops", "career-ops-apps"),
                 ("Secret", "career-ops", "career-ops-source"),
                 ("Secret", "career-ops", "cv-render-database"),
+                ("Secret", "career-ops", "cv-prepare-source"),
+                ("Secret", "career-ops", "cv-api-auth"),
             },
         )
         credential = next(d for d in docs if d["metadata"]["name"] == "career-ops-source")
@@ -1078,9 +1139,7 @@ class ApplicationConnectionTests(unittest.TestCase):
 
     def test_runtime_database_secret_is_selected_by_the_platform_connection(self):
         docs = render(ROOT / "kubernetes/apps/applications/career-ops/connection")
-        credential = next(
-            (d for d in docs if d["metadata"]["name"] == "cv-render-database"), None
-        )
+        credential = next((d for d in docs if d["metadata"]["name"] == "cv-render-database"), None)
         self.assertIsNotNone(credential)
         self.assertEqual(credential["kind"], "Secret")
         self.assertEqual(credential["metadata"]["namespace"], "career-ops")

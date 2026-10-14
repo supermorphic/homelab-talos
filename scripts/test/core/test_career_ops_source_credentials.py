@@ -116,6 +116,76 @@ class SourceCredentialTest(unittest.TestCase):
         with self.assertRaises(source.EnrollmentError):
             self.install()
 
+    def test_preparation_enrollment_preserves_active_flux_and_uses_distinct_secret(self):
+        for name in ("gitrepository.yaml", "application-kustomization.yaml"):
+            path = self.selection.parent / name
+            manifest = yaml.safe_load(path.read_bytes())
+            manifest["spec"]["suspend"] = False
+            path.write_text(yaml.safe_dump(manifest))
+        existing = self.root / source.TARGET
+        existing.write_text("existing-flux-ciphertext")
+        self.receipt["token"]["name"] = "career-ops-prepare-synthetic"
+        result = source.install(
+            self.root,
+            self.receipt,
+            self.receipt["token"]["name"],
+            "enroll:career-ops:preparation-source",
+            preparation=True,
+            runner=self.encrypt,
+        )
+        target = self.selection.parent / "cv-prepare-source.sops.yaml"
+        self.assertEqual(
+            yaml.safe_load(target.read_bytes())["metadata"],
+            {"name": "cv-prepare-source", "namespace": "career-ops"},
+        )
+        self.assertEqual(existing.read_text(), "existing-flux-ciphertext")
+        self.assertFalse(result["source_suspended"])
+        self.assertFalse(result["application_suspended"])
+        for name in ("gitrepository.yaml", "application-kustomization.yaml"):
+            self.assertFalse(
+                yaml.safe_load((self.selection.parent / name).read_bytes())["spec"]["suspend"]
+            )
+        self.assertIn(
+            "./cv-prepare-source.sops.yaml",
+            yaml.safe_load(self.selection.read_bytes())["resources"],
+        )
+        with self.assertRaises(source.EnrollmentError):
+            source.install(
+                self.root,
+                self.receipt,
+                self.receipt["token"]["name"],
+                "enroll:career-ops:preparation-source",
+                preparation=True,
+                runner=self.encrypt,
+            )
+
+    def test_preparation_rejects_flux_token_and_confirmation_before_encryption(self):
+        for confirmation in (source.CONFIRMATION, "enroll:career-ops:preparation-source"):
+            with (
+                self.subTest(confirmation=confirmation),
+                self.assertRaises(source.EnrollmentError),
+            ):
+                source.install(
+                    self.root,
+                    self.receipt,
+                    self.name,
+                    confirmation,
+                    preparation=True,
+                    runner=self.encrypt,
+                )
+        self.assertEqual(self.calls, [])
+
+    def test_preparation_resume_cannot_adopt_flux_creation_intent(self):
+        private = self.root / "private"
+        private.mkdir(mode=0o700)
+        source.enrollment_name(private, self.name, "")
+        with self.assertRaises(source.EnrollmentError):
+            source.enrollment_name(private, "career-ops-prepare-new", self.name, preparation=True)
+        name = source.enrollment_name(private, "career-ops-prepare-original", "", preparation=True)
+        self.assertEqual(
+            source.enrollment_name(private, "career-ops-prepare-new", name, preparation=True), name
+        )
+
     def test_rejects_broader_or_unbound_credentials_before_encryption(self):
         for changes in (
             {"scopes": ["write:repository"]},

@@ -1,4 +1,4 @@
-"""One-shot enrollment of the suspended Career Ops HTTPS Flux source.
+"""One-shot enrollment of distinct Career Ops Flux or preparation source credentials.
 
 The authenticated browser producer streams its one-time creation receipt into
 an owner-only FIFO. Only SOPS ciphertext is installed. This is not a credential
@@ -30,6 +30,18 @@ TARGET = Path("kubernetes/apps/applications/career-ops/connection/career-ops-sou
 SELECTION = TARGET.parent / "kustomization.yaml"
 RESOURCE = "./" + TARGET.name
 CONFIRMATION = "enroll:career-ops:flux-source"
+PREPARATION_TARGET = TARGET.with_name("cv-prepare-source.sops.yaml")
+PREPARATION_CONFIRMATION = "enroll:career-ops:preparation-source"
+
+
+def purpose(preparation):
+    if type(preparation) is not bool:
+        raise EnrollmentError("Invalid source purpose")
+    return (
+        (PREPARATION_TARGET, PREPARATION_CONFIRMATION, "career-ops-prepare-")
+        if preparation
+        else (TARGET, CONFIRMATION, "career-ops-flux-")
+    )
 
 
 class EnrollmentError(RuntimeError):
@@ -53,8 +65,9 @@ def safe_path(root, relative):
     return path
 
 
-def preflight(root):
-    target, selection = safe_path(root, TARGET), safe_path(root, SELECTION)
+def preflight(root, *, preparation=False):
+    target_path, _, _ = purpose(preparation)
+    target, selection = safe_path(root, target_path), safe_path(root, SELECTION)
     if target.exists():
         raise EnrollmentError("Source ciphertext already exists; bootstrap cannot replace it")
     original = selection.read_bytes()
@@ -62,11 +75,13 @@ def preflight(root):
     resources = document.get("resources")
     if not isinstance(resources, list) or not all(isinstance(item, str) for item in resources):
         raise EnrollmentError("Invalid connection resource selection")
-    if any(Path(os.path.normpath(TARGET.parent / item)) == TARGET for item in resources):
+    if any(Path(os.path.normpath(TARGET.parent / item)) == target_path for item in resources):
         raise EnrollmentError("Source Secret is already selected")
     for name in ("gitrepository.yaml", "application-kustomization.yaml"):
         manifest = load_yaml(safe_path(root, TARGET.parent / name).read_bytes())
-        if manifest.get("spec", {}).get("suspend") is not True:
+        if type(manifest.get("spec", {}).get("suspend")) is not bool or (
+            not preparation and manifest["spec"]["suspend"] is not True
+        ):
             raise EnrollmentError("Both the Git source and application must remain suspended")
         spec = manifest["spec"]
         if name == "gitrepository.yaml":
@@ -94,7 +109,7 @@ def preflight(root):
     matches = []
     for rule in rules:
         try:
-            if re.search(rule.get("path_regex", "(?!)"), TARGET.as_posix()):
+            if re.search(rule.get("path_regex", "(?!)"), target_path.as_posix()):
                 matches.append(rule)
         except (AttributeError, TypeError, re.error):
             raise EnrollmentError("Invalid SOPS creation rule") from None
@@ -108,7 +123,8 @@ def preflight(root):
     return original, document, policy_bytes, matches[0]["age"]
 
 
-def validate_receipt(receipt, expected_name):
+def validate_receipt(receipt, expected_name, *, preparation=False):
+    _, _, prefix = purpose(preparation)
     if not isinstance(receipt, dict) or set(receipt) != {
         "origin",
         "username",
@@ -128,14 +144,15 @@ def validate_receipt(receipt, expected_name):
         or type(token["id"]) is not int
         or token["id"] <= 0
         or token["name"] != expected_name
-        or not re.fullmatch(r"career-ops-flux-[a-z0-9-]{1,64}", expected_name)
+        or not re.fullmatch(re.escape(prefix) + r"[a-z0-9-]{1,64}", expected_name)
         or token["scopes"] != ["read:repository"]
         or token["repositories"] != [REPOSITORY]
     ):
         raise EnrollmentError("Creation receipt does not match the read-only source contract")
 
 
-def validate_ciphertext(content, recipient, receipt):
+def validate_ciphertext(content, recipient, receipt, *, preparation=False):
+    secret_name = "cv-prepare-source" if preparation else "career-ops-source"
     document = load_yaml(content)
     data, sops = document.get("stringData"), document.get("sops")
     if (
@@ -143,7 +160,7 @@ def validate_ciphertext(content, recipient, receipt):
         or document["apiVersion"] != "v1"
         or document["kind"] != "Secret"
         or document["type"] != "Opaque"
-        or document["metadata"] != {"name": "career-ops-source", "namespace": "career-ops"}
+        or document["metadata"] != {"name": secret_name, "namespace": "career-ops"}
         or not isinstance(data, dict)
         or set(data) != {"username", "password"}
         or not all(isinstance(v, str) and v.startswith("ENC[AES256_GCM,") for v in data.values())
@@ -159,17 +176,27 @@ def validate_ciphertext(content, recipient, receipt):
         raise EnrollmentError("Encrypted source does not match the ciphertext contract")
 
 
-def install(root, receipt, expected_name, confirmation, *, runner=subprocess.run):
-    if confirmation != CONFIRMATION:
+def install(
+    root, receipt, expected_name, confirmation, *, preparation=False, runner=subprocess.run
+):
+    target_path, expected_confirmation, _ = purpose(preparation)
+    if confirmation != expected_confirmation:
         raise EnrollmentError("The exact enrollment confirmation is required")
-    original, document, policy_bytes, recipient = preflight(root)
-    validate_receipt(receipt, expected_name)
+    original, document, policy_bytes, recipient = preflight(root, preparation=preparation)
+    bindings = {
+        name: safe_path(root, TARGET.parent / name).read_bytes()
+        for name in ("gitrepository.yaml", "application-kustomization.yaml")
+    }
+    validate_receipt(receipt, expected_name, preparation=preparation)
     plaintext = yaml.safe_dump(
         {
             "apiVersion": "v1",
             "kind": "Secret",
             "type": "Opaque",
-            "metadata": {"name": "career-ops-source", "namespace": "career-ops"},
+            "metadata": {
+                "name": "cv-prepare-source" if preparation else "career-ops-source",
+                "namespace": "career-ops",
+            },
             "stringData": {key: receipt[key] for key in ("username", "password")},
         }
     ).encode()
@@ -185,7 +212,7 @@ def install(root, receipt, expected_name, confirmation, *, runner=subprocess.run
                 "--config",
                 str(root / ".sops.yaml"),
                 "--filename-override",
-                TARGET.as_posix(),
+                target_path.as_posix(),
                 "/dev/stdin",
             ],
             cwd=root,
@@ -199,23 +226,30 @@ def install(root, receipt, expected_name, confirmation, *, runner=subprocess.run
         raise EnrollmentError("SOPS encryption could not complete; details withheld") from None
     if result.returncode or not result.stdout:
         raise EnrollmentError("SOPS encryption failed; tool output withheld")
-    validate_ciphertext(result.stdout, recipient, receipt)
-    document["resources"].append(RESOURCE)
+    validate_ciphertext(result.stdout, recipient, receipt, preparation=preparation)
+    document["resources"].append("./" + target_path.name)
     selection_bytes = yaml.safe_dump(document, sort_keys=False).encode()
     with tempfile.TemporaryDirectory(
         prefix=".source-enrollment-", dir=root / TARGET.parent
     ) as staging:
-        candidate = Path(staging) / TARGET.name
+        candidate = Path(staging) / target_path.name
         candidate.write_bytes(result.stdout)
         candidate.chmod(0o600)
         selected = Path(staging) / SELECTION.name
         selected.write_bytes(selection_bytes)
         selected.chmod(0o600)
         # Repeat all live filesystem preconditions immediately before installation.
-        fresh, _, policy, _ = preflight(root)
-        if fresh != original or policy != policy_bytes:
+        fresh, _, policy, _ = preflight(root, preparation=preparation)
+        if (
+            fresh != original
+            or policy != policy_bytes
+            or any(
+                safe_path(root, TARGET.parent / name).read_bytes() != content
+                for name, content in bindings.items()
+            )
+        ):
             raise EnrollmentError("Enrollment inputs changed; ciphertext was not selected")
-        target = root / TARGET
+        target = root / target_path
         # link is exclusive: never overwrite a concurrently created credential.
         os.link(candidate, target)
         try:
@@ -228,8 +262,10 @@ def install(root, receipt, expected_name, confirmation, *, runner=subprocess.run
         "username": receipt["username"],
         "token": receipt["token"],
         "ciphertext_sha256": hashlib.sha256(result.stdout).hexdigest(),
-        "source_suspended": True,
-        "application_suspended": True,
+        "source_suspended": load_yaml(bindings["gitrepository.yaml"])["spec"]["suspend"],
+        "application_suspended": load_yaml(bindings["application-kustomization.yaml"])["spec"][
+            "suspend"
+        ],
     }
 
 
@@ -293,9 +329,10 @@ def enrollment_lock(private):
         os.close(descriptor)
 
 
-def enrollment_name(private, generated, resume):
+def enrollment_name(private, generated, resume, *, preparation=False):
+    _, _, prefix = purpose(preparation)
     name = resume or generated
-    if not re.fullmatch(r"career-ops-flux-[a-z0-9-]{1,64}", name):
+    if not re.fullmatch(re.escape(prefix) + r"[a-z0-9-]{1,64}", name):
         raise EnrollmentError("Invalid enrollment name")
     intent = private / (name + ".pending.json")
     expected = {"token_name": name, "origin": ORIGIN, "repository": REPOSITORY}
@@ -318,6 +355,11 @@ def enrollment_name(private, generated, resume):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("discover", "receive"))
+    parser.add_argument(
+        "--preparation",
+        action="store_true",
+        help="enroll only the separate cv-prepare-source identity; preserve active bootstrap",
+    )
     parser.add_argument("--confirm", default="")
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument(
@@ -326,8 +368,9 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     try:
+        target_path, confirmation, prefix = purpose(args.preparation)
         if args.action == "discover":
-            target = safe_path(root, TARGET)
+            target = safe_path(root, target_path)
             print(
                 json.dumps(
                     {
@@ -335,17 +378,24 @@ def main():
                         "repository": REPOSITORY,
                         "ciphertext_present": target.exists(),
                         "next_action": "review rotation" if target.exists() else "receive",
-                        "confirmation": CONFIRMATION,
+                        "confirmation": confirmation,
                     }
                 )
             )
             return 0
-        if args.confirm != CONFIRMATION or not 1 <= args.timeout <= 1800:
+        if args.confirm != confirmation or not 1 <= args.timeout <= 1800:
             raise EnrollmentError(
                 "Use the exact confirmation and a timeout from 1 to 1800 seconds"
             )
-        preflight(root)
-        private = safe_path(root, Path(".tmp/issue-593/source-enrollment"))
+        preflight(root, preparation=args.preparation)
+        private = safe_path(
+            root,
+            Path(
+                ".tmp/issue-593/preparation-enrollment"
+                if args.preparation
+                else ".tmp/issue-593/source-enrollment"
+            ),
+        )
         private.mkdir(parents=True, exist_ok=True, mode=0o700)
         if private.stat().st_uid != os.getuid() or stat.S_IMODE(private.stat().st_mode) != 0o700:
             raise EnrollmentError("Source enrollment directory must be owner-only")
@@ -353,12 +403,12 @@ def main():
             enrollment_lock(private),
             tempfile.TemporaryDirectory(prefix="receive-", dir=private) as session,
         ):
-            preflight(root)
+            preflight(root, preparation=args.preparation)
             directory = Path(session)
-            token_name = "career-ops-flux-" + directory.name.removeprefix("receive-").replace(
-                "_", "-"
+            token_name = prefix + directory.name.removeprefix("receive-").replace("_", "-")
+            token_name = enrollment_name(
+                private, token_name, args.resume, preparation=args.preparation
             )
-            token_name = enrollment_name(private, token_name, args.resume)
             fifo = directory / "receipt.fifo"
             os.mkfifo(fifo, 0o600)
             expression = directory / "browser-expression.js"
@@ -372,8 +422,9 @@ def main():
                         "origin": ORIGIN,
                         "repository": REPOSITORY,
                         "tokenName": token_name,
-                        "confirmation": CONFIRMATION,
+                        "confirmation": confirmation,
                         "resumeOnly": bool(args.resume),
+                        "preparation": args.preparation,
                     }
                 )
                 + ")"
@@ -391,7 +442,7 @@ def main():
                 flush=True,
             )
             receipt = read_fifo(fifo, timeout=args.timeout)
-            result = install(root, receipt, token_name, args.confirm)
+            result = install(root, receipt, token_name, args.confirm, preparation=args.preparation)
             receipt_path = private / (token_name + ".json")
             with receipt_path.open("x") as stream:
                 json.dump(result, stream, indent=2)
@@ -402,8 +453,8 @@ def main():
                     {
                         "status": "ciphertext-installed",
                         "receipt": str(receipt_path),
-                        "target": TARGET.as_posix(),
-                        "activation": "suspended",
+                        "target": target_path.as_posix(),
+                        "activation": "unchanged",
                     }
                 )
             )
