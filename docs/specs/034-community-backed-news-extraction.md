@@ -40,11 +40,10 @@ publisher extraction logic. A recognized rule is necessary but does not alone
 enable a source: representative public articles must pass quality acceptance.
 Rich feeds remain on ordinary RSS delivery without article fetching or rewriting.
 
-With production requests enabled, startup applies community mode to existing
-WIRED and Ars Technica subscriptions with neither a saved mode nor a native
-extraction selector. It uses their accepted public RSS URLs and eligibility checks, adds no
-subscriptions, and preserves explicit RSS choices and other sources. Disable
-requests through Git to stop fetching while keeping accepted-body preservation.
+After quality acceptance, community enrichment is the default for eligible WIRED
+and Ars Technica subscriptions without an explicit content mode or native
+extraction configuration. Adoption preserves explicit RSS choices and existing
+extraction configurations, adds no subscriptions, and leaves other sources unchanged.
 
 WIRED and Ars Technica are enrichment candidates. Pages with multiple article
 elements use RSS fallback because an additional article can contain a reader
@@ -139,10 +138,8 @@ RSS unless the publisher changes the feed entry and a later ingestion attempt
 accepts enrichment. Reader View remains available for these articles. There is no
 automatic background reprocessing of previously synchronized snippets. A later
 reprocessing feature would need separate acceptance for existing item identity,
-concurrent state changes, and native client caches.
-NetNewsWire may retain a previously downloaded summary even when FreshRSS later
-stores an accepted full body for that item. Fresh downloads use the current body;
-activation does not replace the client's existing article cache.
+concurrent state changes, and native client caches. Server-side enrichment does
+not guarantee replacement of bodies already cached by a native client.
 
 ## Worker interface and failure isolation
 
@@ -330,38 +327,24 @@ stored-content and native macOS spike:
   on the required client.
 
 Production adoption requires these integration and operational gates to pass.
-The standalone production acceptance workflow uses an explicitly supplied operator
-kubeconfig; the ordinary observer and diagnostic identities do not gain news
-mutation rights. It creates a temporary FreshRSS account and run-owned disposable
-worker resources, with readiness kept false so they cannot join production Service
-endpoints. It must verify the deployed release and take the existing maintenance
-locks before account or entry writes. Keep article bodies, temporary credentials,
-and Mac screenshots in the approved private evidence store. Canonical results
-contain only aggregate outcomes and immutable identities. Remove the temporary
-client account before deleting its server account, and verify owned-resource cleanup.
+Acceptance mutations require explicit, task-scoped authorization without expanding
+ordinary observer or diagnostic access. Test accounts and disposable workers must
+remain isolated from operator data and production traffic. Acceptance must verify
+the deployed release and avoid conflicts with refresh or maintenance operations.
+Required native-client outcomes must come from actual observations. Failed or
+incomplete acceptance keeps production requests disabled.
 
-Run `mise exec -- just test record test.news-production-acceptance` with
-`NEWS_ACCEPTANCE_KUBECONFIG` set to the explicitly authorized absolute kubeconfig,
-`NEWS_EXTRACTION_CORPUS` set to the retained reviewed inputs, and
-`NEWS_ACCEPTANCE_PRIVATE_ROOT` set to an existing private retained directory.
-Set `NEWS_PRODUCTION_ACCEPTANCE_CONFIRM=test:news:production-acceptance` to select
-the test's mutations. The workflow pauses for the required Mac observations in
-its private `native-request.json`; its receipt template starts without passing
-outcomes. Complete only the observations actually made and remove the temporary
-NetNewsWire account before submitting the receipt. Failed or incomplete acceptance
-keeps production requests disabled. Cleanup failure requires inspection of the
-private ownership ledger; never adopt or delete a same-named replacement resource.
-If native acceptance is interrupted, keep the server account until client removal
-is confirmed using the run-bound `native-client-removed.json` template. The private
-`cleanup-required.json` identifies the retained account; owned worker resources are
-still removed. An ambiguous account-creation result must be reconciled by its
-ownership marker or reported as incomplete cleanup.
+Keep article bodies, temporary credentials, and native-client screenshots in the
+approved private evidence store. Public results contain only aggregate outcomes
+and immutable evidence identities. Cleanup must establish resource ownership and
+verify removal without affecting replacement resources. Remove temporary client
+accounts before their server accounts, including after interrupted acceptance.
+Uncertain account creation or incomplete cleanup must remain visible in the result.
 
-When a publisher revises a frozen article, retain a fresh source capture and an
-independently reviewed complete reference under a new observation identity.
-`NEWS_ACCEPTANCE_LIVE_REFERENCES` may select these private references for current
-publisher acceptance; source and review fingerprints must match. Frozen corpus
-replay and its release fingerprint remain unchanged.
+Current publisher acceptance may use a fresh source capture and an independently
+reviewed complete reference under a distinct observation identity when a publisher
+revises a frozen article. The reference must identify the reviewed source capture;
+the frozen regression corpus and its release identity remain unchanged.
 
 If they require ongoing local publisher rules, widespread browser rendering, or
 unsafe generic fallback, retain direct rich RSS plus summaries/Reader View and
