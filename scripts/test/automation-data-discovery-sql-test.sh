@@ -241,7 +241,28 @@ assert observed.get('complete') is False
 PYTHON
 query n8n postgres >/dev/null <<'SQL'
 ALTER TABLE credentials_entity RENAME COLUMN renamed_type TO type;
-INSERT INTO credentials_entity(id,name,type,"updatedAt") SELECT 'overflow-'||i,'unknown','postgres',now() FROM generate_series(1,1001) i;
+INSERT INTO credentials_entity(id,name,type,"updatedAt") SELECT 'growth-'||i,'unknown','postgres',now() FROM generate_series(1,999) i;
+SQL
+for count in 1001 2000; do
+	printf '%s\n' 'SELECT platform_discovery.read_snapshot();' | query n8n n8n_inventory >"$scratch/growth.json"
+	python - "$scratch/growth.json" "$count" <<'PYTHON'
+import json,sys
+from pathlib import Path
+sys.path.insert(0,'scripts/lib')
+from automation_data_inventory import validate_observation
+observed=validate_observation(json.loads(Path(sys.argv[1]).read_text().splitlines()[-1]),'n8n')
+assert observed.complete
+assert observed.object_count==int(sys.argv[2])
+assert any(o['kind']=='credential' and o['id']=='fixture-runtime' for o in observed.objects)
+PYTHON
+	if [[ "$count" == 1001 ]]; then
+		query n8n postgres >/dev/null <<'SQL'
+INSERT INTO credentials_entity(id,name,type,"updatedAt") SELECT 'growth-'||i,'unknown','postgres',now() FROM generate_series(1000,1998) i;
+SQL
+	fi
+done
+query n8n postgres >/dev/null <<'SQL'
+INSERT INTO credentials_entity(id,name,type,"updatedAt") VALUES ('overflow','unknown','postgres',now());
 SQL
 printf '%s\n' 'SELECT platform_discovery.read_snapshot();' | query n8n n8n_inventory >"$scratch/overflow.json"
 python - "$scratch/overflow.json" <<'PYTHON'

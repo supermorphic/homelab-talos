@@ -118,8 +118,8 @@ BEGIN
     RETURN jsonb_build_object('source','n8n','status','unavailable','complete',false,'errorCode','unsupported_schema');
   END IF;
   SELECT count(*), COALESCE(jsonb_agg(body ORDER BY kind,id),'[]'::jsonb)
-    INTO total,payload FROM (SELECT kind,id,body FROM platform_discovery.objects ORDER BY kind,id LIMIT 1001) bounded;
-  IF total > 1000 OR octet_length(payload::text) > 1048000 THEN
+    INTO total,payload FROM (SELECT kind,id,body FROM platform_discovery.objects ORDER BY kind,id LIMIT 2001) bounded;
+  IF total > 2000 OR octet_length(payload::text) > 1048000 THEN
     RETURN jsonb_build_object('source','n8n','status','unavailable','complete',false,'errorCode','limit_exceeded');
   END IF;
   RETURN jsonb_build_object('source','n8n','status','ok','complete',true,

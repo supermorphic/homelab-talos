@@ -954,8 +954,9 @@ Pin projections to tested application schemas; drift returns `unsupported_schema
 raw-table/API fallback. [Specification 028](028-nocodb-operator-ui.md#credential-discovery-and-source-evidence-issue-506)
 defines NocoDB-specific evidence rules.
 
-Each source is limited to 1,000 objects and 1 MiB; the total response to 4 MiB and 30 seconds,
-including connection and response handling. Overflow returns `limit_exceeded`, never a
+The n8n source is limited to 2,000 objects; the platform and NocoDB sources remain
+limited to 1,000 objects each. Each source is limited to 1 MiB; the total response to
+4 MiB and 30 seconds, including connection and response handling. Overflow returns `limit_exceeded`, never a
 complete truncated result. Read each projection in a REPEATABLE READ, READ ONLY transaction
 with local statement timeouts and n8n-managed commit/rollback. Compare fingerprints from
 two separate observations of every source, with one retry within the deadline; continued
@@ -1025,6 +1026,12 @@ implicitly enrolled and their passwords are never exported.
 Retain protected installer `pending/` records until acceptance. Reruns retain reader
 passwords; uncertain creation needs attended reconciliation rather than receipt deletion
 or repeated imports. Remove any enrollment-only API-key file afterward.
+
+An inventory-capacity upgrade must update both the installed SQL projection and the
+published inventory graph. Merging templates alone updates neither installed component.
+Preserve retained workflow and credential IDs, bindings, and reader passwords. Keep
+consumers blocked until fresh, complete discovery passes through the canonical client;
+an intermediate mismatch must not permit a truncated inventory or cached selection.
 
 ## Upgrade existing mutation workflows
 

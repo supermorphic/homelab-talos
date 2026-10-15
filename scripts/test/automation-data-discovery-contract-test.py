@@ -103,6 +103,41 @@ class DiscoveryContractTest(unittest.TestCase):
             self.api.validate_observation(raw, "n8n")
         self.assertEqual(str(caught.exception), "limit_exceeded")
 
+    def test_n8n_growth_keeps_complete_inventory_and_rejects_overflow(self):
+        # A growing workflow archive must not hide the retained migrator.
+        for count in (1001, 2000):
+            objects = [
+                {"kind": "workflow", "id": f"fixture-{i}", "published": False}
+                for i in range(count - 1)
+            ] + [self.raw["objects"][0]]
+            observed = self.api.validate_observation(
+                self.raw | {"objects": objects, "objectCount": count}, "n8n"
+            )
+            self.assertTrue(observed.complete)
+            self.assertEqual(observed.object_count, count)
+            self.assertIn(self.raw["objects"][0], observed.objects)
+        objects.append({"kind": "workflow", "id": "overflow", "published": False})
+        with self.assertRaises(self.api.InventoryError) as caught:
+            self.api.validate_observation(
+                self.raw | {"objects": objects, "objectCount": 2001}, "n8n"
+            )
+        self.assertEqual(str(caught.exception), "limit_exceeded")
+
+    def test_other_sources_keep_their_existing_object_limit(self):
+        for source, kind in (("platform", "role"), ("nocodb", "workspace")):
+            objects = [{"kind": kind, "id": f"fixture-{i}"} for i in range(1000)]
+            raw = self.raw | {
+                "source": source,
+                "schemaRevision": self.api.SCHEMA_REVISIONS[source],
+                "objects": objects,
+                "objectCount": 1000,
+            }
+            self.assertTrue(self.api.validate_observation(raw, source).complete)
+            objects.append({"kind": kind, "id": "overflow"})
+            with self.assertRaises(self.api.InventoryError) as caught:
+                self.api.validate_observation(raw | {"objectCount": 1001}, source)
+            self.assertEqual(str(caught.exception), "limit_exceeded")
+
 
 if __name__ == "__main__":
     unittest.main()

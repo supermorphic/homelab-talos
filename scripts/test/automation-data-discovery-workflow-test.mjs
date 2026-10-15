@@ -27,6 +27,20 @@ const snapshot=(source,objects=[])=>({source,status:'ok',complete:true,schemaRev
 const values={'Validate Request':init};
 for (const source of Object.keys(revisions)) for(const pass of [1,2]) values[`Observe ${source} 1.${pass}`]={snapshot:snapshot(source)};
 const collect=()=>evaluate('Collect Attempt 1',{},values)[0].json;
+// Exercise both collectors: a retry must accept the same complete enlarged source.
+for (const attempt of [1,2]) for (const count of [1001,2000,2001]) {
+  const grown={};
+  for(const source of Object.keys(revisions)) for(const pass of [1,2]) {
+    const objects=source==='n8n'?Array.from({length:count},(_,i)=>({kind:'workflow',id:`fixture-${i}`,published:false})):[];
+    grown[`Observe ${source} ${attempt}.${pass}`]={snapshot:snapshot(source,objects)};
+  }
+  grown['Validate Request']=init;
+  const result=evaluate(`Collect Attempt ${attempt}`,{},grown)[0].json;
+  const observed=result.sources.find(s=>s.source==='n8n');
+  assert.equal(observed.complete,count<=2000,`attempt ${attempt}, ${count} objects`);
+  if(count<=2000) assert.equal(observed.objectCount,count);
+  else {assert.equal(observed.errorCode,'limit_exceeded');assert.equal(observed.objects,undefined);}
+}
 assert.equal(collect().retryRequired,false);
 assert.ok(collect().sources.every(s=>s.complete));
 values['Observe n8n 1.2'].snapshot.observedAt=new Date(Date.now()-10).toISOString();
