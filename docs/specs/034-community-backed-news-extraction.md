@@ -40,6 +40,12 @@ publisher extraction logic. A recognized rule is necessary but does not alone
 enable a source: representative public articles must pass quality acceptance.
 Rich feeds remain on ordinary RSS delivery without article fetching or rewriting.
 
+With production requests enabled, startup applies community mode to existing
+WIRED and Ars Technica subscriptions with neither a saved mode nor a native
+extraction selector. It uses their accepted public RSS URLs and eligibility checks, adds no
+subscriptions, and preserves explicit RSS choices and other sources. Disable
+requests through Git to stop fetching while keeping accepted-body preservation.
+
 WIRED and Ars Technica are enrichment candidates. Pages with multiple article
 elements use RSS fallback because an additional article can contain a reader
 comment or unrelated story. Car and Driver retains RSS: its current community
@@ -134,6 +140,9 @@ accepts enrichment. Reader View remains available for these articles. There is n
 automatic background reprocessing of previously synchronized snippets. A later
 reprocessing feature would need separate acceptance for existing item identity,
 concurrent state changes, and native client caches.
+NetNewsWire may retain a previously downloaded summary even when FreshRSS later
+stores an accepted full body for that item. Fresh downloads use the current body;
+activation does not replace the client's existing article cache.
 
 ## Worker interface and failure isolation
 

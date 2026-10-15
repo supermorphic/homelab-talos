@@ -358,6 +358,8 @@ advertisements, or upgrade nagging is an acceptance requirement for the client. 
 Use FreshRSS's self-hosted
 [Google Reader–compatible synchronization API](https://freshrss.github.io/FreshRSS/en/developers/06_GoogleReader_API.html)
 over trusted HTTPS, authenticated with a separate FreshRSS API password. This
+API uses the FreshRSS base URL followed by `/api/greader.php` in NetNewsWire's
+API URL field. The
 community-supported compatibility interface has no dependency on Google's
 discontinued service. Prefer it over the Fever API, consistent with
 [FreshRSS's mobile-access guidance](https://freshrss.github.io/FreshRSS/en/users/06_Mobile_access.html).

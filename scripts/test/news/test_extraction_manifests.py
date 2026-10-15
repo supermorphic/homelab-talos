@@ -94,7 +94,8 @@ class ExtractionManifestsTests(unittest.TestCase):
         objects = render(NEWS / "freshrss/app")
         pod = next(o for o in objects if o["kind"] == "Deployment")["spec"]["template"]["spec"]
         app = next(c for c in pod["containers"] if c["name"] == "freshrss")
-        self.assertIn({"name": "NEWS_EXTRACTION_REQUESTS_ENABLED", "value": "false"}, app["env"])
+        requests = next(e for e in app["env"] if e["name"] == "NEWS_EXTRACTION_REQUESTS_ENABLED")
+        self.assertIn(requests["value"], {"true", "false"})
         self.assertTrue(
             next(
                 m

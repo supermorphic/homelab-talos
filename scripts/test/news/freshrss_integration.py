@@ -507,6 +507,96 @@ def main(*, extraction=False, extraction_recovery=False):
                 )
                 result = run("exec", names["app"], "php", "/extraction-tests.php")
                 print(result.stdout.decode(), end="")
+                # Create subscriptions through the real DAO without fetching them.
+                defaults = {
+                    "wired": "https://www.wired.com/feed/rss",
+                    "ars": "https://feeds.arstechnica.com/arstechnica/index",
+                    "other": "https://example.com/independent-rich.xml",
+                }
+                setup = (
+                    "require '/var/www/FreshRSS/cli/_cli.php';cliInitUser('reader');"
+                    "$dao=FreshRSS_Factory::createFeedDao();foreach(json_decode($argv[1],true) as $name=>$url){"
+                    "$f=new FreshRSS_Feed($url);$f->_name($name);$f->_categoryId(1);"
+                    "if($name==='ars')$f->_attribute('community_extraction_mode','rss');"
+                    "$id=$dao->addFeedObject($f);if(!$id||!$dao->updateFeed($id,['ttl'=>-1]))exit(1);}"
+                )
+                run("exec", names["app"], "php", "-r", setup, json.dumps(defaults))
+
+                def default_modes():
+                    probe = (
+                        "require '/var/www/FreshRSS/cli/_cli.php';cliInitUser('reader');"
+                        "$dao=FreshRSS_Factory::createFeedDao();$out=[];foreach(json_decode($argv[1],true) as $name=>$url){"
+                        "$f=$dao->searchByUrl($url);$out[$name]=$f->attributeString('community_extraction_mode');}"
+                        "echo json_encode($out);"
+                    )
+                    return json.loads(
+                        run("exec", names["app"], "php", "-r", probe, json.dumps(defaults)).stdout
+                    )
+
+                before = {"wired": None, "ars": "rss", "other": None}
+                assert default_modes() == before
+                run(
+                    "exec",
+                    "-e",
+                    "NEWS_EXTRACTION_REQUESTS_ENABLED=false",
+                    names["app"],
+                    "php",
+                    "/opt/news/bootstrap.php",
+                )
+                assert default_modes() == before, "disabled requests changed feed defaults"
+                for _ in range(2):
+                    run(
+                        "exec",
+                        "-e",
+                        "NEWS_EXTRACTION_REQUESTS_ENABLED=true",
+                        names["app"],
+                        "php",
+                        "/opt/news/bootstrap.php",
+                    )
+                    assert default_modes() == {
+                        "wired": "community",
+                        "ars": "rss",
+                        "other": None,
+                    }, "approved defaults missing or explicit RSS choice overwritten"
+                customize = (
+                    "require '/var/www/FreshRSS/cli/_cli.php';cliInitUser('reader');"
+                    "$dao=FreshRSS_Factory::createFeedDao();$urls=json_decode($argv[1],true);"
+                    "$wired=$dao->searchByUrl($urls['wired']);$ars=$dao->searchByUrl($urls['ars']);"
+                    "if(!$dao->updateFeed($wired->id(),['attributes'=>['community_extraction_mode'=>'rss']])||"
+                    "!$dao->updateFeed($ars->id(),['attributes'=>[],'pathEntries'=>'//article']))exit(1);"
+                )
+                run("exec", names["app"], "php", "-r", customize, json.dumps(defaults))
+                run(
+                    "exec",
+                    "-e",
+                    "NEWS_EXTRACTION_REQUESTS_ENABLED=true",
+                    names["app"],
+                    "php",
+                    "/opt/news/bootstrap.php",
+                )
+                assert default_modes() == {"wired": "rss", "ars": None, "other": None}, (
+                    "startup overwrote explicit RSS or native extraction"
+                )
+                run(
+                    "exec",
+                    names["app"],
+                    "php",
+                    "-r",
+                    "require '/var/www/FreshRSS/cli/_cli.php';cliInitUser('reader');$d=FreshRSS_Factory::createFeedDao();$f=$d->searchByUrl($argv[1]);if(!$d->updateFeed($f->id(),['pathEntries'=>'']))exit(1);",
+                    defaults["ars"],
+                )
+                run(
+                    "exec",
+                    "-e",
+                    "NEWS_EXTRACTION_REQUESTS_ENABLED=true",
+                    names["app"],
+                    "php",
+                    "/opt/news/bootstrap.php",
+                )
+                assert default_modes() == {"wired": "rss", "ars": "community", "other": None}
+                print(
+                    "Accepted startup defaults preserve explicit RSS, native extraction and other feeds"
+                )
                 account = {
                     "user": "news583_" + secrets.token_hex(6),
                     "owner": secrets.token_hex(32),
