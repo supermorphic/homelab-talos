@@ -9,7 +9,7 @@ final class Client {
     private float $used=0;
     private \Closure $clock;
     private float $deadline;
-    private const REASONS=['community_rule','not_modified','destination_rejected','request_invalid','timeout','body_limit','header_limit','encoding_rejected','fetch_failed','rate_limited','http_denied','non_html','redirect_limit','origin_cooldown','malformed','restricted','no_rule','no_body_rule','secondary_request_required','secondary_request_denied','extraction_failed','generic_rejected','selector_miss','insufficient_content','reply_invalid','job_timeout','job_failed'];
+    private const REASONS=['community_rule','not_modified','destination_rejected','request_invalid','timeout','body_limit','header_limit','encoding_rejected','fetch_failed','rate_limited','http_denied','non_html','redirect_limit','origin_cooldown','malformed','restricted','ambiguous_article','no_rule','no_body_rule','secondary_request_required','secondary_request_denied','extraction_failed','generic_rejected','selector_miss','insufficient_content','reply_invalid','job_timeout','job_failed'];
     public function __construct(string $manifest='/opt/news-extraction/release.json',private ?\Closure $transport=null,?\Closure $clock=null) {
         $this->clock=$clock??fn()=>hrtime(true)/1e9;
         $this->deadline=($this->clock)()+max(0,min(300,(int)(getenv('NEWS_REFRESH_DEADLINE')?:time()+300)-time()));

@@ -17,6 +17,7 @@ from scripts.test.news.extraction_corpus import (
     export_archive,
     retrieve_archive,
     validate_corpus,
+    validate_replay_contract,
 )
 
 
@@ -168,6 +169,34 @@ class ReleaseGateTests(unittest.TestCase):
             assess(complete.replace("/illustration.jpg", "/unrelated.jpg"), reference)["pass"]
         )
 
+    def test_ordered_editorial_repeats_match_later_occurrences(self):
+        reference = {
+            "blocks": [
+                {"tag": "p", "text": "The price is 25 dollars."},
+                {"tag": "p", "text": "A later editorial paragraph."},
+                {"tag": "p", "text": "25 dollars"},
+            ],
+            "paragraph_order": [
+                "The price is 25 dollars.",
+                "A later editorial paragraph.",
+                "25 dollars",
+            ],
+            "images": ["/first.jpg", "/second.jpg", "/first.jpg"],
+            "image_order": ["/first.jpg", "/second.jpg", "/first.jpg"],
+        }
+        complete = (
+            '<p>The price is 25 dollars.</p><img src="/first.jpg">'
+            '<p>A later editorial paragraph.</p><img src="/second.jpg">'
+            '<p>25 dollars</p><img src="/first.jpg">'
+        )
+        self.assertTrue(assess(complete, reference)["pass"])
+        for incomplete in (
+            complete.replace("<p>25 dollars</p>", ""),
+            complete.removesuffix('<img src="/first.jpg">'),
+        ):
+            with self.subTest(incomplete=incomplete):
+                self.assertFalse(assess(incomplete, reference)["pass"])
+
     def test_missing_or_tampered_corpus_fails(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -191,6 +220,45 @@ class ReleaseGateTests(unittest.TestCase):
             (root / "case.html").write_text("changed")
             with self.assertRaises(ValueError):
                 validate_corpus(root)
+
+    def test_replacement_corpus_retains_its_reviewed_lineage_and_baseline(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "case.html").write_bytes(b"Replacement editorial input")
+            manifest = {
+                "schema": 2,
+                "revision": "replacement-20261015",
+                "replaces_sha256": "a" * 64,
+                "baseline_ids": ["replacement-case"],
+                "cases": [
+                    {
+                        "id": "replacement-case",
+                        "html": "case.html",
+                        "sha256": hashlib.sha256(b"Replacement editorial input").hexdigest(),
+                    }
+                ],
+                "reviews": {},
+            }
+            (root / "manifest.json").write_text(json.dumps(manifest))
+            actual, digest = validate_corpus(root)
+            reviewed = {
+                "schema": 2,
+                "revision": "replacement-20261015",
+                "replaces_sha256": "a" * 64,
+                "baseline_ids": ["replacement-case"],
+                "sha256": digest,
+                "cases": {"replacement-case": {}},
+            }
+            validate_replay_contract(actual, digest, reviewed)
+            for field, value in (
+                ("revision", "unreviewed-replacement"),
+                ("replaces_sha256", "b" * 64),
+                ("baseline_ids", ["unreviewed-case"]),
+                ("baseline_ids", ["replacement-case", "replacement-case"]),
+            ):
+                invalid = {**actual, field: value}
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    validate_replay_contract(invalid, digest, reviewed)
 
     def test_private_archive_round_trip_and_link_rejection(self):
         with tempfile.TemporaryDirectory() as temporary:

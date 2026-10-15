@@ -14,6 +14,9 @@ check(!str_contains($result['html'],'Publisher navigation'),'page chrome leaked'
 check(str_contains($result['html'],'First caption') && strpos($result['html'],'first.jpg')<strpos($result['html'],'second.jpg'),'media order/captions lost');
 check(str_contains($result['html'],'<table') && str_contains($result['html'],'<ul') && str_contains($result['html'],'https://arstechnica.com/reference'),'editorial structure/links lost');
 check(isset($result['rules']['arstechnica.com.txt']),'actual matched rule provenance missing');
+$ambiguous='<article><p>'.$paragraph.'</p><article><p>Independent reader comment that is not editorial article content.</p></article></article>';
+$ambiguousResult=$extractor->extract('https://arstechnica.com/fixture',$ambiguous);
+check($ambiguousResult['decision']==='rejected'&&$ambiguousResult['reason']==='ambiguous_article','multiple article elements allowed unrelated content into the selected body');
 foreach ([['https://unsupported.invalid/',$page,'no_rule'],['https://arstechnica.com/','<html><body><p>'.$paragraph.'</p></body></html>','selector_miss'],['https://arstechnica.com/','<article><p>Subscribe to continue reading this article.</p></article>','restricted'],['https://arstechnica.com/','<html><script type="application/ld+json">{"isAccessibleForFree":false}</script>'.$page.'</html>','restricted'],['https://arstechnica.com/','<article><h2>This article is only for paid subscribers</h2><p>'.$paragraph.'</p></article>','restricted']] as [$url,$input,$reason]) {
     $r=$extractor->extract($url,$input);
     check($r['decision']==='rejected'&&!isset($r['html'])&&$r['reason']===$reason,'rejection lost: '.$reason);
