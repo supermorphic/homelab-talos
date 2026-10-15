@@ -21,7 +21,7 @@ final class Server {
     private int $requests=0;
     private ?\React\Socket\SocketServer $socket=null;
     private ?\React\Socket\SocketServer $metricsSocket=null;
-    private const REASONS=['community_rule','not_modified','destination_rejected','request_invalid','timeout','body_limit','header_limit','encoding_rejected','fetch_failed','rate_limited','http_denied','non_html','redirect_limit','origin_cooldown','malformed','restricted','no_rule','no_body_rule','secondary_request_required','secondary_request_denied','extraction_failed','generic_rejected','selector_miss','insufficient_content','reply_invalid','job_timeout','job_failed'];
+    private const REASONS=['community_rule','not_modified','destination_rejected','request_invalid','timeout','body_limit','header_limit','encoding_rejected','fetch_failed','rate_limited','http_denied','non_html','redirect_limit','origin_cooldown','malformed','restricted','ambiguous_article','no_rule','no_body_rule','secondary_request_required','secondary_request_denied','extraction_failed','generic_rejected','selector_miss','insufficient_content','reply_invalid','job_timeout','job_failed'];
     public function __construct(private Release $release,private array $limits,private ?\Closure $jobFactory=null) {}
     private static function now(): float { return hrtime(true)/1e9; }
     private static function response(int $status,array $reply): ResponseInterface {

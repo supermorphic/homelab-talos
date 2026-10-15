@@ -29,7 +29,7 @@
     "src/Fetcher.php": "8cb2e580ceee180821595eca316ed9bbf5552907a0abeaf262af41ca2d0f6451",
     "src/Release.php": "7a80116ad7e82518b3484d43357c50aac9f2125b8569e6a3e8d03ec876779cb1",
     "src/Sanitizer.php": "42b0339dcf31914a8d250a115ef6818cdbce83e4d23107fac88c90d733ed4f94",
-    "src/Server.php": "fd5b0834d1f05ed9a0904ea5bf36f6fb0427794ebee85b3448b25301b608ac7a"
+    "src/Server.php": "a7210d7256ee10cd002f9922094e857f3d62c096447ece097c85d638dd2b39a8"
   },
   "extension_files": {
     "Client.php": "b6c8bf10b3c0599707b95b90097c7b7bc1b61b53828df41abe0d92829cb1d8da",
@@ -209,5 +209,5 @@
       }
     }
   },
-  "id": "1e1cf40b083fa058042921882c5f612659ab4dca6d99f6b1599804d3d6ed3266"
+  "id": "aa2c00e8c222505978194ca1892f438838a53925401b8332ee458acb4b89e392"
 }

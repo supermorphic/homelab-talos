@@ -31,7 +31,7 @@ try {
     check(json_decode(httpRequest('/extract',$request('https://another.example/ok'))['body'],true)['decision']==='accepted','origin cooldown disabled another publisher');
     $metrics=httpRequest('/metrics',null,18083)['body'];
     check(str_contains($metrics,'news_extraction_request_seconds_count 3'),'invalid/cooldown request spawned a job');
-    foreach (['stdout'=>'reply_invalid','stderr'=>'job_failed','invalid'=>'reply_invalid','conditional'=>'not_modified'] as $case=>$reason) {
+    foreach (['stdout'=>'reply_invalid','stderr'=>'job_failed','invalid'=>'reply_invalid','conditional'=>'not_modified','ambiguous'=>'ambiguous_article','unknown-reason'=>'reply_invalid'] as $case=>$reason) {
         $reply=json_decode(httpRequest('/extract',$request('https://another.example/'.$case))['body'],true);
         check(($reply['reason']??'')===$reason,'bounded/conditional reply case failed: '.$case);
     }
@@ -57,6 +57,7 @@ try {
     $timed=httpRequest('/extract',$request('https://fixture.example/hang'));
     check($timed['seconds']<10&&json_decode($timed['body'],true)['reason']==='job_timeout','hung child exceeded client deadline');
     $metrics=httpRequest('/metrics',null,18083)['body'];
+    check(str_contains($metrics,'news_extraction_decisions_total{reason="ambiguous_article"} 1')&&!str_contains($metrics,'unreviewed_reason'),'reviewed rejection reason missing from bounded metrics');
     check(str_contains($metrics,'news_extraction_active_jobs 0')&&!str_contains($metrics,'fixture.example'),'metrics exposed origin or stale job');
     unlink('/work/job-started');
     $socket=stream_socket_client('tcp://127.0.0.1:18082'); $body=$request('https://fixture.example/hang');

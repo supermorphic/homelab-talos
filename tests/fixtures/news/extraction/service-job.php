@@ -18,5 +18,7 @@ if (str_contains($request['url'],'/stderr')) { fwrite(STDERR,str_repeat('x',8193
 $reply=['decision'=>'accepted','release_id'=>$request['expected_release'],'reason'=>'community_rule','html'=>'<p>synthetic body</p>','rules'=>['fixture.txt'=>str_repeat('a',64)],'final_url'=>$request['url'],'validators'=>[]];
 if (str_contains($request['url'],'/rate')) { $reply=['decision'=>'rejected','release_id'=>$request['expected_release'],'reason'=>'rate_limited','retry_after'=>60]; }
 if (str_contains($request['url'],'/conditional')) { $reply=['decision'=>'not_modified','reason'=>'not_modified','release_id'=>$request['expected_release']]; }
+if (str_contains($request['url'],'/ambiguous')) { $reply=['decision'=>'rejected','reason'=>'ambiguous_article','release_id'=>$request['expected_release']]; }
+if (str_contains($request['url'],'/unknown-reason')) { $reply=['decision'=>'rejected','reason'=>'unreviewed_reason','release_id'=>$request['expected_release']]; }
 if (str_contains($request['url'],'/invalid')) { $reply['release_id']=str_repeat('0',64); }
 echo json_encode($reply);
