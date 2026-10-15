@@ -1,12 +1,20 @@
 """Invariants that keep acceptance fixtures out of production traffic and data."""
 
 import copy
+import hashlib
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
 import yaml
 
-from scripts.test.news.production_acceptance import cold_policy, validate_native, worker_fixture
+from scripts.test.news.production_acceptance import (
+    cold_policy,
+    load_live_references,
+    validate_native,
+    worker_fixture,
+)
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -98,6 +106,51 @@ class FixtureTests(unittest.TestCase):
             for value in (False, "true", None):
                 with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                     validate_native({**receipt, key: value})
+
+    def test_live_references_bind_new_identity_source_and_independent_review(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.html"
+            source.write_text("<article><p>Independent synthetic revision.</p></article>")
+            reference = {"blocks": [{"tag": "p", "text": "Independent synthetic revision."}]}
+            source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+            ref_hash = hashlib.sha256(
+                json.dumps(
+                    reference, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+                ).encode()
+            ).hexdigest()
+            case = {
+                "id": "synthetic-live-v2",
+                "replaces_case_id": "synthetic-v1",
+                "url": "https://example.com/article",
+                "source": "source.html",
+                "source_sha256": source_hash,
+                "reference": reference,
+                "review": {
+                    "status": "reviewed",
+                    "source_sha256": source_hash,
+                    "reference_sha256": ref_hash,
+                    "schema_segments_missing": 0,
+                },
+            }
+            document = {"schema": 1, "corpus_sha256": "a" * 64, "cases": [case]}
+            path = root / "live.json"
+            path.write_text(json.dumps(document))
+            originals = {"synthetic-v1": {"url": case["url"]}}
+            loaded = load_live_references(path, "a" * 64, originals)
+            self.assertEqual(loaded["synthetic-v1"]["id"], "synthetic-live-v2")
+            for field, value in (
+                ("id", "synthetic-v1"),
+                ("url", "https://example.com/other"),
+                ("source", "../foreign.html"),
+                ("source_sha256", "0" * 64),
+                ("review", {}),
+            ):
+                invalid = copy.deepcopy(document)
+                invalid["cases"][0][field] = value
+                path.write_text(json.dumps(invalid))
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    load_live_references(path, "a" * 64, originals)
 
 
 if __name__ == "__main__":

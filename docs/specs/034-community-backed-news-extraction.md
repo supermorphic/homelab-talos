@@ -343,6 +343,12 @@ NetNewsWire account before submitting the receipt. Failed or incomplete acceptan
 keeps production requests disabled. Cleanup failure requires inspection of the
 private ownership ledger; never adopt or delete a same-named replacement resource.
 
+When a publisher revises a frozen article, retain a fresh source capture and an
+independently reviewed complete reference under a new observation identity.
+`NEWS_ACCEPTANCE_LIVE_REFERENCES` may select these private references for current
+publisher acceptance; source and review fingerprints must match. Frozen corpus
+replay and its release fingerprint remain unchanged.
+
 If they require ongoing local publisher rules, widespread browser rendering, or
 unsafe generic fallback, retain direct rich RSS plus summaries/Reader View and
 stop extending custom extraction work.

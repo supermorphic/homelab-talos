@@ -418,6 +418,54 @@ echo json_encode($results,JSON_THROW_ON_ERROR);
     return checks
 
 
+def load_live_references(path: Path | None, corpus_sha: str, originals: dict) -> dict:
+    """Bind separately reviewed current observations without changing frozen replay inputs."""
+    if path is None:
+        return {}
+    document = json.loads(path.read_text())
+    if document.get("schema") != 1 or document.get("corpus_sha256") != corpus_sha:
+        raise ValueError("live references must identify the frozen corpus")
+    result, identities = {}, set(originals)
+    for case in document["cases"]:
+        previous, identity = case["replaces_case_id"], case["id"]
+        if (
+            previous not in originals
+            or previous in result
+            or not re.fullmatch(r"[a-zA-Z0-9_-]+", identity)
+            or identity in identities
+            or case["url"] != originals[previous]["url"]
+        ):
+            raise ValueError("live reference identity differs from its selected publisher")
+        source = Path(case["source"])
+        if source.is_absolute() or ".." in source.parts:
+            raise ValueError("live source must remain beside its reference")
+        source = path.parent / source
+        if (
+            source.is_symlink()
+            or not source.resolve().is_relative_to(path.parent.resolve())
+            or not source.is_file()
+            or hashlib.sha256(source.read_bytes()).hexdigest() != case["source_sha256"]
+        ):
+            raise ValueError("live source fingerprint differs")
+        reference, review = case["reference"], case.get("review", {})
+        reference_sha = hashlib.sha256(
+            json.dumps(
+                reference, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+        if (
+            not reference.get("blocks")
+            or review.get("status") != "reviewed"
+            or review.get("source_sha256") != case["source_sha256"]
+            or review.get("reference_sha256") != reference_sha
+            or review.get("schema_segments_missing") != 0
+        ):
+            raise ValueError("live reference requires complete independently reviewed evidence")
+        identities.add(identity)
+        result[previous] = case
+    return result
+
+
 def validate_native(receipt):
     required = (
         "clean_account",
@@ -459,6 +507,12 @@ def execute(client: Acceptance, corpus: Path):
     if digest != client.release["corpus"]["sha256"]:
         raise RuntimeError("retained corpus differs from release")
     cases = selected_cases(manifest)
+    live_path = os.environ.get("NEWS_ACCEPTANCE_LIVE_REFERENCES")
+    live = load_live_references(
+        Path(live_path) if live_path else None,
+        digest,
+        {c["id"]: c for c in manifest["cases"]},
+    )
     now = int(time.time())
     payload = [
         {
@@ -528,15 +582,24 @@ def execute(client: Acceptance, corpus: Path):
     stored = client.account("ingest", cases=payload)
     client.private_json("initial-ingestion.json", stored)
     by_id = {c["case_id"]: c for c in stored["cases"]}
-    quality = [
-        {"case_id": c["id"], **assess(by_id[c["id"]]["html"], c["reference"])} for c in cases
-    ]
+    quality = []
+    for case in cases:
+        reference = live.get(case["id"], case)
+        observation = {
+            "case_id": reference["id"],
+            **assess(by_id[case["id"]]["html"], reference["reference"]),
+        }
+        if case["id"] in live:
+            observation.update(
+                replaces_case_id=case["id"], source_sha256=reference["source_sha256"]
+            )
+        quality.append(observation)
+    client.result["editorial"] = quality
     if (
         not all(q["pass"] for q in quality)
         or by_id[rich["id"]]["html"] != baseline["cases"][0]["html"]
     ):
         raise RuntimeError("deployed editorial or rich RSS preservation gate failed")
-    client.result["editorial"] = quality
     client.result["rich_rss_unchanged"] = True
     fault_cases = [{**payload[0], "rss": "<p>Genuine changed summary during outage.</p>"}]
     fault_cases.extend(
@@ -657,6 +720,7 @@ def execute(client: Acceptance, corpus: Path):
             "case_ids": [c["id"] for c in payload],
             "cache_case_id": cache_case["id"],
             "credentials_file": str(client.private / "fixture-credentials.json"),
+            "live_reference_file": live_path,
             "receipt_template": {
                 "client": "NetNewsWire",
                 "version": None,
