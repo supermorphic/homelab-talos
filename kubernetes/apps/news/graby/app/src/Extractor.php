@@ -63,6 +63,11 @@ final class Extractor {
     public function extract(string $url,string $html): array {
         if ($html==='' || strlen($html)>$this->limits['publisher_bytes'] || !str_contains($html,'<')) { return self::reject('malformed'); }
         if (self::restricted($html)) { return self::reject('restricted'); }
+        // Separate article elements may contain reader comments or related
+        // stories. A generic extractor cannot prove which are editorial.
+        $source=Sanitizer::document($html);
+        if ($source->getElementsByTagName('article')->length>1) { return self::reject('ambiguous_article'); }
+        unset($source);
         $files=new RuleFiles($this->rules); $trace=new RuleTrace();
         $builder=new \Graby\SiteConfig\ConfigBuilder([], $trace,$files);
         $host=strtolower((string)parse_url($url,PHP_URL_HOST));

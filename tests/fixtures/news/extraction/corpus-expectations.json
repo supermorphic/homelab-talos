@@ -1,331 +1,396 @@
 {
-  "sha256": "7f0b05f965495c072e0ab949ec0398f6ae4c34ce7483e999e1efc72539df2c00",
-  "original_ids": [
-    "wired-0",
-    "wired-4",
-    "wired-7",
-    "wired-1",
-    "caranddriver-5",
-    "caranddriver-6",
-    "caranddriver-7",
-    "caranddriver-1",
-    "newsline-0",
-    "newsline-1",
-    "newsline-2",
-    "milehighreport-0",
-    "milehighreport-1",
-    "milehighreport-3",
-    "ars-0",
-    "ars-1",
-    "ars-2"
+  "schema": 2,
+  "revision": "replacement-20261015",
+  "replaces_sha256": "7f0b05f965495c072e0ab949ec0398f6ae4c34ce7483e999e1efc72539df2c00",
+  "baseline_ids": [
+    "wired-0-r20261015",
+    "wired-4-r20261015",
+    "wired-7-r20261015",
+    "wired-1-r20261015",
+    "caranddriver-5-r20261015",
+    "caranddriver-6-r20261015",
+    "caranddriver-7-r20261015",
+    "caranddriver-1-r20261015",
+    "newsline-0-r20261015",
+    "newsline-1-r20261015",
+    "newsline-2-r20261015",
+    "milehighreport-0-r20261015",
+    "milehighreport-1-r20261015",
+    "milehighreport-3-r20261015",
+    "ars-0-r20261015",
+    "ars-1-r20261015",
+    "ars-2-r20261015"
   ],
+  "sha256": "7d17d7b05ab5533078246c32c101c2584c75d76dbe8481bdb65ccc9f46f5dd92",
   "cases": {
-    "wired-0": {
+    "wired-0-r20261015": {
+      "replaces_case_id": "wired-0",
       "mode": "community",
       "expected": "accepted",
-      "blocks": 21
+      "blocks": 11
     },
-    "wired-4": {
-      "mode": "community",
-      "expected": "accepted",
-      "blocks": 16
-    },
-    "wired-7": {
-      "mode": "community",
-      "expected": "accepted",
-      "blocks": 13
-    },
-    "wired-1": {
-      "mode": "community",
-      "expected": "accepted",
-      "blocks": 31
-    },
-    "caranddriver-5": {
-      "mode": "community",
-      "expected": "accepted",
-      "blocks": 12
-    },
-    "caranddriver-6": {
-      "mode": "community",
-      "expected": "accepted",
-      "blocks": 24
-    },
-    "caranddriver-7": {
+    "wired-4-r20261015": {
+      "replaces_case_id": "wired-4",
       "mode": "community",
       "expected": "accepted",
       "blocks": 25
     },
-    "caranddriver-1": {
+    "wired-7-r20261015": {
+      "replaces_case_id": "wired-7",
       "mode": "community",
-      "expected": "rejected",
-      "blocks": 0
+      "expected": "accepted",
+      "blocks": 28
     },
-    "newsline-0": {
-      "mode": "rss",
-      "expected": "rss",
+    "wired-1-r20261015": {
+      "replaces_case_id": "wired-1",
+      "mode": "community",
+      "expected": "accepted",
       "blocks": 19
     },
-    "newsline-1": {
-      "mode": "rss",
-      "expected": "rss",
-      "blocks": 27
-    },
-    "newsline-2": {
-      "mode": "rss",
-      "expected": "rss",
-      "blocks": 19
-    },
-    "milehighreport-0": {
-      "mode": "rss",
-      "expected": "rss",
-      "blocks": 22
-    },
-    "milehighreport-1": {
+    "caranddriver-5-r20261015": {
+      "replaces_case_id": "caranddriver-5",
       "mode": "rss",
       "expected": "rss",
       "blocks": 10
     },
-    "milehighreport-3": {
+    "caranddriver-6-r20261015": {
+      "replaces_case_id": "caranddriver-6",
       "mode": "rss",
       "expected": "rss",
-      "blocks": 68
-    },
-    "ars-0": {
-      "mode": "community",
-      "expected": "accepted",
-      "blocks": 23
-    },
-    "ars-1": {
-      "mode": "community",
-      "expected": "accepted",
-      "blocks": 13
-    },
-    "ars-2": {
-      "mode": "community",
-      "expected": "accepted",
-      "blocks": 17
-    },
-    "no-rule-wired-0": {
-      "mode": "community",
-      "expected": "rejected",
       "blocks": 0
     },
-    "no-rule-caranddriver-5": {
-      "mode": "community",
-      "expected": "rejected",
+    "caranddriver-7-r20261015": {
+      "replaces_case_id": "caranddriver-7",
+      "mode": "rss",
+      "expected": "rss",
+      "blocks": 39
+    },
+    "caranddriver-1-r20261015": {
+      "replaces_case_id": "caranddriver-1",
+      "mode": "rss",
+      "expected": "rss",
       "blocks": 0
     },
-    "no-rule-ars-0": {
-      "mode": "community",
-      "expected": "rejected",
-      "blocks": 0
+    "newsline-0-r20261015": {
+      "replaces_case_id": "newsline-0",
+      "mode": "rss",
+      "expected": "rss",
+      "blocks": 24
     },
-    "control-public": {
-      "mode": "community",
-      "expected": "accepted",
-      "blocks": 9
-    },
-    "control-empty": {
-      "mode": "community",
-      "expected": "rejected",
-      "blocks": 0
-    },
-    "control-malformed": {
-      "mode": "community",
-      "expected": "rejected",
-      "blocks": 0
-    },
-    "control-restricted": {
-      "mode": "community",
-      "expected": "rejected",
-      "blocks": 0
-    },
-    "wired-live-0": {
-      "mode": "community",
-      "expected": "accepted",
-      "blocks": 105
-    },
-    "wired-live-1": {
-      "mode": "community",
-      "expected": "accepted",
-      "blocks": 46
-    },
-    "caranddriver-live-0": {
-      "mode": "community",
-      "expected": "accepted",
-      "blocks": 20
-    },
-    "caranddriver-live-1": {
-      "mode": "community",
-      "expected": "accepted",
-      "blocks": 22
-    },
-    "ars-live-0": {
-      "mode": "community",
-      "expected": "accepted",
-      "blocks": 12
-    },
-    "ars-live-1": {
-      "mode": "community",
-      "expected": "accepted",
-      "blocks": 12
-    },
-    "bbc-live-0": {
+    "newsline-1-r20261015": {
+      "replaces_case_id": "newsline-1",
       "mode": "rss",
       "expected": "rss",
       "blocks": 32
     },
-    "bbc-live-1": {
+    "newsline-2-r20261015": {
+      "replaces_case_id": "newsline-2",
       "mode": "rss",
       "expected": "rss",
-      "blocks": 0
+      "blocks": 25
     },
-    "guardian-live-0": {
+    "milehighreport-0-r20261015": {
+      "replaces_case_id": "milehighreport-0",
       "mode": "rss",
       "expected": "rss",
-      "blocks": 19
+      "blocks": 39
     },
-    "guardian-live-1": {
+    "milehighreport-1-r20261015": {
+      "replaces_case_id": "milehighreport-1",
       "mode": "rss",
       "expected": "rss",
-      "blocks": 20
+      "blocks": 74
     },
-    "npr-live-0": {
-      "mode": "rss",
-      "expected": "rss",
-      "blocks": 12
-    },
-    "npr-live-1": {
+    "milehighreport-3-r20261015": {
+      "replaces_case_id": "milehighreport-3",
       "mode": "rss",
       "expected": "rss",
       "blocks": 36
     },
-    "bleepingcomputer-live-0": {
-      "mode": "rss",
-      "expected": "rss",
-      "blocks": 0
+    "ars-0-r20261015": {
+      "replaces_case_id": "ars-0",
+      "mode": "community",
+      "expected": "rejected",
+      "blocks": 11
     },
-    "bleepingcomputer-live-1": {
-      "mode": "rss",
-      "expected": "rss",
-      "blocks": 0
-    },
-    "coloradosun-live-0": {
-      "mode": "rss",
-      "expected": "rss",
-      "blocks": 0
-    },
-    "coloradosun-live-1": {
-      "mode": "rss",
-      "expected": "rss",
-      "blocks": 0
-    },
-    "outside-live-1": {
-      "mode": "rss",
-      "expected": "rss",
-      "blocks": 0
-    },
-    "sciencenews-live-0": {
-      "mode": "rss",
-      "expected": "rss",
-      "blocks": 0
-    },
-    "sciencenews-live-1": {
-      "mode": "rss",
-      "expected": "rss",
-      "blocks": 0
-    },
-    "revalidated-wired-0": {
+    "ars-1-r20261015": {
+      "replaces_case_id": "ars-1",
       "mode": "community",
       "expected": "accepted",
-      "blocks": 22
+      "blocks": 12
     },
-    "revalidated-wired-4": {
+    "ars-2-r20261015": {
+      "replaces_case_id": "ars-2",
       "mode": "community",
       "expected": "accepted",
       "blocks": 16
     },
-    "revalidated-wired-7": {
-      "mode": "community",
-      "expected": "accepted",
-      "blocks": 13
-    },
-    "revalidated-wired-1": {
-      "mode": "community",
-      "expected": "accepted",
-      "blocks": 33
-    },
-    "revalidated-caranddriver-5": {
-      "mode": "community",
-      "expected": "accepted",
-      "blocks": 14
-    },
-    "revalidated-caranddriver-6": {
-      "mode": "community",
-      "expected": "accepted",
-      "blocks": 26
-    },
-    "revalidated-caranddriver-7": {
-      "mode": "community",
-      "expected": "accepted",
-      "blocks": 27
-    },
-    "revalidated-caranddriver-1": {
+    "no-rule-wired-0-r20261015": {
+      "replaces_case_id": "no-rule-wired-0",
       "mode": "community",
       "expected": "rejected",
       "blocks": 0
     },
-    "revalidated-ars-0": {
+    "no-rule-caranddriver-5-r20261015": {
+      "replaces_case_id": "no-rule-caranddriver-5",
+      "mode": "community",
+      "expected": "rejected",
+      "blocks": 0
+    },
+    "no-rule-ars-0-r20261015": {
+      "replaces_case_id": "no-rule-ars-0",
+      "mode": "community",
+      "expected": "rejected",
+      "blocks": 0
+    },
+    "control-public-r20261015": {
+      "replaces_case_id": "control-public",
       "mode": "community",
       "expected": "accepted",
-      "blocks": 23
+      "blocks": 9
     },
-    "revalidated-ars-1": {
+    "control-empty-r20261015": {
+      "replaces_case_id": "control-empty",
+      "mode": "community",
+      "expected": "rejected",
+      "blocks": 0
+    },
+    "control-malformed-r20261015": {
+      "replaces_case_id": "control-malformed",
+      "mode": "community",
+      "expected": "rejected",
+      "blocks": 0
+    },
+    "control-restricted-r20261015": {
+      "replaces_case_id": "control-restricted",
+      "mode": "community",
+      "expected": "rejected",
+      "blocks": 0
+    },
+    "wired-live-0-r20261015": {
+      "replaces_case_id": "wired-live-0",
       "mode": "community",
       "expected": "accepted",
-      "blocks": 13
+      "blocks": 94
     },
-    "revalidated-ars-2": {
+    "wired-live-1-r20261015": {
+      "replaces_case_id": "wired-live-1",
       "mode": "community",
       "expected": "accepted",
-      "blocks": 17
+      "blocks": 27
     },
-    "9to5mac-live-0": {
+    "caranddriver-live-0-r20261015": {
+      "replaces_case_id": "caranddriver-live-0",
       "mode": "rss",
       "expected": "rss",
       "blocks": 0
     },
-    "9to5mac-live-1": {
+    "caranddriver-live-1-r20261015": {
+      "replaces_case_id": "caranddriver-live-1",
+      "mode": "rss",
+      "expected": "rss",
+      "blocks": 44
+    },
+    "ars-live-0-r20261015": {
+      "replaces_case_id": "ars-live-0",
+      "mode": "community",
+      "expected": "accepted",
+      "blocks": 31
+    },
+    "ars-live-1-r20261015": {
+      "replaces_case_id": "ars-live-1",
+      "mode": "community",
+      "expected": "accepted",
+      "blocks": 26
+    },
+    "bbc-live-0-r20261015": {
+      "replaces_case_id": "bbc-live-0",
       "mode": "rss",
       "expected": "rss",
       "blocks": 0
     },
-    "engadget-live-0": {
+    "bbc-live-1-r20261015": {
+      "replaces_case_id": "bbc-live-1",
       "mode": "rss",
       "expected": "rss",
       "blocks": 0
     },
-    "engadget-live-1": {
+    "guardian-live-0-r20261015": {
+      "replaces_case_id": "guardian-live-0",
       "mode": "rss",
       "expected": "rss",
       "blocks": 0
     },
-    "techcrunch-live-0": {
+    "guardian-live-1-r20261015": {
+      "replaces_case_id": "guardian-live-1",
       "mode": "rss",
       "expected": "rss",
       "blocks": 0
     },
-    "techcrunch-live-1": {
+    "npr-live-0-r20261015": {
+      "replaces_case_id": "npr-live-0",
       "mode": "rss",
       "expected": "rss",
       "blocks": 0
     },
-    "decoder-live-0": {
+    "npr-live-1-r20261015": {
+      "replaces_case_id": "npr-live-1",
       "mode": "rss",
       "expected": "rss",
       "blocks": 0
     },
-    "decoder-live-1": {
+    "bleepingcomputer-live-0-r20261015": {
+      "replaces_case_id": "bleepingcomputer-live-0",
+      "mode": "rss",
+      "expected": "rss",
+      "blocks": 0
+    },
+    "bleepingcomputer-live-1-r20261015": {
+      "replaces_case_id": "bleepingcomputer-live-1",
+      "mode": "rss",
+      "expected": "rss",
+      "blocks": 0
+    },
+    "coloradosun-live-0-r20261015": {
+      "replaces_case_id": "coloradosun-live-0",
+      "mode": "rss",
+      "expected": "rss",
+      "blocks": 0
+    },
+    "coloradosun-live-1-r20261015": {
+      "replaces_case_id": "coloradosun-live-1",
+      "mode": "rss",
+      "expected": "rss",
+      "blocks": 0
+    },
+    "outside-live-1-r20261015": {
+      "replaces_case_id": "outside-live-1",
+      "mode": "rss",
+      "expected": "rss",
+      "blocks": 0
+    },
+    "sciencenews-live-0-r20261015": {
+      "replaces_case_id": "sciencenews-live-0",
+      "mode": "rss",
+      "expected": "rss",
+      "blocks": 0
+    },
+    "sciencenews-live-1-r20261015": {
+      "replaces_case_id": "sciencenews-live-1",
+      "mode": "rss",
+      "expected": "rss",
+      "blocks": 0
+    },
+    "revalidated-wired-0-r20261015": {
+      "replaces_case_id": "revalidated-wired-0",
+      "mode": "community",
+      "expected": "accepted",
+      "blocks": 11
+    },
+    "revalidated-wired-4-r20261015": {
+      "replaces_case_id": "revalidated-wired-4",
+      "mode": "community",
+      "expected": "accepted",
+      "blocks": 25
+    },
+    "revalidated-wired-7-r20261015": {
+      "replaces_case_id": "revalidated-wired-7",
+      "mode": "community",
+      "expected": "accepted",
+      "blocks": 28
+    },
+    "revalidated-wired-1-r20261015": {
+      "replaces_case_id": "revalidated-wired-1",
+      "mode": "community",
+      "expected": "accepted",
+      "blocks": 19
+    },
+    "revalidated-caranddriver-5-r20261015": {
+      "replaces_case_id": "revalidated-caranddriver-5",
+      "mode": "rss",
+      "expected": "rss",
+      "blocks": 10
+    },
+    "revalidated-caranddriver-6-r20261015": {
+      "replaces_case_id": "revalidated-caranddriver-6",
+      "mode": "rss",
+      "expected": "rss",
+      "blocks": 0
+    },
+    "revalidated-caranddriver-7-r20261015": {
+      "replaces_case_id": "revalidated-caranddriver-7",
+      "mode": "rss",
+      "expected": "rss",
+      "blocks": 39
+    },
+    "revalidated-caranddriver-1-r20261015": {
+      "replaces_case_id": "revalidated-caranddriver-1",
+      "mode": "rss",
+      "expected": "rss",
+      "blocks": 0
+    },
+    "revalidated-ars-0-r20261015": {
+      "replaces_case_id": "revalidated-ars-0",
+      "mode": "community",
+      "expected": "rejected",
+      "blocks": 11
+    },
+    "revalidated-ars-1-r20261015": {
+      "replaces_case_id": "revalidated-ars-1",
+      "mode": "community",
+      "expected": "accepted",
+      "blocks": 12
+    },
+    "revalidated-ars-2-r20261015": {
+      "replaces_case_id": "revalidated-ars-2",
+      "mode": "community",
+      "expected": "accepted",
+      "blocks": 16
+    },
+    "9to5mac-live-0-r20261015": {
+      "replaces_case_id": "9to5mac-live-0",
+      "mode": "rss",
+      "expected": "rss",
+      "blocks": 0
+    },
+    "9to5mac-live-1-r20261015": {
+      "replaces_case_id": "9to5mac-live-1",
+      "mode": "rss",
+      "expected": "rss",
+      "blocks": 0
+    },
+    "engadget-live-0-r20261015": {
+      "replaces_case_id": "engadget-live-0",
+      "mode": "rss",
+      "expected": "rss",
+      "blocks": 0
+    },
+    "engadget-live-1-r20261015": {
+      "replaces_case_id": "engadget-live-1",
+      "mode": "rss",
+      "expected": "rss",
+      "blocks": 0
+    },
+    "techcrunch-live-0-r20261015": {
+      "replaces_case_id": "techcrunch-live-0",
+      "mode": "rss",
+      "expected": "rss",
+      "blocks": 0
+    },
+    "techcrunch-live-1-r20261015": {
+      "replaces_case_id": "techcrunch-live-1",
+      "mode": "rss",
+      "expected": "rss",
+      "blocks": 0
+    },
+    "decoder-live-0-r20261015": {
+      "replaces_case_id": "decoder-live-0",
+      "mode": "rss",
+      "expected": "rss",
+      "blocks": 0
+    },
+    "decoder-live-1-r20261015": {
+      "replaces_case_id": "decoder-live-1",
       "mode": "rss",
       "expected": "rss",
       "blocks": 0

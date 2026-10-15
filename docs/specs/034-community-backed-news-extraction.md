@@ -40,7 +40,10 @@ publisher extraction logic. A recognized rule is necessary but does not alone
 enable a source: representative public articles must pass quality acceptance.
 Rich feeds remain on ordinary RSS delivery without article fetching or rewriting.
 
-WIRED, Ars Technica, and Car and Driver are initial enrichment candidates.
+WIRED and Ars Technica are enrichment candidates. Pages with multiple article
+elements use RSS fallback because an additional article can contain a reader
+comment or unrelated story. Car and Driver retains RSS: its current community
+rule includes unrelated recommendation widgets, and tested galleries are unsupported.
 MacRumors, Colorado Newsline, and Mile High Report retain their rich RSS bodies.
 Unsupported summary sources, including the tested 9to5Mac, Engadget, TechCrunch,
 and The Decoder paths, retain RSS and use Reader View. Restricted Verge content
@@ -246,6 +249,9 @@ previous pin and supported source modes. Missing corpus inputs or incomplete
 validation block promotion. Retrieve retained real-article fixtures from protected
 evidence storage; public synthetic fixtures test generic invariants without
 publishing publisher articles. Validation does not authorize merging.
+Retain protected captures outside task worktrees in operator-selected private
+storage. Verify archive and manifest digests through independent retrieval and
+record the retention scope. Host-local storage does not establish off-host backup.
 Exercise this policy with both a real upstream update and a deliberately broken
 rule. Runtime, dependency, and integration changes use the same gate; review newly
 supported sources against live public pages before enabling enrichment.
@@ -289,8 +295,11 @@ restricted articles remain restricted. Publisher click-through remains available
 Production acceptance must prove the implemented integration, beyond the earlier
 stored-content and native macOS spike:
 
-- Replay the original 17-article corpus with strict community-only behavior and
-  preserve rich feeds unchanged. Add validated intended sources without local
+- Replay the retained reviewed corpus with strict community-only behavior and
+  preserve rich feeds unchanged. Replacing unavailable captures requires a new
+  reviewed corpus identity with explicit lineage and comparable publisher, media,
+  structure, and failure coverage. Keep the historical contract retrievable; do not
+  label new captures as the originals. Add validated intended sources without local
   selectors. Judge completeness against editorial reference content, not merely
   byte equality or a successful response. Unsupported galleries use RSS.
 - Check real public fetching, matched rules, ordered media/captions, structure,

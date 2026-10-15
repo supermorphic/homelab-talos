@@ -64,17 +64,24 @@ def assess(html: str, reference: dict) -> dict:
     ordered_paragraphs = reference.get(
         "paragraph_order", [b["text"] for b in blocks if b.get("tag") == "p"]
     )
-    positions = [
-        text.find(normalize(paragraph))
-        for paragraph in ordered_paragraphs
-        if normalize(paragraph) in text
-    ]
-    image_positions = [
-        parsed.images.index(key)
-        for key in reference.get("image_order", [])
-        if key in parsed.images
-    ]
-    order = positions == sorted(positions) and image_positions == sorted(image_positions)
+    # Match each occurrence after the previous one. A caption, price or image
+    # can legitimately repeat; its first occurrence cannot represent them all.
+    order = True
+    cursor = 0
+    for paragraph in ordered_paragraphs:
+        value = normalize(paragraph)
+        position = text.find(value, cursor)
+        if position < 0:
+            order = False
+            break
+        cursor = position + len(value)
+    cursor = 0
+    for key in reference.get("image_order", []):
+        try:
+            cursor = parsed.images.index(key, cursor) + 1
+        except ValueError:
+            order = False
+            break
     excluded = reference.get("excluded_blocks", [])
     unwanted = sum(normalize(block) in text for block in excluded)
     unwanted += sum(
@@ -106,13 +113,23 @@ def validate_corpus(root: Path) -> tuple[dict, str]:
         manifest = json.loads(raw)
         cases = manifest["cases"]
         ids = [case["id"] for case in cases]
+        schema = manifest.get("schema")
+        baseline = manifest["baseline_ids" if schema == 2 else "original_ids"]
         if (
-            manifest.get("schema") != 1
+            schema not in (1, 2)
             or not ids
             or len(ids) != len(set(ids))
-            or not set(manifest["original_ids"]).issubset(ids)
+            or not isinstance(baseline, list)
+            or not baseline
+            or len(baseline) != len(set(baseline))
+            or not set(baseline).issubset(ids)
         ):
             raise ValueError("incomplete corpus")
+        if schema == 2 and (
+            not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", manifest.get("revision", ""))
+            or not re.fullmatch(r"[a-f0-9]{64}", manifest.get("replaces_sha256", ""))
+        ):
+            raise ValueError("replacement corpus provenance is missing")
         files = [(c["html"], c["sha256"]) for c in cases] + list(
             manifest.get("reviews", {}).items()
         )
@@ -138,6 +155,20 @@ def validate_corpus(root: Path) -> tuple[dict, str]:
         raise ValueError("missing or malformed protected corpus") from error
 
 
+def validate_replay_contract(manifest: dict, fingerprint: str, expected: dict) -> None:
+    schema = expected.get("schema", 1)
+    baseline = "baseline_ids" if schema == 2 else "original_ids"
+    if (
+        manifest.get("schema") != schema
+        or fingerprint != expected["sha256"]
+        or sorted(c["id"] for c in manifest["cases"]) != sorted(expected["cases"])
+        or manifest.get(baseline) != expected[baseline]
+        or schema == 2
+        and any(manifest.get(key) != expected[key] for key in ("revision", "replaces_sha256"))
+    ):
+        raise ValueError("protected corpus differs from reviewed contract")
+
+
 def replay(root: Path, app: Path, *, broken=False) -> dict:
     from scripts.test.news.extraction_local import container
 
@@ -145,12 +176,7 @@ def replay(root: Path, app: Path, *, broken=False) -> dict:
     expected = json.loads(
         (ROOT / "tests/fixtures/news/extraction/corpus-expectations.json").read_text()
     )
-    if (
-        fingerprint != expected["sha256"]
-        or sorted(c["id"] for c in manifest["cases"]) != sorted(expected["cases"])
-        or len(manifest["original_ids"]) != 17
-    ):
-        raise ValueError("protected corpus differs from reviewed contract")
+    validate_replay_contract(manifest, fingerprint, expected)
     release = json.loads((app / "release.json").read_text())
     output = container(
         "sh /app/scripts/initialize.sh >&2 && /usr/bin/php8.4 -d extension=tidy /repo/scripts/test/news/extraction-corpus-replay.php"

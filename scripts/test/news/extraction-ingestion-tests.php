@@ -32,7 +32,9 @@ $accepted=$entry->content(false); $provenance=$entry->attributeArray('community_
 check(($provenance['release_id']??'')===$release&&$entry->attributeString('community_original_rss')==='<p>RSS revision</p>','body/provenance/original pair incomplete');
 check($dao->addEntry($entry->toArray())!==false,'entry save failed'); check($dao->commitNewEntries(),'entry commit failed');
 $stored=$dao->searchByGuid($feed->id(),'accepted'); check($stored!==null,'entry missing'); $identity=$stored->id();
-foreach (['restricted','no_rule','malformed','timeout','http_denied','not_modified','origin_cooldown','reply_invalid'] as $reason) {
+$decision='ambiguous_article'; $client->resetContext(); $rejected=$client->extract('https://fixture.example/article',[]);
+check($rejected['decision']==='rejected'&&$rejected['reason']==='ambiguous_article','ambiguous article rejection was not recognized by the client');
+foreach (['restricted','ambiguous_article','no_rule','malformed','timeout','http_denied','not_modified','origin_cooldown','reply_invalid'] as $reason) {
     $decision=$reason; $client->resetContext(); $incoming=$new('accepted','<p>RSS '.$reason.'</p>'); $incoming->_isUpdated(true); $incoming->_isRead(null); $incoming->_isFavorite(null);
     $h=$incoming->hash(); $preserve->beforeInsert($incoming); $incoming->_content('upstream complete content'); $preserve->beforeUpdate($incoming);
     check($incoming->content(false)===$accepted&&$incoming->attributeArray('community_extraction')===$provenance,'accepted fallback pair lost: '.$reason);
