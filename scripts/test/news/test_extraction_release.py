@@ -10,8 +10,9 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from scripts.repository.news_extraction_release import verify_candidate
+from scripts.repository.news_extraction_release import fingerprint, verify_candidate, verify_files
 from scripts.test.news.extraction_corpus import (
     assess,
     export_archive,
@@ -82,6 +83,27 @@ class ReleaseGateTests(unittest.TestCase):
 
     def test_complete_matching_gate(self):
         self.assertTrue(verify_candidate(self.candidate, self.evidence))
+
+    def test_build_definition_format_is_separate_from_runtime_integrity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "app"
+            extension = Path(temporary) / "extension"
+            root.mkdir()
+            extension.mkdir()
+            (root / "release.json").write_text(json.dumps(self.candidate))
+            (root / "worker.php").write_bytes(b"<?php echo 'synthetic worker';\n")
+            (extension / "extension.php").write_bytes(b"<?php // synthetic extension\n")
+            build = root / "kustomization.yaml"
+            build.write_text("---\nkind: Kustomization\napiVersion: example/v1\n")
+            with patch("scripts.repository.news_extraction_release.EXTENSION", extension):
+                original = fingerprint(root)
+                build.write_text("apiVersion: example/v1\nkind: Kustomization\n")
+                normalized = fingerprint(root)
+            self.assertEqual(original, normalized)
+            self.assertEqual(set(normalized["files"]), {"worker.php"})
+            self.assertTrue(verify_files(normalized, root, extension))
+            (root / "worker.php").write_bytes(b"<?php echo 'altered worker';\n")
+            self.assertFalse(verify_files(normalized, root, extension))
 
     def test_missing_failed_or_other_release_never_promotes(self):
         for phase in ("initialization", "runtime", "ingestion", "corpus", "retention"):

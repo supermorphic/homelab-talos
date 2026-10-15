@@ -119,8 +119,6 @@ spec:
             path: composer.lock
           - key: deployment.yaml
             path: deployment.yaml
-          - key: kustomization.yaml
-            path: kustomization.yaml
           - key: limits.json
             path: limits.json
           - key: release.json
