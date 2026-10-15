@@ -289,6 +289,54 @@ class ApplicationAuthorityTests(ApplicationFixture, unittest.TestCase):
                 self.assertTrue(self.admission(obj))
                 self.assertTrue(self.admission(obj, operation="UPDATE", old=obj))
 
+    def test_coordinator_may_explicitly_disable_or_enable_its_token(self):
+        for kind in ["Job", "Pod", "Deployment", "ReplicaSet"]:
+            for token in [False, True]:
+                with self.subTest(kind=kind, token=token):
+                    obj = workload("cv-coordinator", kind)
+                    pod = obj["spec"] if kind == "Pod" else obj["spec"]["template"]["spec"]
+                    pod["automountServiceAccountToken"] = token
+                    pod["volumes"] = [
+                        {"name": "database", "secret": {"secretName": "cv-render-database"}}
+                    ]
+                    pod["containers"][0]["volumeMounts"] = [
+                        {
+                            "name": "database",
+                            "mountPath": "/run/secrets/cv-render-database",
+                            "readOnly": True,
+                        }
+                    ]
+                    self.assertTrue(self.admission(obj))
+                    self.assertTrue(self.admission(obj, operation="UPDATE", old=obj))
+
+    def test_other_runtime_accounts_cannot_enable_tokens(self):
+        for account in [
+            "cv-prepare",
+            "cv-renderer",
+            "career-ops-service",
+            "career-ops-boundary-coordinator",
+            "career-ops-boundary-renderer",
+        ]:
+            for kind in ["Job", "Pod"]:
+                with self.subTest(account=account, kind=kind):
+                    obj = workload(account, kind)
+                    pod = obj["spec"] if kind == "Pod" else obj["spec"]["template"]["spec"]
+                    pod["automountServiceAccountToken"] = True
+                    self.assertFalse(self.admission(obj))
+
+    def test_workloads_must_explicitly_select_token_mounting(self):
+        for account in ["cv-coordinator", "cv-renderer", "cv-prepare", "career-ops-service"]:
+            for kind in ["Job", "Pod"]:
+                for omitted in [False, True]:
+                    with self.subTest(account=account, kind=kind, omitted=omitted):
+                        obj = workload(account, kind)
+                        pod = obj["spec"] if kind == "Pod" else obj["spec"]["template"]["spec"]
+                        if omitted:
+                            del pod["automountServiceAccountToken"]
+                        else:
+                            pod["automountServiceAccountToken"] = None
+                        self.assertFalse(self.admission(obj))
+
     def test_workload_escalations_are_denied(self):
         cases = [
             ({"hostNetwork": True}, None),

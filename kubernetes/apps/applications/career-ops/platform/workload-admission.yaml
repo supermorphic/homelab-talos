@@ -105,8 +105,8 @@ spec:
       && has(variables.oldPod.nodeName) && variables.pod.nodeName == variables.oldPod.nodeName)) && (!has(variables.pod.os)
       || variables.pod.os.name == 'linux'))
     message: Host namespaces and host overrides are forbidden.
-  - expression: request.operation == 'DELETE' || (has(variables.pod.automountServiceAccountToken) && variables.pod.automountServiceAccountToken
-      == variables.token)
+  - expression: request.operation == 'DELETE' || (has(variables.pod.automountServiceAccountToken) && (variables.pod.automountServiceAccountToken
+      == false || (variables.token && variables.pod.automountServiceAccountToken == true)))
     message: Only the coordinator may mount its Kubernetes token.
   - expression: request.operation == 'DELETE' || (has(variables.pod.securityContext) && variables.pod.securityContext.runAsNonRoot
       == true && variables.pod.securityContext.runAsUser > 0 && variables.pod.securityContext.seccompProfile.type

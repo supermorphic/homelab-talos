@@ -194,9 +194,10 @@ ephemeral containers, alternative controllers, or forged platform identity label
 Require non-root operation, a read-only root filesystem, dropped capabilities,
 no privilege escalation, and bounded CPU, memory, and ephemeral storage. Forbid
 host namespaces, host mounts, privileged execution, and arbitrary storage drivers.
-Among application runtime accounts, only the Job coordinator receives the
-Kubernetes token needed for its runtime Role. Private services also default to
-no token. Preparation and offline workers receive no token, including explicit
+Require every workload to set automatic token mounting explicitly. Among
+application runtime accounts, only the Job coordinator may enable it when its
+runtime Role is needed; coordinator checks may disable it. Private services also
+default to no token. Preparation and offline workers receive no token, including explicit
 projected-token alternatives to automatic mounting.
 
 ## Networking and route allocation
