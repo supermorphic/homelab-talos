@@ -89,7 +89,7 @@ statefulset_contract="$(yq ea -r '
   ] | join("|")
 ' "$temp_dir/postgresql.yaml")"
 [[ "$statefulset_contract" == \
-  '1|automation-data-postgresql|false|70|RuntimeDefault|postgres:17.11-alpine3.24|true|true|50m|256Mi|1Gi' ]] || \
+  '1|automation-data-postgresql|false|70|RuntimeDefault|postgres:17.11-alpine3.24|true|true|50m|1Gi|2Gi' ]] || \
   fail 'PostgreSQL StatefulSet identity, hardening, image, or resources drifted'
 
 database_env="$(yq ea -r '
