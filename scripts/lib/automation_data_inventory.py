@@ -8,7 +8,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 
-MAX_OBJECTS = 1000
+MAX_OBJECTS = {"platform": 1000, "nocodb": 1000, "n8n": 2000}
 MAX_SOURCE_BYTES = 1024 * 1024
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 DEADLINE_SECONDS = 30
@@ -317,7 +317,7 @@ def validate_observation(raw: object, source: str) -> SourceObservation:
     objects = raw.get("objects")
     if not isinstance(objects, list):
         raise InventoryError("invalid_response")
-    if len(objects) > MAX_OBJECTS:
+    if len(objects) > MAX_OBJECTS[source]:
         raise InventoryError("limit_exceeded")
     clean = [_validate_object(obj, source) for obj in objects]
     keys = [(obj["kind"], obj["id"]) for obj in clean]
