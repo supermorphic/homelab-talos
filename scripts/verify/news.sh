@@ -16,8 +16,11 @@ for unit in namespace postgresql freshrss alerts; do
   [[ "$(yq -r '.spec.suspend' "$base/$unit/ks.yaml")" == "$staged" ]] || fail 'News Flux units have mixed activation intent.'
 done
 [[ "$staged" == true || "$staged" == false ]] || fail 'News suspension intent is invalid.'
+worker_staged=$(yq -r '.spec.suspend' "$base/graby/ks.yaml")
+[[ "$worker_staged" == true || "$worker_staged" == false ]] || fail 'Extraction worker suspension intent is invalid.'
 selected=$(yq -r '[.resources[] | select(. == "./news")] | length' kubernetes/apps/kustomization.yaml)
 if [[ "$staged" == true ]]; then
+  [[ "$worker_staged" == true ]] || fail 'Extraction worker requires the active news platform.'
   [[ "$selected" == 0 ]] || fail 'Suspended news is selected by the root application list.'
   for name in news news-postgresql freshrss news-alerts news-graby; do
     live=$("${kc[@]}" --namespace flux-system get kustomization "$name" --ignore-not-found --output json)
@@ -33,7 +36,9 @@ if [[ "$staged" == true ]]; then
   exit 0
 fi
 [[ "$selected" == 1 ]] || fail 'Active news is absent from the root application list.'
-for name in news news-postgresql freshrss news-alerts; do
+active_units=(news news-postgresql freshrss news-alerts)
+[[ "$worker_staged" != false ]] || active_units+=(news-graby)
+for name in "${active_units[@]}"; do
   live=$("${kc[@]}" --namespace flux-system get kustomization "$name" --output json)
   # shellcheck disable=SC2016 # yq owns this literal expression and its variable.
   yq -p=json -e '
@@ -64,7 +69,13 @@ require_signal 'max(news_refresh_last_completed_timestamp_seconds{namespace="new
 require_signal 'max(news_backup_last_success_timestamp_seconds{namespace="news",service="freshrss"}) > 0 and time() - max(news_backup_last_success_timestamp_seconds{namespace="news",service="freshrss"}) < 36 * 60 * 60'
 require_signal 'max(longhorn_volume_last_backup_at{pvc_namespace="news",pvc="news-backups"}) > 0 and time() - max(longhorn_volume_last_backup_at{pvc_namespace="news",pvc="news-backups"}) < 48 * 60 * 60'
 worker=$("${kc[@]}" --namespace news get deployment news-graby --ignore-not-found --output json)
-if [[ -n "$worker" ]]; then
+if [[ "$worker_staged" == false ]]; then
+  [[ -n "$worker" ]] || fail 'The enabled extraction worker is absent.'
+  yq -p=json -e '.spec.replicas == 1 and .status.availableReplicas == 1 and .status.observedGeneration == .metadata.generation' - >/dev/null <<<"$worker" || fail 'The enabled extraction worker is unavailable.'
+  require_signal 'max(up{namespace="news",service="news-graby"}) == 1'
+  require_signal 'max(news_extraction_ready{namespace="news",service="news-graby"}) == 1'
+  echo 'Extraction worker readiness observations passed; publisher fetching and network denial require separate acceptance.'
+elif [[ -n "$worker" ]]; then
   yq -p=json -e '.status.availableReplicas == 1 and .status.observedGeneration == .metadata.generation' - >/dev/null <<<"$worker" && echo 'Extraction worker observation: available.' || echo 'Extraction worker observation: unavailable; FreshRSS acceptance is independent.'
 else
   echo 'Extraction worker observation: absent; FreshRSS acceptance is independent.'
