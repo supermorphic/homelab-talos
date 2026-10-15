@@ -46,7 +46,9 @@ cleanup() {
 }
 trap cleanup TERM INT EXIT
 while :; do
-    httpd -f /opt/news-httpd.conf -D FOREGROUND &
+    # Apache signals its process group while stopping. Keep the scheduler out
+    # of that group so paired backups cannot silently stop feed polling.
+    setsid httpd -f /opt/news-httpd.conf -D FOREGROUND &
     web_pid=$!
     while kill -0 "$web_pid" 2>/dev/null; do
         date +%s > /run/news/supervisor-heartbeat
