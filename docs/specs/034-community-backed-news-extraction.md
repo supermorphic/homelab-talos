@@ -306,8 +306,10 @@ stored-content and native macOS spike:
   cluster's CPU architecture with the intended process restrictions.
 - Verify API delivery and actual native rendering separately: text, hero/inline
   images, captions, headings/lists/tables when present, links, light/dark usability,
-  and read/favorite sync. Test Reader View separately on summary sources. Preserve
-  the base platform's attended iPhone/iPad, offline, and client-cache requirements.
+  and read/favorite sync. Test Reader View separately on summary sources. Use the
+  [base platform's native-client acceptance scope](033-self-hosted-news-reading.md#native-presentation-and-optional-image-privacy)
+  for required devices and offline/reconnect checks. Verify client-cache behavior
+  on the required client.
 
 Production adoption requires these integration and operational gates to pass.
 If they require ongoing local publisher rules, widespread browser rendering, or

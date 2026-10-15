@@ -243,6 +243,69 @@ def main(*, extraction=False, extraction_recovery=False):
                 else:
                     assert "FreshRSS scheduler disabled" in diagnostics
                     assert "FreshRSS refresh started" not in diagnostics
+            # Apache's real graceful shutdown must leave the polling process
+            # alive. A fake httpd cannot reproduce its process-group signals.
+            maintenance_bin = tmp / "maintenance-bin"
+            maintenance_bin.mkdir()
+            for command in ("php", "sleep"):
+                source = fakebin / command
+                destination = maintenance_bin / command
+                destination.write_bytes(source.read_bytes())
+                destination.chmod(0o755)
+            target = names["scheduler"] + "-maintenance"
+            container(
+                target,
+                "--user",
+                "1000:1000",
+                "--tmpfs",
+                "/tmp:rw,size=16m",
+                "--tmpfs",
+                "/run/news:rw,mode=1777,size=16m",
+                "-v",
+                str(maintenance_bin) + ":/testbin:ro",
+                "-v",
+                str(APP / "scripts") + ":/opt/news:ro",
+                "-v",
+                str(APP / "httpd.conf") + ":/opt/news-httpd.conf:ro",
+                "-e",
+                "PATH=/testbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "--entrypoint",
+                "/bin/sh",
+                image,
+                "/opt/news/start.sh",
+            )
+
+            def runtime_value(path):
+                return run("exec", target, "cat", "/run/news/" + path, success=False).stdout
+
+            def wait_runtime(predicate, message):
+                deadline = time.monotonic() + 15
+                while time.monotonic() < deadline:
+                    if predicate():
+                        return
+                    time.sleep(0.2)
+                raise AssertionError(message)
+
+            wait_runtime(lambda: runtime_value("last-refresh"), "scheduler never refreshed")
+            wait_runtime(lambda: runtime_value("httpd.pid"), "Apache never started")
+            for _ in range(2):
+                previous_pid = runtime_value("httpd.pid")
+                assert previous_pid, "Apache never started"
+                run("exec", target, "touch", "/run/news/maintenance-request")
+                wait_runtime(
+                    lambda previous=previous_pid: (
+                        runtime_value("httpd.pid") not in (b"", previous)
+                    ),
+                    "Apache did not restart after maintenance",
+                )
+                previous_refresh = runtime_value("last-refresh")
+                wait_runtime(
+                    lambda previous=previous_refresh: (
+                        runtime_value("last-refresh") not in (b"", previous)
+                    ),
+                    "scheduled refresh stopped after Apache maintenance",
+                )
+            run("stop", "--time", "5", target)
             db_env = tmp / "db.env"
             db_env.touch(mode=0o600)
             db_env.write_text(
