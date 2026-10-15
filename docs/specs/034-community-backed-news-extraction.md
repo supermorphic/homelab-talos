@@ -342,6 +342,11 @@ outcomes. Complete only the observations actually made and remove the temporary
 NetNewsWire account before submitting the receipt. Failed or incomplete acceptance
 keeps production requests disabled. Cleanup failure requires inspection of the
 private ownership ledger; never adopt or delete a same-named replacement resource.
+If native acceptance is interrupted, keep the server account until client removal
+is confirmed using the run-bound `native-client-removed.json` template. The private
+`cleanup-required.json` identifies the retained account; owned worker resources are
+still removed. An ambiguous account-creation result must be reconciled by its
+ownership marker or reported as incomplete cleanup.
 
 When a publisher revises a frozen article, retain a fresh source capture and an
 independently reviewed complete reference under a new observation identity.

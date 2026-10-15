@@ -6,10 +6,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 import yaml
 
 from scripts.test.news.production_acceptance import (
+    Acceptance,
     cold_policy,
     load_live_references,
     validate_native,
@@ -106,6 +108,42 @@ class FixtureTests(unittest.TestCase):
             for value in (False, "true", None):
                 with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                     validate_native({**receipt, key: value})
+
+    def test_ambiguous_account_creation_is_reconciled_during_cleanup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            client = Acceptance(root / "config", root / "run", root)
+            client.account = Mock(
+                side_effect=[RuntimeError("lost create response"), {"deleted": True}]
+            )
+            client.recorded = Mock(return_value=[])
+            with self.assertRaises(RuntimeError):
+                client.create_account()
+            self.assertTrue((root / "account-creation-intent.json").exists())
+            self.assertTrue(client.cleanup())
+            self.assertEqual(
+                [call.args[0] for call in client.account.call_args_list], ["create", "delete"]
+            )
+
+    def test_native_interruption_preserves_server_account_until_client_removal(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            client = Acceptance(root / "config", root / "run", root)
+            client.account_created = True
+            client.result["native_client_cleanup"] = "pending"
+            client.account = Mock(return_value={"deleted": True})
+            client.recorded = Mock(return_value=[{"owned": "fixture"}])
+            client.owned = Mock()
+            self.assertFalse(client.cleanup())
+            client.account.assert_not_called()
+            client.owned.assert_called_once_with("delete", {"owned": "fixture"})
+            self.assertTrue((root / "cleanup-required.json").exists())
+            for identity, expected in (("foreign", False), (client.run, True)):
+                (root / "native-client-removed.json").write_text(
+                    json.dumps({"run": identity, "removed": True})
+                )
+                self.assertEqual(client.cleanup(), expected)
+            client.account.assert_called_once_with("delete")
 
     def test_live_references_bind_new_identity_source_and_independent_review(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -275,6 +275,16 @@ class Acceptance:
         temporary.chmod(0o600)
         temporary.replace(path)
 
+    def create_account(self):
+        self.private_json(
+            "account-creation-intent.json",
+            {"user": self.credentials["user"], "owner": self.credentials["owner"]},
+        )
+        # An exec failure can lose the reply after FreshRSS has committed the account.
+        self.account_created = True
+        if self.account("create") != {"created": True}:
+            raise RuntimeError("temporary account creation failed")
+
     def wait_pod(self, phase, *, initialized=False):
         deadline = time.monotonic() + 350
         while time.monotonic() < deadline:
@@ -302,14 +312,45 @@ class Acceptance:
 
     def cleanup(self):
         failed = False
-        if self.account_created:
+        if self.result.get("native_client_cleanup") == "pending":
+            confirmation = self.private / "native-client-removed.json"
             try:
-                if self.account("delete") != {"deleted": True}:
-                    raise RuntimeError("temporary account cleanup failed")
-                self.account_created = False
-                (self.private / "fixture-credentials.json").unlink(missing_ok=True)
-            except Exception:  # noqa: BLE001 -- Complete every owned cleanup without exposing adapter errors.
+                removed = json.loads(confirmation.read_text()) if confirmation.exists() else {}
+                if removed.get("run") == self.run and removed.get("removed") is True:
+                    self.result["native_client_cleanup"] = "confirmed"
+            except (OSError, ValueError):
+                pass
+        if self.account_created:
+            if self.result.get("native_client_cleanup") == "pending":
+                self.private_json(
+                    "cleanup-required.json",
+                    {
+                        "reason": "Remove the temporary NetNewsWire account before server cleanup.",
+                        "user": self.credentials["user"],
+                        "confirmation": {"run": self.run, "removed": True},
+                        "ownership_ledger": str(self.ledger),
+                        "next_action": "After client removal, remove only this temporary account through FreshRSS account administration.",
+                    },
+                )
                 failed = True
+            else:
+                try:
+                    if self.account("delete") != {"deleted": True}:
+                        raise RuntimeError("temporary account cleanup failed")
+                    self.account_created = False
+                    (self.private / "fixture-credentials.json").unlink(missing_ok=True)
+                    (self.private / "cleanup-required.json").unlink(missing_ok=True)
+                except Exception:  # noqa: BLE001 -- Complete every owned cleanup without exposing adapter errors.
+                    self.private_json(
+                        "cleanup-required.json",
+                        {
+                            "reason": "Account ownership or deletion could not be reconciled.",
+                            "user": self.credentials["user"],
+                            "creation_intent": "account-creation-intent.json",
+                            "next_action": "Inspect the private ownership evidence before removing this temporary account through FreshRSS account administration.",
+                        },
+                    )
+                    failed = True
         for record in reversed(self.recorded()):
             try:
                 self.owned("delete", record)
@@ -572,9 +613,7 @@ def execute(client: Acceptance, corpus: Path):
         "fixture-credentials.json",
         {**client.credentials, "server": "https://news.lab.supermorphic.com"},
     )
-    if client.account("create") != {"created": True}:
-        raise RuntimeError("temporary account creation failed")
-    client.account_created = True
+    client.create_account()
     client.result["stage"] = "deployed-ingestion"
     print("Testing actual ingestion through the deployed public-fetch worker", flush=True)
     rich_payload = next(p for p in payload if p["id"] == rich["id"])
@@ -712,6 +751,7 @@ def execute(client: Acceptance, corpus: Path):
         "cache_behavior_observed",
         "client_account_removed",
     ]
+    client.result["native_client_cleanup"] = "pending"
     client.private_json(
         "native-request.json",
         {
@@ -721,6 +761,7 @@ def execute(client: Acceptance, corpus: Path):
             "cache_case_id": cache_case["id"],
             "credentials_file": str(client.private / "fixture-credentials.json"),
             "live_reference_file": live_path,
+            "client_removal_confirmation": {"run": client.run, "removed": True},
             "receipt_template": {
                 "client": "NetNewsWire",
                 "version": None,
@@ -732,7 +773,6 @@ def execute(client: Acceptance, corpus: Path):
     )
     print("Native Mac fixture ready; awaiting private client observations", flush=True)
     client.result["stage"] = "native-client"
-    client.result["native_client_cleanup"] = "pending"
     deadline = time.monotonic() + 1800
     handled = set()
     while time.monotonic() < deadline:

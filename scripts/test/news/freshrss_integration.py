@@ -535,6 +535,7 @@ def main(*, extraction=False, extraction_recovery=False):
                         "$p='/run/news/extraction-circuit.json';echo is_file($p)?hash_file('sha256',$p):'absent';",
                     ).stdout
 
+                assert json.loads(account_call("delete").stdout) == {"deleted": True}
                 created = account_call("create")
                 assert json.loads(created.stdout) == {"created": True}
                 try:
@@ -563,6 +564,7 @@ def main(*, extraction=False, extraction_recovery=False):
                 finally:
                     deleted = account_call("delete")
                     assert json.loads(deleted.stdout) == {"deleted": True}
+                assert json.loads(account_call("delete").stdout) == {"deleted": True}
                 print(
                     "Native temporary-account ownership, failed-fault rollback and cleanup passed"
                 )

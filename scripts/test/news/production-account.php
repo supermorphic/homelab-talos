@@ -62,6 +62,10 @@ try {
         cliInitUser($user); acceptanceCheck(FreshRSS_api_Controller::updatePassword($p['api_password'])===false);
         echo json_encode(['created'=>true],JSON_THROW_ON_ERROR); exit(0);
     }
+    if ($p['operation']==='delete'&&!FreshRSS_user_Controller::userExists($user)) {
+        acceptanceCheck(!file_exists(dirname($marker)));
+        echo json_encode(['deleted'=>true],JSON_THROW_ON_ERROR); exit(0);
+    }
     acceptanceCheck(FreshRSS_user_Controller::userExists($user)&&!is_link(dirname($marker))&&is_file($marker)&&!is_link($marker)&&hash_equals($owner,file_get_contents($marker)));
     cliInitUser($user);
     if ($p['operation']==='delete') {
