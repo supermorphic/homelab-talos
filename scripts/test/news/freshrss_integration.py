@@ -474,6 +474,9 @@ def main(*, extraction=False, extraction_recovery=False):
                             "-v",
                             str(Path(__file__).with_name("extraction-ingestion-tests.php"))
                             + ":/extraction-tests.php:ro",
+                            "-v",
+                            str(Path(__file__).with_name("production-account.php"))
+                            + ":/production-account.php:ro",
                         ]
                         if (extraction or extraction_recovery)
                         else []
@@ -504,6 +507,65 @@ def main(*, extraction=False, extraction_recovery=False):
                 )
                 result = run("exec", names["app"], "php", "/extraction-tests.php")
                 print(result.stdout.decode(), end="")
+                account = {
+                    "user": "news583_" + secrets.token_hex(6),
+                    "owner": secrets.token_hex(32),
+                    "password": secrets.token_hex(24),
+                    "api_password": secrets.token_hex(24),
+                }
+                passwords.update({"acceptance_" + k: v for k, v in account.items()})
+
+                def account_call(operation, *, success=True, **values):
+                    return run(
+                        "exec",
+                        "-i",
+                        names["app"],
+                        "php",
+                        "/production-account.php",
+                        input=json.dumps({**account, "operation": operation, **values}).encode(),
+                        success=success,
+                    )
+
+                def circuit_hash():
+                    return run(
+                        "exec",
+                        names["app"],
+                        "php",
+                        "-r",
+                        "$p='/run/news/extraction-circuit.json';echo is_file($p)?hash_file('sha256',$p):'absent';",
+                    ).stdout
+
+                created = account_call("create")
+                assert json.loads(created.stdout) == {"created": True}
+                try:
+                    refused = account_call("delete", success=False, owner="0" * 64)
+                    assert refused.returncode != 0, "foreign ownership deleted an account"
+                    fixture = {
+                        "id": "local-rss",
+                        "mode": "rss",
+                        "url": "https://example.com/article",
+                        "rss": "<p>Independent native API fixture.</p>",
+                        "published": int(time.time()),
+                    }
+                    stored = json.loads(account_call("rss", cases=[fixture]).stdout)
+                    assert stored["cases"][0]["html"] == fixture["rss"]
+                    delivered = json.loads(account_call("inspect").stdout)["items"]
+                    assert (
+                        len(delivered) == 1
+                        and delivered[0]["summary"]["content"] == fixture["rss"]
+                    ), "muted native fixture did not reach the real Reader API"
+                    before = circuit_hash()
+                    refused = account_call("fault", success=False, worker_ip="invalid")
+                    assert refused.returncode != 0, "invalid fault target was accepted"
+                    assert circuit_hash() == before, (
+                        "failed acceptance changed shared circuit state"
+                    )
+                finally:
+                    deleted = account_call("delete")
+                    assert json.loads(deleted.stdout) == {"deleted": True}
+                print(
+                    "Native temporary-account ownership, failed-fault rollback and cleanup passed"
+                )
                 return
 
             def metrics():

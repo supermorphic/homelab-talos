@@ -17,6 +17,7 @@ PREREQUISITES = {
     "talos-operator",
     "physical-power",
     "application-credential",
+    "kubernetes-operator",
     "openbao-operator",
     "openbao-recovery",
 }
@@ -30,6 +31,7 @@ HOST_LOCAL_SUITES = {
     "test.news-extraction-corpus",
 }
 PHYSICAL_SUITE = "test.resilience.node-abrupt-loss"
+NEWS_PRODUCTION_SUITE = "test.news-production-acceptance"
 PURPOSE_PROFILES = {
     "campaign-observer": "observer",
     "campaign-coordinator": "campaign-coordinator",
@@ -58,14 +60,15 @@ def validate_access(entry: dict) -> None:
         raise SafeError("invalid-source")
     if profile is None:
         if metadata.get("tier") != "offline" and suite_id not in HOST_LOCAL_SUITES | {
-            PHYSICAL_SUITE
+            PHYSICAL_SUITE,
+            NEWS_PRODUCTION_SUITE,
         }:
             raise SafeError("invalid-source")
     elif (
         profile not in BASE_PROFILES | SUITE_PROFILE_BINDINGS.keys()
         or profile in {"report-publisher", "campaign-coordinator"}
         or metadata.get("tier") == "offline"
-        or suite_id in HOST_LOCAL_SUITES | {PHYSICAL_SUITE}
+        or suite_id in HOST_LOCAL_SUITES | {PHYSICAL_SUITE, NEWS_PRODUCTION_SUITE}
     ):
         raise SafeError("invalid-source")
     for dedicated, suites in SUITE_PROFILE_BINDINGS.items():
@@ -75,6 +78,7 @@ def validate_access(entry: dict) -> None:
         "talos-operator",
         "physical-power",
         "application-credential",
+        "kubernetes-operator",
         "openbao-operator",
         "openbao-recovery",
     }
@@ -85,6 +89,12 @@ def validate_access(entry: dict) -> None:
             "talos-operator",
             "physical-power",
         } <= set(prerequisites):
+            raise SafeError("invalid-source")
+    elif suite_id == NEWS_PRODUCTION_SUITE:
+        if (
+            declaration.get("operator_boundary") != "news-production-acceptance"
+            or "kubernetes-operator" not in prerequisites
+        ):
             raise SafeError("invalid-source")
     elif "operator_boundary" in declaration:
         raise SafeError("invalid-source")

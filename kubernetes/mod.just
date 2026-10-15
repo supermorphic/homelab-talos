@@ -60,6 +60,11 @@ news-restore-drill: require-bash
     @scripts/test/run-catalog-suite.sh test.news-restore-drill -- \
       scripts/test/scenarios/news-restore-drill.sh {{quote(test_kubeconfig)}}
 
+# Attended news acceptance requires an explicitly authorized operator kubeconfig.
+news-production-acceptance: require-bash
+    @scripts/test/run-catalog-suite.sh test.news-production-acceptance -- \
+      scripts/test/scenarios/news-production-acceptance.sh
+
 # Run disposable native web research containers and automatic credential cutover.
 web-research-local-integration-test: require-bash
     @scripts/test/run-catalog-suite.sh test.web-research-local-integration -- \

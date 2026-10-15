@@ -163,6 +163,29 @@ class AccessContractTests(unittest.TestCase):
         with self.assertRaises(catalog_validator.ValidationFailure):
             self.validate(entry)
 
+    def test_news_production_boundary_is_explicit_and_cannot_be_reused(self):
+        entry = self.entry("test.news-restore-drill")
+        entry["metadata"].update(id="test.news-production-acceptance", execution_owner="human")
+        entry["access"] = {
+            "profile": None,
+            "prerequisites": ["kubernetes-operator"],
+            "operator_boundary": "news-production-acceptance",
+        }
+        self.validate(entry)
+        for field, value in (
+            ("profile", "observer"),
+            ("operator_boundary", "physical-power-and-talos"),
+            ("prerequisites", []),
+        ):
+            invalid = copy.deepcopy(entry)
+            invalid["access"][field] = value
+            with self.subTest(field=field), self.assertRaises(catalog_validator.ValidationFailure):
+                self.validate(invalid)
+        invalid = copy.deepcopy(entry)
+        invalid["metadata"]["id"] = "test.storage-provisioning"
+        with self.assertRaises(catalog_validator.ValidationFailure):
+            self.validate(invalid)
+
     def router(self):
         spec = importlib.util.find_spec("scripts.test.access")
         self.assertIsNotNone(spec, "canonical access router is required")

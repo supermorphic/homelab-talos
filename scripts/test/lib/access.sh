@@ -57,6 +57,17 @@ test_access_open() {
   _TEST_ACCESS_CATALOG_DIGEST="$(yq -r '.catalog_digest' - <<<"$declaration")" || return 1
   profile="$(yq -r '.profile // "null"' - <<<"$declaration")" || return 1
   if [[ "$profile" == 'null' ]]; then
+    if [[ "$(yq -r '.operator_boundary // "none"' - <<<"$declaration")" == news-production-acceptance ]]; then
+      config="${NEWS_ACCEPTANCE_KUBECONFIG:-}"
+      [[ -z "${TEST_ACCESS_CONFIG:-}" && "$config" == /* && -f "$config" &&
+         ( -z "${TEST_KUBECONFIG:-}" || "$TEST_KUBECONFIG" == "$config" ) ]] || {
+        echo 'News production acceptance requires an explicitly authorized NEWS_ACCEPTANCE_KUBECONFIG.' >&2
+        return 1
+      }
+      export TEST_KUBECONFIG="$config" KUBECONFIG="$config" TEST_ACCESS_CONFIG=''
+      test_access_prerequisites "$declaration"
+      return "$?"
+    fi
     if [[ "$(yq -r '.operator_boundary // "none"' - <<<"$declaration")" == physical-power-and-talos ]]; then
       config="${NODE_OPERATOR_KUBECONFIG:-}"
       [[ -z "${TEST_ACCESS_CONFIG:-}" && "$config" == /* && -f "$config" &&

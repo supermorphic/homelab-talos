@@ -321,6 +321,28 @@ stored-content and native macOS spike:
   on the required client.
 
 Production adoption requires these integration and operational gates to pass.
+The standalone production acceptance workflow uses an explicitly supplied operator
+kubeconfig; the ordinary observer and diagnostic identities do not gain news
+mutation rights. It creates a temporary FreshRSS account and run-owned disposable
+worker resources, with readiness kept false so they cannot join production Service
+endpoints. It must verify the deployed release and take the existing maintenance
+locks before account or entry writes. Keep article bodies, temporary credentials,
+and Mac screenshots in the approved private evidence store. Canonical results
+contain only aggregate outcomes and immutable identities. Remove the temporary
+client account before deleting its server account, and verify owned-resource cleanup.
+
+Run `mise exec -- just test record test.news-production-acceptance` with
+`NEWS_ACCEPTANCE_KUBECONFIG` set to the explicitly authorized absolute kubeconfig,
+`NEWS_EXTRACTION_CORPUS` set to the retained reviewed inputs, and
+`NEWS_ACCEPTANCE_PRIVATE_ROOT` set to an existing private retained directory.
+Set `NEWS_PRODUCTION_ACCEPTANCE_CONFIRM=test:news:production-acceptance` to select
+the test's mutations. The workflow pauses for the required Mac observations in
+its private `native-request.json`; its receipt template starts without passing
+outcomes. Complete only the observations actually made and remove the temporary
+NetNewsWire account before submitting the receipt. Failed or incomplete acceptance
+keeps production requests disabled. Cleanup failure requires inspection of the
+private ownership ledger; never adopt or delete a same-named replacement resource.
+
 If they require ongoing local publisher rules, widespread browser rendering, or
 unsafe generic fallback, retain direct rich RSS plus summaries/Reader View and
 stop extending custom extraction work.

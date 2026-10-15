@@ -896,6 +896,13 @@ suites:
     runner: {command: "NEWS_RESTORE_DRILL_CONFIRM=restore:news:disposable mise exec -- just kube news-restore-drill", implementation: scripts/test/scenarios/news-restore-drill.sh}
     native_results: {strategy: wrapper-junit}
     dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/news-restore-drill.sh, args: ["@test-kubeconfig@"], selector: null}
+  - metadata: {id: test.news-production-acceptance, source: test, framework: bash, suite: platform, tier: integration, target: news, scenario: deployed-extraction-and-native-client, scope: application, intent: acceptance, mutates_cluster: true, execution_owner: human}
+    description: Uses an explicitly authorized operator kubeconfig for run-owned news fixtures and a temporary account; production workloads and operator subscriptions remain unchanged.
+    access: {profile: null, prerequisites: [kubernetes-operator], operator_boundary: news-production-acceptance}
+    confirmation: {type: exact, variable: NEWS_PRODUCTION_ACCEPTANCE_CONFIRM, expected: "test:news:production-acceptance"}
+    runner: {command: "NEWS_PRODUCTION_ACCEPTANCE_CONFIRM=test:news:production-acceptance mise exec -- just kube news-production-acceptance", implementation: scripts/test/scenarios/news-production-acceptance.sh}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/news-production-acceptance.sh, args: [], selector: null}
   - metadata: {id: test.web-research-local-integration, source: test, framework: bash, suite: platform, tier: integration, target: web-research-local, scenario: disposable-podman, scope: system, intent: acceptance, mutates_cluster: false, execution_owner: shared}
     access: {profile: null, prerequisites: []}
     confirmation: {type: none, variable: null, expected: null}
