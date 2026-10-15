@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -36,6 +37,7 @@ from automation_data_client import (
 
 TARGET = Path("kubernetes/apps/applications/career-ops/connection/cv-render-database.sops.yaml")
 CONFIRMATION = "stage:career-ops:cv-render-database"
+REPLACE_CONFIRMATION = "replace:career-ops:cv-render-database"
 ROLE = (
     "app_"
     + hashlib.md5(b"career_ops:cv_render", usedforsecurity=False).hexdigest()
@@ -100,11 +102,27 @@ def runtime_credential():
         assert_profile_unchanged(selected)
 
 
-def preflight(root):
+def preflight(root, replace_sha256=None):
     target = root / TARGET
     policy = root / ".sops.yaml"
-    if target.resolve() != target or policy.resolve() != policy or target.exists():
-        raise EnrollmentError("Ciphertext staging cannot replace existing files or use symlinks")
+    if target.resolve() != target or policy.resolve() != policy:
+        raise EnrollmentError("Ciphertext staging cannot use symlinks")
+    if replace_sha256 is None:
+        if target.exists():
+            raise EnrollmentError("Initial ciphertext staging cannot replace existing files")
+    else:
+        try:
+            info = target.lstat()
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_nlink != 1
+                or info.st_size > 1048576
+                or hashlib.sha256(target.read_bytes()).hexdigest() != replace_sha256
+            ):
+                raise EnrollmentError("Existing ciphertext does not match the reviewed replacement")
+        except OSError:
+            raise EnrollmentError("Reviewed ciphertext replacement target is unavailable") from None
     content = policy.read_bytes()
     rules = yaml.safe_load(content).get("creation_rules", [])
     matching = [
@@ -149,12 +167,25 @@ def validate_ciphertext(content, recipient, password):
         raise EnrollmentError("SOPS did not return the expected encrypted Secret")
 
 
-def install(root, confirmation, *, credential=runtime_credential, runner=subprocess.run):
-    if confirmation != CONFIRMATION:
+def install(
+    root, confirmation, *, replace_sha256=None, expected_generation=None,
+    credential=runtime_credential, runner=subprocess.run,
+):
+    replacing = replace_sha256 is not None or expected_generation is not None
+    if replacing and (
+        not isinstance(replace_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", replace_sha256) is None
+        or type(expected_generation) is not int
+        or expected_generation < 2
+    ):
+        raise EnrollmentError("Replacement requires a reviewed checksum and new generation")
+    if confirmation != (REPLACE_CONFIRMATION if replacing else CONFIRMATION):
         raise EnrollmentError("The exact ciphertext staging confirmation is required")
-    policy, recipient = preflight(root)
+    policy, recipient = preflight(root, replace_sha256)
     with credential() as (binding, password):
         binding_contract(binding)
+        if replacing and binding["credentialGeneration"] != expected_generation:
+            raise EnrollmentError("The ready credential does not match the replacement generation")
         if not isinstance(password, str) or not password or any(c.isspace() for c in password):
             raise EnrollmentError("The CV application password is not valid")
         plaintext = yaml.safe_dump(
@@ -200,33 +231,47 @@ def install(root, confirmation, *, credential=runtime_credential, runner=subproc
         generation = binding["credentialGeneration"]
     # The credential context repeats remote readiness and local generation checks
     # before this exclusive installation; only ciphertext leaves that context.
-    if preflight(root) != (policy, recipient):
+    if preflight(root, replace_sha256) != (policy, recipient):
         raise EnrollmentError("SOPS policy changed during staging")
     with tempfile.TemporaryDirectory(prefix=".cv-runtime-", dir=root / TARGET.parent) as temporary:
         candidate = Path(temporary) / TARGET.name
         candidate.write_bytes(result.stdout)
         candidate.chmod(0o600)
         try:
-            os.link(candidate, root / TARGET)
+            if replacing:
+                # Repeat guards immediately before replacing only the reviewed ciphertext.
+                if preflight(root, replace_sha256) != (policy, recipient):
+                    raise EnrollmentError("SOPS policy changed during staging")
+                os.replace(candidate, root / TARGET)
+            else:
+                os.link(candidate, root / TARGET)
         except OSError:
             raise EnrollmentError(
                 "Ciphertext was not installed; existing files were preserved"
             ) from None
-    return {
+    receipt = {
         "status": "ciphertext-staged",
         "credentialGeneration": generation,
         "ciphertext_sha256": hashlib.sha256(result.stdout).hexdigest(),
         "path": TARGET.as_posix(),
     }
+    if replacing:
+        receipt["replaced_ciphertext_sha256"] = replace_sha256
+    return receipt
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--confirm", required=True, choices=[CONFIRMATION])
+    parser.add_argument("--confirm", required=True, choices=[CONFIRMATION, REPLACE_CONFIRMATION])
+    parser.add_argument("--replace-sha256", help="Replace only existing ciphertext with this reviewed SHA256")
+    parser.add_argument("--expected-generation", type=int, help="Require this ready new credential generation (at least 2)")
     args = parser.parse_args()
     try:
         print(
-            json.dumps(install(Path(__file__).resolve().parents[2], args.confirm), sort_keys=True)
+            json.dumps(install(
+                Path(__file__).resolve().parents[2], args.confirm,
+                replace_sha256=args.replace_sha256, expected_generation=args.expected_generation,
+            ), sort_keys=True)
         )
         return 0
     except (

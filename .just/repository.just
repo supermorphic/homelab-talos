@@ -123,6 +123,8 @@ career-ops-source-credentials *args:
 
 # Stage ciphertext from the ready CV application profile; never activates or rotates it.
 # Guard: --confirm stage:career-ops:cv-render-database. Requires scoped debugger credentials.
+# Replacement requires --confirm replace:career-ops:cv-render-database,
+# --replace-sha256 of reviewed existing ciphertext and --expected-generation of the ready login.
 career-ops-runtime-secret *args:
     uv run --locked --no-dev python -m scripts.repository.career_ops_runtime_secret {{args}}
 

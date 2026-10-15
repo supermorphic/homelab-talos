@@ -751,6 +751,18 @@ restore the last reviewed restrictive policy through Git. Do not temporarily
 remove admission/network controls to make a workload start. Credential rotation
 uses the owning provisioner and protected enrollment, followed by identity and
 denial checks; it does not recover credentials from application Pods or n8n.
+The existing application-login provisioner replaces the password on the same
+PostgreSQL role; it does not provide simultaneous acceptance of old and new
+passwords for new connections. Keep qualification held during that transition.
+Retain the protected candidate on ambiguous failures and retry the same operation.
+Stage replacement database ciphertext from the freshly validated ready profile
+with `just repo career-ops-runtime-secret`, requiring the reviewed existing
+ciphertext checksum and expected new generation. Merge that credential change
+separately, then verify projection reload, new authentication, stable role/epoch
+and rejection of the previous password. Staging alone does not rotate a password
+or prove workload delivery. A future active consumer must plan for the reconnect
+gap through reviewed drain/readiness behavior; this qualification does not claim
+uninterrupted database access or revoke already-authenticated sessions.
 
 For a database or volume restore, the prerequisite is verified backups and the
 existing attended platform restore authority. Stop/fence pre-restore writers and

@@ -1,6 +1,7 @@
 """Runtime Secret enrollment tests use synthetic private profiles only."""
 
 import contextlib
+import hashlib
 import json
 import shutil
 import subprocess
@@ -45,7 +46,8 @@ class RuntimeSecretTest(unittest.TestCase):
         self.assertEqual(document["stringData"]["username"], runtime.ROLE)
         self.assertEqual(document["stringData"]["password"], self.password)
         document["stringData"] = {
-            key: "ENC[AES256_GCM,synthetic]" for key in document["stringData"]
+            key: f"ENC[AES256_GCM,synthetic-generation-{self.binding['credentialGeneration']}]"
+            for key in document["stringData"]
         }
         document["sops"] = {
             "age": [{"recipient": "age1synthetic"}],
@@ -54,14 +56,102 @@ class RuntimeSecretTest(unittest.TestCase):
         }
         return subprocess.CompletedProcess(command, 0, yaml.safe_dump(document).encode(), b"")
 
-    def install(self, runner=None, material=None):
+    def install(self, runner=None, material=None, **options):
         @contextlib.contextmanager
         def credential():
             yield material or (self.binding, self.password)
 
         return runtime.install(
-            self.root, runtime.CONFIRMATION, credential=credential, runner=runner or self.encrypt
+            self.root,
+            options.pop("confirmation", runtime.CONFIRMATION),
+            credential=credential,
+            runner=runner or self.encrypt,
+            **options,
         )
+
+    def replacement(self):
+        self.install()
+        target = self.root / runtime.TARGET
+        checksum = hashlib.sha256(target.read_bytes()).hexdigest()
+        self.binding["credentialGeneration"] = 2
+        self.password = "synthetic-rotated-candidate-" + "r" * 32
+        self.calls.clear()
+        return {
+            "confirmation": "replace:career-ops:cv-render-database",
+            "replace_sha256": checksum,
+            "expected_generation": 2,
+        }
+
+    def test_replacement_requires_reviewed_ciphertext_and_current_new_generation(self):
+        options = self.replacement()
+        result = self.install(**options)
+        self.assertEqual(result["credentialGeneration"], 2)
+        self.assertEqual(result["replaced_ciphertext_sha256"], options["replace_sha256"])
+        self.assertEqual(len(self.calls), 1)
+        self.assertNotIn(self.password, (self.root / runtime.TARGET).read_text())
+        self.assertNotEqual(
+            hashlib.sha256((self.root / runtime.TARGET).read_bytes()).hexdigest(),
+            options["replace_sha256"],
+        )
+
+    def test_invalid_replacement_guards_preserve_existing_ciphertext_before_credentials(self):
+        options = self.replacement()
+        target = self.root / runtime.TARGET
+        original = target.read_bytes()
+        cases = [
+            options | {"confirmation": runtime.CONFIRMATION},
+            options | {"replace_sha256": "0" * 64},
+            options | {"replace_sha256": None},
+            options | {"replace_sha256": "not-a-digest"},
+            options | {"expected_generation": None},
+            options | {"expected_generation": 1},
+            options | {"expected_generation": True},
+        ]
+        @contextlib.contextmanager
+        def unread():
+            self.fail("Credentials accessed before replacement preflight")
+            yield
+        for case in cases:
+            with self.subTest(case=case), self.assertRaises(runtime.EnrollmentError):
+                confirmation = case.pop("confirmation")
+                runtime.install(self.root, confirmation, credential=unread, **case)
+            self.assertEqual(target.read_bytes(), original)
+
+    def test_wrong_generation_and_encryption_failure_preserve_replacement_target(self):
+        options = self.replacement()
+        target = self.root / runtime.TARGET
+        original = target.read_bytes()
+        with self.assertRaises(runtime.EnrollmentError):
+            self.install(**(options | {"expected_generation": 3}))
+        self.assertEqual(self.calls, [])
+        with self.assertRaises(runtime.EnrollmentError):
+            self.install(runner=lambda *a, **kw: subprocess.CompletedProcess(a, 1, b"", b""), **options)
+        self.assertEqual(target.read_bytes(), original)
+
+    def test_concurrent_change_during_replacement_is_preserved(self):
+        options = self.replacement()
+        def changed(command, **kwargs):
+            result = self.encrypt(command, **kwargs)
+            (self.root / runtime.TARGET).write_bytes(b"independent ciphertext change")
+            return result
+        with self.assertRaises(runtime.EnrollmentError):
+            self.install(runner=changed, **options)
+        self.assertEqual((self.root / runtime.TARGET).read_bytes(), b"independent ciphertext change")
+
+    def test_replacement_rejects_symlink_and_missing_target(self):
+        options = self.replacement()
+        target = self.root / runtime.TARGET
+        original = target.read_bytes()
+        target.unlink()
+        with self.assertRaises(runtime.EnrollmentError):
+            self.install(**options)
+        elsewhere = target.parent / "other.yaml"
+        elsewhere.write_bytes(original)
+        target.symlink_to(elsewhere)
+        with self.assertRaises(runtime.EnrollmentError):
+            self.install(**options)
+        self.assertEqual(elsewhere.read_bytes(), original)
+        self.assertEqual(self.calls, [])
 
     def test_stages_only_ciphertext_without_selecting_or_activating_resources(self):
         result = self.install()
@@ -133,6 +223,17 @@ class RuntimeSecretTest(unittest.TestCase):
             all(v.startswith("ENC[AES256_GCM,") for v in encrypted["stringData"].values())
         )
         self.assertEqual(result["status"], "ciphertext-staged")
+        old_sha256 = result["ciphertext_sha256"]
+        self.binding["credentialGeneration"] = 2
+        rotated = self.install(
+            runner=subprocess.run,
+            confirmation="replace:career-ops:cv-render-database",
+            replace_sha256=old_sha256,
+            expected_generation=2,
+        )
+        self.assertEqual(rotated["credentialGeneration"], 2)
+        self.assertEqual(rotated["replaced_ciphertext_sha256"], old_sha256)
+        self.assertNotEqual(rotated["ciphertext_sha256"], old_sha256)
 
     def test_changed_profile_after_encryption_prevents_installation(self):
         @contextlib.contextmanager
@@ -145,6 +246,21 @@ class RuntimeSecretTest(unittest.TestCase):
                 self.root, runtime.CONFIRMATION, credential=changed, runner=self.encrypt
             )
         self.assertFalse((self.root / runtime.TARGET).exists())
+
+    def test_changed_profile_during_replacement_preserves_existing_ciphertext(self):
+        options = self.replacement()
+        target = self.root / runtime.TARGET
+        original = target.read_bytes()
+        @contextlib.contextmanager
+        def changed():
+            yield self.binding, self.password
+            raise runtime.EnrollmentError("Profile changed")
+        with self.assertRaises(runtime.EnrollmentError):
+            runtime.install(
+                self.root, options.pop("confirmation"), credential=changed,
+                runner=self.encrypt, **options,
+            )
+        self.assertEqual(target.read_bytes(), original)
 
     def test_wrong_sops_policy_and_symlink_target_fail_before_password_access(self):
         @contextlib.contextmanager
