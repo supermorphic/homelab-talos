@@ -100,6 +100,7 @@ STANDALONE_SUITES = {
     "test.news-extraction-corpus",
     "test.news-local-integration",
     "test.news-restore-drill",
+    "test.news-production-acceptance",
     "test.web-research-live-contract",
     "test.web-research-local-integration",
     "test.resilience.node-abrupt-loss",

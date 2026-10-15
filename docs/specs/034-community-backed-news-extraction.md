@@ -40,6 +40,11 @@ publisher extraction logic. A recognized rule is necessary but does not alone
 enable a source: representative public articles must pass quality acceptance.
 Rich feeds remain on ordinary RSS delivery without article fetching or rewriting.
 
+After quality acceptance, community enrichment is the default for eligible WIRED
+and Ars Technica subscriptions without an explicit content mode or native
+extraction configuration. Adoption preserves explicit RSS choices and existing
+extraction configurations, adds no subscriptions, and leaves other sources unchanged.
+
 WIRED and Ars Technica are enrichment candidates. Pages with multiple article
 elements use RSS fallback because an additional article can contain a reader
 comment or unrelated story. Car and Driver retains RSS: its current community
@@ -133,7 +138,8 @@ RSS unless the publisher changes the feed entry and a later ingestion attempt
 accepts enrichment. Reader View remains available for these articles. There is no
 automatic background reprocessing of previously synchronized snippets. A later
 reprocessing feature would need separate acceptance for existing item identity,
-concurrent state changes, and native client caches.
+concurrent state changes, and native client caches. Server-side enrichment does
+not guarantee replacement of bodies already cached by a native client.
 
 ## Worker interface and failure isolation
 
@@ -321,6 +327,25 @@ stored-content and native macOS spike:
   on the required client.
 
 Production adoption requires these integration and operational gates to pass.
+Acceptance mutations require explicit, task-scoped authorization without expanding
+ordinary observer or diagnostic access. Test accounts and disposable workers must
+remain isolated from operator data and production traffic. Acceptance must verify
+the deployed release and avoid conflicts with refresh or maintenance operations.
+Required native-client outcomes must come from actual observations. Failed or
+incomplete acceptance keeps production requests disabled.
+
+Keep article bodies, temporary credentials, and native-client screenshots in the
+approved private evidence store. Public results contain only aggregate outcomes
+and immutable evidence identities. Cleanup must establish resource ownership and
+verify removal without affecting replacement resources. Remove temporary client
+accounts before their server accounts, including after interrupted acceptance.
+Uncertain account creation or incomplete cleanup must remain visible in the result.
+
+Current publisher acceptance may use a fresh source capture and an independently
+reviewed complete reference under a distinct observation identity when a publisher
+revises a frozen article. The reference must identify the reviewed source capture;
+the frozen regression corpus and its release identity remain unchanged.
+
 If they require ongoing local publisher rules, widespread browser rendering, or
 unsafe generic fallback, retain direct rich RSS plus summaries/Reader View and
 stop extending custom extraction work.

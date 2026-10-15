@@ -105,6 +105,28 @@ try {
     } elseif (!is_file($home . '/config.php')) {
         throw new RuntimeException('Completed account configuration needs recovery');
     }
+    if (getenv('NEWS_EXTRACTION_REQUESTS_ENABLED') === 'true') {
+        require_once '/var/www/FreshRSS/cli/_cli.php';
+        cliInitUser($user);
+        $feeds = FreshRSS_Factory::createFeedDao();
+        $accepted = ['https://www.wired.com/feed/rss',
+                     'https://feeds.arstechnica.com/arstechnica/index'];
+        foreach ($feeds->listFeeds() as $feed) {
+            // Apply accepted defaults only to existing, unconfigured subscriptions.
+            // An explicit RSS choice or native extraction selector remains authoritative.
+            if (!in_array($feed->url(false), $accepted, true) ||
+                $feed->attributeString('community_extraction_mode') !== null ||
+                $feed->pathEntries() !== '' ||
+                !CommunityExtraction\Preservation::eligibleFeed($feed)) {
+                continue;
+            }
+            $attributes = $feed->attributes();
+            $attributes['community_extraction_mode'] = 'community';
+            if (!$feeds->updateFeed($feed->id(), ['attributes' => $attributes])) {
+                throw new RuntimeException('Unable to apply accepted feed default');
+            }
+        }
+    }
     echo "FreshRSS bootstrap ready\n";
 } catch (Throwable $error) {
     // Do not emit exception messages from the database or parser with credentials.

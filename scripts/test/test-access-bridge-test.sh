@@ -118,6 +118,23 @@ NODE_OPERATOR_KUBECONFIG="$fixture_root/operator-config" TEST_KUBECONFIG='' \
   bash -e -c 'source scripts/test/lib/access.sh; test_access_open test.resilience.node-abrupt-loss physical-run; [[ "$TEST_KUBECONFIG" == "$NODE_OPERATOR_KUBECONFIG" && -z "$TEST_ACCESS_CONFIG" ]]; test_access_check test.resilience.node-abrupt-loss; test_access_close'
 [[ -f "$fixture_root/operator-config" ]]
 
+# Production news acceptance never discovers or substitutes an operator config.
+for supplied in '' relative-config /nonexistent/config; do
+  if NEWS_ACCEPTANCE_KUBECONFIG="$supplied" TEST_KUBECONFIG='' TEST_ACCESS_CONFIG='' \
+    bash -e -c 'source scripts/test/lib/access.sh; test_access_open test.news-production-acceptance news-run' >/dev/null 2>&1; then
+    echo 'News acceptance adopted an invalid operator input.' >&2
+    exit 1
+  fi
+done
+NEWS_ACCEPTANCE_KUBECONFIG="$fixture_root/operator-config" TEST_KUBECONFIG='' TEST_ACCESS_CONFIG='' \
+  bash -e -c 'source scripts/test/lib/access.sh; test_access_open test.news-production-acceptance news-run; [[ "$TEST_KUBECONFIG" == "$NEWS_ACCEPTANCE_KUBECONFIG" && -z "$TEST_ACCESS_CONFIG" ]]; test_access_check test.news-production-acceptance; test_access_close'
+if NEWS_ACCEPTANCE_KUBECONFIG="$fixture_root/operator-config" TEST_KUBECONFIG=/foreign/config TEST_ACCESS_CONFIG='' \
+  bash -e -c 'source scripts/test/lib/access.sh; test_access_open test.news-production-acceptance news-run' >/dev/null 2>&1; then
+  echo 'News acceptance accepted a foreign selected config.' >&2
+  exit 1
+fi
+[[ -f "$fixture_root/operator-config" ]]
+
 # A direct invocation ignores ambient KUBECONFIG and exports only its own config.
 : >"$fixture_root/trace"
 TALOSCONFIG=/synthetic/ambient-talos KUBECONFIG=/synthetic/ambient-admin TEST_KUBECONFIG='' TEST_ACCESS_CONFIG='' \

@@ -474,6 +474,9 @@ def main(*, extraction=False, extraction_recovery=False):
                             "-v",
                             str(Path(__file__).with_name("extraction-ingestion-tests.php"))
                             + ":/extraction-tests.php:ro",
+                            "-v",
+                            str(Path(__file__).with_name("production-account.php"))
+                            + ":/production-account.php:ro",
                         ]
                         if (extraction or extraction_recovery)
                         else []
@@ -504,6 +507,157 @@ def main(*, extraction=False, extraction_recovery=False):
                 )
                 result = run("exec", names["app"], "php", "/extraction-tests.php")
                 print(result.stdout.decode(), end="")
+                # Create subscriptions through the real DAO without fetching them.
+                defaults = {
+                    "wired": "https://www.wired.com/feed/rss",
+                    "ars": "https://feeds.arstechnica.com/arstechnica/index",
+                    "other": "https://example.com/independent-rich.xml",
+                }
+                setup = (
+                    "require '/var/www/FreshRSS/cli/_cli.php';cliInitUser('reader');"
+                    "$dao=FreshRSS_Factory::createFeedDao();foreach(json_decode($argv[1],true) as $name=>$url){"
+                    "$f=new FreshRSS_Feed($url);$f->_name($name);$f->_categoryId(1);"
+                    "if($name==='ars')$f->_attribute('community_extraction_mode','rss');"
+                    "$id=$dao->addFeedObject($f);if(!$id||!$dao->updateFeed($id,['ttl'=>-1]))exit(1);}"
+                )
+                run("exec", names["app"], "php", "-r", setup, json.dumps(defaults))
+
+                def default_modes():
+                    probe = (
+                        "require '/var/www/FreshRSS/cli/_cli.php';cliInitUser('reader');"
+                        "$dao=FreshRSS_Factory::createFeedDao();$out=[];foreach(json_decode($argv[1],true) as $name=>$url){"
+                        "$f=$dao->searchByUrl($url);$out[$name]=$f->attributeString('community_extraction_mode');}"
+                        "echo json_encode($out);"
+                    )
+                    return json.loads(
+                        run("exec", names["app"], "php", "-r", probe, json.dumps(defaults)).stdout
+                    )
+
+                before = {"wired": None, "ars": "rss", "other": None}
+                assert default_modes() == before
+                run(
+                    "exec",
+                    "-e",
+                    "NEWS_EXTRACTION_REQUESTS_ENABLED=false",
+                    names["app"],
+                    "php",
+                    "/opt/news/bootstrap.php",
+                )
+                assert default_modes() == before, "disabled requests changed feed defaults"
+                for _ in range(2):
+                    run(
+                        "exec",
+                        "-e",
+                        "NEWS_EXTRACTION_REQUESTS_ENABLED=true",
+                        names["app"],
+                        "php",
+                        "/opt/news/bootstrap.php",
+                    )
+                    assert default_modes() == {
+                        "wired": "community",
+                        "ars": "rss",
+                        "other": None,
+                    }, "approved defaults missing or explicit RSS choice overwritten"
+                customize = (
+                    "require '/var/www/FreshRSS/cli/_cli.php';cliInitUser('reader');"
+                    "$dao=FreshRSS_Factory::createFeedDao();$urls=json_decode($argv[1],true);"
+                    "$wired=$dao->searchByUrl($urls['wired']);$ars=$dao->searchByUrl($urls['ars']);"
+                    "if(!$dao->updateFeed($wired->id(),['attributes'=>['community_extraction_mode'=>'rss']])||"
+                    "!$dao->updateFeed($ars->id(),['attributes'=>[],'pathEntries'=>'//article']))exit(1);"
+                )
+                run("exec", names["app"], "php", "-r", customize, json.dumps(defaults))
+                run(
+                    "exec",
+                    "-e",
+                    "NEWS_EXTRACTION_REQUESTS_ENABLED=true",
+                    names["app"],
+                    "php",
+                    "/opt/news/bootstrap.php",
+                )
+                assert default_modes() == {"wired": "rss", "ars": None, "other": None}, (
+                    "startup overwrote explicit RSS or native extraction"
+                )
+                run(
+                    "exec",
+                    names["app"],
+                    "php",
+                    "-r",
+                    "require '/var/www/FreshRSS/cli/_cli.php';cliInitUser('reader');$d=FreshRSS_Factory::createFeedDao();$f=$d->searchByUrl($argv[1]);if(!$d->updateFeed($f->id(),['pathEntries'=>'']))exit(1);",
+                    defaults["ars"],
+                )
+                run(
+                    "exec",
+                    "-e",
+                    "NEWS_EXTRACTION_REQUESTS_ENABLED=true",
+                    names["app"],
+                    "php",
+                    "/opt/news/bootstrap.php",
+                )
+                assert default_modes() == {"wired": "rss", "ars": "community", "other": None}
+                print(
+                    "Accepted startup defaults preserve explicit RSS, native extraction and other feeds"
+                )
+                account = {
+                    "user": "news583_" + secrets.token_hex(6),
+                    "owner": secrets.token_hex(32),
+                    "password": secrets.token_hex(24),
+                    "api_password": secrets.token_hex(24),
+                }
+                passwords.update({"acceptance_" + k: v for k, v in account.items()})
+
+                def account_call(operation, *, success=True, **values):
+                    return run(
+                        "exec",
+                        "-i",
+                        names["app"],
+                        "php",
+                        "/production-account.php",
+                        input=json.dumps({**account, "operation": operation, **values}).encode(),
+                        success=success,
+                    )
+
+                def circuit_hash():
+                    return run(
+                        "exec",
+                        names["app"],
+                        "php",
+                        "-r",
+                        "$p='/run/news/extraction-circuit.json';echo is_file($p)?hash_file('sha256',$p):'absent';",
+                    ).stdout
+
+                assert json.loads(account_call("delete").stdout) == {"deleted": True}
+                created = account_call("create")
+                assert json.loads(created.stdout) == {"created": True}
+                try:
+                    refused = account_call("delete", success=False, owner="0" * 64)
+                    assert refused.returncode != 0, "foreign ownership deleted an account"
+                    fixture = {
+                        "id": "local-rss",
+                        "mode": "rss",
+                        "url": "https://example.com/article",
+                        "rss": "<p>Independent native API fixture.</p>",
+                        "published": int(time.time()),
+                    }
+                    stored = json.loads(account_call("rss", cases=[fixture]).stdout)
+                    assert stored["cases"][0]["html"] == fixture["rss"]
+                    delivered = json.loads(account_call("inspect").stdout)["items"]
+                    assert (
+                        len(delivered) == 1
+                        and delivered[0]["summary"]["content"] == fixture["rss"]
+                    ), "muted native fixture did not reach the real Reader API"
+                    before = circuit_hash()
+                    refused = account_call("fault", success=False, worker_ip="invalid")
+                    assert refused.returncode != 0, "invalid fault target was accepted"
+                    assert circuit_hash() == before, (
+                        "failed acceptance changed shared circuit state"
+                    )
+                finally:
+                    deleted = account_call("delete")
+                    assert json.loads(deleted.stdout) == {"deleted": True}
+                assert json.loads(account_call("delete").stdout) == {"deleted": True}
+                print(
+                    "Native temporary-account ownership, failed-fault rollback and cleanup passed"
+                )
                 return
 
             def metrics():

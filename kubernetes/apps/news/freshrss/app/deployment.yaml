@@ -55,7 +55,7 @@ spec:
                   name: freshrss-runtime
                   key: api-password
             - name: NEWS_EXTRACTION_REQUESTS_ENABLED
-              value: 'false'
+              value: 'true'
           ports:
             - name: http
               containerPort: 8080
