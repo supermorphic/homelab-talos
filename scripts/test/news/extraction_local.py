@@ -12,6 +12,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[3]
 APP = Path(
     os.environ.get("NEWS_EXTRACTION_CANDIDATE", str(ROOT / "kubernetes/apps/news/graby/app"))
@@ -117,6 +119,61 @@ def pid1_service():
         ),
         end="",
     )
+
+
+def projected_initialization():
+    # Flux normalizes its build definition before generating ConfigMaps. Exercise
+    # the rendered data and AtomicWriter links rather than mounting source files.
+    with tempfile.TemporaryDirectory(prefix="projected-worker-", dir=ROOT / ".tmp") as tmp:
+        source = Path(tmp) / "source"
+        shutil.copytree(APP, source)
+        definition = source / "kustomization.yaml"
+        definition.write_text(yaml.safe_dump(yaml.safe_load(definition.read_text())))
+        objects = list(
+            yaml.safe_load_all(
+                subprocess.check_output(["kustomize", "build", str(source)], text=True)
+            )
+        )
+        deployment = next(obj for obj in objects if obj["kind"] == "Deployment")
+        volume = next(
+            v for v in deployment["spec"]["template"]["spec"]["volumes"] if v["name"] == "code"
+        )["configMap"]
+        data = next(obj for obj in objects if obj["metadata"]["name"] == volume["name"])["data"]
+        mounted = Path(tmp) / "mounted"
+        snapshot = mounted / "..snapshot"
+        snapshot.mkdir(parents=True)
+        for item in volume["items"]:
+            target = snapshot / item["path"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(data[item["key"]])
+        (mounted / "..data").symlink_to("..snapshot")
+        for child in snapshot.iterdir():
+            (mounted / child.name).symlink_to(Path("..data") / child.name)
+        print(
+            container(
+                "sh /app/scripts/initialize.sh && /usr/bin/php8.4 -d extension=tidy /app/scripts/ready.php",
+                app=mounted,
+                network="bridge",
+            ),
+            end="",
+        )
+        # Normalizing build metadata must never relax executable-file integrity.
+        server = snapshot / "src/Server.php"
+        server.write_text(server.read_text() + "\n// Synthetic changed runtime bytes.\n")
+        print(
+            container(
+                r"""/usr/bin/php8.4 <<'PHP'
+<?php
+require '/app/src/Release.php';
+try { NewsExtraction\Release::load('/app/release.json','/app'); exit(1); }
+catch (RuntimeException $e) { if ($e->getMessage()!=='release_file_mismatch') { throw $e; } }
+echo "projected runtime tamper rejected\n";
+PHP""",
+                app=mounted,
+            ),
+            end="",
+        )
+    print("Projected ConfigMap initialization and readiness passed")
 
 
 def initialization_lifecycle():
@@ -276,6 +333,7 @@ def main():
     if args.phase in ("service", "all"):
         pid1_service()
     if args.phase in ("initialization", "all"):
+        projected_initialization()
         initialization()
         initialization_lifecycle()
     if args.phase in ("fetch", "all"):

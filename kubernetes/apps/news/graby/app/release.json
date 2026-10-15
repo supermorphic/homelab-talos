@@ -10,8 +10,7 @@
     "ciliumnetworkpolicy.yaml": "a0803ae6216b579af9fcdf0700d0c450d1c809b0f43da2646467f364414e6abd",
     "composer.json": "ddba80e309d77916daf52e9666674977cd47d03e90fc9426a06471e3ad5ce913",
     "composer.lock": "3c1874561f35c3b7280e5fde589760f9dfe605b4fedfc22aeb55838337704100",
-    "deployment.yaml": "3546ba9fd99e54931feae9f923a7ff5b98463bacb47a557d91b4af2118a8cea1",
-    "kustomization.yaml": "d5eac35af26a6e44dd2d822d498384d47daabc6bf2e4caab91317050dc1b5236",
+    "deployment.yaml": "aa0a67bb0bb0149b1db3d7471618b7dd1d6aebbf75852a1e70d249dd09f62666",
     "limits.json": "6a776c97dfcb242c272a535905a80eef79380416cbcabd5f846a9fd92dd32966",
     "scripts/archive.php": "3334d21690b209d1e2caa16b8b014bb53ff35e8fb0c55eea0397e29c4e7f4285",
     "scripts/initialize.php": "0435316ad85550aef5dda5bdbcdb790e2c851692692d180efc8672cc563bc2cd",
@@ -209,5 +208,5 @@
       }
     }
   },
-  "id": "aa2c00e8c222505978194ca1892f438838a53925401b8332ee458acb4b89e392"
+  "id": "4c6c9262e3cc4a5a77098ed813e934ef516d65880475f94ccc51393ccdcc1557"
 }

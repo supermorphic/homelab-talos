@@ -24,10 +24,12 @@ def canonical(value):
 def fingerprint(root):
     metadata = json.loads((root / "release.json").read_text())
     metadata.pop("id", None)
+    # Flux normalizes its build definition before generating the ConfigMap.
+    # Keep that Git input separate from the byte-identical runtime package.
     metadata["files"] = {
         str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
         for p in sorted(root.rglob("*"))
-        if p.is_file() and p.name != "release.json"
+        if p.is_file() and p.name != "release.json" and p != root / "kustomization.yaml"
     }
     metadata["extension_files"] = {
         p.name: hashlib.sha256(p.read_bytes()).hexdigest()
@@ -157,6 +159,7 @@ def prepare(request: dict) -> Path:
 
 
 def verify_files(metadata: dict, root: Path, extension: Path) -> bool:
+    build_definition = root.resolve() / "kustomization.yaml"
     for base, declared in (
         (root, metadata.get("files", {})),
         (extension, metadata.get("extension_files", {})),
@@ -165,7 +168,10 @@ def verify_files(metadata: dict, root: Path, extension: Path) -> bool:
         actual = {
             str(file.relative_to(base)): hashlib.sha256(file.read_bytes()).hexdigest()
             for file in base.rglob("*")
-            if file.is_file() and file.name != "release.json" and not file.is_symlink()
+            if file.is_file()
+            and file.name != "release.json"
+            and file != build_definition
+            and not file.is_symlink()
         }
         if not declared or declared != actual:
             return False
