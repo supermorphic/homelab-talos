@@ -138,6 +138,10 @@ class FixtureTests(unittest.TestCase):
             client.account.assert_not_called()
             client.owned.assert_called_once_with("delete", {"owned": "fixture"})
             self.assertTrue((root / "cleanup-required.json").exists())
+            for invalid in (None, [], True, "removed"):
+                (root / "native-client-removed.json").write_text(json.dumps(invalid))
+                self.assertFalse(client.cleanup())
+                client.account.assert_not_called()
             for identity, expected in (("foreign", False), (client.run, True)):
                 (root / "native-client-removed.json").write_text(
                     json.dumps({"run": identity, "removed": True})

@@ -316,7 +316,11 @@ class Acceptance:
             confirmation = self.private / "native-client-removed.json"
             try:
                 removed = json.loads(confirmation.read_text()) if confirmation.exists() else {}
-                if removed.get("run") == self.run and removed.get("removed") is True:
+                if (
+                    isinstance(removed, dict)
+                    and removed.get("run") == self.run
+                    and removed.get("removed") is True
+                ):
                     self.result["native_client_cleanup"] = "confirmed"
             except (OSError, ValueError):
                 pass
