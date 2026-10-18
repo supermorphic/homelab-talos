@@ -229,6 +229,10 @@ class ApplicationAuthorityTests(ApplicationFixture, unittest.TestCase):
         ]:
             self.assertFalse(any(r == forbidden for g, r, v in allowed), forbidden)
         self.assertFalse(any(v in ["impersonate", "escalate", "*"] for g, r, v in allowed))
+        # Flux health checks read Deployment ReplicaSets; the reconciler cannot change them.
+        self.assertEqual(
+            {v for g, r, v in allowed if (g, r) == ("apps", "replicasets")}, {"get", "list", "watch"}
+        )
         bind = [r for r in roles["career-ops-reconciler"]["rules"] if "bind" in r["verbs"]]
         self.assertEqual(
             bind,

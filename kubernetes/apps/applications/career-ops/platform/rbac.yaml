@@ -33,6 +33,14 @@ rules:
   - deployments
   verbs: *id001
 - apiGroups:
+  - apps
+  resources:
+  - replicasets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - batch
   resources:
   - jobs
