@@ -254,8 +254,8 @@ The initial allocation is:
 | Coordinator endpoint | Service `cv-coordinator`, HTTP port 8080; `/readyz` includes database readiness |
 | Monitoring endpoint | Service `cv-coordinator`, named port `metrics` on 9090, `/metrics`; no CV contents |
 | Database endpoint | `automation-data-postgresql.automation-data.svc.cluster.local:5432`, database `career_ops` |
-| Registered database application | `cv_render`, schema `cv_render`; application-owned grants and functions |
-| Runtime credentials | Secret `cv-render-database` for the coordinator login; `cv-api-auth` for application authentication |
+| Registered database applications | `cv_render`, schema `cv_render`; `application_packages`, schema `package_access`; application-owned grants and functions |
+| Runtime credentials | Secrets `cv-render-database` and `application-packages-database` for the coordinator's two logins; `cv-api-auth` for application authentication |
 | Source credentials | `career-ops-source` for Flux; separate `cv-prepare-source` for preparation |
 | Retained claims | `cv-releases` 8 GiB, `cv-requests` 16 GiB, `cv-artifacts` 32 GiB; all RWX |
 | Storage class | Platform-owned `career-ops-retain`, Longhorn CSI, `Retain`, two replicas, existing backup policy |

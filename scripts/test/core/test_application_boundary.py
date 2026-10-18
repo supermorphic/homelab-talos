@@ -950,6 +950,7 @@ class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
     def test_secret_files_are_read_only_at_the_enrolled_path(self):
         for account, secret in [
             ("cv-coordinator", "cv-render-database"),
+            ("cv-coordinator", "application-packages-database"),
             ("cv-coordinator", "cv-api-auth"),
             ("cv-prepare", "cv-prepare-source"),
         ]:
@@ -971,6 +972,7 @@ class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
     def test_secret_environment_and_partial_directory_delivery_are_denied(self):
         for account, secret in [
             ("cv-coordinator", "cv-render-database"),
+            ("cv-coordinator", "application-packages-database"),
             ("cv-coordinator", "cv-api-auth"),
             ("cv-prepare", "cv-prepare-source"),
         ]:
