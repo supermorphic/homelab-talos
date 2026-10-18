@@ -1147,7 +1147,7 @@ class ApplicationAssuranceTests(ApplicationFixture, unittest.TestCase):
 class ApplicationConnectionTests(unittest.TestCase):
     def test_reviewed_private_source_and_application_reconciliation_are_enabled(self):
         docs = render(ROOT / "kubernetes/apps/applications/career-ops/connection")
-        self.assertEqual(len(docs), 6)
+        self.assertEqual(len(docs), 7)
         self.assertEqual(
             {(d["kind"], d["metadata"]["namespace"], d["metadata"]["name"]) for d in docs},
             {
@@ -1155,6 +1155,7 @@ class ApplicationConnectionTests(unittest.TestCase):
                 ("Kustomization", "career-ops", "career-ops-apps"),
                 ("Secret", "career-ops", "career-ops-source"),
                 ("Secret", "career-ops", "cv-render-database"),
+                ("Secret", "career-ops", "application-packages-database"),
                 ("Secret", "career-ops", "cv-prepare-source"),
                 ("Secret", "career-ops", "cv-api-auth"),
             },
@@ -1187,9 +1188,13 @@ class ApplicationConnectionTests(unittest.TestCase):
         for field in ["decryption", "postBuild", "patches", "components", "kubeConfig"]:
             self.assertNotIn(field, application["spec"])
 
-    def test_runtime_database_secret_is_selected_by_the_platform_connection(self):
+    def test_runtime_database_secrets_are_selected_by_the_platform_connection(self):
         docs = render(ROOT / "kubernetes/apps/applications/career-ops/connection")
-        credential = next((d for d in docs if d["metadata"]["name"] == "cv-render-database"), None)
+        for name in ("cv-render-database", "application-packages-database"):
+            with self.subTest(secret=name):
+                self.assert_database_secret(next((d for d in docs if d["metadata"]["name"] == name), None))
+
+    def assert_database_secret(self, credential):
         self.assertIsNotNone(credential)
         self.assertEqual(credential["kind"], "Secret")
         self.assertEqual(credential["metadata"]["namespace"], "career-ops")

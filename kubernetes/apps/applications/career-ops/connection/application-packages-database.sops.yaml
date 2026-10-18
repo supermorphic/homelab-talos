@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Secret
+metadata:
+    name: application-packages-database
+    namespace: career-ops
+stringData:
+    binding.json: ENC[AES256_GCM,data:Nfq0aTnyw64+Z2d0rcO5uqvFxYtkCtVWC+LZyq+LCUmorwjwfZg9mBwK1YYYVCdelqEG7PGMaTh9gLQBRrg6LI3I58lcwBJSSYQIFvIgkFiPBHX+Nt1kfo7J1Eng2/BBECJU5hyKhE9NEqEUiTTLXc1qMSAf2KPiQPZO4DcGxXW7bBoNWEzdH6D5IrVxOlz/q2LbWQtlksgYtQiUFlKPS6E/qXnroDH+xtTmlqJNmtslMpL92c3YluGAtmobKrkaZLASX0kNFoU9vpQs,iv:0ZX9WGru6P5Cip2Lt2AhFZmH9KdzldwLAfWqxL218G0=,tag:mHx7YrKQA3I2Ci9m0dzFmg==,type:str]
+    password: ENC[AES256_GCM,data:Yo7WHjv4gvB7UQnXnqyDYeSjCRmRh+v3iYoX1vE9JqnGtQQAGIaledDcecvUyowks+syY5dbymaNnj1ES2xTnw==,iv:KgFVGPHljWDPAo+8HTDN3JfFiWMUfcEdKExFDaDthXw=,tag:6xpVqjPKVHW7k3tjrRT6Vg==,type:str]
+    username: ENC[AES256_GCM,data:yuSosJUY+oYyXCbxilJ8FxdLesE8i/0pfB56hqAA3Wg0+IVNPDUmZJI/Txn6DtvJ,iv:oRB7si4OlZ6mPCi+q1UYTVORLd4zlxnB9eBbzjeTP2U=,tag:8gFP9y4ak54dNGnwi9qyIg==,type:str]
+type: Opaque
+sops:
+    age:
+        - enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBpdUhDMTY1bklMV2d2MmNU
+            QlJsNDBQcEdrTVpJVGUxaVZUa1lCVjE4UVRFCndJRERJODFwQTJLWUNMY1NMazla
+            bmllaUgra2R4U2JQSFdnRGhYZnRWMlUKLS0tIG1CUkNqK3k4UFd1dHpUTkpqVVJi
+            eE9DWDdxT1YvZkI1bVl4Y3grd3ZPMXMKf0QsFX6MwX6P7QyEVuvtmTm4M9Mz8fAn
+            SC0TGgGVjlsFinVhFPqGl9FlbryNFJuE66FhX8J84MoWUx0A71M6WQ==
+            -----END AGE ENCRYPTED FILE-----
+          recipient: age1da2cywfkg9hp6v39jvj9qcmqz4n8w3gm6nqj5vygu7e0zzgnp5psne9wlx
+    encrypted_regex: ^(data|stringData)$
+    lastmodified: "2026-10-18T14:08:11Z"
+    mac: ENC[AES256_GCM,data:fMDAmBVOEgIj4XawleR/5+q3Pr3TITtLKjYRM87Iy+l3pzb2G38+kXLiYnxLruL2UqAHKxkMdQ6rCvBPn0tDXtlTsPlgyu2p0210W4tBv00ogNEaQs1IY85jdqmYYJ+nXdbr7IWaPvB0Y4UXEFwiDsOhcwyiAWj1pd6gt5jJvyg=,iv:b5Ywy2SJzoQPuRuZWCC312g62x8cXLUZStUDl/sg/oM=,tag:n6WoNO3p9lc1KTT7SvDROA==,type:str]
+    version: 3.13.2
