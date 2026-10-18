@@ -4,20 +4,20 @@ metadata:
     name: cv-api-auth
     namespace: career-ops
 stringData:
-    principals.json: ENC[AES256_GCM,data:v50Dylc8iajG5+g3jks6vlD697dLzrbffO/RsYAISGgHmSfA9n2q0cUi+xr9SR6FIW3SsczwfxlqLIiUXcHfPWG7sqaRYANT7tAak81YgzdLoVKZs0ce/IQ3PWGjjYSxaxHbcXegjeLd5s9rz0DEZ2LEuxMUaHtjApC4LylKgqOjM5LxAi62XJQz3GJARcvD0J+lExSL30qWcca13LMuCA==,iv:nKLUFTIDFDvYv9BdY9bdaiTwdfRo6dNAOya3sNjr+x0=,tag:I7Mq8YsWBrA5MEm4FqvTEQ==,type:str]
+    principals.json: ENC[AES256_GCM,data:+GyJW1AX2/F0ipskn0w1jupaKLo7Z/IU7zA/ES6tDK3vHajcYOQeS71n8mm2coRxgeMVGbhndkJtBlYuEaX59r1y6aVotlyl98Lpo08Yn1FHepD5U/aL0WyKsM0qoLO/IwlfQm7m25mDp1+PqYRN48WRgBDPvzcxO4Mnn7JRGydlFqxG0Clrxo3vuu8AertscYYMkY2oyKihR/9OfcqqoYK4y6mIQoGBicdHPvvWT85gtUJhpQWQAJk+wyBntrHAFokpuLREgy6zROPI2OSSJZ979Dhd1tyhSCtKPvXVBf8O5BQFvl3mZ7xsTZAMJY7u8xDSwemkeTN9RRRoVl+hAlombl3rJ+gbOnDQHQIkLpo1h0iZBH/nOeilNFLIRyXGakOWCmYZHLyBPnbsWKR8PLFkx2lry69gTByV93QQ1oSjOQh/zyiscKw2gImf9bScIHrAAPIhIuOYdbPihu5ejO31lLhq,iv:iJ4sfMfthvuLrJeUf0Y8zh2i9zUkRDVGzwfO4tCtUOQ=,tag:CFZaRmuR+RRdX/mN1jlwAA==,type:str]
 type: Opaque
 sops:
     age:
         - enc: |
             -----BEGIN AGE ENCRYPTED FILE-----
-            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSB2dFoyYVFxZFpteDd6eTFV
-            cGxuc0U3QWRVM3hjTVltTzJST3BnakJYcm1VCi9mdXlGWUdQL1BnUEFuRnE2eVVo
-            WjMwWWVISzVxZzZMb2lYSWFnS0NrWUEKLS0tIDFhNFErbjgxZEk1UnZmaTBMS2pE
-            cFRNOW0wcUYyV3JsaG8xcXgyUUk0MFEKPhqDqx94oQ76mzvuDs/jvJ/DewndXekT
-            795sUCg1PVjA8yQptKS4qdO9z6N09dJ6+gXzyvFQeCfZNIt5DJZfEA==
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBia3lNTEw4T21LRCtCbmd2
+            YThmYlQ2bzExYXdvVjVubnJKTDRTTXJqakNBCklOYlZyZFYzaFhEZUJBZEFybnFk
+            MXFFWjN1Rzl0V3lydFNVQjJHRC9kU2sKLS0tIE9aQlV6dExqU3JUbjVKTStzOXJC
+            MU1tY0xEWXJSS2JFNXdKdVUyQ1IzdmcKH48sC8Yc3vcFbo5d9gvxZJzBkFqhKPSt
+            wi/c0Et1FCt/Q4xBrLM0kjcn1JjP7LG3gB1v5s9EIJLi4o3F2L0WUg==
             -----END AGE ENCRYPTED FILE-----
           recipient: age1da2cywfkg9hp6v39jvj9qcmqz4n8w3gm6nqj5vygu7e0zzgnp5psne9wlx
     encrypted_regex: ^(data|stringData)$
-    lastmodified: "2026-10-14T11:53:29Z"
-    mac: ENC[AES256_GCM,data:1BQ1ocEHTwMGrf+fFWSqihuldrpA/K+t7l3FTHz/p4KKx6588t6uRQ5JlcD54uA0p8I2gce1p3icBi0oquSHqJDa96jT+B0G1wF19pt1q9eABQiaq510nxwLPaskqhs305HUP/d013BmMExhdC91gErHzaOZI3Wwi2IyxGl8RaE=,iv:Mka9EWP5R7HQb7UbP77uuF79fDibHUy+yyryD1J73jU=,tag:u3YGMU3HUvqdTBbdY55i+Q==,type:str]
+    lastmodified: "2026-10-18T03:07:00Z"
+    mac: ENC[AES256_GCM,data:nPKsqOmegzH0zplRDEAADOPYI6ITH6c/vkGg0ZVSGKOZf8XptgZ58ooxMLtcxXZCQYzxNvPARC1HkzIdn7ktsnLD9VOFoaB0o2YUHROyRdRK7oalCvg5ya/LMu5KBXJihLmThKBZTivS0dEmN4jFeT/WH8ZaSFTW3ESBOEfKEbE=,iv:9lzNmOVLapX+SvPmky8aEjW1I3iR9x11JPoAfZnoOQw=,tag:8qBzNOaYN4ogZnJAqDTZHQ==,type:str]
     version: 3.13.2
