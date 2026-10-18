@@ -168,6 +168,60 @@ class RuntimeSecretTest(unittest.TestCase):
         with self.assertRaises(runtime.EnrollmentError):
             self.install()
 
+    def test_package_login_stages_only_its_own_secret_and_binding(self):
+        login = runtime.LOGINS["application_packages"]
+        self.assertEqual(
+            login.role, "app_187a49fe010fd1f0424566c383befb58_integration"
+        )
+        package = {
+            "domain": "career_ops",
+            "application": "application_packages",
+            "database": "career_ops",
+            "schema": "package_access",
+            "role": login.role,
+            "credentialGeneration": 1,
+        }
+        (self.root / runtime.TARGET).write_bytes(b"existing runtime ciphertext")
+
+        def encrypt(command, **kwargs):
+            document = yaml.safe_load(kwargs["input"])
+            self.assertEqual(
+                document["metadata"],
+                {"name": "application-packages-database", "namespace": "career-ops"},
+            )
+            self.assertEqual(document["stringData"]["username"], login.role)
+            self.assertIn(login.target.as_posix(), command)
+            document["stringData"] = {
+                key: "ENC[AES256_GCM,synthetic]" for key in document["stringData"]
+            }
+            document["sops"] = {
+                "age": [{"recipient": "age1synthetic"}],
+                "encrypted_regex": "^(data|stringData)$",
+                "mac": "ENC[AES256_GCM,synthetic]",
+            }
+            return subprocess.CompletedProcess(command, 0, yaml.safe_dump(document).encode(), b"")
+
+        @contextlib.contextmanager
+        def credential(material):
+            yield material
+
+        for confirmation, material in (
+            (runtime.CONFIRMATION, (package, self.password)),
+            (login.confirmation, (self.binding, self.password)),
+        ):
+            with self.subTest(confirmation=confirmation), self.assertRaises(runtime.EnrollmentError):
+                runtime.install(
+                    self.root, confirmation, credential=lambda m=material: credential(m),
+                    runner=encrypt, login=login,
+                )
+        self.assertFalse((self.root / login.target).exists())
+        result = runtime.install(
+            self.root, login.confirmation,
+            credential=lambda: credential((package, self.password)), runner=encrypt, login=login,
+        )
+        self.assertEqual(result["path"], login.target.as_posix())
+        self.assertEqual((self.root / runtime.TARGET).read_bytes(), b"existing runtime ciphertext")
+
     def test_rejects_wrong_binding_generation_and_extra_fields(self):
         for change in (
             {"schema": "app"},

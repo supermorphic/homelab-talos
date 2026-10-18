@@ -121,9 +121,10 @@ crawl4ai-secrets:
 career-ops-source-credentials *args:
     uv run --locked --no-dev python scripts/repository/career_ops_source_credentials.py {{args}}
 
-# Stage ciphertext from the ready CV application profile; never activates or rotates it.
-# Guard: --confirm stage:career-ops:cv-render-database. Requires scoped debugger credentials.
-# Replacement requires --confirm replace:career-ops:cv-render-database,
+# Stage ciphertext from a ready Career Ops application profile; never activates or rotates it.
+# --application selects cv_render (default, cv-render-database) or application_packages
+# (application-packages-database). Guard: --confirm stage:career-ops:<secret>.
+# Requires scoped debugger credentials. Replacement requires --confirm replace:career-ops:<secret>,
 # --replace-sha256 of reviewed existing ciphertext and --expected-generation of the ready login.
 career-ops-runtime-secret *args:
     uv run --locked --no-dev python -m scripts.repository.career_ops_runtime_secret {{args}}
@@ -2102,6 +2103,8 @@ secret-scan:
 openbao-secrets:
     @scripts/secrets/openbao.sh
 
-# Stage only the qualification API principal; retain its bearer in a protected local file.
+# Stage the qualification API principal; retain its bearer in a protected local file.
+# Package enrollment adds the operator principal: --operator-token-file, --replace-sha256 of
+# reviewed ciphertext and --confirm replace:career-ops:cv-api-auth; it keeps the qualification bearer.
 career-ops-api-secret *args:
     uv run --locked --no-dev python scripts/repository/career_ops_api_secret.py {{args}}

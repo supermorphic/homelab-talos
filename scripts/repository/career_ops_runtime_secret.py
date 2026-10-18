@@ -1,4 +1,4 @@
-"""Stage a CV database Secret from its ready protected application profile.
+"""Stage a Career Ops database Secret from its ready protected application profile.
 
 Uses public-age SOPS encryption only. Does not activate or rotate a login,
 select the ciphertext in Flux, or change admission and recovery state.
@@ -16,6 +16,8 @@ import subprocess
 import sys
 import tempfile
 from contextlib import contextmanager
+from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 import psycopg
@@ -35,75 +37,111 @@ from automation_data_client import (
     validate_service_profile,
 )
 
-TARGET = Path("kubernetes/apps/applications/career-ops/connection/cv-render-database.sops.yaml")
-CONFIRMATION = "stage:career-ops:cv-render-database"
-REPLACE_CONFIRMATION = "replace:career-ops:cv-render-database"
-ROLE = (
-    "app_"
-    + hashlib.md5(b"career_ops:cv_render", usedforsecurity=False).hexdigest()
-    + "_integration"
-)
-EXPECTED = {
-    "domain": "career_ops",
-    "application": "cv_render",
-    "database": "career_ops",
-    "schema": "cv_render",
-    "role": ROLE,
+@dataclass(frozen=True)
+class Login:
+    """One registered Career Ops application login and its fixed Secret."""
+
+    application: str
+    schema: str
+    secret: str
+
+    @property
+    def target(self):
+        return Path(f"kubernetes/apps/applications/career-ops/connection/{self.secret}.sops.yaml")
+
+    @property
+    def confirmation(self):
+        return f"stage:career-ops:{self.secret}"
+
+    @property
+    def replace_confirmation(self):
+        return f"replace:career-ops:{self.secret}"
+
+    @property
+    def role(self):
+        digest = hashlib.md5(
+            f"career_ops:{self.application}".encode(), usedforsecurity=False
+        ).hexdigest()
+        return f"app_{digest}_integration"
+
+    @property
+    def expected(self):
+        return {
+            "domain": "career_ops",
+            "application": self.application,
+            "database": "career_ops",
+            "schema": self.schema,
+            "role": self.role,
+        }
+
+
+LOGINS = {
+    login.application: login
+    for login in (
+        Login("cv_render", "cv_render", "cv-render-database"),
+        Login("application_packages", "package_access", "application-packages-database"),
+    )
 }
+CV_RENDER = LOGINS["cv_render"]
+TARGET = CV_RENDER.target
+CONFIRMATION = CV_RENDER.confirmation
+REPLACE_CONFIRMATION = CV_RENDER.replace_confirmation
+ROLE = CV_RENDER.role
+EXPECTED = CV_RENDER.expected
 
 
 class EnrollmentError(RuntimeError):
     """A credential-free error safe to display."""
 
 
-def binding_contract(binding):
+def binding_contract(binding, login=CV_RENDER):
     if (
         not isinstance(binding, dict)
-        or set(binding) != set(EXPECTED) | {"credentialGeneration"}
-        or any(binding.get(key) != value for key, value in EXPECTED.items())
+        or set(binding) != set(login.expected) | {"credentialGeneration"}
+        or any(binding.get(key) != value for key, value in login.expected.items())
         or type(binding.get("credentialGeneration")) is not int
         or binding["credentialGeneration"] < 1
     ):
-        raise EnrollmentError("The CV runtime binding is not valid")
+        raise EnrollmentError("The application binding is not valid")
 
 
 @contextmanager
-def runtime_credential():
+def runtime_credential(login=CV_RENDER):
     """Keep the existing scoped tunnel and fresh profile checks around Secret staging."""
     if any(
         key in os.environ for key in ("AUTOMATION_DATA_SERVICE_FILE", "AUTOMATION_DATA_SERVICE")
     ):
         raise EnrollmentError(
-            "Runtime enrollment requires the automatically discovered CV profile"
+            "Runtime enrollment requires the automatically discovered application profile"
         )
-    selected = select_connection_profile("career_ops", "application/cv_render")
+    selected = select_connection_profile("career_ops", f"application/{login.application}")
     if not selected.automatic or selected.status != "ready" or not selected.binding:
-        raise EnrollmentError("The CV application profile is not ready")
-    binding = {key: selected.binding.get(key) for key in (*EXPECTED, "credentialGeneration")}
-    binding_contract(binding)
-    revalidate_connection_profile("career_ops", "application/cv_render", selected)
-    if selected.service != f"automation_data_career_ops_{ROLE}" or selected.local_port is None:
-        raise EnrollmentError("The CV application service is not valid")
+        raise EnrollmentError("The application profile is not ready")
+    binding = {key: selected.binding.get(key) for key in (*login.expected, "credentialGeneration")}
+    binding_contract(binding, login)
+    revalidate_connection_profile("career_ops", f"application/{login.application}", selected)
+    if selected.service != f"automation_data_career_ops_{login.role}" or selected.local_port is None:
+        raise EnrollmentError("The application service is not valid")
     profile = validate_service_profile(
-        selected.service_file, selected.service, "career_ops", ROLE, selected.local_port
+        selected.service_file, selected.service, "career_ops", login.role, selected.local_port
     )
     expected_passfile = selected.service_file.parent / (
         f"generation-{binding['credentialGeneration']}/credential.pgpass"
     )
     if profile["passfile"] != str(expected_passfile):
-        raise EnrollmentError("The CV application password generation is not valid")
+        raise EnrollmentError("The application password generation is not valid")
     assert_profile_unchanged(selected)
     configured = os.environ.get("AUTOMATION_DATA_KUBECONFIG")
     kubeconfig = Path(configured) if configured else None
     with private_database_tunnel(kubeconfig, selected.local_port) as port:
-        authenticate_candidate(port, "career_ops", ROLE, profile["password"])
+        authenticate_candidate(port, "career_ops", login.role, profile["password"])
         yield binding, profile["password"]
-        revalidate_connection_profile("career_ops", "application/cv_render", selected)
+        revalidate_connection_profile("career_ops", f"application/{login.application}", selected)
         assert_profile_unchanged(selected)
 
 
-def preflight(root, replace_sha256=None):
-    target = root / TARGET
+def preflight(root, replace_sha256=None, login=CV_RENDER):
+    target = root / login.target
     policy = root / ".sops.yaml"
     if target.resolve() != target or policy.resolve() != policy:
         raise EnrollmentError("Ciphertext staging cannot use symlinks")
@@ -126,7 +164,7 @@ def preflight(root, replace_sha256=None):
     content = policy.read_bytes()
     rules = yaml.safe_load(content).get("creation_rules", [])
     matching = [
-        rule for rule in rules if re.search(rule.get("path_regex", "(?!)"), TARGET.as_posix())
+        rule for rule in rules if re.search(rule.get("path_regex", "(?!)"), login.target.as_posix())
     ]
     if (
         len(matching) != 1
@@ -138,7 +176,7 @@ def preflight(root, replace_sha256=None):
     return content, matching[0]["age"]
 
 
-def validate_ciphertext(content, recipient, password):
+def validate_ciphertext(content, recipient, password, login=CV_RENDER):
     document = yaml.safe_load(content)
     if not isinstance(document, dict):
         raise EnrollmentError("SOPS did not return the expected encrypted Secret")
@@ -148,7 +186,7 @@ def validate_ciphertext(content, recipient, password):
         or document.get("apiVersion") != "v1"
         or document.get("kind") != "Secret"
         or document.get("type") != "Opaque"
-        or document.get("metadata") != {"name": "cv-render-database", "namespace": "career-ops"}
+        or document.get("metadata") != {"name": login.secret, "namespace": "career-ops"}
         or not isinstance(data, dict)
         or set(data) != {"username", "password", "binding.json"}
         or not all(
@@ -162,14 +200,14 @@ def validate_ciphertext(content, recipient, password):
         or not isinstance(sops.get("mac"), str)
         or not sops["mac"].startswith("ENC[AES256_GCM,")
         or password.encode() in content
-        or ROLE.encode() in content
+        or login.role.encode() in content
     ):
         raise EnrollmentError("SOPS did not return the expected encrypted Secret")
 
 
 def install(
     root, confirmation, *, replace_sha256=None, expected_generation=None,
-    credential=runtime_credential, runner=subprocess.run,
+    credential=None, runner=subprocess.run, login=CV_RENDER,
 ):
     replacing = replace_sha256 is not None or expected_generation is not None
     if replacing and (
@@ -179,23 +217,24 @@ def install(
         or expected_generation < 2
     ):
         raise EnrollmentError("Replacement requires a reviewed checksum and new generation")
-    if confirmation != (REPLACE_CONFIRMATION if replacing else CONFIRMATION):
+    if confirmation != (login.replace_confirmation if replacing else login.confirmation):
         raise EnrollmentError("The exact ciphertext staging confirmation is required")
-    policy, recipient = preflight(root, replace_sha256)
+    policy, recipient = preflight(root, replace_sha256, login)
+    credential = credential or partial(runtime_credential, login)
     with credential() as (binding, password):
-        binding_contract(binding)
+        binding_contract(binding, login)
         if replacing and binding["credentialGeneration"] != expected_generation:
             raise EnrollmentError("The ready credential does not match the replacement generation")
         if not isinstance(password, str) or not password or any(c.isspace() for c in password):
-            raise EnrollmentError("The CV application password is not valid")
+            raise EnrollmentError("The application password is not valid")
         plaintext = yaml.safe_dump(
             {
                 "apiVersion": "v1",
                 "kind": "Secret",
                 "type": "Opaque",
-                "metadata": {"name": "cv-render-database", "namespace": "career-ops"},
+                "metadata": {"name": login.secret, "namespace": "career-ops"},
                 "stringData": {
-                    "username": ROLE,
+                    "username": login.role,
                     "password": password,
                     "binding.json": json.dumps(binding, sort_keys=True),
                 },
@@ -213,7 +252,7 @@ def install(
                     "--config",
                     str(root / ".sops.yaml"),
                     "--filename-override",
-                    TARGET.as_posix(),
+                    login.target.as_posix(),
                     "/dev/stdin",
                 ],
                 cwd=root,
@@ -227,24 +266,26 @@ def install(
             raise EnrollmentError("SOPS encryption could not complete; details withheld") from None
         if result.returncode or not result.stdout:
             raise EnrollmentError("SOPS encryption failed; tool output withheld")
-        validate_ciphertext(result.stdout, recipient, password)
+        validate_ciphertext(result.stdout, recipient, password, login)
         generation = binding["credentialGeneration"]
     # The credential context repeats remote readiness and local generation checks
     # before this exclusive installation; only ciphertext leaves that context.
-    if preflight(root, replace_sha256) != (policy, recipient):
+    if preflight(root, replace_sha256, login) != (policy, recipient):
         raise EnrollmentError("SOPS policy changed during staging")
-    with tempfile.TemporaryDirectory(prefix=".cv-runtime-", dir=root / TARGET.parent) as temporary:
-        candidate = Path(temporary) / TARGET.name
+    with tempfile.TemporaryDirectory(
+        prefix=".application-runtime-", dir=root / login.target.parent
+    ) as temporary:
+        candidate = Path(temporary) / login.target.name
         candidate.write_bytes(result.stdout)
         candidate.chmod(0o600)
         try:
             if replacing:
                 # Repeat guards immediately before replacing only the reviewed ciphertext.
-                if preflight(root, replace_sha256) != (policy, recipient):
+                if preflight(root, replace_sha256, login) != (policy, recipient):
                     raise EnrollmentError("SOPS policy changed during staging")
-                os.replace(candidate, root / TARGET)
+                os.replace(candidate, root / login.target)
             else:
-                os.link(candidate, root / TARGET)
+                os.link(candidate, root / login.target)
         except OSError:
             raise EnrollmentError(
                 "Ciphertext was not installed; existing files were preserved"
@@ -253,7 +294,7 @@ def install(
         "status": "ciphertext-staged",
         "credentialGeneration": generation,
         "ciphertext_sha256": hashlib.sha256(result.stdout).hexdigest(),
-        "path": TARGET.as_posix(),
+        "path": login.target.as_posix(),
     }
     if replacing:
         receipt["replaced_ciphertext_sha256"] = replace_sha256
@@ -262,7 +303,11 @@ def install(
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--confirm", required=True, choices=[CONFIRMATION, REPLACE_CONFIRMATION])
+    parser.add_argument(
+        "--application", choices=sorted(LOGINS), default=CV_RENDER.application,
+        help="Registered application login whose fixed Secret is staged",
+    )
+    parser.add_argument("--confirm", required=True)
     parser.add_argument("--replace-sha256", help="Replace only existing ciphertext with this reviewed SHA256")
     parser.add_argument("--expected-generation", type=int, help="Require this ready new credential generation (at least 2)")
     args = parser.parse_args()
@@ -271,6 +316,7 @@ def main():
             json.dumps(install(
                 Path(__file__).resolve().parents[2], args.confirm,
                 replace_sha256=args.replace_sha256, expected_generation=args.expected_generation,
+                login=LOGINS[args.application],
             ), sort_keys=True)
         )
         return 0
@@ -288,7 +334,7 @@ def main():
         psycopg.Error,
     ):
         print(
-            "CV runtime ciphertext staging failed; credential and tool details withheld",
+            "Application runtime ciphertext staging failed; credential and tool details withheld",
             file=sys.stderr,
         )
         return 1

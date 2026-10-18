@@ -1,5 +1,6 @@
 """API credential delivery invariants; values are synthetic."""
 
+import hashlib
 import json
 import subprocess
 import tempfile
@@ -11,7 +12,7 @@ import yaml
 from scripts.repository import career_ops_api_secret as api
 
 
-class ApiSecretTest(unittest.TestCase):
+class ApiSecretFixture(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -45,6 +46,8 @@ class ApiSecretTest(unittest.TestCase):
             **kwargs,
         )
 
+
+class ApiSecretTest(ApiSecretFixture):
     def test_protected_token_is_retained_but_only_hash_enters_encryption(self):
         receipt = self.stage()
         token = self.token.read_text().strip()
@@ -53,8 +56,6 @@ class ApiSecretTest(unittest.TestCase):
         doc = self.calls[0]
         self.assertEqual(doc["metadata"], {"name": "cv-api-auth", "namespace": "career-ops"})
         principals = json.loads(doc["stringData"]["principals.json"])
-        import hashlib
-
         self.assertEqual(
             principals,
             {
@@ -124,6 +125,89 @@ class ApiSecretTest(unittest.TestCase):
 
         with self.assertRaises(api.EnrollmentError):
             self.stage(runner=changed)
+        self.assertEqual((self.root / api.TARGET).read_text(), "other-writer")
+
+
+class PackageEnrollmentTest(ApiSecretFixture):
+    def setUp(self):
+        super().setUp()
+        self.stage()
+        self.qualification = self.token.read_bytes()
+        self.reviewed = hashlib.sha256((self.root / api.TARGET).read_bytes()).hexdigest()
+        operators = self.root / "operator"
+        operators.mkdir(mode=0o700)
+        self.operator = operators / "token"
+        self.calls.clear()
+
+    def replace(self, **kwargs):
+        return api.stage(
+            self.root,
+            self.token,
+            kwargs.pop("confirmation", api.REPLACE_CONFIRMATION),
+            operator_token_file=kwargs.pop("operator_token_file", self.operator),
+            replace_sha256=kwargs.pop("replace_sha256", self.reviewed),
+            runner=kwargs.pop("runner", self.encrypt),
+        )
+
+    def test_operator_principal_is_added_and_qualification_bearer_is_kept(self):
+        receipt = self.replace()
+        operator = self.operator.read_text().strip()
+        self.assertEqual(self.operator.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.token.read_bytes(), self.qualification)
+        principals = json.loads(self.calls[0]["stringData"]["principals.json"])
+        self.assertEqual(
+            principals,
+            {
+                "schemaVersion": 2,
+                "principals": [
+                    {
+                        "principalId": "career-ops-qualification",
+                        "tokenSha256": [hashlib.sha256(self.qualification.strip()).hexdigest()],
+                        "capabilities": ["render"],
+                    },
+                    {
+                        "principalId": "career-ops-operator",
+                        "tokenSha256": [hashlib.sha256(operator.encode()).hexdigest()],
+                        "capabilities": ["packages:read", "packages:write"],
+                    },
+                ],
+            },
+        )
+        self.assertEqual(receipt["replaced_ciphertext_sha256"], self.reviewed)
+        self.assertNotIn(operator, json.dumps(receipt))
+        self.assertNotIn(operator, (self.root / api.TARGET).read_text())
+
+    def test_unreviewed_or_incomplete_replacement_preserves_ciphertext_and_tokens(self):
+        original = (self.root / api.TARGET).read_bytes()
+        for case in (
+            {"confirmation": api.CONFIRMATION},
+            {"replace_sha256": "0" * 64},
+            {"replace_sha256": None},
+            {"replace_sha256": "not-a-digest"},
+            {"operator_token_file": None},
+            {"operator_token_file": self.token},
+        ):
+            with self.subTest(case=case), self.assertRaises(api.EnrollmentError):
+                self.replace(**case)
+            self.assertEqual((self.root / api.TARGET).read_bytes(), original)
+        self.assertFalse(self.operator.exists())
+        self.assertEqual(self.calls, [])
+
+    def test_replacement_never_mints_a_qualification_bearer(self):
+        self.token.unlink()
+        with self.assertRaises(OSError):
+            self.replace()
+        self.assertFalse(self.token.exists())
+        self.assertEqual(self.calls, [])
+
+    def test_concurrent_ciphertext_change_is_preserved(self):
+        def changed(command, **kwargs):
+            result = self.encrypt(command, **kwargs)
+            (self.root / api.TARGET).write_text("other-writer")
+            return result
+
+        with self.assertRaises(api.EnrollmentError):
+            self.replace(runner=changed)
         self.assertEqual((self.root / api.TARGET).read_text(), "other-writer")
 
 

@@ -1,8 +1,10 @@
-"""Stage the qualification API principal without activating a caller or coordinator.
+"""Stage Career Ops API principals without activating a caller or coordinator.
 
-The bearer stays in an owner-only local file. Only its SHA-256 enters the
-public-age SOPS encryption input. This bootstrap never replaces a Secret,
-changes Flux selection, rotates credentials, or enables production admission.
+Each bearer stays in an owner-only local file. Only its SHA-256 enters the
+public-age SOPS encryption input. Bootstrap stages the qualification principal
+and never replaces a Secret. Package enrollment replaces only reviewed
+ciphertext: it keeps the existing qualification bearer and adds a package
+operator principal. Neither changes Flux selection or enables admission.
 """
 
 from __future__ import annotations
@@ -23,17 +25,36 @@ import yaml
 
 TARGET = Path("kubernetes/apps/applications/career-ops/connection/cv-api-auth.sops.yaml")
 CONFIRMATION = "stage:career-ops:cv-api-auth"
+REPLACE_CONFIRMATION = "replace:career-ops:cv-api-auth"
 PRINCIPAL = "career-ops-qualification"
+OPERATOR = "career-ops-operator"
+OPERATOR_CAPABILITIES = ["packages:read", "packages:write"]
 
 
 class EnrollmentError(RuntimeError):
     """Credential-free failure safe to display."""
 
 
-def preflight(root):
+def preflight(root, replace_sha256=None):
     target, policy = root / TARGET, root / ".sops.yaml"
-    if target.resolve() != target or policy.resolve() != policy or target.exists():
-        raise EnrollmentError("Bootstrap cannot replace ciphertext or follow symlinks")
+    if target.resolve() != target or policy.resolve() != policy:
+        raise EnrollmentError("API enrollment cannot follow symlinks")
+    if replace_sha256 is None:
+        if target.exists():
+            raise EnrollmentError("Bootstrap cannot replace ciphertext")
+    else:
+        try:
+            info = target.lstat()
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_nlink != 1
+                or info.st_size > 1048576
+                or hashlib.sha256(target.read_bytes()).hexdigest() != replace_sha256
+            ):
+                raise EnrollmentError("Existing ciphertext does not match the reviewed replacement")
+        except OSError:
+            raise EnrollmentError("Reviewed ciphertext replacement target is unavailable") from None
     content = policy.read_bytes()
     try:
         rules = yaml.safe_load(content)["creation_rules"]
@@ -49,13 +70,15 @@ def preflight(root):
     return content, matches[0]["age"]
 
 
-def read_token(path):
+def read_token(path, create=True):
     if not path.is_absolute() or path.resolve() != path:
         raise EnrollmentError("Token path must be absolute and contain no symlinks")
     parent = path.parent.stat()
     if parent.st_uid != os.getuid() or stat.S_IMODE(parent.st_mode) != 0o700:
         raise EnrollmentError("Token directory must be owned by the current user with mode 0700")
     try:
+        if not create:
+            raise FileExistsError()
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     except FileExistsError:
         pass
@@ -76,21 +99,54 @@ def read_token(path):
             raise EnrollmentError("Token must be an owner-only regular file")
         content = stream.read(128)
         if not re.fullmatch(rb"[A-Za-z0-9_-]{43}\n?", content):
-            raise EnrollmentError("Invalid qualification token format")
+            raise EnrollmentError("Invalid API token format")
     return content.strip().decode()
 
 
-def stage(root, token_file, confirmation, *, runner=subprocess.run):
-    if confirmation != CONFIRMATION:
-        raise EnrollmentError("Exact qualification enrollment confirmation required")
-    policy, recipient = preflight(root)
-    token = read_token(token_file)
-    principals = {
-        "schemaVersion": 1,
-        "principals": [
-            {"principalId": PRINCIPAL, "tokenSha256": [hashlib.sha256(token.encode()).hexdigest()]}
-        ],
-    }
+def stage(
+    root, token_file, confirmation, *, operator_token_file=None, replace_sha256=None,
+    runner=subprocess.run,
+):
+    replacing = operator_token_file is not None or replace_sha256 is not None
+    if replacing and (
+        not isinstance(replace_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", replace_sha256) is None
+        or not isinstance(operator_token_file, Path)
+        or operator_token_file == token_file
+    ):
+        raise EnrollmentError("Package enrollment requires a reviewed checksum and operator token")
+    if confirmation != (REPLACE_CONFIRMATION if replacing else CONFIRMATION):
+        raise EnrollmentError("Exact API enrollment confirmation required")
+    policy, recipient = preflight(root, replace_sha256)
+
+    def inputs():
+        # Replacement keeps the deployed qualification bearer; it never mints a new one.
+        tokens = [read_token(token_file, create=not replacing)]
+        if replacing:
+            tokens.append(read_token(operator_token_file))
+            if tokens[0] == tokens[1]:
+                raise EnrollmentError("API principals require distinct tokens")
+        return tokens
+
+    tokens = inputs()
+    digests = [hashlib.sha256(token.encode()).hexdigest() for token in tokens]
+    if replacing:
+        principals = {
+            "schemaVersion": 2,
+            "principals": [
+                {"principalId": PRINCIPAL, "tokenSha256": [digests[0]], "capabilities": ["render"]},
+                {
+                    "principalId": OPERATOR,
+                    "tokenSha256": [digests[1]],
+                    "capabilities": OPERATOR_CAPABILITIES,
+                },
+            ],
+        }
+    else:
+        principals = {
+            "schemaVersion": 1,
+            "principals": [{"principalId": PRINCIPAL, "tokenSha256": [digests[0]]}],
+        }
     document = {
         "apiVersion": "v1",
         "kind": "Secret",
@@ -132,7 +188,7 @@ def stage(root, token_file, confirmation, *, runner=subprocess.run):
             or [a["recipient"] for a in encrypted["sops"]["age"]] != [recipient]
             or encrypted["sops"]["encrypted_regex"] != "^(data|stringData)$"
             or not encrypted["sops"]["mac"].startswith("ENC[AES256_GCM,")
-            or token.encode() in result.stdout
+            or any(token.encode() in result.stdout for token in tokens)
         ):
             raise EnrollmentError("API Secret encryption did not satisfy the ciphertext contract")
     except (
@@ -150,16 +206,19 @@ def stage(root, token_file, confirmation, *, runner=subprocess.run):
         candidate = Path(directory) / TARGET.name
         candidate.write_bytes(result.stdout)
         candidate.chmod(0o600)
-        fresh_policy, _ = preflight(root)
-        if fresh_policy != policy or read_token(token_file) != token:
+        fresh_policy, _ = preflight(root, replace_sha256)
+        if fresh_policy != policy or inputs() != tokens:
             raise EnrollmentError("Enrollment inputs changed; ciphertext was not installed")
         try:
-            os.link(candidate, root / TARGET)
+            if replacing:
+                os.replace(candidate, root / TARGET)
+            else:
+                os.link(candidate, root / TARGET)
         except FileExistsError:
             raise EnrollmentError(
                 "Another writer installed ciphertext; nothing replaced"
             ) from None
-    return {
+    receipt = {
         "principal": PRINCIPAL,
         "target": str(TARGET),
         "token_file": str(token_file),
@@ -167,6 +226,14 @@ def stage(root, token_file, confirmation, *, runner=subprocess.run):
         "activation": "unchanged",
         "selected": False,
     }
+    if replacing:
+        receipt |= {
+            "operator_principal": OPERATOR,
+            "operator_capabilities": OPERATOR_CAPABILITIES,
+            "operator_token_file": str(operator_token_file),
+            "replaced_ciphertext_sha256": replace_sha256,
+        }
+    return receipt
 
 
 def main():
@@ -177,11 +244,22 @@ def main():
         type=Path,
         help="owner-only file in an existing 0700 directory; generated once, retained for delivery retries",
     )
+    parser.add_argument(
+        "--operator-token-file",
+        type=Path,
+        help="package enrollment: owner-only operator token, generated once and retained",
+    )
+    parser.add_argument(
+        "--replace-sha256", help="package enrollment: SHA-256 of the reviewed existing ciphertext"
+    )
     parser.add_argument("--confirm", required=True)
     args = parser.parse_args()
     try:
         print(
-            json.dumps(stage(Path(__file__).resolve().parents[2], args.token_file, args.confirm))
+            json.dumps(stage(
+                Path(__file__).resolve().parents[2], args.token_file, args.confirm,
+                operator_token_file=args.operator_token_file, replace_sha256=args.replace_sha256,
+            ))
         )
         return 0
     except (EnrollmentError, OSError) as error:
