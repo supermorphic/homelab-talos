@@ -70,8 +70,8 @@ spec:
   - name: token
     expression: variables.account == 'cv-coordinator'
   - name: secrets
-    expression: 'variables.token ? [''cv-render-database'', ''cv-api-auth''] : variables.account
-      == ''cv-prepare'' ? [''cv-prepare-source''] : []'
+    expression: 'variables.token ? [''cv-render-database'', ''application-packages-database'', ''cv-api-auth'']
+      : variables.account == ''cv-prepare'' ? [''cv-prepare-source''] : []'
   - name: containers
     expression: variables.pod.containers
   - name: bounds
