@@ -343,50 +343,67 @@ class RuntimeSecretTest(unittest.TestCase):
     def test_real_profile_parser_and_authentication_fail_closed(self):
         from automation_data_access import ProfileMetadata
 
-        with tempfile.TemporaryDirectory() as private:
-            directory = Path(private).resolve()
-            directory.chmod(0o700)
-            generation = directory / "generation-1"
-            generation.mkdir(mode=0o700)
-            passfile = generation / "credential.pgpass"
-            passfile.write_text(f"127.0.0.1:15432:career_ops:{runtime.ROLE}:{self.password}\n")
-            passfile.chmod(0o600)
-            service = directory / "service.conf"
-            section = f"automation_data_career_ops_{runtime.ROLE}"
-            service.write_text(
-                f"[{section}]\nhost=127.0.0.1\nport=15432\n"
-                f"dbname=career_ops\nuser={runtime.ROLE}\n"
-                f"passfile={passfile}\nsslmode=disable\n"
-            )
-            service.chmod(0o600)
-            selected = ProfileMetadata(
-                "ready",
-                service,
-                section,
-                15432,
-                self.binding,
-                automatic=True,
-            )
-            with (
-                patch.object(runtime, "select_connection_profile", return_value=selected),
-                patch.object(runtime, "revalidate_connection_profile"),
-                patch.object(runtime, "assert_profile_unchanged"),
-                patch.object(
-                    runtime, "private_database_tunnel", return_value=contextlib.nullcontext(15432)
-                ),
-                patch.object(runtime, "authenticate_candidate") as authenticate,
-            ):
-                with runtime.runtime_credential() as material:
-                    self.assertEqual(material, (self.binding, self.password))
-                authenticate.assert_called_once_with(
-                    15432, "career_ops", runtime.ROLE, self.password
-                )
-                authenticate.side_effect = runtime.EnrollmentError("Authentication failed")
-                with self.assertRaises(runtime.EnrollmentError):
-                    runtime.install(self.root, runtime.CONFIRMATION, runner=self.encrypt)
-                self.assertEqual(self.calls, [])
-                self.assertFalse((self.root / runtime.TARGET).exists())
-
+        for login in runtime.LOGINS.values():
+            with self.subTest(application=login.application):
+                self.calls.clear()
+                binding = login.expected | {"credentialGeneration": 1}
+                with tempfile.TemporaryDirectory() as private:
+                    directory = Path(private).resolve()
+                    directory.chmod(0o700)
+                    generation = directory / "generation-1"
+                    generation.mkdir(mode=0o700)
+                    passfile = generation / "credential.pgpass"
+                    passfile.write_text(
+                        f"127.0.0.1:15432:career_ops:{login.role}:{self.password}\n"
+                    )
+                    passfile.chmod(0o600)
+                    service = directory / "service.conf"
+                    section = f"automation_data_career_ops_{login.role}"
+                    service.write_text(
+                        f"[{section}]\nhost=127.0.0.1\nport=15432\n"
+                        f"dbname=career_ops\nuser={login.role}\n"
+                        f"passfile={passfile}\nsslmode=disable\n"
+                    )
+                    service.chmod(0o600)
+                    selected = ProfileMetadata(
+                        "ready", service, section, 15432, binding, automatic=True
+                    )
+                    with (
+                        patch.object(
+                            runtime, "select_connection_profile", return_value=selected
+                        ) as select,
+                        patch.object(runtime, "revalidate_connection_profile"),
+                        patch.object(runtime, "assert_profile_unchanged"),
+                        patch.object(
+                            runtime,
+                            "private_database_tunnel",
+                            return_value=contextlib.nullcontext(15432),
+                        ),
+                        patch.object(runtime, "authenticate_candidate") as authenticate,
+                    ):
+                        with runtime.runtime_credential(login) as material:
+                            self.assertEqual(material, (binding, self.password))
+                        select.assert_called_once_with(
+                            "career_ops", f"application/{login.application}"
+                        )
+                        authenticate.assert_called_once_with(
+                            15432, "career_ops", login.role, self.password
+                        )
+                        other = next(o for o in runtime.LOGINS.values() if o != login)
+                        with (
+                            self.assertRaises(runtime.EnrollmentError),
+                            runtime.runtime_credential(other),
+                        ):
+                            self.fail("Another login's profile was accepted")
+                        authenticate.side_effect = runtime.EnrollmentError(
+                            "Authentication failed"
+                        )
+                        with self.assertRaises(runtime.EnrollmentError):
+                            runtime.install(
+                                self.root, login.confirmation, runner=self.encrypt, login=login
+                            )
+                        self.assertEqual(self.calls, [])
+                        self.assertFalse((self.root / login.target).exists())
 
 if __name__ == "__main__":
     unittest.main()
