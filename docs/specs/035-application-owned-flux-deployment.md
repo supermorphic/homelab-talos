@@ -112,12 +112,14 @@ inclusion in the application inventory.
 
 Use `career-ops-reconciler` for Flux impersonation. Admission binds each runtime
 account to its capability; creating an account or copying a label grants
-nothing. An identity's privileges are never raised in place: a capability that
-needs more authority gets a new, separately enrolled identity.
+nothing. An identity never gains credentials, a Kubernetes token or storage
+access in place; a capability that needs them gets a new, separately enrolled
+identity. Narrow connectivity changes, such as the renderer's coordinator-only
+ingress, are reviewed platform changes.
 
 | Account | Capability | Has | Never has |
 | --- | --- | --- | --- |
-| `cv-coordinator` | Private service | Gateway ingress; egress to PostgreSQL and `cv-renderer`; Secrets `cv-render-database`, `application-packages-database`, `cv-api-auth`; read-only ConfigMaps | Kubernetes token (after P2), volumes (after migration), download egress |
+| `cv-coordinator` | Private service | Gateway and Prometheus ingress; egress to DNS, PostgreSQL and `cv-renderer`; Secrets `cv-render-database`, `application-packages-database`, `cv-api-auth`; read-only ConfigMaps | Kubernetes token and PersistentVolumeClaims (after P2), internet egress |
 | `cv-renderer` | Sandboxed renderer service | Ingress from `cv-coordinator` only; read-only ConfigMaps; bounded `emptyDir` | Any egress including DNS, Kubernetes token, Secrets, claims |
 | `career-ops-service` | Reserved private service | Nothing until separately enrolled | — |
 
@@ -141,8 +143,9 @@ Every container is non-root, has a read-only root filesystem, drops all
 capabilities, disallows privilege escalation and sets bounded CPU, memory and
 ephemeral storage. Forbid host namespaces, host mounts, privileged execution and
 arbitrary storage drivers. Every workload sets automatic token mounting
-explicitly. Private image pull Secrets are rejected; workloads use public,
-digest-pinned images.
+explicitly. Private image pull Secrets are rejected, so workloads use public
+images; the application pins them by digest and its review enforces that, not
+admission.
 
 Use Cilium's service-account identity for capability-specific connections rather
 than an application-supplied label. Services and workload labels are checked so
@@ -163,7 +166,7 @@ Default-deny all traffic in `career-ops` and allow only these connections:
 | `cv-coordinator` | `cv-renderer` 8080 | Render calls |
 | `cv-coordinator` | `automation-data-postgresql` 5432, with reciprocal policy | Ledger and artifacts |
 | `cv-coordinator` | Cluster DNS | Service resolution |
-| Kubelet | Both Deployments | Health probes |
+| Kubelet | Both Deployments | Health probes; allowed by Cilium's default host policy, not by a rule here |
 
 `cv-renderer` has no egress, including DNS. Node image pulls do not justify
 workload egress.
@@ -171,7 +174,7 @@ workload egress.
 Allocate `cv.lab.supermorphic.com` to `cv-coordinator` on the existing
 `networking/internal` Gateway HTTPS listener, with the
 `external-dns.k8s.io/audience: internal` annotation. Admit only allocated
-hostnames, namespace-local backends, approved ports and supported route filters.
+hostnames, namespace-local backends and approved ports, with no route filters.
 Download URLs carry bearer tokens in their path, so the internal Gateway access
 log excludes the `cv.lab` authority, as it already does for search URLs.
 
@@ -197,9 +200,10 @@ across ConfigMaps. A change to any delivered file changes the generated ConfigMa
 name and rolls the Deployment.
 
 The approved font is Liberation Serif 2.1.5 (SIL Open Font License), pinned by
-file checksum. It is metric-compatible with Times New Roman; a five-CV comparison
-kept every line break and page count, and moved one page break in two CVs. Fonts
-whose licenses forbid storage in Git are not used.
+file checksum. It has the same character widths as Times New Roman, so line
+breaks match; its slightly tighter line spacing can move a page break, so the
+application's page-count check runs with this font. Fonts whose licenses forbid
+storage in Git are not used.
 
 An image digest change alters the application's runtime. The application tests
 run inside the pinned image before a digest change merges, and the service checks
@@ -240,7 +244,7 @@ The retained Longhorn claims `cv-releases`, `cv-requests` and `cv-artifacts`
 (class `career-ops-retain`: Longhorn CSI, `Retain`, two replicas, existing backup
 group) belong to the replaced design. They stay enrolled and protected until the
 migration has verified the database copy, then are reclaimed by the attended P3
-action. The target design needs no application volume.
+action. The target design needs no PersistentVolumeClaim.
 
 Claims must use permitted names, sizes, access modes and classes. Forbid routine
 PVC deletion, workload owner references, removal of Flux prune protection,
@@ -260,31 +264,21 @@ data or per-request labels.
 | --- | --- | --- |
 | CV service down | Critical after 5 minutes | Target absent or down, service not ready, or required metrics missing |
 | CV work stuck | Warning after 15 minutes | The oldest unfinished request is past its deadline |
-| CV renders failing | Warning | A request exhausted its automatic retries, or failed with an infrastructure reason |
+| CV renders failing | Warning after 1 minute; resolves when no such failure remains in the last hour | A request exhausted its automatic retries, or failed with an infrastructure reason |
 
-Designed outcomes such as a page overflow returned to composition do not alert.
+These three replace the earlier ten. Designed outcomes such as a page overflow
+returned to composition do not alert.
 A missing workload or Service must not disable the rules. The rules are armed
 whenever the coordinator is expected to run; an attended restore scales it to
 zero and accepts the service-down alert.
 
 ## Capacity
 
-These are namespace ceilings, not throughput guarantees. Executable manifests own
-the exact values.
-
-| Allocation | Ceiling |
-| --- | --- |
-| CPU requests / limits | 6 / 16 cores |
-| Memory requests / limits | 12 / 24 GiB |
-| Ephemeral storage requests / limits | 16 / 32 GiB |
-| Nonterminal Pods / Jobs | 16 / 64 |
-| Deployments / Services / HTTPRoutes | 4 / 8 / 4 |
-| ConfigMaps | 64 |
-| PVC count / storage | 10 / 64 GiB |
-
-These ceilings were sized for the replaced Job-per-render design. P2 lowers them
-to the measured needs of the two Deployments plus headroom, and P3 removes the
-claim allocation.
+Namespace ResourceQuota and object counts stay as deployed while migrating; the
+manifests own the exact values. They were sized for the Job-per-render design.
+P2 lowers compute and object ceilings to the measured needs of the two
+Deployments plus headroom, and P3 removes the claim allocation. Quotas are
+ceilings, not throughput guarantees.
 
 The renderer handles one render at a time within 1 CPU, 1 GiB memory and a
 1 GiB `emptyDir`; the coordinator queues further work.
@@ -297,14 +291,15 @@ explicit operator approval.
 
 | Step | Owner | Change |
 | --- | --- | --- |
-| 1 | Career Ops | Renderer service, HTTP render path, pure-Python dependencies, database artifact store with read fallback to the existing volume, download tokens |
-| 2 | Platform P1 | Admit `cv-renderer` as a Deployment and Service; Cilium rules for renderer ingress and coordinator egress; Gateway access-log exclusion for `cv.lab`; the three alerts |
-| 3 | Career Ops | Guarded database migration, then deployment from the upstream image and ConfigMaps |
-| 4 | Career Ops | Coordinator copies every receipt-listed file except retired previews into the database, verifying each SHA-256 and honoring deletion records; then removes the volume fallback and mounts |
-| 5 | Joint | Acceptance below; render admission opens only after it passes |
-| 6 | Career Ops | Remove Job launch, worker permissions, release preparation, promotion, qualification and preview code and manifests |
-| 7 | Platform P2 | Remove the Job Role and binding, coordinator token and Kubernetes API egress, Job-worker and preparation admission profiles, preparation egress and `cv-prepare-source`; lower quota; retire the storage-network test and its fixtures |
-| 8 | Operator P3 | Reclaim the three CV claims and three fixture claims after a retained final backup; revoke the preparation token in Forgejo |
+| 1 | Platform P1 | Admit the `cv-renderer` Service; restrict renderer claim mounts to Jobs; Cilium rules for renderer ingress and coordinator egress; Gateway access-log exclusion for `cv.lab`; replace the ten CV alerts and the scrape metric list with the three schema-version-2 alerts, still disabled |
+| 2 | Career Ops | Renderer service, HTTP render path, pure-Python dependencies, database artifact store with read fallback to the existing volume, download tokens. Merged code stays outside `./deploy/` until step 3, because that root deploys on merge |
+| 3 | Career Ops | Guarded database migration, then deployment from the upstream image and ConfigMaps; download tokens are issued only from here on |
+| 4 | Platform | Enable the alerts once schema-version-2 metrics are healthy |
+| 5 | Career Ops | Coordinator copies every receipt-listed file except retired previews into the database, verifying each SHA-256 and honoring deletion records; then removes the volume fallback and claim mounts |
+| 6 | Joint | Acceptance below; the application starts accepting render requests only after it passes |
+| 7 | Career Ops | Set the coordinator's `automountServiceAccountToken: false` and remove its `cv-coordinator-jobs` RoleBinding; remove Job launch, worker permissions, release preparation, promotion, qualification and preview code and manifests |
+| 8 | Platform P2 | Remove every reference to retired identities, Roles and kinds: the `cv-render-jobs` Role and the reconciler's RoleBinding and `bind` permissions for it; the coordinator token and Kubernetes API egress; Job-worker, preparation and test-fixture admission rules; `cv-prepare`, `cv-prepare-source` and preparation egress; the `career-ops-boundary-*` identities, their PostgreSQL policy entry, Role, admission policy and fixtures; the storage-network test; PVC, RoleBinding and ServiceAccount allowances nothing uses; then lower quota |
+| 9 | Operator P3 | Reclaim the three CV claims and three fixture claims after a retained final backup; revoke the preparation token in Forgejo |
 
 Historical ledger rows from the replaced design remain as read-only history.
 
@@ -315,13 +310,15 @@ actual deployed state, through the existing
 [scoped test execution](032-openbao-scoped-test-execution.md) and report
 workflows. Keep feature-branch evidence distinct from deployed-main evidence.
 
-- Private API: DNS, trusted TLS and route; missing and invalid tokens rejected; a
-  caller submits, polls and downloads; a repeated request returns the same result
-  and a conflicting one is rejected; a download link serves only its PDF and a
-  wrong or revoked token is rejected; a rotated `cv-api-auth` accepts the new
-  token and rejects the old one without a Pod restart.
+- Private API: DNS, trusted TLS and route; missing and invalid tokens rejected;
+  a rotated `cv-api-auth` delivered through SOPS accepts the new token and
+  rejects the old one without a Pod restart. Caller behavior (submit, poll,
+  download, repeated and conflicting requests, download-link scope) is the
+  application's acceptance in its CV rendering specification and runs as part of
+  the joint gate.
 - Boundary: offline admission cases and a live server-side dry run deny the
-  renderer a token, Secrets, claims, pull Secrets and wider network profiles.
+  renderer a token, Secrets, claims, pull Secrets and wider network profiles;
+  the dry run is repeated after P2.
   At startup the renderer attempts one DNS query and one TCP connection and
   reports through the coordinator's metrics that both were blocked; Hubble drop
   counters for that attempt provide independent positive evidence.
@@ -332,7 +329,8 @@ workflows. Keep feature-branch evidence distinct from deployed-main evidence.
   record's bytes match their checksum and the deletion survives.
 
 Platform acceptance does not establish rendering quality or composition behavior.
-Close issue 593 when these pass on deployed main, P2 is merged and this
+Close issue 593 when these pass on deployed main, P2 is merged, the boundary
+checks have been repeated after P2, and this
 specification matches the deployed state. P3 may follow as an operator task.
 
 ## Rollback and recovery
@@ -352,7 +350,7 @@ reviewed existing ciphertext checksum and expected new generation, then verify
 projection reload, new authentication and rejection of the previous password.
 
 For a database restore, scale `cv-coordinator` to zero through Git, restore with
-the attended [database recovery](026-automation-data-postgresql-platform.md)
+the attended [database recovery](026-automation-data-postgresql-platform.md#recovery)
 procedure, then scale it back. Requests accepted and uploads made after the
 selected backup are lost and must be resubmitted; the application specification
 defines how composition resubmits affected jobs.
