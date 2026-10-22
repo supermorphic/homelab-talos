@@ -1471,8 +1471,24 @@ class ApplicationMonitoringTests(unittest.TestCase):
             ],
             [{"port": "metrics", "path": "/metrics", "interval": "1m", "scrapeTimeout": "10s"}],
         )
+        keep = monitor["spec"]["endpoints"][0]["metricRelabelings"][0]
+        self.assertEqual(
+            keep["regex"],
+            "cv_render_(metrics_schema_info|ready|database_ready|renderer_egress_blocked"
+            "|overdue_work|recent_failures)",
+        )
         rule = next(d for d in docs if d["kind"] == "PrometheusRule")
-        expected = next(r for g in rule["spec"]["groups"] for r in g["rules"] if "record" in r)
+        rules = [r for g in rule["spec"]["groups"] for r in g["rules"]]
+        self.assertEqual(
+            [r["alert"] for r in rules if "alert" in r],
+            ["CareerOpsCVServiceDown", "CareerOpsCVWorkStuck", "CareerOpsCVRendersFailing"],
+        )
+        for alert in (r for r in rules if "alert" in r):
+            self.assertTrue(
+                alert["expr"].endswith("and on() (career_ops_coordinator_expected == 1)"),
+                alert["alert"],
+            )
+        expected = next(r for r in rules if "record" in r)
         self.assertEqual(
             expected, {"record": "career_ops_coordinator_expected", "expr": "vector(0)"}
         )
