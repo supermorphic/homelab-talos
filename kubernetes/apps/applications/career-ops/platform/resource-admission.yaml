@@ -95,9 +95,12 @@ spec:
       == 'cv-coordinator' && variables.item.spec.selector == {'app.kubernetes.io/name':'cv-coordinator'}
       && variables.item.spec.ports.size() == 2 && variables.item.spec.ports.all(p, (p.name == 'http' &&
       p.port == 8080 && p.targetPort == 8080) || (p.name == 'metrics' && p.port == 9090 && p.targetPort
-      == 9090))) || (variables.item.metadata.name != 'cv-coordinator' && (!has(variables.item.metadata.labels)
-      || !('app.kubernetes.io/name' in variables.item.metadata.labels) || variables.item.metadata.labels['app.kubernetes.io/name']
-      != 'cv-coordinator') && variables.item.spec.selector == {'app.kubernetes.io/name':'career-ops-service'}
+      == 9090))) || (variables.item.metadata.name == 'cv-renderer' && variables.item.metadata.labels['app.kubernetes.io/name']
+      == 'cv-renderer' && variables.item.spec.selector == {'app.kubernetes.io/name':'cv-renderer'} && variables.item.spec.ports.size()
+      == 1 && variables.item.spec.ports.all(p, p.name == 'http' && p.port == 8080 && p.targetPort == 8080))
+      || (!(variables.item.metadata.name in ['cv-coordinator','cv-renderer']) && (!has(variables.item.metadata.labels)
+      || !('app.kubernetes.io/name' in variables.item.metadata.labels) || !(variables.item.metadata.labels['app.kubernetes.io/name']
+      in ['cv-coordinator','cv-renderer'])) && variables.item.spec.selector == {'app.kubernetes.io/name':'career-ops-service'}
       && variables.item.spec.ports.all(p, p.port == 8080 && p.targetPort == 8080))) && variables.item.spec.ports.all(p,
       p.protocol == 'TCP' && (!has(p.nodePort) || p.nodePort == 0)))
     message: Services must use enrolled selectors and private ports.

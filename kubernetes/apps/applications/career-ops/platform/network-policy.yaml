@@ -71,6 +71,35 @@ spec:
         protocol: TCP
       - port: '443'
         protocol: TCP
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.cilium.k8s.policy.serviceaccount: cv-renderer
+        k8s:io.kubernetes.pod.namespace: career-ops
+    toPorts:
+    - ports:
+      - port: '8080'
+        protocol: TCP
+---
+# The sandboxed renderer accepts render calls from the coordinator only and has
+# no egress rule, so the namespace default-deny blocks all of its traffic.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: career-ops-renderer
+  namespace: career-ops
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:io.cilium.k8s.policy.serviceaccount: cv-renderer
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        k8s:io.cilium.k8s.policy.serviceaccount: cv-coordinator
+        k8s:io.kubernetes.pod.namespace: career-ops
+    toPorts:
+    - ports:
+      - port: '8080'
+        protocol: TCP
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy

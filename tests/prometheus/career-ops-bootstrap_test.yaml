@@ -2,36 +2,16 @@ rule_files:
 - career-ops.yaml
 evaluation_interval: 1m
 tests:
-- name: intentionally suspended bootstrap
+- name: shipped rules stay quiet while disabled, even with the coordinator absent
   interval: 1m
+  input_series: []
   alert_rule_test:
   - eval_time: 10m
-    alertname: CareerOpsCoordinatorUnavailable
+    alertname: CareerOpsCVServiceDown
     exp_alerts: []
   - eval_time: 10m
-    alertname: CareerOpsDatabaseNotReady
+    alertname: CareerOpsCVWorkStuck
     exp_alerts: []
   - eval_time: 10m
-    alertname: CareerOpsTelemetryMissing
-    exp_alerts: []
-  - eval_time: 10m
-    alertname: CareerOpsReconciliationStale
-    exp_alerts: []
-  - eval_time: 10m
-    alertname: CareerOpsReconciliationNotStarted
-    exp_alerts: []
-  - eval_time: 10m
-    alertname: CareerOpsWorkOverdue
-    exp_alerts: []
-  - eval_time: 10m
-    alertname: CareerOpsRetriesExhausted
-    exp_alerts: []
-  - eval_time: 10m
-    alertname: CareerOpsArtifactsUnavailable
-    exp_alerts: []
-  - eval_time: 10m
-    alertname: CareerOpsArtifactsUnrepairable
-    exp_alerts: []
-  - eval_time: 10m
-    alertname: CareerOpsRecoveryUnsafe
+    alertname: CareerOpsCVRendersFailing
     exp_alerts: []

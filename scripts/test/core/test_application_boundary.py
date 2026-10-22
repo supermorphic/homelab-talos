@@ -148,6 +148,41 @@ def workload(account="cv-renderer", kind="Job"):
     return {"kind": kind, "metadata": metadata, "spec": spec}
 
 
+def renderer_deployment():
+    """The sandboxed renderer service shape from spec 035."""
+    obj = workload("cv-renderer", "Deployment")
+    obj["metadata"]["name"] = "cv-renderer"
+    pod = obj["spec"]["template"]["spec"]
+    pod["volumes"] = [
+        {"name": "code", "configMap": {"name": "cv-renderer-code"}},
+        {"name": "fonts", "configMap": {"name": "cv-font-liberation-serif-regular"}},
+        {"name": "tmp", "emptyDir": {"sizeLimit": "1Gi"}},
+    ]
+    pod["containers"][0]["volumeMounts"] = [
+        {"name": "code", "mountPath": "/app", "readOnly": True},
+        {"name": "fonts", "mountPath": "/fonts/regular", "readOnly": True},
+        {"name": "tmp", "mountPath": "/tmp"},
+    ]
+    pod["containers"][0]["ports"] = [{"name": "http", "containerPort": 8080}]
+    return obj
+
+
+def renderer_service():
+    return {
+        "kind": "Service",
+        "metadata": {
+            "name": "cv-renderer",
+            "namespace": "career-ops",
+            "labels": {"app.kubernetes.io/name": "cv-renderer"},
+        },
+        "spec": {
+            "type": "ClusterIP",
+            "selector": {"app.kubernetes.io/name": "cv-renderer"},
+            "ports": [{"name": "http", "port": 8080, "targetPort": 8080, "protocol": "TCP"}],
+        },
+    }
+
+
 class ApplicationFixture:
     @classmethod
     def setUpClass(cls):
@@ -579,11 +614,14 @@ class ApplicationNetworkTests(ApplicationFixture, unittest.TestCase):
                 "career-ops-coordinator",
                 "career-ops-boundary-coordinator",
                 "career-ops-preparation",
+                "career-ops-renderer",
             },
         )
         coordinator = policies["career-ops-coordinator"]
         native = policies["career-ops-boundary-coordinator"]
-        self.assertEqual(native["egress"], coordinator["egress"])
+        # The fixture proves the shared DNS, database and API destinations; only the
+        # production coordinator may call the renderer.
+        self.assertEqual(native["egress"], coordinator["egress"][:3])
         self.assertEqual(native["ingress"], [])
         self.assertEqual(
             native["endpointSelector"]["matchLabels"],
@@ -597,7 +635,7 @@ class ApplicationNetworkTests(ApplicationFixture, unittest.TestCase):
             [p["port"] for r in coordinator["ingress"] for p in r["toPorts"][0]["ports"]],
             ["8080", "9090"],
         )
-        self.assertEqual(len(coordinator["egress"]), 3)
+        self.assertEqual(len(coordinator["egress"]), 4)
         self.assertEqual(coordinator["egress"][2]["toEntities"], ["kube-apiserver"])
         self.assertEqual(
             coordinator["egress"][1]["toPorts"][0]["ports"], [{"port": "5432", "protocol": "TCP"}]
@@ -1210,6 +1248,229 @@ class ApplicationConnectionTests(unittest.TestCase):
         self.assertEqual(credential["sops"]["encrypted_regex"], "^(data|stringData)$")
 
 
+class RendererServiceTests(ApplicationFixture, unittest.TestCase):
+    def test_renderer_service_admitted(self):
+        self.assertTrue(self.admission(renderer_service(), policy="career-ops-services"))
+
+    def test_renderer_service_shape_denied(self):
+        cases = {
+            "second port": lambda s: s["spec"]["ports"].append(
+                {"name": "metrics", "port": 9090, "targetPort": 9090, "protocol": "TCP"}
+            ),
+            "metrics port": lambda s: s["spec"].update(
+                ports=[{"name": "http", "port": 9090, "targetPort": 9090, "protocol": "TCP"}]
+            ),
+            "node port": lambda s: s["spec"].update(type="NodePort"),
+            "coordinator selector": lambda s: s["spec"].update(
+                selector={"app.kubernetes.io/name": "cv-coordinator"}
+            ),
+            "coordinator label": lambda s: s["metadata"]["labels"].update(
+                {"app.kubernetes.io/name": "cv-coordinator"}
+            ),
+            "renamed port": lambda s: s["spec"]["ports"][0].update(name="web"),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(name):
+                bad = renderer_service()
+                mutate(bad)
+                self.assertFalse(self.admission(bad, policy="career-ops-services"))
+
+    def test_renderer_selector_not_reachable_from_other_service_names(self):
+        bad = renderer_service()
+        bad["metadata"]["name"] = "career-ops-service"
+        bad["metadata"]["labels"] = {"app.kubernetes.io/name": "career-ops-service"}
+        self.assertFalse(self.admission(bad, policy="career-ops-services"))
+
+    def test_renderer_deployment_admitted(self):
+        deployment = renderer_deployment()
+        for kind in ("Deployment", "ReplicaSet", "Pod"):
+            with self.subTest(kind=kind):
+                obj = copy.deepcopy(deployment)
+                if kind == "Pod":
+                    template = obj["spec"]["template"]
+                    obj = {"kind": "Pod", "metadata": obj["metadata"], "spec": template["spec"]}
+                    obj["spec"]["restartPolicy"] = "Always"
+                obj["kind"] = kind
+                self.assertTrue(self.admission(obj))
+
+    def test_renderer_claims_only_in_jobs(self):
+        def with_claim(obj):
+            spec = obj["spec"] if obj["kind"] == "Pod" else obj["spec"]["template"]["spec"]
+            spec.setdefault("volumes", []).append(
+                {"name": "requests", "persistentVolumeClaim": {"claimName": "cv-requests", "readOnly": True}}
+            )
+            spec["containers"][0].setdefault("volumeMounts", []).append(
+                {"name": "requests", "mountPath": "/input", "subPath": "requests/r1/input", "readOnly": True}
+            )
+            return obj
+
+        self.assertTrue(self.admission(with_claim(workload("cv-renderer", "Job"))))
+        job_pod = with_claim(workload("cv-renderer", "Pod"))
+        job_pod["metadata"]["ownerReferences"] = [{"kind": "Job", "name": "fixture", "apiVersion": "batch/v1", "uid": "u"}]
+        self.assertTrue(self.admission(job_pod))
+        for kind in ("Deployment", "ReplicaSet", "Pod"):
+            with self.subTest(kind=kind):
+                self.assertFalse(self.admission(with_claim(workload("cv-renderer", kind))))
+
+    def test_orphaned_worker_pod_update_admitted(self):
+        # Deleting a Job with default propagation orphans its Pods: the garbage
+        # collector removes the Job owner in a Pod UPDATE, which must stay allowed.
+        old = workload("cv-renderer", "Pod")
+        old["spec"]["volumes"] = [
+            {"name": "requests", "persistentVolumeClaim": {"claimName": "cv-requests", "readOnly": True}}
+        ]
+        old["spec"]["containers"][0]["volumeMounts"] = [
+            {"name": "requests", "mountPath": "/input", "subPath": "requests/r1/input", "readOnly": True}
+        ]
+        old["metadata"]["ownerReferences"] = [
+            {"kind": "Job", "name": "fixture", "apiVersion": "batch/v1", "uid": "u"}
+        ]
+        new = copy.deepcopy(old)
+        del new["metadata"]["ownerReferences"]
+        self.assertTrue(self.admission(new, operation="UPDATE", old=old))
+
+    def test_renderer_deployment_escalations_denied(self):
+        def pod(obj):
+            return obj["spec"]["template"]["spec"]
+
+        def add_volume(volume, mount):
+            def mutate(obj):
+                pod(obj)["volumes"].append(volume)
+                pod(obj)["containers"][0]["volumeMounts"].append(mount)
+
+            return mutate
+
+        cases = {
+            "artifact claim": add_volume(
+                {"name": "a", "persistentVolumeClaim": {"claimName": "cv-artifacts"}},
+                {"name": "a", "mountPath": "/artifacts"},
+            ),
+            "api secret": add_volume(
+                {"name": "s", "secret": {"secretName": "cv-api-auth"}},
+                {"name": "s", "mountPath": "/run/secrets/cv-api-auth", "readOnly": True},
+            ),
+            "token": lambda o: pod(o).update(automountServiceAccountToken=True),
+            "projected token": add_volume(
+                {
+                    "name": "kube-api-access-x",
+                    "projected": {"sources": [{"serviceAccountToken": {"path": "token"}}]},
+                },
+                {"name": "kube-api-access-x", "mountPath": "/var/run/secrets/token"},
+            ),
+            "pull secret": lambda o: pod(o).update(imagePullSecrets=[{"name": "registry"}]),
+            "init container": lambda o: pod(o).update(
+                initContainers=[copy.deepcopy(pod(o)["containers"][0])]
+            ),
+            "large workspace": lambda o: pod(o)["volumes"][2]["emptyDir"].update(sizeLimit="2Gi"),
+            "cpu limit": lambda o: pod(o)["containers"][0]["resources"]["limits"].update(cpu="2"),
+            "platform configmap": lambda o: pod(o)["volumes"][0]["configMap"].update(
+                name="career-ops-boundary-program"
+            ),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(name):
+                bad = renderer_deployment()
+                mutate(bad)
+                self.assertFalse(self.admission(bad))
+
+
+class RendererNetworkTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.policies = [d for d in render(PLATFORM) if d["kind"] == "CiliumNetworkPolicy"]
+
+    @staticmethod
+    def selects(policy, account):
+        labels = policy["spec"]["endpointSelector"].get("matchLabels", {})
+        return labels in ({}, {"k8s:io.cilium.k8s.policy.serviceaccount": account})
+
+    def test_renderer_ingress_only_from_coordinator(self):
+        renderer = [
+            p for p in self.policies
+            if p["spec"]["endpointSelector"].get("matchLabels")
+            == {"k8s:io.cilium.k8s.policy.serviceaccount": "cv-renderer"}
+        ]
+        self.assertEqual(len(renderer), 1)
+        spec = renderer[0]["spec"]
+        self.assertNotIn("egress", spec)
+        self.assertEqual(
+            spec["ingress"],
+            [
+                {
+                    "fromEndpoints": [
+                        {
+                            "matchLabels": {
+                                "k8s:io.cilium.k8s.policy.serviceaccount": "cv-coordinator",
+                                "k8s:io.kubernetes.pod.namespace": "career-ops",
+                            }
+                        }
+                    ],
+                    "toPorts": [{"ports": [{"port": "8080", "protocol": "TCP"}]}],
+                }
+            ],
+        )
+
+    def test_no_policy_grants_renderer_egress(self):
+        for policy in self.policies:
+            if self.selects(policy, "cv-renderer"):
+                with self.subTest(policy["metadata"]["name"]):
+                    egress = policy["spec"].get("egress", [])
+                    self.assertTrue(
+                        all(rule == {"toEntities": ["none"]} for rule in egress), egress
+                    )
+
+    def test_gateway_access_log_excludes_private_hosts(self):
+        proxy = yaml.safe_load(
+            (ROOT / "kubernetes/apps/networking/internal-gateway/app/envoyproxy.yaml").read_text()
+        )
+        expressions = [
+            e for setting in proxy["spec"]["telemetry"]["accessLog"]["settings"]
+            for e in setting.get("matches", [])
+        ]
+        self.assertEqual(len(expressions), 1)
+        env = celpy.Environment()
+        program = env.program(env.compile(expressions[0]))
+
+        def logged(host):
+            return bool(program.evaluate({"request": celpy.json_to_cel({"host": host})}))
+
+        for host in (
+            "cv.lab.supermorphic.com",
+            "CV.LAB.SUPERMORPHIC.COM",
+            "cv.lab.supermorphic.com.",
+            "cv.lab.supermorphic.com:443",
+            "searxng.lab.supermorphic.com",
+        ):
+            with self.subTest(excluded=host):
+                self.assertFalse(logged(host))
+        for host in (
+            "evilcv.lab.supermorphic.com",
+            "cv.lab.supermorphic.com.example",
+            "n8n.lab.supermorphic.com",
+        ):
+            with self.subTest(logged=host):
+                self.assertTrue(logged(host))
+
+    def test_coordinator_egress_to_renderer(self):
+        coordinator = next(
+            p for p in self.policies if p["metadata"]["name"] == "career-ops-coordinator"
+        )
+        self.assertIn(
+            {
+                "toEndpoints": [
+                    {
+                        "matchLabels": {
+                            "k8s:io.cilium.k8s.policy.serviceaccount": "cv-renderer",
+                            "k8s:io.kubernetes.pod.namespace": "career-ops",
+                        }
+                    }
+                ],
+                "toPorts": [{"ports": [{"port": "8080", "protocol": "TCP"}]}],
+            },
+            coordinator["spec"]["egress"],
+        )
+
+
 class ApplicationMonitoringTests(unittest.TestCase):
     def test_platform_monitoring_is_quiet_until_activation(self):
         docs = render(PLATFORM)
@@ -1227,8 +1488,24 @@ class ApplicationMonitoringTests(unittest.TestCase):
             ],
             [{"port": "metrics", "path": "/metrics", "interval": "1m", "scrapeTimeout": "10s"}],
         )
+        keep = monitor["spec"]["endpoints"][0]["metricRelabelings"][0]
+        self.assertEqual(
+            keep["regex"],
+            "cv_render_(metrics_schema_info|ready|database_ready|renderer_egress_blocked"
+            "|overdue_work|recent_failures)",
+        )
         rule = next(d for d in docs if d["kind"] == "PrometheusRule")
-        expected = next(r for g in rule["spec"]["groups"] for r in g["rules"] if "record" in r)
+        rules = [r for g in rule["spec"]["groups"] for r in g["rules"]]
+        self.assertEqual(
+            [r["alert"] for r in rules if "alert" in r],
+            ["CareerOpsCVServiceDown", "CareerOpsCVWorkStuck", "CareerOpsCVRendersFailing"],
+        )
+        for alert in (r for r in rules if "alert" in r):
+            self.assertTrue(
+                alert["expr"].endswith("and on() (career_ops_coordinator_expected == 1)"),
+                alert["alert"],
+            )
+        expected = next(r for r in rules if "record" in r)
         self.assertEqual(
             expected, {"record": "career_ops_coordinator_expected", "expr": "vector(0)"}
         )

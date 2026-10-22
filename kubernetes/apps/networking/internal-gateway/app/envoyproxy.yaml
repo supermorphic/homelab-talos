@@ -9,9 +9,10 @@ spec:
     accessLog:
       settings:
         # Keep the default format for existing routes. Search URLs can contain
-        # private query text, so exclude this app's authority from access logs.
+        # private query text and CV download URLs carry bearer tokens, so exclude
+        # these authorities from access logs.
         - matches:
-            - '!request.host.matches("(?i)^searxng[.]lab[.]supermorphic[.]com[.]?(:[0-9]+)?$")'
+            - '!request.host.matches("(?i)^(searxng|cv)[.]lab[.]supermorphic[.]com[.]?(:[0-9]+)?$")'
           sinks:
             - type: File
               file:
