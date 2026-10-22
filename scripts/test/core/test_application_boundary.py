@@ -1290,6 +1290,25 @@ class RendererServiceTests(ApplicationFixture, unittest.TestCase):
                 obj["kind"] = kind
                 self.assertTrue(self.admission(obj))
 
+    def test_renderer_claims_only_in_jobs(self):
+        def with_claim(obj):
+            spec = obj["spec"] if obj["kind"] == "Pod" else obj["spec"]["template"]["spec"]
+            spec.setdefault("volumes", []).append(
+                {"name": "requests", "persistentVolumeClaim": {"claimName": "cv-requests", "readOnly": True}}
+            )
+            spec["containers"][0].setdefault("volumeMounts", []).append(
+                {"name": "requests", "mountPath": "/input", "subPath": "requests/r1/input", "readOnly": True}
+            )
+            return obj
+
+        self.assertTrue(self.admission(with_claim(workload("cv-renderer", "Job"))))
+        job_pod = with_claim(workload("cv-renderer", "Pod"))
+        job_pod["metadata"]["ownerReferences"] = [{"kind": "Job", "name": "fixture", "apiVersion": "batch/v1", "uid": "u"}]
+        self.assertTrue(self.admission(job_pod))
+        for kind in ("Deployment", "ReplicaSet", "Pod"):
+            with self.subTest(kind=kind):
+                self.assertFalse(self.admission(with_claim(workload("cv-renderer", kind))))
+
     def test_renderer_deployment_escalations_denied(self):
         def pod(obj):
             return obj["spec"]["template"]["spec"]
