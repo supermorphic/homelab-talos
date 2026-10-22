@@ -168,7 +168,10 @@ spec:
       : variables.account == ''cv-prepare'' ? [variables.releaseClaim] : variables.profile == ''cv-renderer''
       ? [variables.releaseClaim,variables.requestClaim] : []))))'
     message: Claims are restricted by runtime identity.
-  - expression: request.operation == 'DELETE' || variables.profile != 'cv-renderer' || variables.volumes.all(v,
+  # Pod volumes cannot change after creation; garbage-collector orphaning updates
+  # remove the Job owner and must not be denied.
+  - expression: request.operation == 'DELETE' || (variables.item.kind == 'Pod' && request.operation == 'UPDATE')
+      || variables.profile != 'cv-renderer' || variables.volumes.all(v,
       !has(v.persistentVolumeClaim)) || variables.item.kind == 'Job' || (variables.item.kind == 'Pod' && has(variables.item.metadata.ownerReferences)
       && variables.item.metadata.ownerReferences.exists(o, o.kind == 'Job'))
     message: Renderer claims are limited to offline-worker Jobs; the renderer service has no claims.

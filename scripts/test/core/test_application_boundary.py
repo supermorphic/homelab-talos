@@ -1312,6 +1312,23 @@ class RendererServiceTests(ApplicationFixture, unittest.TestCase):
             with self.subTest(kind=kind):
                 self.assertFalse(self.admission(with_claim(workload("cv-renderer", kind))))
 
+    def test_orphaned_worker_pod_update_admitted(self):
+        # Deleting a Job with default propagation orphans its Pods: the garbage
+        # collector removes the Job owner in a Pod UPDATE, which must stay allowed.
+        old = workload("cv-renderer", "Pod")
+        old["spec"]["volumes"] = [
+            {"name": "requests", "persistentVolumeClaim": {"claimName": "cv-requests", "readOnly": True}}
+        ]
+        old["spec"]["containers"][0]["volumeMounts"] = [
+            {"name": "requests", "mountPath": "/input", "subPath": "requests/r1/input", "readOnly": True}
+        ]
+        old["metadata"]["ownerReferences"] = [
+            {"kind": "Job", "name": "fixture", "apiVersion": "batch/v1", "uid": "u"}
+        ]
+        new = copy.deepcopy(old)
+        del new["metadata"]["ownerReferences"]
+        self.assertTrue(self.admission(new, operation="UPDATE", old=old))
+
     def test_renderer_deployment_escalations_denied(self):
         def pod(obj):
             return obj["spec"]["template"]["spec"]
