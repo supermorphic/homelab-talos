@@ -2,13 +2,23 @@ rule_files:
 - career-ops.yaml
 evaluation_interval: 1m
 tests:
-- name: shipped rules stay quiet while disabled, even with the coordinator absent
+- name: shipped rules alert when the coordinator is absent
   interval: 1m
   input_series: []
   alert_rule_test:
-  - eval_time: 10m
+  - eval_time: 4m
     alertname: CareerOpsCVServiceDown
     exp_alerts: []
+  - eval_time: 6m
+    alertname: CareerOpsCVServiceDown
+    exp_alerts:
+    - exp_labels:
+        namespace: career-ops
+        service: cv-coordinator
+        severity: critical
+      exp_annotations:
+        summary: Career Ops CV service is down
+        description: 'CV renders, uploads and downloads are blocked. Status: https://cv.lab.supermorphic.com/readyz'
   - eval_time: 10m
     alertname: CareerOpsCVWorkStuck
     exp_alerts: []

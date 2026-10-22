@@ -17,9 +17,6 @@ yq -N 'select(.kind == "PrometheusRule") | .spec' "$platform/monitoring.yaml" >"
 promtool check rules "$temp_dir/career-ops.yaml"
 cp tests/prometheus/career-ops-bootstrap_test.yaml "$temp_dir/bootstrap_test.yaml"
 promtool test rules "$temp_dir/bootstrap_test.yaml"
-# Enable only the platform expectation in this ephemeral test variant. The shipped
-# alert expressions are unchanged, and application metric names are not invented.
-yq -i '(.groups[].rules[] | select(.record == "career_ops_coordinator_expected") | .expr) = "vector(1)"' "$temp_dir/career-ops.yaml"
 cp tests/prometheus/career-ops-alerts_test.yaml "$temp_dir/alerts_test.yaml"
 promtool test rules "$temp_dir/alerts_test.yaml"
-echo 'Application boundary offline checks passed; source enrollment, monitoring activation and native acceptance remain pending.'
+echo 'Application boundary offline checks passed; native acceptance remains separate.'
