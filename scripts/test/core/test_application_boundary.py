@@ -148,6 +148,41 @@ def workload(account="cv-renderer", kind="Job"):
     return {"kind": kind, "metadata": metadata, "spec": spec}
 
 
+def renderer_deployment():
+    """The sandboxed renderer service shape from spec 035."""
+    obj = workload("cv-renderer", "Deployment")
+    obj["metadata"]["name"] = "cv-renderer"
+    pod = obj["spec"]["template"]["spec"]
+    pod["volumes"] = [
+        {"name": "code", "configMap": {"name": "cv-renderer-code"}},
+        {"name": "fonts", "configMap": {"name": "cv-font-liberation-serif-regular"}},
+        {"name": "tmp", "emptyDir": {"sizeLimit": "1Gi"}},
+    ]
+    pod["containers"][0]["volumeMounts"] = [
+        {"name": "code", "mountPath": "/app", "readOnly": True},
+        {"name": "fonts", "mountPath": "/fonts/regular", "readOnly": True},
+        {"name": "tmp", "mountPath": "/tmp"},
+    ]
+    pod["containers"][0]["ports"] = [{"name": "http", "containerPort": 8080}]
+    return obj
+
+
+def renderer_service():
+    return {
+        "kind": "Service",
+        "metadata": {
+            "name": "cv-renderer",
+            "namespace": "career-ops",
+            "labels": {"app.kubernetes.io/name": "cv-renderer"},
+        },
+        "spec": {
+            "type": "ClusterIP",
+            "selector": {"app.kubernetes.io/name": "cv-renderer"},
+            "ports": [{"name": "http", "port": 8080, "targetPort": 8080, "protocol": "TCP"}],
+        },
+    }
+
+
 class ApplicationFixture:
     @classmethod
     def setUpClass(cls):
@@ -1208,6 +1243,96 @@ class ApplicationConnectionTests(unittest.TestCase):
             all(value.startswith("ENC[AES256_GCM,") for value in credential["stringData"].values())
         )
         self.assertEqual(credential["sops"]["encrypted_regex"], "^(data|stringData)$")
+
+
+class RendererServiceTests(ApplicationFixture, unittest.TestCase):
+    def test_renderer_service_admitted(self):
+        self.assertTrue(self.admission(renderer_service(), policy="career-ops-services"))
+
+    def test_renderer_service_shape_denied(self):
+        cases = {
+            "second port": lambda s: s["spec"]["ports"].append(
+                {"name": "metrics", "port": 9090, "targetPort": 9090, "protocol": "TCP"}
+            ),
+            "metrics port": lambda s: s["spec"].update(
+                ports=[{"name": "http", "port": 9090, "targetPort": 9090, "protocol": "TCP"}]
+            ),
+            "node port": lambda s: s["spec"].update(type="NodePort"),
+            "coordinator selector": lambda s: s["spec"].update(
+                selector={"app.kubernetes.io/name": "cv-coordinator"}
+            ),
+            "coordinator label": lambda s: s["metadata"]["labels"].update(
+                {"app.kubernetes.io/name": "cv-coordinator"}
+            ),
+            "renamed port": lambda s: s["spec"]["ports"][0].update(name="web"),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(name):
+                bad = renderer_service()
+                mutate(bad)
+                self.assertFalse(self.admission(bad, policy="career-ops-services"))
+
+    def test_renderer_selector_not_reachable_from_other_service_names(self):
+        bad = renderer_service()
+        bad["metadata"]["name"] = "career-ops-service"
+        bad["metadata"]["labels"] = {"app.kubernetes.io/name": "career-ops-service"}
+        self.assertFalse(self.admission(bad, policy="career-ops-services"))
+
+    def test_renderer_deployment_admitted(self):
+        deployment = renderer_deployment()
+        for kind in ("Deployment", "ReplicaSet", "Pod"):
+            with self.subTest(kind=kind):
+                obj = copy.deepcopy(deployment)
+                if kind == "Pod":
+                    template = obj["spec"]["template"]
+                    obj = {"kind": "Pod", "metadata": obj["metadata"], "spec": template["spec"]}
+                    obj["spec"]["restartPolicy"] = "Always"
+                obj["kind"] = kind
+                self.assertTrue(self.admission(obj))
+
+    def test_renderer_deployment_escalations_denied(self):
+        def pod(obj):
+            return obj["spec"]["template"]["spec"]
+
+        def add_volume(volume, mount):
+            def mutate(obj):
+                pod(obj)["volumes"].append(volume)
+                pod(obj)["containers"][0]["volumeMounts"].append(mount)
+
+            return mutate
+
+        cases = {
+            "artifact claim": add_volume(
+                {"name": "a", "persistentVolumeClaim": {"claimName": "cv-artifacts"}},
+                {"name": "a", "mountPath": "/artifacts"},
+            ),
+            "api secret": add_volume(
+                {"name": "s", "secret": {"secretName": "cv-api-auth"}},
+                {"name": "s", "mountPath": "/run/secrets/cv-api-auth", "readOnly": True},
+            ),
+            "token": lambda o: pod(o).update(automountServiceAccountToken=True),
+            "projected token": add_volume(
+                {
+                    "name": "kube-api-access-x",
+                    "projected": {"sources": [{"serviceAccountToken": {"path": "token"}}]},
+                },
+                {"name": "kube-api-access-x", "mountPath": "/var/run/secrets/token"},
+            ),
+            "pull secret": lambda o: pod(o).update(imagePullSecrets=[{"name": "registry"}]),
+            "init container": lambda o: pod(o).update(
+                initContainers=[copy.deepcopy(pod(o)["containers"][0])]
+            ),
+            "large workspace": lambda o: pod(o)["volumes"][2]["emptyDir"].update(sizeLimit="2Gi"),
+            "cpu limit": lambda o: pod(o)["containers"][0]["resources"]["limits"].update(cpu="2"),
+            "platform configmap": lambda o: pod(o)["volumes"][0]["configMap"].update(
+                name="career-ops-boundary-program"
+            ),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(name):
+                bad = renderer_deployment()
+                mutate(bad)
+                self.assertFalse(self.admission(bad))
 
 
 class ApplicationMonitoringTests(unittest.TestCase):
