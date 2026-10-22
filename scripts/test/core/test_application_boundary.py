@@ -1387,7 +1387,7 @@ class RendererNetworkTests(unittest.TestCase):
         labels = policy["spec"]["endpointSelector"].get("matchLabels", {})
         pinned = {
             value for key, value in labels.items()
-            if key.removeprefix("k8s:") == "io.cilium.k8s.policy.serviceaccount"
+            if key.split(":", 1)[-1] == "io.cilium.k8s.policy.serviceaccount"
         }
         return pinned <= {account}
 
