@@ -1402,6 +1402,38 @@ class RendererNetworkTests(unittest.TestCase):
                         all(rule == {"toEntities": ["none"]} for rule in egress), egress
                     )
 
+    def test_gateway_access_log_excludes_private_hosts(self):
+        proxy = yaml.safe_load(
+            (ROOT / "kubernetes/apps/networking/internal-gateway/app/envoyproxy.yaml").read_text()
+        )
+        expressions = [
+            e for setting in proxy["spec"]["telemetry"]["accessLog"]["settings"]
+            for e in setting.get("matches", [])
+        ]
+        self.assertEqual(len(expressions), 1)
+        env = celpy.Environment()
+        program = env.program(env.compile(expressions[0]))
+
+        def logged(host):
+            return bool(program.evaluate({"request": celpy.json_to_cel({"host": host})}))
+
+        for host in (
+            "cv.lab.supermorphic.com",
+            "CV.LAB.SUPERMORPHIC.COM",
+            "cv.lab.supermorphic.com.",
+            "cv.lab.supermorphic.com:443",
+            "searxng.lab.supermorphic.com",
+        ):
+            with self.subTest(excluded=host):
+                self.assertFalse(logged(host))
+        for host in (
+            "evilcv.lab.supermorphic.com",
+            "cv.lab.supermorphic.com.example",
+            "n8n.lab.supermorphic.com",
+        ):
+            with self.subTest(logged=host):
+                self.assertTrue(logged(host))
+
     def test_coordinator_egress_to_renderer(self):
         coordinator = next(
             p for p in self.policies if p["metadata"]["name"] == "career-ops-coordinator"
