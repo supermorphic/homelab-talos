@@ -2,6 +2,7 @@
 
 import copy
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -1268,6 +1269,7 @@ class RendererServiceTests(ApplicationFixture, unittest.TestCase):
                 {"app.kubernetes.io/name": "cv-coordinator"}
             ),
             "renamed port": lambda s: s["spec"]["ports"][0].update(name="web"),
+            "no labels": lambda s: s["metadata"].pop("labels"),
         }
         for name, mutate in cases.items():
             with self.subTest(name):
@@ -1381,8 +1383,13 @@ class RendererNetworkTests(unittest.TestCase):
 
     @staticmethod
     def selects(policy, account):
+        # Conservative: a policy not pinned to another service account may select it.
         labels = policy["spec"]["endpointSelector"].get("matchLabels", {})
-        return labels in ({}, {"k8s:io.cilium.k8s.policy.serviceaccount": account})
+        pinned = {
+            value for key, value in labels.items()
+            if key.split(":", 1)[-1] == "io.cilium.k8s.policy.serviceaccount"
+        }
+        return pinned <= {account}
 
     def test_renderer_ingress_only_from_coordinator(self):
         renderer = [
@@ -1488,14 +1495,15 @@ class ApplicationMonitoringTests(unittest.TestCase):
             ],
             [{"port": "metrics", "path": "/metrics", "interval": "1m", "scrapeTimeout": "10s"}],
         )
-        keep = monitor["spec"]["endpoints"][0]["metricRelabelings"][0]
-        self.assertEqual(
-            keep["regex"],
-            "cv_render_(metrics_schema_info|ready|database_ready|renderer_egress_blocked"
-            "|overdue_work|recent_failures)",
-        )
         rule = next(d for d in docs if d["kind"] == "PrometheusRule")
         rules = [r for g in rule["spec"]["groups"] for r in g["rules"]]
+        keep = monitor["spec"]["endpoints"][0]["metricRelabelings"][0]
+        self.assertEqual((keep["action"], keep["sourceLabels"]), ("keep", ["__name__"]))
+        used = {name for r in rules for name in re.findall(r"\bcv_render_\w+", r["expr"])}
+        self.assertTrue(used)
+        for name in sorted(used):
+            with self.subTest(kept=name):
+                self.assertRegex(name, f"^(?:{keep['regex']})$")
         self.assertEqual(
             [r["alert"] for r in rules if "alert" in r],
             ["CareerOpsCVServiceDown", "CareerOpsCVWorkStuck", "CareerOpsCVRendersFailing"],
