@@ -614,11 +614,14 @@ class ApplicationNetworkTests(ApplicationFixture, unittest.TestCase):
                 "career-ops-coordinator",
                 "career-ops-boundary-coordinator",
                 "career-ops-preparation",
+                "career-ops-renderer",
             },
         )
         coordinator = policies["career-ops-coordinator"]
         native = policies["career-ops-boundary-coordinator"]
-        self.assertEqual(native["egress"], coordinator["egress"])
+        # The fixture proves the shared DNS, database and API destinations; only the
+        # production coordinator may call the renderer.
+        self.assertEqual(native["egress"], coordinator["egress"][:3])
         self.assertEqual(native["ingress"], [])
         self.assertEqual(
             native["endpointSelector"]["matchLabels"],
@@ -632,7 +635,7 @@ class ApplicationNetworkTests(ApplicationFixture, unittest.TestCase):
             [p["port"] for r in coordinator["ingress"] for p in r["toPorts"][0]["ports"]],
             ["8080", "9090"],
         )
-        self.assertEqual(len(coordinator["egress"]), 3)
+        self.assertEqual(len(coordinator["egress"]), 4)
         self.assertEqual(coordinator["egress"][2]["toEntities"], ["kube-apiserver"])
         self.assertEqual(
             coordinator["egress"][1]["toPorts"][0]["ports"], [{"port": "5432", "protocol": "TCP"}]
@@ -1352,6 +1355,71 @@ class RendererServiceTests(ApplicationFixture, unittest.TestCase):
                 bad = renderer_deployment()
                 mutate(bad)
                 self.assertFalse(self.admission(bad))
+
+
+class RendererNetworkTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.policies = [d for d in render(PLATFORM) if d["kind"] == "CiliumNetworkPolicy"]
+
+    @staticmethod
+    def selects(policy, account):
+        labels = policy["spec"]["endpointSelector"].get("matchLabels", {})
+        return labels in ({}, {"k8s:io.cilium.k8s.policy.serviceaccount": account})
+
+    def test_renderer_ingress_only_from_coordinator(self):
+        renderer = [
+            p for p in self.policies
+            if p["spec"]["endpointSelector"].get("matchLabels")
+            == {"k8s:io.cilium.k8s.policy.serviceaccount": "cv-renderer"}
+        ]
+        self.assertEqual(len(renderer), 1)
+        spec = renderer[0]["spec"]
+        self.assertNotIn("egress", spec)
+        self.assertEqual(
+            spec["ingress"],
+            [
+                {
+                    "fromEndpoints": [
+                        {
+                            "matchLabels": {
+                                "k8s:io.cilium.k8s.policy.serviceaccount": "cv-coordinator",
+                                "k8s:io.kubernetes.pod.namespace": "career-ops",
+                            }
+                        }
+                    ],
+                    "toPorts": [{"ports": [{"port": "8080", "protocol": "TCP"}]}],
+                }
+            ],
+        )
+
+    def test_no_policy_grants_renderer_egress(self):
+        for policy in self.policies:
+            if self.selects(policy, "cv-renderer"):
+                with self.subTest(policy["metadata"]["name"]):
+                    egress = policy["spec"].get("egress", [])
+                    self.assertTrue(
+                        all(rule == {"toEntities": ["none"]} for rule in egress), egress
+                    )
+
+    def test_coordinator_egress_to_renderer(self):
+        coordinator = next(
+            p for p in self.policies if p["metadata"]["name"] == "career-ops-coordinator"
+        )
+        self.assertIn(
+            {
+                "toEndpoints": [
+                    {
+                        "matchLabels": {
+                            "k8s:io.cilium.k8s.policy.serviceaccount": "cv-renderer",
+                            "k8s:io.kubernetes.pod.namespace": "career-ops",
+                        }
+                    }
+                ],
+                "toPorts": [{"ports": [{"port": "8080", "protocol": "TCP"}]}],
+            },
+            coordinator["spec"]["egress"],
+        )
 
 
 class ApplicationMonitoringTests(unittest.TestCase):
