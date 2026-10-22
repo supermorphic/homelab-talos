@@ -321,8 +321,10 @@ workflows. Keep feature-branch evidence distinct from deployed-main evidence.
   wrong or revoked token is rejected; a rotated `cv-api-auth` accepts the new
   token and rejects the old one without a Pod restart.
 - Boundary: offline admission cases and a live server-side dry run deny the
-  renderer a token, Secrets, claims, pull Secrets and wider network profiles;
-  positive drop evidence shows renderer egress is denied.
+  renderer a token, Secrets, claims, pull Secrets and wider network profiles.
+  At startup the renderer attempts one DNS query and one TCP connection and
+  reports through the coordinator's metrics that both were blocked; Hubble drop
+  counters for that attempt provide independent positive evidence.
 - Monitoring: offline rule tests cover all three alerts; one real ntfy
   notification is delivered and resolved for stuck work.
 - Recovery: the existing automation-data restore drill restores a backup
