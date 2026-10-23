@@ -3,8 +3,9 @@
 Each bearer stays in an owner-only local file. Only its SHA-256 enters the
 public-age SOPS encryption input. Bootstrap stages the qualification principal
 and never replaces a Secret. Package enrollment replaces only reviewed
-ciphertext: it keeps the existing qualification bearer and adds a package
-operator principal. Neither changes Flux selection or enables admission.
+ciphertext: it keeps the existing qualification bearer and stages the package
+operator and the composer, which may only render and register its own packages.
+Neither changes Flux selection or enables admission.
 """
 
 from __future__ import annotations
@@ -29,6 +30,8 @@ REPLACE_CONFIRMATION = "replace:career-ops:cv-api-auth"
 PRINCIPAL = "career-ops-qualification"
 OPERATOR = "career-ops-operator"
 OPERATOR_CAPABILITIES = ["packages:read", "packages:write", "render"]
+COMPOSER = "career-ops-composer"
+COMPOSER_CAPABILITIES = ["render", "packages:register"]
 
 
 class EnrollmentError(RuntimeError):
@@ -104,17 +107,24 @@ def read_token(path, create=True):
 
 
 def stage(
-    root, token_file, confirmation, *, operator_token_file=None, replace_sha256=None,
-    runner=subprocess.run,
+    root, token_file, confirmation, *, operator_token_file=None, composer_token_file=None,
+    replace_sha256=None, runner=subprocess.run,
 ):
-    replacing = operator_token_file is not None or replace_sha256 is not None
+    replacing = (
+        operator_token_file is not None
+        or composer_token_file is not None
+        or replace_sha256 is not None
+    )
     if replacing and (
         not isinstance(replace_sha256, str)
         or re.fullmatch(r"[0-9a-f]{64}", replace_sha256) is None
         or not isinstance(operator_token_file, Path)
-        or operator_token_file == token_file
+        or not isinstance(composer_token_file, Path)
+        or len({token_file, operator_token_file, composer_token_file}) != 3
     ):
-        raise EnrollmentError("Package enrollment requires a reviewed checksum and operator token")
+        raise EnrollmentError(
+            "Package enrollment requires a reviewed checksum, operator token and composer token"
+        )
     if confirmation != (REPLACE_CONFIRMATION if replacing else CONFIRMATION):
         raise EnrollmentError("Exact API enrollment confirmation required")
     policy, recipient = preflight(root, replace_sha256)
@@ -124,7 +134,8 @@ def stage(
         tokens = [read_token(token_file, create=not replacing)]
         if replacing:
             tokens.append(read_token(operator_token_file))
-            if tokens[0] == tokens[1]:
+            tokens.append(read_token(composer_token_file))
+            if len(set(tokens)) != len(tokens):
                 raise EnrollmentError("API principals require distinct tokens")
         return tokens
 
@@ -139,6 +150,11 @@ def stage(
                     "principalId": OPERATOR,
                     "tokenSha256": [digests[1]],
                     "capabilities": OPERATOR_CAPABILITIES,
+                },
+                {
+                    "principalId": COMPOSER,
+                    "tokenSha256": [digests[2]],
+                    "capabilities": COMPOSER_CAPABILITIES,
                 },
             ],
         }
@@ -231,6 +247,9 @@ def stage(
             "operator_principal": OPERATOR,
             "operator_capabilities": OPERATOR_CAPABILITIES,
             "operator_token_file": str(operator_token_file),
+            "composer_principal": COMPOSER,
+            "composer_capabilities": COMPOSER_CAPABILITIES,
+            "composer_token_file": str(composer_token_file),
             "replaced_ciphertext_sha256": replace_sha256,
         }
     return receipt
@@ -250,6 +269,14 @@ def main():
         help="package enrollment: owner-only operator token, generated once and retained",
     )
     parser.add_argument(
+        "--composer-token-file",
+        type=Path,
+        help=(
+            "package enrollment, required with --operator-token-file: owner-only composer token,"
+            " generated once and retained"
+        ),
+    )
+    parser.add_argument(
         "--replace-sha256", help="package enrollment: SHA-256 of the reviewed existing ciphertext"
     )
     parser.add_argument("--confirm", required=True)
@@ -258,7 +285,8 @@ def main():
         print(
             json.dumps(stage(
                 Path(__file__).resolve().parents[2], args.token_file, args.confirm,
-                operator_token_file=args.operator_token_file, replace_sha256=args.replace_sha256,
+                operator_token_file=args.operator_token_file,
+                composer_token_file=args.composer_token_file, replace_sha256=args.replace_sha256,
             ))
         )
         return 0

@@ -60,7 +60,10 @@ Keep application source, inputs, outputs and detailed release behavior outside
 this public repository. Enroll credentials through guarded workflows that write
 only SOPS-encrypted artifacts. Application API authentication uses dedicated
 material whose behavior and rotation the application owns; the coordinator
-receives only token hashes through `cv-api-auth`.
+receives only token hashes through `cv-api-auth`. Each caller has its own
+principal. Unattended composition uses a principal that can only submit renders
+and register packages from its own renders; it never holds the operator's
+package bearer.
 
 Use the existing Flux, Cilium, Gateway, Longhorn, and credential conventions in
 [the platform specification](010-talos-flux-platform.md). Group platform
