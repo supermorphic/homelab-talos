@@ -114,16 +114,15 @@ secrets:
 crawl4ai-secrets:
     uv run --locked --no-dev python scripts/repository/crawl4ai_secrets.py
 
-# Discover or receive a distinct repository-specific Flux or preparation read token.
+# Discover or receive a distinct repository-specific Flux read token.
 # Requires an authenticated Forgejo browser session; no private age key is needed.
-# Guard: --confirm enroll:career-ops:flux-source, or --preparation with
-# --confirm enroll:career-ops:preparation-source. Never activates or rotates Flux.
+# Guard: --confirm enroll:career-ops:flux-source. Never activates or rotates Flux.
 career-ops-source-credentials *args:
     uv run --locked --no-dev python scripts/repository/career_ops_source_credentials.py {{args}}
 
 # Stage ciphertext from a ready Career Ops application profile; never activates or rotates it.
-# --application selects cv_render (default, cv-render-database) or application_packages
-# (application-packages-database). Guard: --confirm stage:career-ops:<secret>.
+# --application accepts only application_packages (default, application-packages-database).
+# Guard: --confirm stage:career-ops:application-packages-database.
 # Requires scoped debugger credentials. Replacement requires --confirm replace:career-ops:<secret>,
 # --replace-sha256 of reviewed existing ciphertext and --expected-generation of the ready login.
 career-ops-runtime-secret *args:

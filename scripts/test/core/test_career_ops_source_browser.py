@@ -19,7 +19,6 @@ class BrowserProducerTest(unittest.TestCase):
         fail_post=False,
         resume_only=False,
         fail_probe=False,
-        preparation=False,
     ):
         path = Path("scripts/repository/career_ops_source_browser.js")
         self.assertTrue(path.exists(), "the authenticated scoped producer is missing")
@@ -30,8 +29,8 @@ let probeAttempts = 0;
 global.location = {origin: 'https://forgejo.infra.supermorphic.com'};
 global.window = {};
 const options = JSON.parse(process.argv[1]);
-const name = options.preparation ? 'career-ops-prepare-synthetic' : 'career-ops-flux-synthetic';
-const confirmation = options.preparation ? 'enroll:career-ops:preparation-source' : 'enroll:career-ops:flux-source';
+const name = 'career-ops-flux-synthetic';
+const confirmation = 'enroll:career-ops:flux-source';
 const text = (value) => ({textContent: value});
 class Document {
   constructor(kind) { this.kind = kind; }
@@ -75,9 +74,9 @@ global.fetch = async (url, args) => {
 };
 (async () => {
   const result = await PRODUCER({origin: location.origin, repository: 'supermorphic/career-ops',
-    tokenName: name, confirmation, preparation: options.preparation, resumeOnly: options.resume_only});
+    tokenName: name, confirmation, resumeOnly: options.resume_only});
   const second = result.password || options.fail_probe ? await PRODUCER({origin: location.origin, repository: 'supermorphic/career-ops',
-    tokenName: name, confirmation, preparation: options.preparation}) : null;
+    tokenName: name, confirmation}) : null;
   console.log(JSON.stringify({result, second, calls, probeAttempts}));
 })();
 """
@@ -93,7 +92,6 @@ global.fetch = async (url, args) => {
                         "fail_post": fail_post,
                         "resume_only": resume_only,
                         "fail_probe": fail_probe,
-                        "preparation": preparation,
                     }
                 ),
             ],
@@ -121,13 +119,6 @@ global.fetch = async (url, args) => {
         )
         probe = next(call for call in observed["calls"] if "/api/v1/repos/" in call["url"])
         self.assertEqual(probe["credentials"], "omit")
-
-    def test_preparation_uses_distinct_pending_identity_and_exact_read_scope(self):
-        observed = self.run_producer(preparation=True)
-        self.assertEqual(observed["result"], observed["second"])
-        self.assertEqual(observed["result"]["token"]["name"], "career-ops-prepare-synthetic")
-        self.assertEqual(observed["result"]["token"]["scopes"], ["read:repository"])
-        self.assertEqual(len([c for c in observed["calls"] if c["method"] == "POST"]), 1)
 
     def test_broader_server_readback_does_not_deliver_a_credential(self):
         observed = self.run_producer(broad=True)
