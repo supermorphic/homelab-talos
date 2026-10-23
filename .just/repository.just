@@ -2103,7 +2103,7 @@ openbao-secrets:
     @scripts/secrets/openbao.sh
 
 # Stage the qualification API principal; retain its bearer in a protected local file.
-# Package enrollment adds the operator principal: --operator-token-file, --replace-sha256 of
+# Package enrollment adds the operator principal (render and packages): --operator-token-file, --replace-sha256 of
 # reviewed ciphertext and --confirm replace:career-ops:cv-api-auth; it keeps the qualification bearer.
 career-ops-api-secret *args:
     uv run --locked --no-dev python scripts/repository/career_ops_api_secret.py {{args}}
