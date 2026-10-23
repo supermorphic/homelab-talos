@@ -175,8 +175,9 @@ Download URLs carry bearer tokens in their path, so the internal Gateway access
 log excludes the `cv.lab` authority, as it already does for search URLs.
 
 New external hostnames, dependencies, credentials or cross-domain access require
-platform allocation. This specification does not enable n8n consumption or any
-upstream workflow.
+platform allocation. n8n is allocated HTTPS egress to the internal Gateway for the
+`cv.lab` server name only, so the Career Ops composition workflow can call the
+CV service.
 
 ## Runtime delivery
 

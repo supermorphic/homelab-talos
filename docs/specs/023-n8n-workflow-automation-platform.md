@@ -287,6 +287,10 @@ Cilium policy limits traffic by workload role:
   existing L7 proxy to restrict TLS handshakes at a shared HTTPS address without
   decrypting application traffic. Verified HTTPS and repository-scoped read-only
   credentials remain application requirements;
+- n8n can reach the internal Envoy data plane on its HTTPS port only with the TLS
+  server name `cv.lab.supermorphic.com`, so Career Ops workflows can call the CV
+  service with their own scoped bearer (see
+  [application-owned deployment](035-application-owned-flux-deployment.md));
 - n8n cannot initiate connections to unrelated cluster Services or private network
   destinations;
 - the backup job can reach PostgreSQL and cluster DNS but has no general Internet egress;
