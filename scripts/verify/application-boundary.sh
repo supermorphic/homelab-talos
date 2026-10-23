@@ -49,8 +49,6 @@ def ready(item):
 
 def controlled(item):
     item=copy.deepcopy(item)
-    if item['kind'] == 'PersistentVolumeClaim':
-        item['spec'].pop('volumeName',None)
     if item['kind'] == 'LimitRange':
         # The API derives Container defaults from max when not explicitly set.
         # Preserve explicit values so drift in defaults still fails observation.
@@ -66,7 +64,7 @@ def controlled(item):
 
 rendered='\n---\n'.join(
     subprocess.check_output(['kustomize','build','kubernetes/apps/applications/career-ops/'+root],text=True)
-    for root in ('platform','fixture-storage'))
+    for root in ('platform',))
 for expected in yaml.safe_load_all(rendered):
     actual=get(expected)
     if controlled(expected) != controlled(actual):
@@ -77,13 +75,6 @@ for expected in yaml.safe_load_all(rendered):
         c.get('type') == 'Valid' and c.get('status') == 'True'
         for c in actual.get('status',{}).get('conditions',[])):
         sys.exit('An installed Cilium policy has not reported valid: '+expected['metadata']['name'])
-    if expected['kind'] == 'PersistentVolumeClaim':
-        if actual.get('status',{}).get('phase') != 'Bound' or actual['metadata'].get('annotations',{}).get('kustomize.toolkit.fluxcd.io/prune') != 'disabled':
-            sys.exit('A fixture volume is not Bound and prune protected.')
-        pv=read('get','persistentvolume',actual['spec']['volumeName'],'-o','json')
-        if (pv['spec'].get('persistentVolumeReclaimPolicy') != 'Retain' or pv['spec'].get('storageClassName') != 'career-ops-retain'
-            or pv['spec'].get('claimRef',{}).get('uid') != actual['metadata']['uid'] or pv['spec'].get('csi',{}).get('driver') != 'driver.longhorn.io'):
-            sys.exit('A fixture volume lacks its owned Longhorn Retain binding.')
     if expected['kind'] == 'ValidatingAdmissionPolicy':
         status=actual.get('status',{})
         if status.get('observedGeneration') != actual['metadata']['generation'] or status.get('typeChecking',{}).get('expressionWarnings'):
@@ -125,19 +116,6 @@ else:
     revision=enrolled['GitRepository'].get('status',{}).get('artifact',{}).get('revision')
     if not revision or enrolled['Kustomization'].get('status',{}).get('lastAppliedRevision') != revision:
         sys.exit('Application has not applied the current source revision.')
-    for name,size in (('cv-releases','8Gi'),('cv-requests','16Gi'),('cv-artifacts','32Gi')):
-        claim=read('get','persistentvolumeclaim',name,'-n','career-ops','-o','json')
-        if (claim.get('status',{}).get('phase') != 'Bound' or claim['spec'].get('storageClassName') != 'career-ops-retain'
-            or claim['spec'].get('accessModes') != ['ReadWriteMany'] or claim['spec'].get('volumeMode') != 'Filesystem'
-            or claim['spec'].get('resources',{}).get('requests',{}).get('storage') != size
-            or claim['metadata'].get('annotations',{}).get('kustomize.toolkit.fluxcd.io/prune') != 'disabled'
-            or claim['metadata'].get('ownerReferences')):
-            sys.exit('An enrolled retained claim lacks its approved Bound, RWX, size or retention controls.')
-        pv=read('get','persistentvolume',claim['spec']['volumeName'],'-o','json')
-        if (pv['spec'].get('persistentVolumeReclaimPolicy') != 'Retain' or pv['spec'].get('storageClassName') != 'career-ops-retain'
-            or pv['spec'].get('claimRef',{}).get('uid') != claim['metadata']['uid'] or pv['spec'].get('csi',{}).get('driver') != 'driver.longhorn.io'):
-            sys.exit('An enrolled volume lacks its owned Longhorn Retain binding.')
-        print('Retained claim '+name+': '+claim['metadata']['uid'])
     def observe_smoke(name, account, container, message, source_owned=False):
         job=read('get','job',name,'-n','career-ops','-o','json')
         if source_owned and any(job['metadata'].get('labels',{}).get(k) != v for k,v in {
@@ -171,5 +149,5 @@ else:
         observe_smoke('application-json-smoke','career-ops-service','json-check','application-json-ok',source_owned=True)
     else:
         print('Second non-rendering workload is not selected by the current application inventory; acceptance pending.')
-    print('Application source revision '+revision+'; retained-volume observations passed. Runtime, credentials, signal correctness and recovery need separate acceptance.')
+    print('Application source revision '+revision+'; observations passed. Runtime, credentials, signal correctness and recovery need separate acceptance.')
 PY

@@ -6,22 +6,22 @@ metadata:
   namespace: career-ops
 spec:
   hard:
-    requests.cpu: '6'
-    limits.cpu: '16'
-    requests.memory: 12Gi
-    limits.memory: 24Gi
-    requests.ephemeral-storage: 16Gi
-    limits.ephemeral-storage: 32Gi
-    pods: '16'
-    count/jobs.batch: '64'
+    requests.cpu: 220m
+    limits.cpu: '6'
+    requests.memory: 1088Mi
+    limits.memory: 8Gi
+    requests.ephemeral-storage: 384Mi
+    limits.ephemeral-storage: 12Gi
+    pods: '6'
+    count/jobs.batch: '2'
     count/deployments.apps: '4'
-    services: '8'
-    count/httproutes.gateway.networking.k8s.io: '4'
-    configmaps: '64'
-    count/serviceaccounts: '16'
-    count/rolebindings.rbac.authorization.k8s.io: '16'
-    persistentvolumeclaims: '10'
-    requests.storage: 64Gi
+    services: '4'
+    count/httproutes.gateway.networking.k8s.io: '2'
+    configmaps: '32'
+    count/serviceaccounts: '10'
+    count/rolebindings.rbac.authorization.k8s.io: '4'
+    persistentvolumeclaims: '0'
+    requests.storage: '0'
 ---
 apiVersion: v1
 kind: LimitRange

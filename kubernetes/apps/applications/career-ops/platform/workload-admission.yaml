@@ -121,8 +121,8 @@ spec:
       == 0)
     message: Private image credentials require enrollment.
   - expression: request.operation == 'DELETE' || (!has(variables.pod.volumes) || variables.pod.volumes.all(v,
-      v.all(k, k in ['name','emptyDir','persistentVolumeClaim','secret','configMap']) && (has(v.emptyDir)
-      || has(v.persistentVolumeClaim) || (has(v.secret) && v.secret.secretName in variables.secrets
+      v.all(k, k in ['name','emptyDir','secret','configMap']) && (has(v.emptyDir)
+      || (has(v.secret) && v.secret.secretName in variables.secrets
       && (!has(v.secret.items) || v.secret.items.size() == 0)) || (has(v.configMap) && !v.configMap.name.startsWith('career-ops-')))))
     message: Volume drivers, token projections and Secrets are restricted.
   - expression: request.operation == 'DELETE' || (variables.item.kind != 'Job' || (variables.item.spec.backoffLimit
@@ -144,18 +144,10 @@ spec:
   - expression: request.operation == 'DELETE' || (variables.volumes.filter(v, has(v.emptyDir)).size()
       <= 1)
     message: Only one bounded temporary workspace is enrolled.
-  - expression: request.operation == 'DELETE' || variables.volumes.all(v, !has(v.persistentVolumeClaim) ||
-      (variables.coordinator && v.persistentVolumeClaim.claimName == 'cv-artifacts' && has(v.persistentVolumeClaim.readOnly)
-      && v.persistentVolumeClaim.readOnly))
-    message: Only the coordinator may mount a claim, and only the artifact claim read-only.
   - expression: request.operation == 'DELETE' || (variables.containers.all(c, !has(c.volumeDevices)) &&
       variables.mounts.all(m, !has(m.subPathExpr) && (!has(m.mountPropagation) || m.mountPropagation ==
       'None') && variables.volumes.exists(v, v.name == m.name)))
     message: Mounts must reference declared volumes without dynamic paths or propagation.
-  - expression: request.operation == 'DELETE' || variables.mounts.all(m, variables.volumes.all(v, v.name
-      != m.name || !has(v.persistentVolumeClaim) || (m.mountPath == '/artifacts' && has(m.readOnly) && m.readOnly
-      && !has(m.subPath))))
-    message: The artifact claim is a complete read-only mount at /artifacts.
   - expression: request.operation != 'UPDATE' || (has(variables.oldPod.serviceAccountName) && variables.account
       == variables.oldPod.serviceAccountName)
     message: Runtime identity changes require a separately admitted new workload.
