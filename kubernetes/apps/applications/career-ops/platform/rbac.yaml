@@ -50,19 +50,6 @@ rules:
   resources:
   - httproutes
   verbs: *id001
-- apiGroups:
-  - rbac.authorization.k8s.io
-  resources:
-  - rolebindings
-  verbs: *id001
-- apiGroups:
-  - rbac.authorization.k8s.io
-  resources:
-  - roles
-  resourceNames:
-  - cv-render-jobs
-  verbs:
-  - bind
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -77,31 +64,6 @@ subjects:
 - kind: ServiceAccount
   name: career-ops-reconciler
   namespace: career-ops
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: cv-render-jobs
-  namespace: career-ops
-rules:
-- apiGroups:
-  - batch
-  resources:
-  - jobs
-  verbs:
-  - create
-  - get
-  - list
-  - watch
-  - delete
-- apiGroups:
-  - ''
-  resources:
-  - pods
-  verbs:
-  - get
-  - list
-  - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

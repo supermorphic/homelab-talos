@@ -25,10 +25,8 @@ spec:
     expression: 'request.operation == ''DELETE'' ? dyn(oldObject) : dyn(object)'
   - name: application
     expression: request.userInfo.username == 'system:serviceaccount:career-ops:career-ops-reconciler'
-  - name: coordinator
-    expression: request.userInfo.username == 'system:serviceaccount:career-ops:cv-coordinator'
   validations:
-  - expression: '!variables.application || (variables.item.kind in [''Deployment'',''Job'',''Service'',''HTTPRoute'',''ConfigMap'',''PersistentVolumeClaim'',''ServiceAccount'',''RoleBinding''])'
+  - expression: '!variables.application || (variables.item.kind in [''Deployment'',''Job'',''Service'',''HTTPRoute'',''ConfigMap'',''PersistentVolumeClaim'',''ServiceAccount''])'
     message: Application Flux may manage only enrolled resource kinds.
   - expression: '!variables.application || ((!variables.item.metadata.name.startsWith(''career-ops-'')
       || (variables.item.kind == ''ServiceAccount'' && variables.item.metadata.name == ''career-ops-service''))
@@ -40,20 +38,13 @@ spec:
       && oldObject.metadata.name == ''career-ops-service'')) && oldObject.metadata.name != ''kube-root-ca.crt'')'
     message: Ownership transfer cannot bypass reserved names.
   - expression: '!variables.application || variables.item.kind != ''ServiceAccount'' || (variables.item.metadata.name
-      in [''cv-prepare'',''cv-coordinator'',''cv-renderer'',''career-ops-service''] && (request.operation
+      in [''cv-coordinator'',''cv-renderer'',''career-ops-service''] && (request.operation
       == ''DELETE'' || (has(variables.item.automountServiceAccountToken) && variables.item.automountServiceAccountToken
       == false && !has(variables.item.secrets))))'
     message: Runtime accounts are tokenless and explicitly enrolled.
-  - expression: '!variables.application || variables.item.kind != ''RoleBinding'' || (variables.item.metadata.name
-      == ''cv-coordinator-jobs'' && variables.item.roleRef == {''apiGroup'':''rbac.authorization.k8s.io'',''kind'':''Role'',''name'':''cv-render-jobs''}
-      && variables.item.subjects == [{''kind'':''ServiceAccount'',''name'':''cv-coordinator'',''namespace'':''career-ops''}])'
-    message: Only the fixed coordinator-to-Job RoleBinding is admitted.
   - expression: '!variables.application || variables.item.kind != ''PersistentVolumeClaim'' || request.operation
       != ''DELETE'''
     message: Retained claims cannot be deleted by application reconciliation.
-  - expression: '!variables.coordinator || (variables.item.kind == ''Job'' && variables.item.spec.template.spec.serviceAccountName
-      == ''cv-renderer'')'
-    message: Coordinator may mutate only offline-worker Jobs.
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

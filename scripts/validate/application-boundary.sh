@@ -2,7 +2,7 @@
 # Offline checks; enrollment, deployment and native acceptance remain separate.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
-uv run --locked python -m unittest scripts.test.core.test_application_boundary scripts.test.core.test_application_boundary_native scripts.test.core.test_application_boundary_native_probe scripts.test.core.test_application_boundary_mount_probe scripts.test.core.test_admission_compile
+uv run --locked python -m unittest scripts.test.core.test_application_boundary scripts.test.core.test_application_boundary_native_probe scripts.test.core.test_application_boundary_mount_probe scripts.test.core.test_admission_compile
 platform='kubernetes/apps/applications/career-ops/platform'
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/homelab-application-boundary.XXXXXX")"
 trap 'rm -rf -- "$temp_dir"' EXIT

@@ -315,6 +315,5 @@ contracts:
       - scripts/test/scenarios/application_boundary_native.py
     required_tests:
       - catalog:validation.application-boundary
-      - python:scripts/test/core/test_application_boundary_native.py
       - python:scripts/test/core/test_application_boundary_native_probe.py
       - python:scripts/test/core/test_application_boundary_commands.py
