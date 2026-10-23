@@ -17,7 +17,6 @@ rules:
   resources:
   - services
   - configmaps
-  - persistentvolumeclaims
   - serviceaccounts
   verbs: &id001
   - get

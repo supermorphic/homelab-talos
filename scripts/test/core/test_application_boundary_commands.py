@@ -23,7 +23,6 @@ class ApplicationCommandTests(unittest.TestCase):
         self.objects = {}
         for doc in (
             render(PLATFORM)
-            + render(PLATFORM.parent / "fixture-storage")
             + render(ROOT / "kubernetes/apps/applications")
             + render(PLATFORM.parent / "connection")
         ):
@@ -37,27 +36,6 @@ class ApplicationCommandTests(unittest.TestCase):
             if obj["kind"] == "CiliumNetworkPolicy":
                 obj["status"]["conditions"] = [{"type": "Valid", "status": "True"}]
             self.objects[obj["kind"].lower() + "/" + obj["metadata"]["name"]] = obj
-        for obj in self.objects.values():
-            if obj["kind"] != "PersistentVolumeClaim":
-                continue
-            name = obj["metadata"]["name"]
-            obj["metadata"]["uid"] = "synthetic-" + name
-            obj["spec"]["volumeName"] = "synthetic-volume-" + name
-            obj["status"]["phase"] = "Bound"
-        for claim in list(self.objects.values()):
-            if claim["kind"] == "PersistentVolumeClaim":
-                name = claim["spec"]["volumeName"]
-                self.objects["persistentvolume/" + name] = {
-                    "apiVersion": "v1",
-                    "kind": "PersistentVolume",
-                    "metadata": {"name": name},
-                    "spec": {
-                        "persistentVolumeReclaimPolicy": "Retain",
-                        "storageClassName": "career-ops-retain",
-                        "claimRef": {"uid": claim["metadata"]["uid"]},
-                        "csi": {"driver": "driver.longhorn.io"},
-                    },
-                }
         self.objects["deployment/kustomize-controller"] = {
             "apiVersion": "apps/v1",
             "kind": "Deployment",
@@ -73,36 +51,6 @@ class ApplicationCommandTests(unittest.TestCase):
         revision = "main@sha1:" + "a" * 40
         self.objects["gitrepository/career-ops"]["status"]["artifact"] = {"revision": revision}
         self.objects["kustomization/career-ops-apps"]["status"]["lastAppliedRevision"] = revision
-        for name, size in [
-            ("cv-releases", "8Gi"),
-            ("cv-requests", "16Gi"),
-            ("cv-artifacts", "32Gi"),
-        ]:
-            self.objects["persistentvolumeclaim/" + name] = {
-                "kind": "PersistentVolumeClaim",
-                "metadata": {
-                    "name": name,
-                    "namespace": "career-ops",
-                    "uid": "synthetic-" + name,
-                    "annotations": {"kustomize.toolkit.fluxcd.io/prune": "disabled"},
-                },
-                "spec": {
-                    "storageClassName": "career-ops-retain",
-                    "accessModes": ["ReadWriteMany"],
-                    "volumeMode": "Filesystem",
-                    "resources": {"requests": {"storage": size}},
-                    "volumeName": "synthetic-volume-" + name,
-                },
-                "status": {"phase": "Bound"},
-            }
-            self.objects["persistentvolume/synthetic-volume-" + name] = {
-                "spec": {
-                    "persistentVolumeReclaimPolicy": "Retain",
-                    "storageClassName": "career-ops-retain",
-                    "claimRef": {"uid": "synthetic-" + name},
-                    "csi": {"driver": "driver.longhorn.io"},
-                },
-            }
         self.objects["pods"] = {"items": []}
         self.environment = {
             **os.environ,
@@ -250,25 +198,6 @@ class ApplicationCommandTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("revision", result.stderr)
 
-    def test_application_claims_require_retention_and_owned_volume_binding(self):
-        claim = self.objects["persistentvolumeclaim/cv-releases"]
-        for field, value in [
-            ("ownerReferences", [{"kind": "Job", "uid": "synthetic-bootstrap"}]),
-            ("annotations", {}),
-        ]:
-            claim["metadata"][field] = value
-            result = self.run_command()
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("retained claim", result.stderr)
-            claim["metadata"].pop(field)
-            claim["metadata"]["annotations"] = {"kustomize.toolkit.fluxcd.io/prune": "disabled"}
-        self.objects["persistentvolume/synthetic-volume-cv-releases"]["spec"]["claimRef"][
-            "uid"
-        ] = "other"
-        result = self.run_command()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("volume", result.stderr)
-
     def test_observer_accepts_api_defaulted_limit_range_but_rejects_changed_defaults(self):
         limit = self.objects["limitrange/career-ops-container-bounds"]["spec"]["limits"][0]
         limit["default"] = copy.deepcopy(limit["max"])
@@ -288,16 +217,13 @@ class ApplicationCommandTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("remote bases", result.stderr)
 
-    def test_observer_checks_bound_fixture_volume_identity_and_retention(self):
+    def test_observer_requires_no_claim_or_volume(self):
+        self.assertFalse(any(k.startswith("persistentvolume") for k in self.objects))
         result = self.run_command()
         self.assertEqual(result.returncode, 0, result.stderr)
-        volume = next(obj for obj in self.objects.values() if obj["kind"] == "PersistentVolume")
-        volume["spec"]["persistentVolumeReclaimPolicy"] = "Delete"
-        result = self.run_command()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("fixture volume", result.stderr)
+        self.assertFalse(any("persistentvolume" in c[1].lower() for c in self.calls() if c[0] == "get"))
 
-    def test_observer_preserves_monitor_check_when_storage_is_a_separate_root(self):
+    def test_observer_preserves_monitor_check_when_platform_is_the_only_root(self):
         monitor = self.objects["servicemonitor/career-ops-coordinator"]
         monitor["spec"]["endpoints"][0]["path"] = "/wrong-metrics"
         result = self.run_command()

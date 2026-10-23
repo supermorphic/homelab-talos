@@ -11,7 +11,6 @@ spec:
   - name: cilium
   - name: internal-gateway
   - name: automation-data-postgresql
-  - name: longhorn-config
   - name: kube-prometheus-stack
   interval: 1h
   path: ./kubernetes/apps/applications/career-ops/platform
@@ -42,29 +41,6 @@ spec:
       name: sops-age
   interval: 1h
   path: ./kubernetes/apps/applications/career-ops/connection
-  prune: false
-  deletionPolicy: Orphan
-  retryInterval: 1m
-  sourceRef:
-    kind: GitRepository
-    name: flux-system
-    namespace: flux-system
-  suspend: false
-  timeout: 5m
-  wait: true
----
-apiVersion: kustomize.toolkit.fluxcd.io/v1
-kind: Kustomization
-metadata:
-  name: career-ops-fixture-storage
-  namespace: flux-system
-  annotations:
-    kustomize.toolkit.fluxcd.io/prune: disabled
-spec:
-  dependsOn:
-  - name: career-ops-platform
-  interval: 1h
-  path: ./kubernetes/apps/applications/career-ops/fixture-storage
   prune: false
   deletionPolicy: Orphan
   retryInterval: 1m

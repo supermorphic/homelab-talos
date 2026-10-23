@@ -7,6 +7,5 @@ resources:
 - ./workload-admission.yaml
 - ./resource-admission.yaml
 - ./network-policy.yaml
-- ./storageclass.yaml
 - ./quota.yaml
 - ./monitoring.yaml

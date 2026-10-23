@@ -22,22 +22,15 @@ def render(path):
 
 
 class ApplicationScaffoldTests(unittest.TestCase):
-    def test_fixture_storage_waits_for_its_admission_policy(self):
+    def test_fixture_storage_unit_is_retired(self):
         units = {d["metadata"]["name"]: d for d in render(ROOT / "kubernetes/apps/applications")}
-        platform = units["career-ops-platform"]
-        # Flux dry-runs a whole unit before applying any of its policy updates.
+        self.assertNotIn("career-ops-fixture-storage", units)
+        self.assertFalse((PLATFORM.parent / "fixture-storage").exists())
         self.assertFalse(any(d["kind"] == "PersistentVolumeClaim" for d in render(PLATFORM)))
-        fixture = units["career-ops-fixture-storage"]
-        self.assertIn({"name": platform["metadata"]["name"]}, fixture["spec"]["dependsOn"])
-        self.assertTrue(platform["spec"]["wait"])
-        self.assertFalse(fixture["spec"]["prune"])
-        self.assertEqual(fixture["spec"]["deletionPolicy"], "Orphan")
-        claims = render(ROOT / fixture["spec"]["path"])
-        self.assertEqual(len(claims), 3)
-        self.assertTrue(all(d["kind"] == "PersistentVolumeClaim" for d in claims))
+        self.assertTrue(units["career-ops-platform"]["spec"]["wait"])
         self.assertEqual(
-            {d["metadata"]["name"] for d in claims},
-            {"career-ops-boundary-" + name for name in ["releases", "requests", "artifacts"]},
+            {d["metadata"]["name"] for d in units.values()},
+            {"career-ops-platform", "career-ops-connection"},
         )
 
     def test_platform_precedes_connection(self):
@@ -51,10 +44,14 @@ class ApplicationScaffoldTests(unittest.TestCase):
                 "cilium",
                 "internal-gateway",
                 "automation-data-postgresql",
-                "longhorn-config",
                 "kube-prometheus-stack",
             }
             <= {d["name"] for d in units["career-ops-platform"]["spec"]["dependsOn"]}
+        )
+        # Career Ops holds no claims, so its platform must not wait on Longhorn.
+        self.assertNotIn(
+            "longhorn-config",
+            {d["name"] for d in units["career-ops-platform"]["spec"]["dependsOn"]},
         )
 
     def test_reviewed_bootstrap_connection_is_enabled(self):
@@ -756,171 +753,180 @@ class ApplicationNetworkTests(ApplicationFixture, unittest.TestCase):
         self.assertFalse(self.admission(endpoints, policy="career-ops-resources"))
 
 
-class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
-    def test_retention_storage_and_capacity(self):
-        storage = next((d for d in self.documents if d["kind"] == "StorageClass"), None)
-        self.assertIsNotNone(storage, "retaining storage class is missing")
-        self.assertEqual(storage["metadata"]["name"], "career-ops-retain")
-        self.assertEqual(storage["reclaimPolicy"], "Retain")
-        self.assertEqual(storage["provisioner"], "driver.longhorn.io")
-        self.assertEqual(storage["parameters"]["numberOfReplicas"], "2")
-        self.assertEqual(
-            json.loads(storage["parameters"]["recurringJobSelector"]),
-            [{"name": "default", "isGroup": True}],
-        )
-        self.assertIs(storage["allowVolumeExpansion"], True)
-        self.assertNotEqual(
-            storage["metadata"]
-            .get("annotations", {})
-            .get("storageclass.kubernetes.io/is-default-class"),
-            "true",
-        )
-        quota = next(d["spec"]["hard"] for d in self.documents if d["kind"] == "ResourceQuota")
-        self.assertEqual(
-            quota,
-            {
-                "requests.cpu": "6",
-                "limits.cpu": "16",
-                "requests.memory": "12Gi",
-                "limits.memory": "24Gi",
-                "requests.ephemeral-storage": "16Gi",
-                "limits.ephemeral-storage": "32Gi",
-                "pods": "16",
-                "count/jobs.batch": "64",
-                "count/deployments.apps": "4",
-                "services": "8",
-                "count/httproutes.gateway.networking.k8s.io": "4",
-                "configmaps": "64",
-                "count/serviceaccounts": "16",
-                "count/rolebindings.rbac.authorization.k8s.io": "16",
-                "persistentvolumeclaims": "10",
-                "requests.storage": "64Gi",
-            },
-        )
+def pvc(name="cv-releases", **spec):
+    """A claim of the shape the retired design enrolled, with overrides."""
+    return {
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+            "name": name,
+            "namespace": "career-ops",
+            "annotations": {"kustomize.toolkit.fluxcd.io/prune": "disabled"},
+            "finalizers": ["kubernetes.io/pvc-protection"],
+        },
+        "spec": {
+            "accessModes": ["ReadWriteMany"],
+            "storageClassName": "career-ops-retain",
+            "resources": {"requests": {"storage": "8Gi"}},
+            "volumeMode": "Filesystem",
+            **spec,
+        },
+    }
 
-    def test_enrolled_pvc_declarations_and_retention_denials(self):
-        for name, size in [
-            ("cv-releases", "8Gi"),
-            ("cv-requests", "16Gi"),
-            ("cv-artifacts", "32Gi"),
-        ]:
-            obj = {
-                "kind": "PersistentVolumeClaim",
-                "metadata": {
-                    "name": name,
-                    "namespace": "career-ops",
-                    "annotations": {"kustomize.toolkit.fluxcd.io/prune": "disabled"},
-                },
-                "spec": {
-                    "accessModes": ["ReadWriteMany"],
-                    "storageClassName": "career-ops-retain",
-                    "resources": {"requests": {"storage": size}},
-                    "volumeMode": "Filesystem",
-                },
+
+def deployment_shape(requests, limits, name="fixture"):
+    """A Deployment carrying only the container resources the quota must cover."""
+    return {
+        "kind": "Deployment",
+        "metadata": {"name": name},
+        "spec": {
+            "template": {
+                "spec": {"containers": [{"name": "main", "resources": {"requests": requests, "limits": limits}}]}
             }
-            self.assertTrue(self.admission(obj, policy="career-ops-storage"))
-            self.assertFalse(
-                self.admission(None, policy="career-ops-resources", operation="DELETE", old=obj)
-            )
-            cases = [
-                ("storageClassName", "longhorn"),
-                ("accessModes", ["ReadWriteOnce"]),
-                ("volumeName", "arbitrary-pv"),
-                ("dataSource", {"kind": "PersistentVolumeClaim", "name": "private"}),
-                ("resources", {"requests": {"storage": "64Gi"}}),
-                ("volumeMode", "Block"),
-                ("selector", {"matchLabels": {"private": "true"}}),
-            ]
-            for field, value in cases:
-                bad = copy.deepcopy(obj)
-                bad["spec"][field] = value
-                self.assertFalse(self.admission(bad, policy="career-ops-storage"))
-            bad = copy.deepcopy(obj)
-            bad["metadata"]["annotations"] = {}
-            self.assertFalse(
-                self.admission(bad, policy="career-ops-storage", operation="UPDATE", old=obj)
-            )
-            bad = copy.deepcopy(obj)
-            bad["metadata"]["ownerReferences"] = [
-                {"kind": "Job", "name": "fixture", "uid": "synthetic"}
-            ]
-            self.assertFalse(self.admission(bad, policy="career-ops-storage"))
+        },
+    }
 
-    def test_pvc_attribute_classes_and_protection_removal_are_denied(self):
-        obj = {
-            "kind": "PersistentVolumeClaim",
-            "metadata": {
-                "name": "cv-releases",
-                "namespace": "career-ops",
-                "annotations": {"kustomize.toolkit.fluxcd.io/prune": "disabled"},
-                "finalizers": ["kubernetes.io/pvc-protection"],
-            },
-            "spec": {
-                "storageClassName": "career-ops-retain",
-                "accessModes": ["ReadWriteMany"],
-                "resources": {"requests": {"storage": "8Gi"}},
-            },
-        }
-        bad = copy.deepcopy(obj)
-        bad["spec"]["volumeAttributesClassName"] = "alternate-driver-options"
-        self.assertFalse(self.admission(bad, policy="career-ops-storage"))
-        bad = copy.deepcopy(obj)
-        bad["metadata"]["finalizers"] = []
-        self.assertFalse(
-            self.admission(bad, policy="career-ops-storage", operation="UPDATE", old=obj)
-        )
+
+# The Career Ops C2 shapes: configured requests and limits per container.
+C2_COORDINATOR = deployment_shape(
+    {"cpu": "50m", "memory": "256Mi", "ephemeral-storage": "64Mi"},
+    {"cpu": "1", "memory": "2Gi", "ephemeral-storage": "2Gi"},
+    "cv-coordinator",
+)
+C2_RENDERER = deployment_shape(
+    {"cpu": "50m", "memory": "256Mi", "ephemeral-storage": "64Mi"},
+    {"cpu": "1", "memory": "1Gi", "ephemeral-storage": "2Gi"},
+    "cv-renderer",
+)
+# The one-shot smoke Job as Career Ops deploys it (deploy/acceptance-json/smoke.yaml).
+C2_SMOKE = deployment_shape(
+    {"cpu": "25m", "memory": "32Mi", "ephemeral-storage": "64Mi"},
+    {"cpu": "100m", "memory": "64Mi", "ephemeral-storage": "128Mi"},
+    "application-json-smoke",
+)
+
+
+def parse_quantity(text):
+    suffixes = {"Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "m": 1 / 1000, "": 1}
+    match = re.fullmatch(r"(\d+)(Ki|Mi|Gi|m|)", text)
+    return int(match.group(1)) * suffixes[match.group(2)]
+
+
+class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
+    def test_no_storage_class_remains(self):
+        self.assertEqual([d for d in self.documents if d["kind"] == "StorageClass"], [])
+        self.assertNotIn("career-ops-retain", json.dumps(self.documents))
+
+    def quota(self):
+        return next(d["spec"]["hard"] for d in self.documents if d["kind"] == "ResourceQuota")
+
+    def test_quota_holds_no_storage_and_covers_twice_the_workloads(self):
+        quota = self.quota()
+        self.assertEqual(quota["persistentvolumeclaims"], "0")
+        self.assertEqual(quota["requests.storage"], "0")
+        containers = [
+            container
+            for shape in (C2_COORDINATOR, C2_RENDERER, C2_SMOKE)
+            for container in shape["spec"]["template"]["spec"]["containers"]
+        ]
+        for kind, resource in [
+            ("requests", "cpu"),
+            ("requests", "memory"),
+            ("requests", "ephemeral-storage"),
+            ("limits", "cpu"),
+            ("limits", "memory"),
+            ("limits", "ephemeral-storage"),
+        ]:
+            floor = 2 * sum(parse_quantity(c["resources"][kind][resource]) for c in containers)
+            with self.subTest(kind=kind, resource=resource):
+                self.assertGreaterEqual(parse_quantity(quota[f"{kind}.{resource}"]), floor)
+                # Headroom is bounded: not more than ten times the floor.
+                self.assertLessEqual(parse_quantity(quota[f"{kind}.{resource}"]), 10 * floor)
+        # Two Deployments, one smoke Job and their Services, route and accounts.
+        for key, used in [
+            ("pods", 3),
+            ("count/jobs.batch", 1),
+            ("count/deployments.apps", 2),
+            ("services", 2),
+            ("count/httproutes.gateway.networking.k8s.io", 1),
+            ("count/serviceaccounts", 3),
+        ]:
+            with self.subTest(key=key):
+                self.assertGreaterEqual(int(quota[key]), 2 * used)
+                self.assertLessEqual(int(quota[key]), 10 * used)
+
+    def test_reconciler_has_no_claim_permission(self):
+        for role in (d for d in self.documents if d["kind"] == "Role"):
+            for rule in role["rules"]:
+                self.assertNotIn("persistentvolumeclaims", rule["resources"], role["metadata"]["name"])
+
+    def test_application_can_no_longer_manage_claims(self):
+        for operation in ["CREATE", "UPDATE", "DELETE"]:
+            with self.subTest(operation=operation):
+                self.assertFalse(
+                    self.admission(
+                        pvc() if operation != "DELETE" else None,
+                        policy="career-ops-resources",
+                        operation=operation,
+                        old=pvc() if operation != "CREATE" else None,
+                    )
+                )
+        names = self.policy("career-ops-resources")["validations"][0]["expression"]
+        self.assertNotIn("PersistentVolumeClaim", names)
+
+    def test_every_claim_creation_and_update_is_denied(self):
+        shapes = [
+            pvc(),
+            pvc("cv-requests", resources={"requests": {"storage": "16Gi"}}),
+            pvc("cv-artifacts", resources={"requests": {"storage": "32Gi"}}),
+            pvc("anything", storageClassName="longhorn", accessModes=["ReadWriteOnce"]),
+        ]
+        for obj in shapes:
+            with self.subTest(name=obj["metadata"]["name"]):
+                self.assertFalse(self.admission(obj, policy="career-ops-storage"))
+                self.assertFalse(
+                    self.admission(obj, policy="career-ops-storage", operation="UPDATE", old=obj)
+                )
+                for user in ["system:admin", "system:serviceaccount:kube-system:homelab-observer"]:
+                    self.assertFalse(self.admission(obj, policy="career-ops-storage", username=user))
 
     def test_protection_controller_releases_a_deleted_claim(self):
-        deleting = {
-            "kind": "PersistentVolumeClaim",
-            "metadata": {
-                "name": "cv-releases",
-                "namespace": "career-ops",
-                "annotations": {"kustomize.toolkit.fluxcd.io/prune": "disabled"},
-                "finalizers": ["kubernetes.io/pvc-protection"],
-                "deletionTimestamp": "2026-01-01T00:00:00Z",
-            },
-            "spec": {
-                "storageClassName": "career-ops-retain",
-                "accessModes": ["ReadWriteMany"],
-                "resources": {"requests": {"storage": "8Gi"}},
-            },
-        }
+        deleting = pvc()
+        deleting["metadata"]["deletionTimestamp"] = "2026-01-01T00:00:00Z"
         released = copy.deepcopy(deleting)
         released["metadata"]["finalizers"] = []
+        user = "system:serviceaccount:kube-system:pvc-protection-controller"
         self.assertTrue(
             self.admission(
-                released,
-                policy="career-ops-storage",
-                username="system:serviceaccount:kube-system:pvc-protection-controller",
-                operation="UPDATE",
-                old=deleting,
+                released, policy="career-ops-storage", operation="UPDATE", old=deleting, username=user
+            )
+        )
+        # A claim that is not being deleted stays immutable.
+        live = pvc()
+        gone = copy.deepcopy(live)
+        gone["metadata"]["finalizers"] = []
+        self.assertFalse(
+            self.admission(
+                gone, policy="career-ops-storage", operation="UPDATE", old=live, username=user
             )
         )
 
-    def test_bound_pvc_updates_and_pod_resize_are_guarded(self):
-        obj = {
-            "kind": "PersistentVolumeClaim",
-            "metadata": {
-                "name": "cv-releases",
-                "namespace": "career-ops",
-                "annotations": {"kustomize.toolkit.fluxcd.io/prune": "disabled"},
-            },
-            "spec": {
-                "accessModes": ["ReadWriteMany"],
-                "storageClassName": "career-ops-retain",
-                "resources": {"requests": {"storage": "8Gi"}},
-                "volumeName": "fixture-bound-pv",
-            },
-        }
+    def test_claim_deletion_and_volume_binding_remain_possible(self):
+        obj = pvc(volumeName="fixture-bound-pv")
         self.assertTrue(
-            self.admission(obj, policy="career-ops-storage", operation="UPDATE", old=obj)
+            self.admission(None, policy="career-ops-storage", operation="DELETE", old=obj)
         )
-        bad = copy.deepcopy(obj)
-        bad["spec"]["volumeName"] = "another-pv"
-        self.assertFalse(
-            self.admission(bad, policy="career-ops-storage", operation="UPDATE", old=obj)
-        )
+        for user in [
+            "system:kube-controller-manager",
+            "system:serviceaccount:kube-system:persistent-volume-binder",
+        ]:
+            with self.subTest(user=user):
+                self.assertTrue(
+                    self.admission(
+                        obj, policy="career-ops-storage", operation="UPDATE", old=obj, username=user
+                    )
+                )
+
+    def test_pod_resize_is_guarded(self):
         rules = self.policy("career-ops-workloads")["matchConstraints"]["resourceRules"]
         self.assertIn("pods/resize", [r for rule in rules for r in rule["resources"]])
         obj = workload(kind="Pod")
@@ -929,39 +935,35 @@ class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
             self.admission(obj, operation="UPDATE", old=workload(kind="Pod"), sub="resize")
         )
 
-    def test_coordinator_mounts_only_the_read_only_artifact_claim(self):
-        for kind in ["Deployment", "ReplicaSet", "Pod"]:
-            with self.subTest(kind=kind):
-                self.assertTrue(self.admission(with_artifacts(workload("cv-coordinator", kind))))
-        cases = {
-            "writable claim": {"claim_read_only": False},
-            "claim access unset": {"claim_read_only": None},
-            "writable mount": {"mount_read_only": False},
-            "mount access unset": {"mount_read_only": None},
-            "subPath": {"subPath": "private"},
-            "dynamic subPath": {"subPathExpr": "$(PRIVATE_PATH)"},
-            "other path": {"mountPath": "/releases"},
-        }
-        for name, change in cases.items():
-            with self.subTest(name):
-                self.assertFalse(
-                    self.admission(with_artifacts(workload("cv-coordinator", "Deployment"), **change))
-                )
-        for claim in ["cv-releases", "cv-requests", "career-ops-boundary-artifacts"]:
+    def test_no_workload_may_declare_a_claim_volume(self):
+        for account in SERVICE_ACCOUNTS:
+            for kind in ["Job", "Deployment", "ReplicaSet", "Pod"]:
+                if account != "career-ops-service" and kind == "Job":
+                    continue
+                with self.subTest(account=account, kind=kind):
+                    self.assertTrue(self.admission(workload(account, kind)))
+                    for change in [
+                        {},
+                        {"claim_read_only": False},
+                        {"claim_read_only": None},
+                        {"mount_read_only": False},
+                        {"subPath": "private"},
+                        {"mountPath": "/releases"},
+                    ]:
+                        self.assertFalse(
+                            self.admission(with_artifacts(workload(account, kind), **change)),
+                            change,
+                        )
+        for claim in ["cv-releases", "cv-requests", "cv-artifacts", "anything"]:
             with self.subTest(claim=claim):
                 obj = with_artifacts(workload("cv-coordinator", "Deployment"))
                 pod_spec(obj)["volumes"][0]["persistentVolumeClaim"]["claimName"] = claim
                 self.assertFalse(self.admission(obj))
-
-    def test_only_the_coordinator_may_mount_a_claim(self):
-        for account in ["cv-renderer", "career-ops-service"]:
-            for kind in ["Job", "Deployment", "ReplicaSet", "Pod"]:
-                if account == "cv-renderer" and kind == "Job":
-                    continue
-                with self.subTest(account=account, kind=kind):
-                    self.assertTrue(self.admission(workload(account, kind)))
-                    self.assertFalse(self.admission(with_artifacts(workload(account, kind))))
         self.assertFalse(self.admission(with_artifacts(job_pod("cv-renderer"))))
+        # A claim volume without a mount is equally denied.
+        obj = workload("cv-coordinator", "Deployment")
+        pod_spec(obj)["volumes"] = [{"name": "x", "persistentVolumeClaim": {"claimName": "cv-artifacts"}}]
+        self.assertFalse(self.admission(obj))
 
     def test_secret_files_are_read_only_at_the_enrolled_path(self):
         for secret in ["application-packages-database", "cv-api-auth"]:
