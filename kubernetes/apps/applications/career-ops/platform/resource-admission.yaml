@@ -190,7 +190,8 @@ spec:
     message: Only enrolled RWX claims with prune protection and no clone/restore/prebinding are admitted.
   - expression: request.operation == 'DELETE' || !has(variables.item.spec.volumeAttributesClassName)
     message: Unenrolled volume attribute classes are forbidden.
-  - expression: request.operation != 'UPDATE' || !has(oldObject.metadata.finalizers) || !('kubernetes.io/pvc-protection'
+  # Once a claim is being deleted, the protection controller must be able to release it.
+  - expression: request.operation != 'UPDATE' || has(oldObject.metadata.deletionTimestamp) || !has(oldObject.metadata.finalizers) || !('kubernetes.io/pvc-protection'
       in oldObject.metadata.finalizers) || (has(variables.item.metadata.finalizers) && 'kubernetes.io/pvc-protection'
       in variables.item.metadata.finalizers)
     message: Existing claim protection must be preserved.
