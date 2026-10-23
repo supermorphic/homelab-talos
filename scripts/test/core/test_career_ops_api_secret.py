@@ -137,6 +137,9 @@ class PackageEnrollmentTest(ApiSecretFixture):
         operators = self.root / "operator"
         operators.mkdir(mode=0o700)
         self.operator = operators / "token"
+        composers = self.root / "composer"
+        composers.mkdir(mode=0o700)
+        self.composer = composers / "token"
         self.calls.clear()
 
     def replace(self, **kwargs):
@@ -145,14 +148,20 @@ class PackageEnrollmentTest(ApiSecretFixture):
             self.token,
             kwargs.pop("confirmation", api.REPLACE_CONFIRMATION),
             operator_token_file=kwargs.pop("operator_token_file", self.operator),
+            composer_token_file=kwargs.pop("composer_token_file", self.composer),
             replace_sha256=kwargs.pop("replace_sha256", self.reviewed),
             runner=kwargs.pop("runner", self.encrypt),
         )
 
-    def test_operator_principal_renders_and_qualification_bearer_is_kept(self):
+    def test_composer_principal_only_renders_and_registers_and_bearers_are_kept(self):
+        self.operator.write_text("o" * 43 + "\n")
+        self.operator.chmod(0o600)
         receipt = self.replace()
         operator = self.operator.read_text().strip()
-        self.assertEqual(self.operator.stat().st_mode & 0o777, 0o600)
+        composer = self.composer.read_text().strip()
+        self.assertEqual(operator, "o" * 43)
+        self.assertEqual(self.composer.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn(composer, (self.qualification.decode().strip(), operator))
         self.assertEqual(self.token.read_bytes(), self.qualification)
         principals = json.loads(self.calls[0]["stringData"]["principals.json"])
         self.assertEqual(
@@ -170,12 +179,18 @@ class PackageEnrollmentTest(ApiSecretFixture):
                         "tokenSha256": [hashlib.sha256(operator.encode()).hexdigest()],
                         "capabilities": ["packages:read", "packages:write", "render"],
                     },
+                    {
+                        "principalId": "career-ops-composer",
+                        "tokenSha256": [hashlib.sha256(composer.encode()).hexdigest()],
+                        "capabilities": ["render", "packages:register"],
+                    },
                 ],
             },
         )
         self.assertEqual(receipt["replaced_ciphertext_sha256"], self.reviewed)
-        self.assertNotIn(operator, json.dumps(receipt))
-        self.assertNotIn(operator, (self.root / api.TARGET).read_text())
+        for token in (operator, composer):
+            self.assertNotIn(token, json.dumps(receipt))
+            self.assertNotIn(token, (self.root / api.TARGET).read_text())
 
     def test_unreviewed_or_incomplete_replacement_preserves_ciphertext_and_tokens(self):
         original = (self.root / api.TARGET).read_bytes()
@@ -186,11 +201,15 @@ class PackageEnrollmentTest(ApiSecretFixture):
             {"replace_sha256": "not-a-digest"},
             {"operator_token_file": None},
             {"operator_token_file": self.token},
+            {"composer_token_file": None},
+            {"composer_token_file": self.token},
+            {"composer_token_file": self.operator},
         ):
             with self.subTest(case=case), self.assertRaises(api.EnrollmentError):
                 self.replace(**case)
             self.assertEqual((self.root / api.TARGET).read_bytes(), original)
         self.assertFalse(self.operator.exists())
+        self.assertFalse(self.composer.exists())
         self.assertEqual(self.calls, [])
 
     def test_replacement_never_mints_a_qualification_bearer(self):
