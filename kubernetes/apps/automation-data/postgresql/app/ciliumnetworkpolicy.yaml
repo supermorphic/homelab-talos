@@ -24,9 +24,6 @@ spec:
     - matchLabels:
         k8s:io.kubernetes.pod.namespace: career-ops
         k8s:io.cilium.k8s.policy.serviceaccount: cv-coordinator
-    - matchLabels:
-        k8s:io.kubernetes.pod.namespace: career-ops
-        k8s:io.cilium.k8s.policy.serviceaccount: career-ops-boundary-coordinator
     toPorts:
     - ports:
       - port: '5432'

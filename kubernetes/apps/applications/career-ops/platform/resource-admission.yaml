@@ -233,11 +233,9 @@ spec:
   - name: test-runner
     expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
   validations:
-  - expression: "request.namespace == 'career-ops' && ((request.operation == 'CREATE' && has(request.dryRun)
-      && request.dryRun && object.metadata.name == 'career-ops-boundary-admission') ||
-      (request.operation in ['CREATE','DELETE'] && (request.operation == 'DELETE' ? oldObject : object).metadata.name
-      in ['career-ops-boundary-seed','career-ops-boundary-write','career-ops-boundary-read','career-ops-boundary-cleanup','career-ops-boundary-network-write-api','career-ops-boundary-network-write-database','career-ops-boundary-network-write-dns-tcp','career-ops-boundary-network-write-dns-udp','career-ops-boundary-network-read-api','career-ops-boundary-network-read-database','career-ops-boundary-network-read-dns-tcp','career-ops-boundary-network-read-dns-udp']))"
-    message: Application boundary tests may submit the fixed dry-run Job or owned native fixture Jobs.
+  - expression: request.namespace == 'career-ops' && request.operation == 'CREATE' && has(request.dryRun)
+      && request.dryRun && object.metadata.name == 'career-ops-boundary-admission'
+    message: Application boundary tests may submit only the fixed server-side dry-run Job.
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

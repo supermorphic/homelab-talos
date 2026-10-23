@@ -73,7 +73,6 @@ CI_HARNESS_GROUPS = (
 STANDALONE_SUITES = {
     # Infrequent application onboarding; does not certify native storage/network recovery.
     "test.application-boundary-admission",
-    "test.application-boundary-storage-network",
     # Real credential lifetime proof is infrequent acceptance, not a periodic suite.
     "test.credential-issuer.cilium",
     "test.credential-issuer.openbao-ha",

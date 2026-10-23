@@ -906,13 +906,13 @@ class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
             with self.subTest(kind=kind):
                 self.assertTrue(self.admission(with_artifacts(workload("cv-coordinator", kind))))
         cases = {
-            "writable claim": dict(claim_read_only=False),
-            "claim access unset": dict(claim_read_only=None),
-            "writable mount": dict(mount_read_only=False),
-            "mount access unset": dict(mount_read_only=None),
-            "subPath": dict(subPath="private"),
-            "dynamic subPath": dict(subPathExpr="$(PRIVATE_PATH)"),
-            "other path": dict(mountPath="/releases"),
+            "writable claim": {"claim_read_only": False},
+            "claim access unset": {"claim_read_only": None},
+            "writable mount": {"mount_read_only": False},
+            "mount access unset": {"mount_read_only": None},
+            "subPath": {"subPath": "private"},
+            "dynamic subPath": {"subPathExpr": "$(PRIVATE_PATH)"},
+            "other path": {"mountPath": "/releases"},
         }
         for name, change in cases.items():
             with self.subTest(name):
@@ -1059,6 +1059,14 @@ class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
             self.assertTrue(self.admission(obj), kind)
 
 
+TEST_RUNNER = "system:serviceaccount:kube-system:homelab-test-runner"
+
+
+def admission_job():
+    """The live admission suite's positive control."""
+    return yaml.safe_load((ROOT / "tests/fixtures/application-boundary/job.yaml").read_text())
+
+
 class ApplicationAssuranceTests(ApplicationFixture, unittest.TestCase):
     def test_test_runner_can_only_submit_fixed_server_dry_runs(self):
         policies = render(ROOT / "kubernetes/apps/kube-system/agent-access/app")
@@ -1080,28 +1088,7 @@ class ApplicationAssuranceTests(ApplicationFixture, unittest.TestCase):
         self.assertEqual(len(roles), 1)
         self.assertEqual(
             roles[0]["rules"],
-            [
-                {"apiGroups": ["batch"], "resources": ["jobs"], "verbs": ["create"]},
-                {
-                    "apiGroups": ["batch"],
-                    "resources": ["jobs"],
-                    "resourceNames": [
-                        "career-ops-boundary-" + phase
-                        for phase in [
-                            "seed",
-                            "write",
-                            "read",
-                            "cleanup",
-                            *[
-                                "network-" + stage + "-" + target
-                                for stage in ["write", "read"]
-                                for target in ["api", "database", "dns-tcp", "dns-udp"]
-                            ],
-                        ]
-                    ],
-                    "verbs": ["get", "delete"],
-                },
-            ],
+            [{"apiGroups": ["batch"], "resources": ["jobs"], "verbs": ["create"]}],
         )
         readers = [
             d
@@ -1120,16 +1107,15 @@ class ApplicationAssuranceTests(ApplicationFixture, unittest.TestCase):
                 "career-ops-routes",
                 "career-ops-storage",
                 "career-ops-boundary-test",
-                "career-ops-boundary-fixtures",
             },
         )
-        obj = workload()
-        obj["metadata"]["name"] = "career-ops-boundary-admission"
+        obj = admission_job()
+        self.assertEqual(obj["metadata"]["name"], "career-ops-boundary-admission")
         req = {
             "namespace": "career-ops",
             "operation": "CREATE",
             "dryRun": True,
-            "userInfo": {"username": "system:serviceaccount:kube-system:homelab-test-runner"},
+            "userInfo": {"username": TEST_RUNNER},
         }
         self.assertTrue(self.admits("career-ops-boundary-test", req, obj))
         for field, value in [("dryRun", False), ("operation", "UPDATE"), ("operation", "DELETE")]:
@@ -1139,6 +1125,65 @@ class ApplicationAssuranceTests(ApplicationFixture, unittest.TestCase):
         bad = copy.deepcopy(obj)
         bad["metadata"]["name"] = "another-job"
         self.assertFalse(self.admits("career-ops-boundary-test", req, bad))
+        # Retired native fixture Jobs are no longer created or deleted by the runner.
+        for name in ["career-ops-boundary-seed", "career-ops-boundary-network-read-api"]:
+            bad = copy.deepcopy(obj)
+            bad["metadata"]["name"] = name
+            with self.subTest(name=name, operation="CREATE"):
+                self.assertFalse(
+                    self.admits("career-ops-boundary-test", {**req, "dryRun": False}, bad)
+                )
+            with self.subTest(name=name, operation="DELETE"):
+                self.assertFalse(
+                    self.admits(
+                        "career-ops-boundary-test",
+                        {**req, "operation": "DELETE", "dryRun": False},
+                        None,
+                        old=bad,
+                    )
+                )
+
+    def test_admission_suite_cases_agree_with_the_workload_policy(self):
+        """Mirror of scripts/test/scenarios/application-boundary.sh server-side cases."""
+        fixture = admission_job()
+        self.assertEqual(
+            fixture["spec"]["template"]["spec"]["serviceAccountName"], "career-ops-service"
+        )
+        self.assertTrue(self.admission(fixture, username=TEST_RUNNER))
+
+        def mutate(field, value):
+            bad = copy.deepcopy(fixture)
+            bad["spec"]["template"]["spec"][field] = value
+            return bad
+
+        def identity(account):
+            bad = copy.deepcopy(fixture)
+            bad["metadata"]["labels"]["app.kubernetes.io/name"] = account
+            bad["spec"]["template"]["metadata"]["labels"]["app.kubernetes.io/name"] = account
+            bad["spec"]["template"]["spec"]["serviceAccountName"] = account
+            return bad
+
+        ceiling = copy.deepcopy(fixture)
+        ceiling["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"]["cpu"] = "2"
+        denied = {
+            "renderer Job": identity("cv-renderer"),
+            "coordinator Job": identity("cv-coordinator"),
+            "preparation Job": identity("cv-prepare"),
+            "host networking": mutate("hostNetwork", True),
+            "reconciliation identity": mutate("serviceAccountName", "career-ops-reconciler"),
+            "token mounting": mutate("automountServiceAccountToken", True),
+            "source credential": mutate(
+                "volumes", [{"name": "source", "secret": {"secretName": "career-ops-source"}}]
+            ),
+            "artifact claim": mutate(
+                "volumes",
+                [{"name": "artifacts", "persistentVolumeClaim": {"claimName": "cv-artifacts"}}],
+            ),
+            "resource ceiling": ceiling,
+        }
+        for name, obj in denied.items():
+            with self.subTest(name):
+                self.assertFalse(self.admission(obj, username=TEST_RUNNER))
 
 
 class ApplicationConnectionTests(unittest.TestCase):
@@ -1303,7 +1348,7 @@ class RendererServiceTests(ApplicationFixture, unittest.TestCase):
             "large workspace": lambda o: pod(o)["volumes"][2]["emptyDir"].update(sizeLimit="2Gi"),
             "cpu limit": lambda o: pod(o)["containers"][0]["resources"]["limits"].update(cpu="2"),
             "platform configmap": lambda o: pod(o)["volumes"][0]["configMap"].update(
-                name="career-ops-boundary-program"
+                name="career-ops-platform"
             ),
         }
         for name, mutate in cases.items():
