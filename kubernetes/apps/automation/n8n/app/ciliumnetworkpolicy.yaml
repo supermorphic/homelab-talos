@@ -75,6 +75,20 @@ spec:
         - ports:
             - port: "5432"
               protocol: TCP
+    # The CV service resolves to the internal Gateway address; Cilium translates
+    # it to the Envoy Pods' HTTPS container port. Cilium checks the TLS server name.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: envoy-gateway-system
+            app.kubernetes.io/name: envoy
+            gateway.envoyproxy.io/owning-gateway-name: internal
+            gateway.envoyproxy.io/owning-gateway-namespace: networking
+      toPorts:
+        - ports:
+            - port: "10443"
+              protocol: TCP
+          serverNames:
+            - cv.lab.supermorphic.com
     - toEndpoints:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: ntfy
