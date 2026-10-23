@@ -99,8 +99,7 @@ application workloads must not remove the namespace, platform controls or
 retained claims.
 
 The reconciliation identity has explicit permissions for Deployments, Jobs,
-ClusterIP Services, internal HTTPRoutes, ConfigMaps, retained PVC declarations
-and constrained ServiceAccounts, plus read access to ReplicaSets for Flux health
+ClusterIP Services, internal HTTPRoutes, ConfigMaps, and constrained ServiceAccounts, plus read access to ReplicaSets for Flux health
 checks. It has no namespace, Secret, Role, RoleBinding, network-policy, quota,
 storage-class, Flux-resource or admission-policy administration. No wildcard
 permissions, impersonation grants, token minting, exec, port-forward or
@@ -119,7 +118,7 @@ ingress, are reviewed platform changes.
 
 | Account | Capability | Has | Never has |
 | --- | --- | --- | --- |
-| `cv-coordinator` | Private service | Gateway and Prometheus ingress; egress to DNS, PostgreSQL and `cv-renderer`; Secrets `application-packages-database` and `cv-api-auth`; read-only ConfigMaps; until P2b, the `cv-artifacts` claim read-only at `/artifacts` | Kubernetes token or API access, Jobs, writable claims, internet egress |
+| `cv-coordinator` | Private service | Gateway and Prometheus ingress; egress to DNS, PostgreSQL and `cv-renderer`; Secrets `application-packages-database` and `cv-api-auth`; read-only ConfigMaps | Kubernetes token or API access, Jobs, claims, internet egress |
 | `cv-renderer` | Sandboxed renderer service | Ingress from `cv-coordinator` only; read-only ConfigMaps; bounded `emptyDir` | Any egress including DNS, Kubernetes token, Jobs, Secrets, claims |
 | `career-ops-service` | Reserved private service | Nothing until separately enrolled | — |
 
@@ -245,16 +244,13 @@ uploads and renders cannot exceed the cap together. A write that would exceed
 it fails with `STORAGE_FULL`, which counts as an infrastructure failure and
 raises the CV renders failing alert.
 
-The retained Longhorn claims `cv-releases`, `cv-requests` and `cv-artifacts`
-(class `career-ops-retain`: Longhorn CSI, `Retain`, two replicas, existing backup
-group) belong to the replaced design. They stay enrolled and protected until the
-migration has verified the database copy, then are reclaimed by the attended P3
-action. The target design needs no PersistentVolumeClaim.
-
-Claims must use permitted names, sizes, access modes and classes. Forbid routine
-PVC deletion, workload owner references, removal of Flux prune protection,
-arbitrary PV prebinding and unapproved restore or clone sources. Physical claim
-reclamation remains a deliberate privileged operation.
+The namespace has no PersistentVolumeClaim. Admission denies every workload
+volume that references a claim, denies creation and update of any claim, and
+gives the application reconciler no claim permission. Claim deletion stays
+allowed so the operator and the volume protection controller can finish the P3
+removal of the replaced design's claims. The `career-ops-retain` storage class
+and the fixture-storage Flux unit are removed from Git; the operator deletes the
+live objects (P3).
 
 ## Failure visibility
 
@@ -279,10 +275,11 @@ attended restore scales the coordinator to zero and accepts that alert.
 
 ## Capacity
 
-Namespace ResourceQuota and object counts stay as deployed while migrating; the
-manifests own the exact values. They were sized for the Job-per-render design.
-P2b lowers compute, object and claim ceilings to the measured needs of the two
-Deployments plus headroom. Quotas are ceilings, not throughput guarantees.
+The namespace ResourceQuota is twice the configured requests and limits of the
+two Deployments and the one-shot `career-ops-service` smoke Job, which covers a
+rolling update that briefly runs two Pods of each. Object counts are about twice
+current use. The quota allows no claims and no storage. The manifests own the
+exact values. Quotas are ceilings, not throughput guarantees.
 
 The renderer handles one render at a time within 1 CPU, 1 GiB memory and a
 1 GiB `emptyDir`; the coordinator queues further work.
@@ -301,10 +298,10 @@ explicit operator approval.
 | 4 | Platform | Done | Enable the alerts once schema-version-2 metrics are healthy |
 | 5 | Career Ops C1 | Done | Set the coordinator's `automountServiceAccountToken: false`; remove every Job running as `cv-renderer`, `cv-prepare` or `cv-coordinator`, the `cv-prepare` ServiceAccount, the `cv-coordinator-jobs` RoleBinding and the coordinator's `cv-render-database` mount; remove Job launch, worker, release preparation, promotion, qualification and preview code |
 | 6 | Platform P2a | Done | Remove the authority those objects needed: the `cv-render-jobs` Role and the reconciler's RoleBinding and `bind` permissions; Job profiles for the coordinator and renderer; every token allowance; the coordinator's Kubernetes API egress; `cv-prepare`, `cv-prepare-source` and preparation egress; `cv-render-database`; the `career-ops-boundary-*` identities, their PostgreSQL policy entry, admission policy, programs and the storage-network test; the alert gate series. The platform and connection Flux units do not prune, so the operator deletes the removed live objects after merge |
-| 7 | Career Ops C2 | Pending | Coordinator copies every receipt-listed file except retired previews into the database, verifying each SHA-256 and honoring deletion records; then removes the volume fallback and its read-only `cv-artifacts` mount |
+| 7 | Career Ops C2 | Done | Coordinator copies every receipt-listed file except retired previews into the database, verifying each SHA-256 and honoring deletion records; then removes the volume fallback and its read-only `cv-artifacts` mount |
 | 8 | Joint | Pending | Acceptance below; the application starts accepting render requests only after it passes |
-| 9 | Platform P2b | Pending | Deny every claim mount; remove the CV and fixture claim declarations, their storage admission names and the fixture-storage Flux unit; lower quota |
-| 10 | Operator P3 | Pending | Reclaim the three CV claims and three fixture claims after a retained final backup; revoke the preparation token in Forgejo; retire the `cv_render` database login; delete the objects that P2b removed from Git |
+| 9 | Platform P2b | Done | Deny every claim mount; remove claim management from the application and its reconciler role; deny claim creation and update; remove the fixture-storage Flux unit and the `career-ops-retain` storage class; lower quota to the two Deployments and set claims and storage to zero. Merge only after P3 claim deletion, because a quota below current usage raises the quota alert |
+| 10 | Operator P3 | Pending | Reclaim the three CV claims and three fixture claims after a retained final backup; revoke the preparation token in Forgejo; retire the `cv_render` database login; delete the Flux unit `career-ops-fixture-storage` and the `career-ops-retain` storage class that P2b removed from Git, after the claims and their volumes are gone |
 
 Historical ledger rows from the replaced design remain as read-only history.
 
