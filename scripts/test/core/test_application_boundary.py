@@ -44,10 +44,14 @@ class ApplicationScaffoldTests(unittest.TestCase):
                 "cilium",
                 "internal-gateway",
                 "automation-data-postgresql",
-                "longhorn-config",
                 "kube-prometheus-stack",
             }
             <= {d["name"] for d in units["career-ops-platform"]["spec"]["dependsOn"]}
+        )
+        # Career Ops holds no claims, so its platform must not wait on Longhorn.
+        self.assertNotIn(
+            "longhorn-config",
+            {d["name"] for d in units["career-ops-platform"]["spec"]["dependsOn"]},
         )
 
     def test_reviewed_bootstrap_connection_is_enabled(self):
@@ -793,10 +797,10 @@ C2_RENDERER = deployment_shape(
     {"cpu": "1", "memory": "1Gi", "ephemeral-storage": "2Gi"},
     "cv-renderer",
 )
-# The one-shot smoke Job runs at the namespace LimitRange minimums and bounds.
+# The one-shot smoke Job as Career Ops deploys it (deploy/acceptance-json/smoke.yaml).
 C2_SMOKE = deployment_shape(
-    {"cpu": "10m", "memory": "32Mi", "ephemeral-storage": "64Mi"},
-    {"cpu": "1", "memory": "1Gi", "ephemeral-storage": "2Gi"},
+    {"cpu": "25m", "memory": "32Mi", "ephemeral-storage": "64Mi"},
+    {"cpu": "100m", "memory": "64Mi", "ephemeral-storage": "128Mi"},
     "application-json-smoke",
 )
 

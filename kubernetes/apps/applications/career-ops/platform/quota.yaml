@@ -6,7 +6,7 @@ metadata:
   namespace: career-ops
 spec:
   hard:
-    requests.cpu: 220m
+    requests.cpu: 250m
     limits.cpu: '6'
     requests.memory: 1088Mi
     limits.memory: 8Gi

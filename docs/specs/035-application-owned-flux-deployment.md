@@ -10,13 +10,12 @@ services that fit the approved capabilities must need only application
 repository changes. Independently deployed future domains receive their own
 namespaces when needed, following the same onboarding pattern.
 
-The restricted source connection, admission, retained claims, the private route
-and two harmless application-owned workloads are deployed and accepted. The
-first CV coordinator design used one Kubernetes Job per render, shared request
-and artifact volumes, and an on-cluster release-preparation pipeline. The
-renderer-service design below replaces it. Its Job, token and preparation
-authority is removed; the retained claims and the coordinator's read-only
-artifact mount remain until the later phases under [Migration](#migration).
+The restricted source connection, admission, the private route and two harmless
+application-owned workloads are deployed and accepted. The first CV coordinator
+design used one Kubernetes Job per render, shared request and artifact volumes,
+and an on-cluster release-preparation pipeline. The renderer-service design below
+replaces it, and its Job, token, preparation and claim authority is removed; see
+[Migration](#migration).
 
 This specification owns the platform boundary: namespace, Flux connection,
 identities, admission, network policy, route allocation, storage, credentials,
@@ -95,8 +94,7 @@ with [`--no-remote-bases=true`](https://fluxcd.io/flux/components/kustomize/opti
 set through the owning bootstrap Kustomize patch.
 
 Reconcile platform restrictions before the application connection. Removing
-application workloads must not remove the namespace, platform controls or
-retained claims.
+application workloads must not remove the namespace or platform controls.
 
 The reconciliation identity has explicit permissions for Deployments, Jobs,
 ClusterIP Services, internal HTTPRoutes, ConfigMaps, and constrained ServiceAccounts, plus read access to ReplicaSets for Flux health
@@ -276,8 +274,9 @@ attended restore scales the coordinator to zero and accepts that alert.
 ## Capacity
 
 The namespace ResourceQuota is twice the configured requests and limits of the
-two Deployments and the one-shot `career-ops-service` smoke Job, which covers a
-rolling update that briefly runs two Pods of each. Object counts are about twice
+two Deployments and the one-shot `career-ops-service` smoke Job. Both Deployments
+use `Recreate`, so the headroom covers a Pod that is still terminating while its
+replacement starts. Object counts are about twice
 current use. The quota allows no claims and no storage. The manifests own the
 exact values. Quotas are ceilings, not throughput guarantees.
 
@@ -333,7 +332,8 @@ workflows. Keep feature-branch evidence distinct from deployed-main evidence.
 Platform acceptance does not establish rendering quality or composition behavior.
 Close issue 593 when these pass on deployed main, P2a and P2b are merged, the
 boundary checks have been repeated after them, and this
-specification matches the deployed state. P3 may follow as an operator task.
+specification matches the deployed state. Retiring the `cv_render` login may
+follow as an operator task.
 
 ## Rollback and recovery
 

@@ -11,7 +11,6 @@ spec:
   - name: cilium
   - name: internal-gateway
   - name: automation-data-postgresql
-  - name: longhorn-config
   - name: kube-prometheus-stack
   interval: 1h
   path: ./kubernetes/apps/applications/career-ops/platform
