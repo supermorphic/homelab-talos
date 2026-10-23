@@ -28,7 +28,7 @@ CONFIRMATION = "stage:career-ops:cv-api-auth"
 REPLACE_CONFIRMATION = "replace:career-ops:cv-api-auth"
 PRINCIPAL = "career-ops-qualification"
 OPERATOR = "career-ops-operator"
-OPERATOR_CAPABILITIES = ["packages:read", "packages:write"]
+OPERATOR_CAPABILITIES = ["packages:read", "packages:write", "render"]
 
 
 class EnrollmentError(RuntimeError):

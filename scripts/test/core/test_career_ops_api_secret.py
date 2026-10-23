@@ -149,7 +149,7 @@ class PackageEnrollmentTest(ApiSecretFixture):
             runner=kwargs.pop("runner", self.encrypt),
         )
 
-    def test_operator_principal_is_added_and_qualification_bearer_is_kept(self):
+    def test_operator_principal_renders_and_qualification_bearer_is_kept(self):
         receipt = self.replace()
         operator = self.operator.read_text().strip()
         self.assertEqual(self.operator.stat().st_mode & 0o777, 0o600)
@@ -168,7 +168,7 @@ class PackageEnrollmentTest(ApiSecretFixture):
                     {
                         "principalId": "career-ops-operator",
                         "tokenSha256": [hashlib.sha256(operator.encode()).hexdigest()],
-                        "capabilities": ["packages:read", "packages:write"],
+                        "capabilities": ["packages:read", "packages:write", "render"],
                     },
                 ],
             },
