@@ -78,23 +78,22 @@ class Login:
 LOGINS = {
     login.application: login
     for login in (
-        Login("cv_render", "cv_render", "cv-render-database"),
         Login("application_packages", "package_access", "application-packages-database"),
     )
 }
-CV_RENDER = LOGINS["cv_render"]
-TARGET = CV_RENDER.target
-CONFIRMATION = CV_RENDER.confirmation
-REPLACE_CONFIRMATION = CV_RENDER.replace_confirmation
-ROLE = CV_RENDER.role
-EXPECTED = CV_RENDER.expected
+PACKAGES = LOGINS["application_packages"]
+TARGET = PACKAGES.target
+CONFIRMATION = PACKAGES.confirmation
+REPLACE_CONFIRMATION = PACKAGES.replace_confirmation
+ROLE = PACKAGES.role
+EXPECTED = PACKAGES.expected
 
 
 class EnrollmentError(RuntimeError):
     """A credential-free error safe to display."""
 
 
-def binding_contract(binding, login=CV_RENDER):
+def binding_contract(binding, login=PACKAGES):
     if (
         not isinstance(binding, dict)
         or set(binding) != set(login.expected) | {"credentialGeneration"}
@@ -106,7 +105,7 @@ def binding_contract(binding, login=CV_RENDER):
 
 
 @contextmanager
-def runtime_credential(login=CV_RENDER):
+def runtime_credential(login=PACKAGES):
     """Keep the existing scoped tunnel and fresh profile checks around Secret staging."""
     if any(
         key in os.environ for key in ("AUTOMATION_DATA_SERVICE_FILE", "AUTOMATION_DATA_SERVICE")
@@ -140,7 +139,7 @@ def runtime_credential(login=CV_RENDER):
         assert_profile_unchanged(selected)
 
 
-def preflight(root, replace_sha256=None, login=CV_RENDER):
+def preflight(root, replace_sha256=None, login=PACKAGES):
     target = root / login.target
     policy = root / ".sops.yaml"
     if target.resolve() != target or policy.resolve() != policy:
@@ -176,7 +175,7 @@ def preflight(root, replace_sha256=None, login=CV_RENDER):
     return content, matching[0]["age"]
 
 
-def validate_ciphertext(content, recipient, password, login=CV_RENDER):
+def validate_ciphertext(content, recipient, password, login=PACKAGES):
     document = yaml.safe_load(content)
     if not isinstance(document, dict):
         raise EnrollmentError("SOPS did not return the expected encrypted Secret")
@@ -207,7 +206,7 @@ def validate_ciphertext(content, recipient, password, login=CV_RENDER):
 
 def install(
     root, confirmation, *, replace_sha256=None, expected_generation=None,
-    credential=None, runner=subprocess.run, login=CV_RENDER,
+    credential=None, runner=subprocess.run, login=PACKAGES,
 ):
     replacing = replace_sha256 is not None or expected_generation is not None
     if replacing and (
@@ -304,7 +303,7 @@ def install(
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--application", choices=sorted(LOGINS), default=CV_RENDER.application,
+        "--application", choices=sorted(LOGINS), default=PACKAGES.application,
         help="Registered application login whose fixed Secret is staged",
     )
     parser.add_argument("--confirm", required=True)

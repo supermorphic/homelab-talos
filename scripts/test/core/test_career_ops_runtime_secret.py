@@ -27,9 +27,9 @@ class RuntimeSecretTest(unittest.TestCase):
         )
         self.binding = {
             "domain": "career_ops",
-            "application": "cv_render",
+            "application": "application_packages",
             "database": "career_ops",
-            "schema": "cv_render",
+            "schema": "package_access",
             "role": runtime.ROLE,
             "credentialGeneration": 1,
         }
@@ -40,7 +40,7 @@ class RuntimeSecretTest(unittest.TestCase):
         self.calls.append((command, kwargs))
         document = yaml.safe_load(kwargs["input"])
         self.assertEqual(
-            document["metadata"], {"name": "cv-render-database", "namespace": "career-ops"}
+            document["metadata"], {"name": "application-packages-database", "namespace": "career-ops"}
         )
         self.assertEqual(json.loads(document["stringData"]["binding.json"]), self.binding)
         self.assertEqual(document["stringData"]["username"], runtime.ROLE)
@@ -77,10 +77,33 @@ class RuntimeSecretTest(unittest.TestCase):
         self.password = "synthetic-rotated-candidate-" + "r" * 32
         self.calls.clear()
         return {
-            "confirmation": "replace:career-ops:cv-render-database",
+            "confirmation": "replace:career-ops:application-packages-database",
             "replace_sha256": checksum,
             "expected_generation": 2,
         }
+
+    def test_cv_render_login_is_removed_and_rejected_by_the_cli(self):
+        self.assertEqual(set(runtime.LOGINS), {"application_packages"})
+        for arguments in (["--application", "cv_render"], ["--application=cv_render"]):
+            with (
+                self.subTest(arguments=arguments),
+                patch("sys.argv", ["prog", *arguments, "--confirm", "x"]),
+                patch("sys.stderr"),
+                self.assertRaises(SystemExit) as raised,
+            ):
+                runtime.main()
+            self.assertEqual(raised.exception.code, 2)
+
+    def test_cli_defaults_to_and_accepts_application_packages(self):
+        for arguments in ([], ["--application", "application_packages"]):
+            with (
+                self.subTest(arguments=arguments),
+                patch("sys.argv", ["prog", *arguments, "--confirm", "x"]),
+                patch.object(runtime, "install", return_value={}) as install,
+                patch("builtins.print"),
+            ):
+                self.assertEqual(runtime.main(), 0)
+            self.assertIs(install.call_args.kwargs["login"], runtime.LOGINS["application_packages"])
 
     def test_replacement_requires_reviewed_ciphertext_and_current_new_generation(self):
         options = self.replacement()
@@ -181,7 +204,6 @@ class RuntimeSecretTest(unittest.TestCase):
             "role": login.role,
             "credentialGeneration": 1,
         }
-        (self.root / runtime.TARGET).write_bytes(b"existing runtime ciphertext")
 
         def encrypt(command, **kwargs):
             document = yaml.safe_load(kwargs["input"])
@@ -205,9 +227,10 @@ class RuntimeSecretTest(unittest.TestCase):
         def credential(material):
             yield material
 
+        wrong = package | {"application": "other_login"}
         for confirmation, material in (
-            (runtime.CONFIRMATION, (package, self.password)),
-            (login.confirmation, (self.binding, self.password)),
+            ("stage:career-ops:other-database", (package, self.password)),
+            (login.confirmation, (wrong, self.password)),
         ):
             with self.subTest(confirmation=confirmation), self.assertRaises(runtime.EnrollmentError):
                 runtime.install(
@@ -220,7 +243,6 @@ class RuntimeSecretTest(unittest.TestCase):
             credential=lambda: credential((package, self.password)), runner=encrypt, login=login,
         )
         self.assertEqual(result["path"], login.target.as_posix())
-        self.assertEqual((self.root / runtime.TARGET).read_bytes(), b"existing runtime ciphertext")
 
     def test_rejects_wrong_binding_generation_and_extra_fields(self):
         for change in (
@@ -281,7 +303,7 @@ class RuntimeSecretTest(unittest.TestCase):
         self.binding["credentialGeneration"] = 2
         rotated = self.install(
             runner=subprocess.run,
-            confirmation="replace:career-ops:cv-render-database",
+            confirmation="replace:career-ops:application-packages-database",
             replace_sha256=old_sha256,
             expected_generation=2,
         )
@@ -389,7 +411,7 @@ class RuntimeSecretTest(unittest.TestCase):
                         authenticate.assert_called_once_with(
                             15432, "career_ops", login.role, self.password
                         )
-                        other = next(o for o in runtime.LOGINS.values() if o != login)
+                        other = runtime.Login("other_login", "other_schema", "other-database")
                         with (
                             self.assertRaises(runtime.EnrollmentError),
                             runtime.runtime_credential(other),
