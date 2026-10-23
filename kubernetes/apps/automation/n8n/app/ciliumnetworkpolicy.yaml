@@ -76,7 +76,7 @@ spec:
             - port: "5432"
               protocol: TCP
     # The CV service resolves to the internal Gateway address; Cilium translates
-    # it to the Envoy Pods' HTTPS container port. SNI admits only the CV host.
+    # it to the Envoy Pods' HTTPS container port. Cilium checks the TLS server name.
     - toEndpoints:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: envoy-gateway-system
