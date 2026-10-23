@@ -885,6 +885,27 @@ class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
                 for user in ["system:admin", "system:serviceaccount:kube-system:homelab-observer"]:
                     self.assertFalse(self.admission(obj, policy="career-ops-storage", username=user))
 
+    def test_protection_controller_releases_a_deleted_claim(self):
+        deleting = pvc()
+        deleting["metadata"]["deletionTimestamp"] = "2026-01-01T00:00:00Z"
+        released = copy.deepcopy(deleting)
+        released["metadata"]["finalizers"] = []
+        user = "system:serviceaccount:kube-system:pvc-protection-controller"
+        self.assertTrue(
+            self.admission(
+                released, policy="career-ops-storage", operation="UPDATE", old=deleting, username=user
+            )
+        )
+        # A claim that is not being deleted stays immutable.
+        live = pvc()
+        gone = copy.deepcopy(live)
+        gone["metadata"]["finalizers"] = []
+        self.assertFalse(
+            self.admission(
+                gone, policy="career-ops-storage", operation="UPDATE", old=live, username=user
+            )
+        )
+
     def test_claim_deletion_and_volume_binding_remain_possible(self):
         obj = pvc(volumeName="fixture-bound-pv")
         self.assertTrue(

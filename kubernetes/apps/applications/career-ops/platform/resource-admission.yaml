@@ -169,8 +169,8 @@ spec:
       - UPDATE
       - DELETE
   validations:
-  - expression: request.operation == 'DELETE'
-    message: Claims cannot be created or changed; the namespace has no storage.
+  - expression: request.operation == 'DELETE' || (request.operation == 'UPDATE' && has(oldObject.metadata.deletionTimestamp))
+    message: Claims cannot be created or changed, except to release a claim already being deleted.
   matchConditions:
   - name: exclude-volume-binding
     expression: request.userInfo.username != 'system:kube-controller-manager' && request.userInfo.username
