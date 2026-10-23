@@ -870,6 +870,34 @@ class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
             self.admission(bad, policy="career-ops-storage", operation="UPDATE", old=obj)
         )
 
+    def test_protection_controller_releases_a_deleted_claim(self):
+        deleting = {
+            "kind": "PersistentVolumeClaim",
+            "metadata": {
+                "name": "cv-releases",
+                "namespace": "career-ops",
+                "annotations": {"kustomize.toolkit.fluxcd.io/prune": "disabled"},
+                "finalizers": ["kubernetes.io/pvc-protection"],
+                "deletionTimestamp": "2026-01-01T00:00:00Z",
+            },
+            "spec": {
+                "storageClassName": "career-ops-retain",
+                "accessModes": ["ReadWriteMany"],
+                "resources": {"requests": {"storage": "8Gi"}},
+            },
+        }
+        released = copy.deepcopy(deleting)
+        released["metadata"]["finalizers"] = []
+        self.assertTrue(
+            self.admission(
+                released,
+                policy="career-ops-storage",
+                username="system:serviceaccount:kube-system:pvc-protection-controller",
+                operation="UPDATE",
+                old=deleting,
+            )
+        )
+
     def test_bound_pvc_updates_and_pod_resize_are_guarded(self):
         obj = {
             "kind": "PersistentVolumeClaim",
