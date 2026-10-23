@@ -271,7 +271,10 @@ def main():
     parser.add_argument(
         "--composer-token-file",
         type=Path,
-        help="package enrollment: owner-only composer token, generated once and retained",
+        help=(
+            "package enrollment, required with --operator-token-file: owner-only composer token,"
+            " generated once and retained"
+        ),
     )
     parser.add_argument(
         "--replace-sha256", help="package enrollment: SHA-256 of the reviewed existing ciphertext"

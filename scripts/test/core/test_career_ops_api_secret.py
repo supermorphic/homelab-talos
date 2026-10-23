@@ -212,6 +212,19 @@ class PackageEnrollmentTest(ApiSecretFixture):
         self.assertFalse(self.composer.exists())
         self.assertEqual(self.calls, [])
 
+    def test_reused_bearer_in_a_distinct_file_is_refused(self):
+        original = (self.root / api.TARGET).read_bytes()
+        for reused in (self.qualification, b"o" * 43 + b"\n"):
+            with self.subTest(reused=reused[:1]):
+                self.operator.write_bytes(b"o" * 43 + b"\n")
+                self.operator.chmod(0o600)
+                self.composer.write_bytes(reused)
+                self.composer.chmod(0o600)
+                with self.assertRaises(api.EnrollmentError):
+                    self.replace()
+                self.assertEqual((self.root / api.TARGET).read_bytes(), original)
+        self.assertEqual(self.calls, [])
+
     def test_replacement_never_mints_a_qualification_bearer(self):
         self.token.unlink()
         with self.assertRaises(OSError):
