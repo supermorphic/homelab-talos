@@ -35,7 +35,7 @@ spec:
     interval: 1m
     rules:
     - record: career_ops_coordinator_expected
-      expr: vector(0)
+      expr: vector(1)
     # Any missing or unhealthy required signal means renders, uploads and downloads
     # are blocked; an absent target must alert as well as up == 0.
     - alert: CareerOpsCVServiceDown

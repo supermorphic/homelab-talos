@@ -1479,7 +1479,7 @@ class RendererNetworkTests(unittest.TestCase):
 
 
 class ApplicationMonitoringTests(unittest.TestCase):
-    def test_platform_monitoring_is_quiet_until_activation(self):
+    def test_platform_monitoring_is_armed(self):
         docs = render(PLATFORM)
         monitor = next((d for d in docs if d["kind"] == "ServiceMonitor"), None)
         self.assertIsNotNone(monitor, "platform monitoring is missing")
@@ -1515,7 +1515,7 @@ class ApplicationMonitoringTests(unittest.TestCase):
             )
         expected = next(r for r in rules if "record" in r)
         self.assertEqual(
-            expected, {"record": "career_ops_coordinator_expected", "expr": "vector(0)"}
+            expected, {"record": "career_ops_coordinator_expected", "expr": "vector(1)"}
         )
 
 
