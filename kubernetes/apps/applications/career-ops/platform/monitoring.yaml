@@ -34,8 +34,6 @@ spec:
   - name: career-ops.availability
     interval: 1m
     rules:
-    - record: career_ops_coordinator_expected
-      expr: vector(1)
     # Any missing or unhealthy required signal means renders, uploads and downloads
     # are blocked; an absent target must alert as well as up == 0.
     - alert: CareerOpsCVServiceDown
@@ -43,7 +41,6 @@ spec:
         != 1) or ((min(cv_render_database_ready{namespace="career-ops",service="cv-coordinator"}) or vector(0)) != 1) or ((min(cv_render_renderer_egress_blocked{namespace="career-ops",service="cv-coordinator"})
         or vector(0)) != 1) or ((max(cv_render_metrics_schema_info{namespace="career-ops",service="cv-coordinator",version="2"}) or vector(0)) != 1) or
         (max(absent(cv_render_overdue_work{namespace="career-ops",service="cv-coordinator"})) == 1) or (max(absent(cv_render_recent_failures{namespace="career-ops",service="cv-coordinator"})) == 1))
-        and on() (career_ops_coordinator_expected == 1)
       for: 5m
       labels:
         namespace: career-ops
@@ -53,7 +50,7 @@ spec:
         summary: Career Ops CV service is down
         description: 'CV renders, uploads and downloads are blocked. Status: https://cv.lab.supermorphic.com/readyz'
     - alert: CareerOpsCVWorkStuck
-      expr: (max(cv_render_overdue_work{namespace="career-ops",service="cv-coordinator"}) > 0) and on() (career_ops_coordinator_expected == 1)
+      expr: max(cv_render_overdue_work{namespace="career-ops",service="cv-coordinator"}) > 0
       for: 15m
       labels:
         namespace: career-ops
@@ -65,7 +62,7 @@ spec:
     # Designed outcomes such as a page overflow return to composition and are not
     # counted; the application keeps a one-hour failure window, so this resolves.
     - alert: CareerOpsCVRendersFailing
-      expr: (max(cv_render_recent_failures{namespace="career-ops",service="cv-coordinator"}) > 0) and on() (career_ops_coordinator_expected == 1)
+      expr: max(cv_render_recent_failures{namespace="career-ops",service="cv-coordinator"}) > 0
       for: 1m
       labels:
         namespace: career-ops

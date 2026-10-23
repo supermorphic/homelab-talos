@@ -1445,15 +1445,12 @@ class ApplicationMonitoringTests(unittest.TestCase):
             [r["alert"] for r in rules if "alert" in r],
             ["CareerOpsCVServiceDown", "CareerOpsCVWorkStuck", "CareerOpsCVRendersFailing"],
         )
+        # Alerts are always armed: no recorded gate series can silence them.
+        self.assertEqual([r for r in rules if "record" in r], [])
         for alert in (r for r in rules if "alert" in r):
-            self.assertTrue(
-                alert["expr"].endswith("and on() (career_ops_coordinator_expected == 1)"),
-                alert["alert"],
-            )
-        expected = next(r for r in rules if "record" in r)
-        self.assertEqual(
-            expected, {"record": "career_ops_coordinator_expected", "expr": "vector(1)"}
-        )
+            with self.subTest(alert=alert["alert"]):
+                self.assertNotIn("career_ops_", alert["expr"])
+                self.assertNotIn("and on()", alert["expr"])
 
 
 if __name__ == "__main__":
