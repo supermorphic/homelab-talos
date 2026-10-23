@@ -595,60 +595,6 @@ class ApplicationNetworkTests(ApplicationFixture, unittest.TestCase):
         self.assertEqual(policy.get("ingress"), [{"fromEntities": ["none"]}])
         self.assertEqual(policy.get("egress"), [{"toEntities": ["none"]}])
 
-    def test_preparation_network_has_only_reviewed_dns_and_https_destinations(self):
-        policy = next(
-            d["spec"]
-            for d in self.documents
-            if d["kind"] == "CiliumNetworkPolicy"
-            and d["metadata"]["name"] == "career-ops-preparation"
-        )
-        self.assertEqual(set(policy), {"endpointSelector", "egress"})
-        self.assertEqual(
-            policy["endpointSelector"],
-            {"matchLabels": {"k8s:io.cilium.k8s.policy.serviceaccount": "cv-prepare"}},
-        )
-        dns, https = policy["egress"]
-        hosts = {
-            "corefonts.sourceforge.net",
-            "deb.debian.org",
-            "downloads.sourceforge.net",
-            "files.pythonhosted.org",
-            "forgejo.infra.supermorphic.com",
-            "packages.typst.org",
-            "psychz.dl.sourceforge.net",
-        }
-        self.assertEqual(set(dns), {"toEndpoints", "toPorts"})
-        self.assertEqual(
-            dns["toEndpoints"],
-            [
-                {
-                    "matchLabels": {
-                        "k8s:io.kubernetes.pod.namespace": "kube-system",
-                        "k8s:k8s-app": "kube-dns",
-                    }
-                }
-            ],
-        )
-        self.assertEqual(
-            dns["toPorts"],
-            [
-                {
-                    "ports": [
-                        {"port": "53", "protocol": "TCP"},
-                        {"port": "53", "protocol": "UDP"},
-                    ],
-                    "rules": {"dns": [{"matchName": h} for h in sorted(hosts)]},
-                }
-            ],
-        )
-        self.assertEqual(
-            https,
-            {
-                "toFQDNs": [{"matchName": h} for h in sorted(hosts)],
-                "toPorts": [{"ports": [{"port": "443", "protocol": "TCP"}]}],
-            },
-        )
-
     def test_network_capabilities_follow_service_account_identity(self):
         policies = {
             d["metadata"]["name"]: d["spec"]
@@ -659,24 +605,9 @@ class ApplicationNetworkTests(ApplicationFixture, unittest.TestCase):
         self.assertEqual(policies["career-ops-deny"]["endpointSelector"], {})
         self.assertEqual(
             set(policies),
-            {
-                "career-ops-deny",
-                "career-ops-coordinator",
-                "career-ops-boundary-coordinator",
-                "career-ops-preparation",
-                "career-ops-renderer",
-            },
+            {"career-ops-deny", "career-ops-coordinator", "career-ops-renderer"},
         )
         coordinator = policies["career-ops-coordinator"]
-        native = policies["career-ops-boundary-coordinator"]
-        # The fixture proves the shared DNS, database and API destinations; only the
-        # production coordinator may call the renderer.
-        self.assertEqual(native["egress"], coordinator["egress"][:3])
-        self.assertEqual(native["ingress"], [])
-        self.assertEqual(
-            native["endpointSelector"]["matchLabels"],
-            {"k8s:io.cilium.k8s.policy.serviceaccount": "career-ops-boundary-coordinator"},
-        )
         self.assertEqual(
             coordinator["endpointSelector"]["matchLabels"],
             {"k8s:io.cilium.k8s.policy.serviceaccount": "cv-coordinator"},
@@ -685,11 +616,28 @@ class ApplicationNetworkTests(ApplicationFixture, unittest.TestCase):
             [p["port"] for r in coordinator["ingress"] for p in r["toPorts"][0]["ports"]],
             ["8080", "9090"],
         )
-        self.assertEqual(len(coordinator["egress"]), 4)
-        self.assertEqual(coordinator["egress"][2]["toEntities"], ["kube-apiserver"])
+        # DNS, PostgreSQL and the renderer only.
+        self.assertEqual(len(coordinator["egress"]), 3)
+        self.assertEqual(
+            coordinator["egress"][0]["toEndpoints"],
+            [{"matchLabels": {"k8s:io.kubernetes.pod.namespace": "kube-system", "k8s:k8s-app": "kube-dns"}}],
+        )
         self.assertEqual(
             coordinator["egress"][1]["toPorts"][0]["ports"], [{"port": "5432", "protocol": "TCP"}]
         )
+
+    def test_no_workload_has_kubernetes_api_or_internet_egress(self):
+        for name, policy in (
+            (d["metadata"]["name"], d["spec"])
+            for d in self.documents
+            if d["kind"] == "CiliumNetworkPolicy"
+        ):
+            for rule in policy.get("egress", []):
+                with self.subTest(policy=name, rule=rule):
+                    self.assertNotIn("toFQDNs", rule)
+                    self.assertNotIn("toCIDR", rule)
+                    self.assertNotIn("toCIDRSet", rule)
+                    self.assertTrue(set(rule.get("toEntities", [])) <= {"none"}, rule)
         db = next(
             iter(
                 yaml.safe_load_all(
