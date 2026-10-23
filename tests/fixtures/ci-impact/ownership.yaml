@@ -303,18 +303,3 @@ contracts:
       - scripts/test/scenarios/application-boundary.sh
     required_tests:
       - python:scripts/test/core/test_application_boundary_commands.py
-  application-boundary-mount-probe:
-    changed_inputs:
-      - kubernetes/apps/applications/career-ops/platform/mount-probe.py
-    required_tests:
-      - python:scripts/test/core/test_application_boundary_mount_probe.py
-  application-boundary-native:
-    changed_inputs:
-      - kubernetes/apps/applications/career-ops/platform/native-fixtures.yaml
-      - kubernetes/apps/applications/career-ops/platform/native-probe.py
-      - scripts/test/scenarios/application_boundary_native.py
-    required_tests:
-      - catalog:validation.application-boundary
-      - python:scripts/test/core/test_application_boundary_native.py
-      - python:scripts/test/core/test_application_boundary_native_probe.py
-      - python:scripts/test/core/test_application_boundary_commands.py

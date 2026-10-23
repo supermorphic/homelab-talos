@@ -13,10 +13,10 @@ namespaces when needed, following the same onboarding pattern.
 The restricted source connection, admission, retained claims, the private route
 and two harmless application-owned workloads are deployed and accepted. The
 first CV coordinator design used one Kubernetes Job per render, shared request
-and artifact volumes, and an on-cluster release-preparation pipeline. It is
-being replaced by the renderer-service design below, delivered in the phases
-under [Migration](#migration). Until a phase merges, the deployed manifests
-remain the source of truth for that phase's controls.
+and artifact volumes, and an on-cluster release-preparation pipeline. The
+renderer-service design below replaces it. Its Job, token and preparation
+authority is removed; the retained claims and the coordinator's read-only
+artifact mount remain until the later phases under [Migration](#migration).
 
 This specification owns the platform boundary: namespace, Flux connection,
 identities, admission, network policy, route allocation, storage, credentials,
@@ -99,9 +99,9 @@ application workloads must not remove the namespace, platform controls or
 retained claims.
 
 The reconciliation identity has explicit permissions for Deployments, Jobs,
-ClusterIP Services, internal HTTPRoutes, ConfigMaps, retained PVC declarations,
-and constrained ServiceAccounts and RoleBindings, plus read access to ReplicaSets
-for Flux health checks. It has no namespace, Secret, Role, network-policy, quota,
+ClusterIP Services, internal HTTPRoutes, ConfigMaps, retained PVC declarations
+and constrained ServiceAccounts, plus read access to ReplicaSets for Flux health
+checks. It has no namespace, Secret, Role, RoleBinding, network-policy, quota,
 storage-class, Flux-resource or admission-policy administration. No wildcard
 permissions, impersonation grants, token minting, exec, port-forward or
 privilege-escalation authority are delegated. Platform-owned object names are
@@ -119,16 +119,15 @@ ingress, are reviewed platform changes.
 
 | Account | Capability | Has | Never has |
 | --- | --- | --- | --- |
-| `cv-coordinator` | Private service | Gateway and Prometheus ingress; egress to DNS, PostgreSQL and `cv-renderer`; Secrets `cv-render-database`, `application-packages-database`, `cv-api-auth`; read-only ConfigMaps | Kubernetes token and PersistentVolumeClaims (after P2), internet egress |
-| `cv-renderer` | Sandboxed renderer service | Ingress from `cv-coordinator` only; read-only ConfigMaps; bounded `emptyDir` | Any egress including DNS, Kubernetes token, Secrets, claims |
+| `cv-coordinator` | Private service | Gateway and Prometheus ingress; egress to DNS, PostgreSQL and `cv-renderer`; Secrets `application-packages-database` and `cv-api-auth`; read-only ConfigMaps; until P2b, the `cv-artifacts` claim read-only at `/artifacts` | Kubernetes token or API access, Jobs, writable claims, internet egress |
+| `cv-renderer` | Sandboxed renderer service | Ingress from `cv-coordinator` only; read-only ConfigMaps; bounded `emptyDir` | Any egress including DNS, Kubernetes token, Jobs, Secrets, claims |
 | `career-ops-service` | Reserved private service | Nothing until separately enrolled | — |
 
-During migration the transitional capabilities remain enrolled: `cv-coordinator`
-keeps its Job-management Role, token and claim mounts, `cv-renderer` keeps its
-offline Job-worker profile, `cv-prepare` keeps its preparation profile, and the
-platform test identities `career-ops-boundary-coordinator` and
-`career-ops-boundary-renderer` keep their fixtures. P2 removes them; see
-[Migration](#migration).
+Admission accepts no other runtime account. The coordinator and renderer run
+only as Deployments, with their ReplicaSets and Pods; a Job, or a Job's Pod,
+with either identity is denied. `career-ops-service` keeps the one-shot Job
+profile: no retries, one completion and no container restart. No runtime
+account has Kubernetes RBAC permissions.
 
 Use native `ValidatingAdmissionPolicy` and bindings, with failure policy `Fail`,
 namespace-wide matching and deny enforcement. Validate controller templates and
@@ -143,9 +142,9 @@ Every container is non-root, has a read-only root filesystem, drops all
 capabilities, disallows privilege escalation and sets bounded CPU, memory and
 ephemeral storage. Forbid host namespaces, host mounts, privileged execution and
 arbitrary storage drivers. Every workload sets automatic token mounting
-explicitly. Private image pull Secrets are rejected, so workloads use public
-images; the application pins them by digest and its review enforces that, not
-admission.
+explicitly to `false`, and token projections are rejected. Private image pull
+Secrets are rejected, so workloads use public images; the application pins them
+by digest and its review enforces that, not admission.
 
 Use Cilium's service-account identity for capability-specific connections rather
 than an application-supplied label. Services and workload labels are checked so
@@ -240,6 +239,12 @@ and resumes when the database returns.
 
 ## Storage
 
+All CV blobs share one 2 GiB byte cap in the shared automation-data database.
+The application counts stored bytes under an advisory lock, so concurrent
+uploads and renders cannot exceed the cap together. A write that would exceed
+it fails with `STORAGE_FULL`, which counts as an infrastructure failure and
+raises the CV renders failing alert.
+
 The retained Longhorn claims `cv-releases`, `cv-requests` and `cv-artifacts`
 (class `career-ops-retain`: Longhorn CSI, `Retain`, two replicas, existing backup
 group) belong to the replaced design. They stay enrolled and protected until the
@@ -268,17 +273,16 @@ data or per-request labels.
 
 These three replace the earlier ten. Designed outcomes such as a page overflow
 returned to composition do not alert.
-A missing workload or Service must not disable the rules. The rules are armed
-whenever the coordinator is expected to run; an attended restore scales it to
-zero and accepts the service-down alert.
+The rules have no gate series and are always armed, so a missing workload,
+Service or series raises the service-down alert instead of silencing it. An
+attended restore scales the coordinator to zero and accepts that alert.
 
 ## Capacity
 
 Namespace ResourceQuota and object counts stay as deployed while migrating; the
 manifests own the exact values. They were sized for the Job-per-render design.
-P2 lowers compute and object ceilings to the measured needs of the two
-Deployments plus headroom, and P3 removes the claim allocation. Quotas are
-ceilings, not throughput guarantees.
+P2b lowers compute, object and claim ceilings to the measured needs of the two
+Deployments plus headroom. Quotas are ceilings, not throughput guarantees.
 
 The renderer handles one render at a time within 1 CPU, 1 GiB memory and a
 1 GiB `emptyDir`; the coordinator queues further work.
@@ -289,17 +293,18 @@ Convert the deployed coordinator in place. The package API, workstation uploads
 and downloads keep working at every step. Each step is a reviewed change or an
 explicit operator approval.
 
-| Step | Owner | Change |
-| --- | --- | --- |
-| 1 | Platform P1 | Admit the `cv-renderer` Service; restrict renderer claim mounts to Jobs; Cilium rules for renderer ingress and coordinator egress; Gateway access-log exclusion for `cv.lab`; replace the ten CV alerts and the scrape metric list with the three schema-version-2 alerts, still disabled |
-| 2 | Career Ops | Renderer service, HTTP render path, pure-Python dependencies, database artifact store with read fallback to the existing volume, download tokens. Merged code stays outside `./deploy/` until step 3, because that root deploys on merge |
-| 3 | Career Ops | Guarded database migration, then deployment from the upstream image and ConfigMaps; download tokens are issued only from here on |
-| 4 | Platform | Enable the alerts once schema-version-2 metrics are healthy |
-| 5 | Career Ops | Coordinator copies every receipt-listed file except retired previews into the database, verifying each SHA-256 and honoring deletion records; then removes the volume fallback and claim mounts |
-| 6 | Joint | Acceptance below; the application starts accepting render requests only after it passes |
-| 7 | Career Ops | Set the coordinator's `automountServiceAccountToken: false` and remove its `cv-coordinator-jobs` RoleBinding; remove Job launch, worker permissions, release preparation, promotion, qualification and preview code and manifests |
-| 8 | Platform P2 | Remove every reference to retired identities, Roles and kinds: the `cv-render-jobs` Role and the reconciler's RoleBinding and `bind` permissions for it; the coordinator token and Kubernetes API egress; Job-worker, preparation and test-fixture admission rules; `cv-prepare`, `cv-prepare-source` and preparation egress; the `career-ops-boundary-*` identities, their PostgreSQL policy entry, Role, admission policy and fixtures; the storage-network test; PVC, RoleBinding and ServiceAccount allowances nothing uses; then lower quota |
-| 9 | Operator P3 | Reclaim the three CV claims and three fixture claims after a retained final backup; revoke the preparation token in Forgejo |
+| Step | Owner | Status | Change |
+| --- | --- | --- | --- |
+| 1 | Platform P1 | Done | Admit the `cv-renderer` Service; restrict renderer claim mounts to Jobs; Cilium rules for renderer ingress and coordinator egress; Gateway access-log exclusion for `cv.lab`; replace the ten CV alerts and the scrape metric list with the three schema-version-2 alerts, still disabled |
+| 2 | Career Ops | Done | Renderer service, HTTP render path, pure-Python dependencies, database artifact store with read fallback to the existing volume, download tokens. Merged code stays outside `./deploy/` until step 3, because that root deploys on merge |
+| 3 | Career Ops | Done | Guarded database migration, then deployment from the upstream image and ConfigMaps; download tokens are issued only from here on |
+| 4 | Platform | Done | Enable the alerts once schema-version-2 metrics are healthy |
+| 5 | Career Ops C1 | Done | Set the coordinator's `automountServiceAccountToken: false`; remove every Job running as `cv-renderer`, `cv-prepare` or `cv-coordinator`, the `cv-prepare` ServiceAccount, the `cv-coordinator-jobs` RoleBinding and the coordinator's `cv-render-database` mount; remove Job launch, worker, release preparation, promotion, qualification and preview code |
+| 6 | Platform P2a | Done | Remove the authority those objects needed: the `cv-render-jobs` Role and the reconciler's RoleBinding and `bind` permissions; Job profiles for the coordinator and renderer; every token allowance; the coordinator's Kubernetes API egress; `cv-prepare`, `cv-prepare-source` and preparation egress; `cv-render-database`; the `career-ops-boundary-*` identities, their PostgreSQL policy entry, admission policy, programs and the storage-network test; the alert gate series. The platform and connection Flux units do not prune, so the operator deletes the removed live objects after merge |
+| 7 | Career Ops C2 | Pending | Coordinator copies every receipt-listed file except retired previews into the database, verifying each SHA-256 and honoring deletion records; then removes the volume fallback and its read-only `cv-artifacts` mount |
+| 8 | Joint | Pending | Acceptance below; the application starts accepting render requests only after it passes |
+| 9 | Platform P2b | Pending | Deny every claim mount; remove the CV and fixture claim declarations, their storage admission names and the fixture-storage Flux unit; lower quota |
+| 10 | Operator P3 | Pending | Reclaim the three CV claims and three fixture claims after a retained final backup; revoke the preparation token in Forgejo; retire the `cv_render` database login; delete the objects that P2b removed from Git |
 
 Historical ledger rows from the replaced design remain as read-only history.
 
@@ -318,7 +323,7 @@ workflows. Keep feature-branch evidence distinct from deployed-main evidence.
   the joint gate.
 - Boundary: offline admission cases and a live server-side dry run deny the
   renderer a token, Secrets, claims, pull Secrets and wider network profiles;
-  the dry run is repeated after P2.
+  the dry run is repeated after P2a and P2b.
   At startup the renderer attempts one DNS query and one TCP connection and
   reports through the coordinator's metrics that both were blocked; Hubble drop
   counters for that attempt provide independent positive evidence.
@@ -329,8 +334,8 @@ workflows. Keep feature-branch evidence distinct from deployed-main evidence.
   record's bytes match their checksum and the deletion survives.
 
 Platform acceptance does not establish rendering quality or composition behavior.
-Close issue 593 when these pass on deployed main, P2 is merged, the boundary
-checks have been repeated after P2, and this
+Close issue 593 when these pass on deployed main, P2a and P2b are merged, the
+boundary checks have been repeated after them, and this
 specification matches the deployed state. P3 may follow as an operator task.
 
 ## Rollback and recovery

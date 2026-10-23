@@ -1193,21 +1193,14 @@ suites:
     runner: {command: "mise exec -- just kube application-boundary-validate", implementation: scripts/validate/application-boundary.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: verification.application-boundary, source: verification, framework: bash, suite: platform, tier: verification, target: application-boundary, scenario: controls-and-source, scope: application, intent: acceptance, mutates_cluster: false, execution_owner: shared}
-    description: Observes installed controls, current source, retained-volume metadata and current Job-owned tokenless bootstrap success. Also checks the second non-rendering smoke when selected by the application inventory. Excludes credential contents, render runtime, network, mount, notification and recovery acceptance.
+    description: Observes installed controls, current source and retained-volume metadata. Also checks the non-rendering service smoke Job when selected by the application inventory. Excludes credential contents, render runtime, network, mount, notification and recovery acceptance.
     access: {profile: observer, prerequisites: []}
     confirmation: {type: none, variable: null, expected: null}
     runner: {command: "mise exec -- just kube application-boundary-verify", implementation: scripts/verify/application-boundary.sh}
     native_results: {strategy: wrapper-junit}
   - metadata: {id: test.application-boundary-admission, source: test, framework: bash, suite: platform, tier: integration, target: application-boundary, scenario: server-admission, scope: application, intent: acceptance, mutates_cluster: true, execution_owner: shared}
-    description: Submits fixed server-side Job dry runs with fresh installed-scope checks before each request; persists no objects and requires the intended workload-policy denial. Controller Pods, networking, cross-node RWX, retention/pruning, source workloads, notification delivery and isolated restore remain separate native acceptance.
+    description: Submits fixed server-side Job dry runs with fresh installed-scope checks before each request; persists no objects. Admits one career-ops-service one-shot Job and requires the intended workload-policy denial for coordinator, renderer and retired preparation Jobs, token mounting, credential, claim, host-network and resource-ceiling cases. Controller Pods, networking, retention/pruning, source workloads, notification delivery and isolated restore remain separate native acceptance.
     access: {profile: test-runner, prerequisites: []}
     confirmation: {type: exact, variable: APPLICATION_BOUNDARY_TEST_CONFIRM, expected: "test:application-boundary:server-admission"}
     runner: {command: "APPLICATION_BOUNDARY_TEST_CONFIRM=test:application-boundary:server-admission mise exec -- just kube application-boundary-test", implementation: scripts/test/scenarios/application-boundary.sh}
     native_results: {strategy: wrapper-junit}
-  - metadata: {id: test.application-boundary-storage-network, source: test, framework: python, suite: platform, tier: integration, target: application-boundary, scenario: storage-network, scope: application, intent: acceptance, mutates_cluster: true, execution_owner: shared}
-    description: Uses fixed tokenless Jobs and separately enrolled synthetic claims on the exact deployed revision. Proves controller Pods, paired API/database/DNS connectivity and enforced worker denial, two-node RWX, EROFS read-only mounts, exclusive creation and retention after owned Job removal. Cleans only recorded Jobs and marked synthetic directories. Excludes source reconciliation/pruning, authenticated grants, ingress, preparation downloads, notification delivery and isolated backup restore.
-    access: {profile: test-runner, prerequisites: []}
-    confirmation: {type: exact, variable: APPLICATION_BOUNDARY_NATIVE_CONFIRM, expected: "test:application-boundary:storage-network"}
-    runner: {command: "APPLICATION_BOUNDARY_NATIVE_CONFIRM=test:application-boundary:storage-network mise exec -- just kube application-boundary-native-test", implementation: scripts/test/scenarios/application_boundary_native.py}
-    native_results: {strategy: wrapper-junit}
-    dispatch: {mode: direct, runtime: uv-python, path: scripts/test/scenarios/application_boundary_native.py, args: ["@test-kubeconfig@"], selector: null}

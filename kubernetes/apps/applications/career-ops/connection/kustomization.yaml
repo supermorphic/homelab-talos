@@ -4,7 +4,5 @@ resources:
 - ./gitrepository.yaml
 - ./application-kustomization.yaml
 - ./career-ops-source.sops.yaml
-- ./cv-render-database.sops.yaml
 - ./application-packages-database.sops.yaml
-- ./cv-prepare-source.sops.yaml
 - ./cv-api-auth.sops.yaml

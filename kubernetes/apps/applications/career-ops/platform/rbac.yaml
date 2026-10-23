@@ -50,19 +50,6 @@ rules:
   resources:
   - httproutes
   verbs: *id001
-- apiGroups:
-  - rbac.authorization.k8s.io
-  resources:
-  - rolebindings
-  verbs: *id001
-- apiGroups:
-  - rbac.authorization.k8s.io
-  resources:
-  - roles
-  resourceNames:
-  - cv-render-jobs
-  verbs:
-  - bind
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -81,31 +68,6 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: cv-render-jobs
-  namespace: career-ops
-rules:
-- apiGroups:
-  - batch
-  resources:
-  - jobs
-  verbs:
-  - create
-  - get
-  - list
-  - watch
-  - delete
-- apiGroups:
-  - ''
-  resources:
-  - pods
-  verbs:
-  - get
-  - list
-  - watch
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
   name: career-ops-boundary-test
   namespace: career-ops
 rules:
@@ -115,26 +77,6 @@ rules:
   - jobs
   verbs:
   - create
-- apiGroups:
-  - batch
-  resources:
-  - jobs
-  resourceNames:
-  - career-ops-boundary-seed
-  - career-ops-boundary-write
-  - career-ops-boundary-read
-  - career-ops-boundary-cleanup
-  - career-ops-boundary-network-write-api
-  - career-ops-boundary-network-write-database
-  - career-ops-boundary-network-write-dns-tcp
-  - career-ops-boundary-network-write-dns-udp
-  - career-ops-boundary-network-read-api
-  - career-ops-boundary-network-read-database
-  - career-ops-boundary-network-read-dns-tcp
-  - career-ops-boundary-network-read-dns-udp
-  verbs:
-  - get
-  - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -167,7 +109,6 @@ rules:
   - career-ops-routes
   - career-ops-storage
   - career-ops-boundary-test
-  - career-ops-boundary-fixtures
   verbs:
   - get
 ---

@@ -1373,12 +1373,7 @@ application-boundary-verify: require-bash
     @scripts/test/run-catalog-suite.sh verification.application-boundary -- \
       scripts/verify/application-boundary.sh {{quote(test_kubeconfig)}}
 
-# Submit only fixed server-side admission dry runs; native storage/network proof is separate.
+# Submit only fixed server-side admission dry runs.
 application-boundary-test: require-bash
     @scripts/test/run-catalog-suite.sh test.application-boundary-admission -- \
       scripts/test/scenarios/application-boundary.sh {{quote(test_kubeconfig)}}
-
-# Fixed tokenless fixtures; separate synthetic claims, controller Pods and two-node RWX.
-application-boundary-native-test: require-bash
-    @scripts/test/run-catalog-suite.sh test.application-boundary-storage-network -- \
-      uv run --locked python scripts/test/scenarios/application_boundary_native.py {{quote(test_kubeconfig)}}

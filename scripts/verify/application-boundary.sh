@@ -166,11 +166,10 @@ else:
             sys.exit('Application '+name+' lacks its current owned tokenless Pod with exit0 and '+message+'.')
         print('Application '+name+': passed; current Job-owned tokenless Pod exited0 with '+message+'.')
 
-    observe_smoke('cv-bootstrap-smoke','cv-renderer','bootstrap','bootstrap-ok')
     inventory=enrolled['Kustomization'].get('status',{}).get('inventory',{}).get('entries',[])
     if any(e.get('id') == 'career-ops_application-json-smoke_batch_Job' and e.get('v') == 'v1' for e in inventory):
         observe_smoke('application-json-smoke','career-ops-service','json-check','application-json-ok',source_owned=True)
     else:
         print('Second non-rendering workload is not selected by the current application inventory; acceptance pending.')
-    print('Application source revision '+revision+'; bootstrap and retained-volume observations passed. Runtime, credentials, signal correctness and recovery need separate acceptance.')
+    print('Application source revision '+revision+'; retained-volume observations passed. Runtime, credentials, signal correctness and recovery need separate acceptance.')
 PY

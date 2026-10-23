@@ -107,10 +107,18 @@ RECONCILER = "system:serviceaccount:career-ops:career-ops-reconciler"
 COORDINATOR = "system:serviceaccount:career-ops:cv-coordinator"
 
 
-def workload(account="cv-renderer", kind="Job"):
+SERVICE_ACCOUNTS = ["cv-coordinator", "cv-renderer", "career-ops-service"]
+RETIRED_ACCOUNTS = [
+    "cv-prepare",
+    "career-ops-boundary-coordinator",
+    "career-ops-boundary-renderer",
+]
+
+
+def workload(account="career-ops-service", kind="Job"):
     pod = {
         "serviceAccountName": account,
-        "automountServiceAccountToken": account == "cv-coordinator",
+        "automountServiceAccountToken": False,
         "securityContext": {
             "runAsNonRoot": True,
             "runAsUser": 1000,
@@ -147,6 +155,43 @@ def workload(account="cv-renderer", kind="Job"):
     if kind == "Job":
         spec.update({"backoffLimit": 0, "parallelism": 1, "completions": 1})
     return {"kind": kind, "metadata": metadata, "spec": spec}
+
+
+def pod_spec(obj):
+    return obj["spec"] if obj["kind"] == "Pod" else obj["spec"]["template"]["spec"]
+
+
+def job_pod(account):
+    """A Pod created by a Job controller for the given account."""
+    obj = workload(account, "Pod")
+    obj["metadata"]["ownerReferences"] = [
+        {"apiVersion": "batch/v1", "kind": "Job", "name": "fixture", "uid": "u", "controller": True}
+    ]
+    return obj
+
+
+def with_artifacts(obj, claim_read_only=True, mount_read_only=True, **mount):
+    """Mount the artifact claim the way the coordinator is enrolled to, with overrides."""
+    pod = pod_spec(obj)
+    claim = {"claimName": "cv-artifacts"}
+    if claim_read_only is not None:
+        claim["readOnly"] = claim_read_only
+    pod.setdefault("volumes", []).append({"name": "artifacts", "persistentVolumeClaim": claim})
+    entry = {"name": "artifacts", "mountPath": "/artifacts"}
+    if mount_read_only is not None:
+        entry["readOnly"] = mount_read_only
+    entry.update(mount)
+    pod["containers"][0].setdefault("volumeMounts", []).append(entry)
+    return obj
+
+
+def with_secret(obj, secret):
+    pod = pod_spec(obj)
+    pod.setdefault("volumes", []).append({"name": "credential", "secret": {"secretName": secret}})
+    pod["containers"][0].setdefault("volumeMounts", []).append(
+        {"name": "credential", "mountPath": "/run/secrets/" + secret, "readOnly": True}
+    )
+    return obj
 
 
 def renderer_deployment():
@@ -261,43 +306,21 @@ class ApplicationAuthorityTests(ApplicationFixture, unittest.TestCase):
             "pods/exec",
             "pods/log",
             "serviceaccounts/token",
+            "roles",
+            "rolebindings",
             "*",
         ]:
             self.assertFalse(any(r == forbidden for g, r, v in allowed), forbidden)
-        self.assertFalse(any(v in ["impersonate", "escalate", "*"] for g, r, v in allowed))
+        self.assertFalse(
+            any(v in ["impersonate", "escalate", "bind", "*"] for g, r, v in allowed)
+        )
+        self.assertFalse(any(g == "rbac.authorization.k8s.io" for g, r, v in allowed))
         # Flux health checks read Deployment ReplicaSets; the reconciler cannot change them.
         self.assertEqual(
             {v for g, r, v in allowed if (g, r) == ("apps", "replicasets")}, {"get", "list", "watch"}
         )
-        bind = [r for r in roles["career-ops-reconciler"]["rules"] if "bind" in r["verbs"]]
-        self.assertEqual(
-            bind,
-            [
-                {
-                    "apiGroups": ["rbac.authorization.k8s.io"],
-                    "resources": ["roles"],
-                    "resourceNames": ["cv-render-jobs"],
-                    "verbs": ["bind"],
-                }
-            ],
-        )
-        runtime = {
-            (r, v)
-            for rule in roles["cv-render-jobs"]["rules"]
-            for r in rule["resources"]
-            for v in rule["verbs"]
-        }
-        self.assertEqual(
-            runtime,
-            {
-                (r, v)
-                for r, verbs in [
-                    ("jobs", ["create", "get", "list", "watch", "delete"]),
-                    ("pods", ["get", "list", "watch"]),
-                ]
-                for v in verbs
-            },
-        )
+        # No runtime account receives Kubernetes API authority.
+        self.assertNotIn("cv-render-jobs", roles)
         bindings = [
             d
             for d in self.documents
@@ -317,60 +340,81 @@ class ApplicationAuthorityTests(ApplicationFixture, unittest.TestCase):
 
     def test_valid_profiles_and_controller_pods(self):
         for account, kind in [
-            ("cv-prepare", "Job"),
-            ("cv-renderer", "Job"),
-            ("cv-coordinator", "Deployment"),
+            ("career-ops-service", "Job"),
             ("career-ops-service", "Deployment"),
-            ("cv-renderer", "Pod"),
+            ("cv-coordinator", "Deployment"),
             ("cv-coordinator", "ReplicaSet"),
+            ("cv-coordinator", "Pod"),
+            ("cv-renderer", "Deployment"),
+            ("cv-renderer", "ReplicaSet"),
+            ("cv-renderer", "Pod"),
         ]:
             with self.subTest(account=account, kind=kind):
                 obj = workload(account, kind)
                 self.assertTrue(self.admission(obj))
                 self.assertTrue(self.admission(obj, operation="UPDATE", old=obj))
 
-    def test_coordinator_may_explicitly_disable_or_enable_its_token(self):
-        for kind in ["Job", "Pod", "Deployment", "ReplicaSet"]:
-            for token in [False, True]:
-                with self.subTest(kind=kind, token=token):
-                    obj = workload("cv-coordinator", kind)
-                    pod = obj["spec"] if kind == "Pod" else obj["spec"]["template"]["spec"]
-                    pod["automountServiceAccountToken"] = token
-                    pod["volumes"] = [
-                        {"name": "database", "secret": {"secretName": "cv-render-database"}}
-                    ]
-                    pod["containers"][0]["volumeMounts"] = [
-                        {
-                            "name": "database",
-                            "mountPath": "/run/secrets/cv-render-database",
-                            "readOnly": True,
-                        }
-                    ]
-                    self.assertTrue(self.admission(obj))
-                    self.assertTrue(self.admission(obj, operation="UPDATE", old=obj))
+    def test_only_the_service_accounts_are_enrolled(self):
+        for account in [*RETIRED_ACCOUNTS, "default", "career-ops-reconciler"]:
+            for kind in ["Job", "Deployment", "ReplicaSet", "Pod"]:
+                with self.subTest(account=account, kind=kind):
+                    self.assertFalse(self.admission(workload(account, kind)))
 
-    def test_other_runtime_accounts_cannot_enable_tokens(self):
-        for account in [
-            "cv-prepare",
-            "cv-renderer",
-            "career-ops-service",
-            "career-ops-boundary-coordinator",
-            "career-ops-boundary-renderer",
-        ]:
-            for kind in ["Job", "Pod"]:
+    def test_coordinator_and_renderer_cannot_run_as_jobs(self):
+        for account in ["cv-coordinator", "cv-renderer"]:
+            with self.subTest(account=account, kind="Job"):
+                self.assertFalse(self.admission(workload(account, "Job")))
+            with self.subTest(account=account, kind="Job Pod"):
+                self.assertFalse(self.admission(job_pod(account)))
+        # The reserved service keeps its one-shot Job profile and Job-owned Pods.
+        self.assertTrue(self.admission(workload("career-ops-service", "Job")))
+        self.assertTrue(self.admission(job_pod("career-ops-service")))
+        retrying = workload("career-ops-service", "Job")
+        retrying["spec"]["backoffLimit"] = 1
+        self.assertFalse(self.admission(retrying))
+
+    def test_no_account_may_mount_a_kubernetes_token(self):
+        for account in SERVICE_ACCOUNTS:
+            for kind in ["Deployment", "ReplicaSet", "Pod"]:
                 with self.subTest(account=account, kind=kind):
                     obj = workload(account, kind)
-                    pod = obj["spec"] if kind == "Pod" else obj["spec"]["template"]["spec"]
-                    pod["automountServiceAccountToken"] = True
+                    pod_spec(obj)["automountServiceAccountToken"] = True
                     self.assertFalse(self.admission(obj))
+                    self.assertFalse(
+                        self.admission(obj, operation="UPDATE", old=workload(account, kind))
+                    )
+        # An explicit API-token projection is no longer an allowance for anyone.
+        for account in SERVICE_ACCOUNTS:
+            with self.subTest(account=account, projection="kube-api-access"):
+                obj = workload(account, "Pod")
+                pod = pod_spec(obj)
+                pod["volumes"] = [
+                    {
+                        "name": "kube-api-access-fixture",
+                        "projected": {
+                            "sources": [
+                                {"serviceAccountToken": {"path": "token"}},
+                                {"configMap": {"name": "kube-root-ca.crt"}},
+                            ]
+                        },
+                    }
+                ]
+                pod["containers"][0]["volumeMounts"] = [
+                    {
+                        "name": "kube-api-access-fixture",
+                        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+                        "readOnly": True,
+                    }
+                ]
+                self.assertFalse(self.admission(obj))
 
     def test_workloads_must_explicitly_select_token_mounting(self):
-        for account in ["cv-coordinator", "cv-renderer", "cv-prepare", "career-ops-service"]:
-            for kind in ["Job", "Pod"]:
+        for account in SERVICE_ACCOUNTS:
+            for kind in ["Deployment", "Pod"]:
                 for omitted in [False, True]:
                     with self.subTest(account=account, kind=kind, omitted=omitted):
                         obj = workload(account, kind)
-                        pod = obj["spec"] if kind == "Pod" else obj["spec"]["template"]["spec"]
+                        pod = pod_spec(obj)
                         if omitted:
                             del pod["automountServiceAccountToken"]
                         else:
@@ -448,7 +492,7 @@ class ApplicationAuthorityTests(ApplicationFixture, unittest.TestCase):
 
     def test_termination_metadata_cannot_read_secret_files(self):
         for field, value in [
-            ("terminationMessagePath", "/run/secrets/cv-render-database/password"),
+            ("terminationMessagePath", "/run/secrets/application-packages-database/password"),
             ("terminationMessagePolicy", "FallbackToLogsOnError"),
         ]:
             obj = workload("cv-coordinator", "Deployment")
@@ -460,27 +504,18 @@ class ApplicationAuthorityTests(ApplicationFixture, unittest.TestCase):
         new = workload("cv-coordinator", "Deployment")
         self.assertFalse(self.admission(new, operation="UPDATE", old=old))
 
-    def test_coordinator_job_authority_includes_old_object_on_delete(self):
-        for operation in ["CREATE", "UPDATE", "DELETE"]:
-            for account, expected in [
-                ("cv-renderer", True),
-                ("cv-prepare", False),
-                ("cv-coordinator", False),
-            ]:
-                obj = workload(account)
-                with self.subTest(operation=operation, account=account):
-                    self.assertEqual(
-                        self.admission(
-                            None if operation == "DELETE" else obj,
-                            username=COORDINATOR,
-                            operation=operation,
-                            old=obj,
-                        ),
-                        expected,
-                    )
+    def test_coordinator_identity_has_no_workload_mutation_authority(self):
+        # Kubernetes RBAC gives the coordinator nothing; its username is not an
+        # admission allowance for retired worker Jobs either.
+        for operation in ["CREATE", "UPDATE"]:
+            with self.subTest(operation=operation):
+                obj = workload("cv-renderer", "Job")
+                self.assertFalse(
+                    self.admission(obj, username=COORDINATOR, operation=operation, old=obj)
+                )
 
     def test_platform_names_are_protected_on_create_update_delete(self):
-        for kind in ["ServiceAccount", "ConfigMap", "Service", "RoleBinding"]:
+        for kind in ["ServiceAccount", "ConfigMap", "Service"]:
             for operation in ["CREATE", "UPDATE", "DELETE"]:
                 obj = {
                     "kind": kind,
@@ -505,7 +540,7 @@ class ApplicationAuthorityTests(ApplicationFixture, unittest.TestCase):
             self.admission(obj, policy="career-ops-resources", operation="UPDATE", old=old)
         )
 
-    def test_only_fixed_runtime_binding_is_admitted(self):
+    def test_application_cannot_manage_role_bindings(self):
         obj = {
             "kind": "RoleBinding",
             "metadata": {"name": "cv-coordinator-jobs", "namespace": "career-ops"},
@@ -518,20 +553,34 @@ class ApplicationAuthorityTests(ApplicationFixture, unittest.TestCase):
                 {"kind": "ServiceAccount", "name": "cv-coordinator", "namespace": "career-ops"}
             ],
         }
-        self.assertTrue(self.admission(obj, policy="career-ops-resources"))
-        for field, value in [
-            (
-                "subjects",
-                [{"kind": "ServiceAccount", "name": "cv-prepare", "namespace": "career-ops"}],
-            ),
-            (
-                "roleRef",
-                {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "admin"},
-            ),
-        ]:
-            bad = copy.deepcopy(obj)
-            bad[field] = value
-            self.assertFalse(self.admission(bad, policy="career-ops-resources"))
+        for operation in ["CREATE", "UPDATE", "DELETE"]:
+            with self.subTest(operation=operation):
+                self.assertFalse(
+                    self.admission(
+                        None if operation == "DELETE" else obj,
+                        policy="career-ops-resources",
+                        operation=operation,
+                        old=obj,
+                    )
+                )
+
+    def test_only_tokenless_service_accounts_are_admitted(self):
+        def account(name):
+            return {
+                "kind": "ServiceAccount",
+                "metadata": {"name": name, "namespace": "career-ops"},
+                "automountServiceAccountToken": False,
+            }
+
+        for name in SERVICE_ACCOUNTS:
+            with self.subTest(name=name):
+                self.assertTrue(self.admission(account(name), policy="career-ops-resources"))
+                bad = account(name)
+                bad["automountServiceAccountToken"] = True
+                self.assertFalse(self.admission(bad, policy="career-ops-resources"))
+        for name in [*RETIRED_ACCOUNTS, "cv-worker"]:
+            with self.subTest(name=name):
+                self.assertFalse(self.admission(account(name), policy="career-ops-resources"))
 
 
 class ApplicationNetworkTests(ApplicationFixture, unittest.TestCase):
@@ -546,60 +595,6 @@ class ApplicationNetworkTests(ApplicationFixture, unittest.TestCase):
         self.assertEqual(policy.get("ingress"), [{"fromEntities": ["none"]}])
         self.assertEqual(policy.get("egress"), [{"toEntities": ["none"]}])
 
-    def test_preparation_network_has_only_reviewed_dns_and_https_destinations(self):
-        policy = next(
-            d["spec"]
-            for d in self.documents
-            if d["kind"] == "CiliumNetworkPolicy"
-            and d["metadata"]["name"] == "career-ops-preparation"
-        )
-        self.assertEqual(set(policy), {"endpointSelector", "egress"})
-        self.assertEqual(
-            policy["endpointSelector"],
-            {"matchLabels": {"k8s:io.cilium.k8s.policy.serviceaccount": "cv-prepare"}},
-        )
-        dns, https = policy["egress"]
-        hosts = {
-            "corefonts.sourceforge.net",
-            "deb.debian.org",
-            "downloads.sourceforge.net",
-            "files.pythonhosted.org",
-            "forgejo.infra.supermorphic.com",
-            "packages.typst.org",
-            "psychz.dl.sourceforge.net",
-        }
-        self.assertEqual(set(dns), {"toEndpoints", "toPorts"})
-        self.assertEqual(
-            dns["toEndpoints"],
-            [
-                {
-                    "matchLabels": {
-                        "k8s:io.kubernetes.pod.namespace": "kube-system",
-                        "k8s:k8s-app": "kube-dns",
-                    }
-                }
-            ],
-        )
-        self.assertEqual(
-            dns["toPorts"],
-            [
-                {
-                    "ports": [
-                        {"port": "53", "protocol": "TCP"},
-                        {"port": "53", "protocol": "UDP"},
-                    ],
-                    "rules": {"dns": [{"matchName": h} for h in sorted(hosts)]},
-                }
-            ],
-        )
-        self.assertEqual(
-            https,
-            {
-                "toFQDNs": [{"matchName": h} for h in sorted(hosts)],
-                "toPorts": [{"ports": [{"port": "443", "protocol": "TCP"}]}],
-            },
-        )
-
     def test_network_capabilities_follow_service_account_identity(self):
         policies = {
             d["metadata"]["name"]: d["spec"]
@@ -610,24 +605,9 @@ class ApplicationNetworkTests(ApplicationFixture, unittest.TestCase):
         self.assertEqual(policies["career-ops-deny"]["endpointSelector"], {})
         self.assertEqual(
             set(policies),
-            {
-                "career-ops-deny",
-                "career-ops-coordinator",
-                "career-ops-boundary-coordinator",
-                "career-ops-preparation",
-                "career-ops-renderer",
-            },
+            {"career-ops-deny", "career-ops-coordinator", "career-ops-renderer"},
         )
         coordinator = policies["career-ops-coordinator"]
-        native = policies["career-ops-boundary-coordinator"]
-        # The fixture proves the shared DNS, database and API destinations; only the
-        # production coordinator may call the renderer.
-        self.assertEqual(native["egress"], coordinator["egress"][:3])
-        self.assertEqual(native["ingress"], [])
-        self.assertEqual(
-            native["endpointSelector"]["matchLabels"],
-            {"k8s:io.cilium.k8s.policy.serviceaccount": "career-ops-boundary-coordinator"},
-        )
         self.assertEqual(
             coordinator["endpointSelector"]["matchLabels"],
             {"k8s:io.cilium.k8s.policy.serviceaccount": "cv-coordinator"},
@@ -636,11 +616,28 @@ class ApplicationNetworkTests(ApplicationFixture, unittest.TestCase):
             [p["port"] for r in coordinator["ingress"] for p in r["toPorts"][0]["ports"]],
             ["8080", "9090"],
         )
-        self.assertEqual(len(coordinator["egress"]), 4)
-        self.assertEqual(coordinator["egress"][2]["toEntities"], ["kube-apiserver"])
+        # DNS, PostgreSQL and the renderer only.
+        self.assertEqual(len(coordinator["egress"]), 3)
+        self.assertEqual(
+            coordinator["egress"][0]["toEndpoints"],
+            [{"matchLabels": {"k8s:io.kubernetes.pod.namespace": "kube-system", "k8s:k8s-app": "kube-dns"}}],
+        )
         self.assertEqual(
             coordinator["egress"][1]["toPorts"][0]["ports"], [{"port": "5432", "protocol": "TCP"}]
         )
+
+    def test_no_workload_has_kubernetes_api_or_internet_egress(self):
+        for name, policy in (
+            (d["metadata"]["name"], d["spec"])
+            for d in self.documents
+            if d["kind"] == "CiliumNetworkPolicy"
+        ):
+            for rule in policy.get("egress", []):
+                with self.subTest(policy=name, rule=rule):
+                    self.assertNotIn("toFQDNs", rule)
+                    self.assertNotIn("toCIDR", rule)
+                    self.assertNotIn("toCIDRSet", rule)
+                    self.assertTrue(set(rule.get("toEntities", [])) <= {"none"}, rule)
         db = next(
             iter(
                 yaml.safe_load_all(
@@ -849,57 +846,6 @@ class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
             ]
             self.assertFalse(self.admission(bad, policy="career-ops-storage"))
 
-    def test_profile_mounts_and_alternate_mount_rejections(self):
-        for account, claim, readonly, path, sub in [
-            ("cv-prepare", "cv-releases", False, "/releases", "candidates/release-fixture"),
-            ("cv-renderer", "cv-releases", True, "/releases", "published/release-fixture"),
-            ("cv-renderer", "cv-requests", True, "/input", "requests/request-fixture/input"),
-            (
-                "cv-renderer",
-                "cv-requests",
-                False,
-                "/staging",
-                "requests/request-fixture/attempts/attempt-fixture/pods/pod-fixture",
-            ),
-            ("cv-coordinator", "cv-artifacts", False, "/artifacts", ""),
-            ("cv-coordinator", "cv-requests", False, "/requests", ""),
-        ]:
-            obj = workload(account)
-            pod = obj["spec"]["template"]["spec"]
-            pod["volumes"] = [
-                {
-                    "name": "data",
-                    "persistentVolumeClaim": {"claimName": claim, "readOnly": readonly},
-                }
-            ]
-            mount = {"name": "data", "mountPath": path, "readOnly": readonly}
-            if sub:
-                mount["subPath"] = sub
-            pod["containers"][0]["volumeMounts"] = [mount]
-            self.assertTrue(self.admission(obj), (account, claim, path))
-            if readonly:
-                bad = copy.deepcopy(obj)
-                bad["spec"]["template"]["spec"]["containers"][0]["volumeMounts"][0]["readOnly"] = (
-                    False
-                )
-                self.assertFalse(self.admission(bad))
-            bad = copy.deepcopy(obj)
-            bad["spec"]["template"]["spec"]["containers"][0]["volumeMounts"][0]["subPathExpr"] = (
-                "$(PRIVATE_PATH)"
-            )
-            self.assertFalse(self.admission(bad))
-            if account != "cv-coordinator":
-                bad = copy.deepcopy(obj)
-                bad["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"][
-                    "claimName"
-                ] = "cv-artifacts"
-                self.assertFalse(self.admission(bad))
-        obj = workload("cv-prepare")
-        obj["spec"]["template"]["spec"]["volumes"] = [
-            {"name": "data", "persistentVolumeClaim": {"claimName": "cv-requests"}}
-        ]
-        self.assertFalse(self.admission(obj))
-
     def test_pvc_attribute_classes_and_protection_removal_are_denied(self):
         obj = {
             "kind": "PersistentVolumeClaim",
@@ -955,53 +901,43 @@ class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
             self.admission(obj, operation="UPDATE", old=workload(kind="Pod"), sub="resize")
         )
 
-    def test_coordinator_promotion_and_read_only_candidate_qualification(self):
-        for account, sub in [
-            ("cv-coordinator", None),
-            ("cv-renderer", "candidates/release-fixture"),
-        ]:
-            obj = workload(account)
-            pod = obj["spec"]["template"]["spec"]
-            pod["volumes"] = [
-                {
-                    "name": "release",
-                    "persistentVolumeClaim": {
-                        "claimName": "cv-releases",
-                        "readOnly": account != "cv-coordinator",
-                    },
-                }
-            ]
-            mount = {
-                "name": "release",
-                "mountPath": "/releases",
-                "readOnly": account != "cv-coordinator",
-            }
-            if sub:
-                mount["subPath"] = sub
-            pod["containers"][0]["volumeMounts"] = [mount]
-            self.assertTrue(self.admission(obj), account)
-        obj = workload("cv-prepare")
-        pod = obj["spec"]["template"]["spec"]
-        pod["volumes"] = [
-            {"name": "release", "persistentVolumeClaim": {"claimName": "cv-releases"}}
-        ]
-        pod["containers"][0]["volumeMounts"] = [
-            {"name": "release", "mountPath": "/releases", "subPath": "published/release-fixture"}
-        ]
-        self.assertFalse(self.admission(obj))
+    def test_coordinator_mounts_only_the_read_only_artifact_claim(self):
+        for kind in ["Deployment", "ReplicaSet", "Pod"]:
+            with self.subTest(kind=kind):
+                self.assertTrue(self.admission(with_artifacts(workload("cv-coordinator", kind))))
+        cases = {
+            "writable claim": {"claim_read_only": False},
+            "claim access unset": {"claim_read_only": None},
+            "writable mount": {"mount_read_only": False},
+            "mount access unset": {"mount_read_only": None},
+            "subPath": {"subPath": "private"},
+            "dynamic subPath": {"subPathExpr": "$(PRIVATE_PATH)"},
+            "other path": {"mountPath": "/releases"},
+        }
+        for name, change in cases.items():
+            with self.subTest(name):
+                self.assertFalse(
+                    self.admission(with_artifacts(workload("cv-coordinator", "Deployment"), **change))
+                )
+        for claim in ["cv-releases", "cv-requests", "career-ops-boundary-artifacts"]:
+            with self.subTest(claim=claim):
+                obj = with_artifacts(workload("cv-coordinator", "Deployment"))
+                pod_spec(obj)["volumes"][0]["persistentVolumeClaim"]["claimName"] = claim
+                self.assertFalse(self.admission(obj))
+
+    def test_only_the_coordinator_may_mount_a_claim(self):
+        for account in ["cv-renderer", "career-ops-service"]:
+            for kind in ["Job", "Deployment", "ReplicaSet", "Pod"]:
+                if account == "cv-renderer" and kind == "Job":
+                    continue
+                with self.subTest(account=account, kind=kind):
+                    self.assertTrue(self.admission(workload(account, kind)))
+                    self.assertFalse(self.admission(with_artifacts(workload(account, kind))))
+        self.assertFalse(self.admission(with_artifacts(job_pod("cv-renderer"))))
 
     def test_secret_files_are_read_only_at_the_enrolled_path(self):
-        for account, secret in [
-            ("cv-coordinator", "cv-render-database"),
-            ("cv-coordinator", "application-packages-database"),
-            ("cv-coordinator", "cv-api-auth"),
-            ("cv-prepare", "cv-prepare-source"),
-        ]:
-            obj = workload(account)
-            pod = obj["spec"]["template"]["spec"]
-            pod["volumes"] = [{"name": "credential", "secret": {"secretName": secret}}]
-            mount = {"name": "credential", "mountPath": "/run/secrets/" + secret, "readOnly": True}
-            pod["containers"][0]["volumeMounts"] = [mount]
+        for secret in ["application-packages-database", "cv-api-auth"]:
+            obj = with_secret(workload("cv-coordinator", "Deployment"), secret)
             self.assertTrue(self.admission(obj), secret)
             for field, value in [
                 ("readOnly", False),
@@ -1012,14 +948,27 @@ class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
                 bad["spec"]["template"]["spec"]["containers"][0]["volumeMounts"][0][field] = value
                 self.assertFalse(self.admission(bad))
 
+    def test_retired_and_unassigned_secrets_are_denied(self):
+        for account in SERVICE_ACCOUNTS:
+            for secret in [
+                "cv-render-database",
+                "cv-prepare-source",
+                "application-packages-database",
+                "cv-api-auth",
+            ]:
+                if account == "cv-coordinator" and secret in [
+                    "application-packages-database",
+                    "cv-api-auth",
+                ]:
+                    continue
+                with self.subTest(account=account, secret=secret):
+                    self.assertFalse(
+                        self.admission(with_secret(workload(account, "Deployment"), secret))
+                    )
+
     def test_secret_environment_and_partial_directory_delivery_are_denied(self):
-        for account, secret in [
-            ("cv-coordinator", "cv-render-database"),
-            ("cv-coordinator", "application-packages-database"),
-            ("cv-coordinator", "cv-api-auth"),
-            ("cv-prepare", "cv-prepare-source"),
-        ]:
-            obj = workload(account)
+        for secret in ["application-packages-database", "cv-api-auth"]:
+            obj = workload("cv-coordinator", "Deployment")
             pod = obj["spec"]["template"]["spec"]
             pod["containers"][0]["env"] = [
                 {
@@ -1027,7 +976,7 @@ class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
                     "valueFrom": {"secretKeyRef": {"name": secret, "key": "password"}},
                 }
             ]
-            with self.subTest(account=account, delivery="environment"):
+            with self.subTest(secret=secret, delivery="environment"):
                 self.assertFalse(self.admission(obj))
             pod["containers"][0].pop("env")
             pod["volumes"] = [
@@ -1042,25 +991,30 @@ class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
             pod["containers"][0]["volumeMounts"] = [
                 {"name": "credential", "mountPath": "/run/secrets/" + secret, "readOnly": True}
             ]
-            with self.subTest(account=account, delivery="partial-directory"):
+            with self.subTest(secret=secret, delivery="partial-directory"):
                 self.assertFalse(self.admission(obj))
 
     def test_per_profile_resources_and_temporary_workspace(self):
-        for account, cpu, memory, ephemeral in [
-            ("cv-renderer", "1001m", "1025Mi", "2049Mi"),
-            ("cv-coordinator", "1001m", "2049Mi", "2049Mi"),
-            ("cv-prepare", "2001m", "4097Mi", "4097Mi"),
+        for account, kind, cpu, memory, ephemeral in [
+            ("cv-renderer", "Deployment", "1001m", "1025Mi", "2049Mi"),
+            ("career-ops-service", "Job", "1001m", "1025Mi", "2049Mi"),
+            ("cv-coordinator", "Deployment", "1001m", "2049Mi", "2049Mi"),
         ]:
             for resource, over in [
                 ("cpu", cpu),
                 ("memory", memory),
                 ("ephemeral-storage", ephemeral),
             ]:
-                obj = workload(account)
+                obj = workload(account, kind)
                 obj["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"][
                     resource
                 ] = over
                 self.assertFalse(self.admission(obj), (account, resource))
+        coordinator = workload("cv-coordinator", "Deployment")
+        coordinator["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"].update(
+            {"cpu": "1", "memory": "2Gi", "ephemeral-storage": "2Gi"}
+        )
+        self.assertTrue(self.admission(coordinator))
         for resources in [
             {},
             {"limits": {"cpu": "1", "memory": "1Gi"}},
@@ -1105,6 +1059,14 @@ class ApplicationStorageTests(ApplicationFixture, unittest.TestCase):
             self.assertTrue(self.admission(obj), kind)
 
 
+TEST_RUNNER = "system:serviceaccount:kube-system:homelab-test-runner"
+
+
+def admission_job():
+    """The live admission suite's positive control."""
+    return yaml.safe_load((ROOT / "tests/fixtures/application-boundary/job.yaml").read_text())
+
+
 class ApplicationAssuranceTests(ApplicationFixture, unittest.TestCase):
     def test_test_runner_can_only_submit_fixed_server_dry_runs(self):
         policies = render(ROOT / "kubernetes/apps/kube-system/agent-access/app")
@@ -1126,28 +1088,7 @@ class ApplicationAssuranceTests(ApplicationFixture, unittest.TestCase):
         self.assertEqual(len(roles), 1)
         self.assertEqual(
             roles[0]["rules"],
-            [
-                {"apiGroups": ["batch"], "resources": ["jobs"], "verbs": ["create"]},
-                {
-                    "apiGroups": ["batch"],
-                    "resources": ["jobs"],
-                    "resourceNames": [
-                        "career-ops-boundary-" + phase
-                        for phase in [
-                            "seed",
-                            "write",
-                            "read",
-                            "cleanup",
-                            *[
-                                "network-" + stage + "-" + target
-                                for stage in ["write", "read"]
-                                for target in ["api", "database", "dns-tcp", "dns-udp"]
-                            ],
-                        ]
-                    ],
-                    "verbs": ["get", "delete"],
-                },
-            ],
+            [{"apiGroups": ["batch"], "resources": ["jobs"], "verbs": ["create"]}],
         )
         readers = [
             d
@@ -1166,16 +1107,15 @@ class ApplicationAssuranceTests(ApplicationFixture, unittest.TestCase):
                 "career-ops-routes",
                 "career-ops-storage",
                 "career-ops-boundary-test",
-                "career-ops-boundary-fixtures",
             },
         )
-        obj = workload()
-        obj["metadata"]["name"] = "career-ops-boundary-admission"
+        obj = admission_job()
+        self.assertEqual(obj["metadata"]["name"], "career-ops-boundary-admission")
         req = {
             "namespace": "career-ops",
             "operation": "CREATE",
             "dryRun": True,
-            "userInfo": {"username": "system:serviceaccount:kube-system:homelab-test-runner"},
+            "userInfo": {"username": TEST_RUNNER},
         }
         self.assertTrue(self.admits("career-ops-boundary-test", req, obj))
         for field, value in [("dryRun", False), ("operation", "UPDATE"), ("operation", "DELETE")]:
@@ -1185,21 +1125,78 @@ class ApplicationAssuranceTests(ApplicationFixture, unittest.TestCase):
         bad = copy.deepcopy(obj)
         bad["metadata"]["name"] = "another-job"
         self.assertFalse(self.admits("career-ops-boundary-test", req, bad))
+        # Retired native fixture Jobs are no longer created or deleted by the runner.
+        for name in ["career-ops-boundary-seed", "career-ops-boundary-network-read-api"]:
+            bad = copy.deepcopy(obj)
+            bad["metadata"]["name"] = name
+            with self.subTest(name=name, operation="CREATE"):
+                self.assertFalse(
+                    self.admits("career-ops-boundary-test", {**req, "dryRun": False}, bad)
+                )
+            with self.subTest(name=name, operation="DELETE"):
+                self.assertFalse(
+                    self.admits(
+                        "career-ops-boundary-test",
+                        {**req, "operation": "DELETE", "dryRun": False},
+                        None,
+                        old=bad,
+                    )
+                )
+
+    def test_admission_suite_cases_agree_with_the_workload_policy(self):
+        """Mirror of scripts/test/scenarios/application-boundary.sh server-side cases."""
+        fixture = admission_job()
+        self.assertEqual(
+            fixture["spec"]["template"]["spec"]["serviceAccountName"], "career-ops-service"
+        )
+        self.assertTrue(self.admission(fixture, username=TEST_RUNNER))
+
+        def mutate(field, value):
+            bad = copy.deepcopy(fixture)
+            bad["spec"]["template"]["spec"][field] = value
+            return bad
+
+        def identity(account):
+            bad = copy.deepcopy(fixture)
+            bad["metadata"]["labels"]["app.kubernetes.io/name"] = account
+            bad["spec"]["template"]["metadata"]["labels"]["app.kubernetes.io/name"] = account
+            bad["spec"]["template"]["spec"]["serviceAccountName"] = account
+            return bad
+
+        ceiling = copy.deepcopy(fixture)
+        ceiling["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"]["cpu"] = "2"
+        denied = {
+            "renderer Job": identity("cv-renderer"),
+            "coordinator Job": identity("cv-coordinator"),
+            "preparation Job": identity("cv-prepare"),
+            "host networking": mutate("hostNetwork", True),
+            "reconciliation identity": mutate("serviceAccountName", "career-ops-reconciler"),
+            "token mounting": mutate("automountServiceAccountToken", True),
+            "source credential": mutate(
+                "volumes", [{"name": "source", "secret": {"secretName": "career-ops-source"}}]
+            ),
+            "artifact claim": mutate(
+                "volumes",
+                [{"name": "artifacts", "persistentVolumeClaim": {"claimName": "cv-artifacts"}}],
+            ),
+            "resource ceiling": ceiling,
+        }
+        for name, obj in denied.items():
+            with self.subTest(name):
+                self.assertFalse(self.admission(obj, username=TEST_RUNNER))
 
 
 class ApplicationConnectionTests(unittest.TestCase):
     def test_reviewed_private_source_and_application_reconciliation_are_enabled(self):
         docs = render(ROOT / "kubernetes/apps/applications/career-ops/connection")
-        self.assertEqual(len(docs), 7)
+        self.assertEqual(len(docs), 5)
         self.assertEqual(
             {(d["kind"], d["metadata"]["namespace"], d["metadata"]["name"]) for d in docs},
             {
                 ("GitRepository", "career-ops", "career-ops"),
                 ("Kustomization", "career-ops", "career-ops-apps"),
                 ("Secret", "career-ops", "career-ops-source"),
-                ("Secret", "career-ops", "cv-render-database"),
                 ("Secret", "career-ops", "application-packages-database"),
-                ("Secret", "career-ops", "cv-prepare-source"),
                 ("Secret", "career-ops", "cv-api-auth"),
             },
         )
@@ -1233,9 +1230,13 @@ class ApplicationConnectionTests(unittest.TestCase):
 
     def test_runtime_database_secrets_are_selected_by_the_platform_connection(self):
         docs = render(ROOT / "kubernetes/apps/applications/career-ops/connection")
-        for name in ("cv-render-database", "application-packages-database"):
-            with self.subTest(secret=name):
-                self.assert_database_secret(next((d for d in docs if d["metadata"]["name"] == name), None))
+        databases = [
+            d for d in docs if d["kind"] == "Secret" and "binding.json" in d.get("stringData", {})
+        ]
+        self.assertEqual(
+            [d["metadata"]["name"] for d in databases], ["application-packages-database"]
+        )
+        self.assert_database_secret(databases[0])
 
     def assert_database_secret(self, credential):
         self.assertIsNotNone(credential)
@@ -1295,9 +1296,9 @@ class RendererServiceTests(ApplicationFixture, unittest.TestCase):
                 obj["kind"] = kind
                 self.assertTrue(self.admission(obj))
 
-    def test_renderer_claims_only_in_jobs(self):
+    def test_renderer_has_no_claims_or_worker_jobs(self):
         def with_claim(obj):
-            spec = obj["spec"] if obj["kind"] == "Pod" else obj["spec"]["template"]["spec"]
+            spec = pod_spec(obj)
             spec.setdefault("volumes", []).append(
                 {"name": "requests", "persistentVolumeClaim": {"claimName": "cv-requests", "readOnly": True}}
             )
@@ -1306,30 +1307,11 @@ class RendererServiceTests(ApplicationFixture, unittest.TestCase):
             )
             return obj
 
-        self.assertTrue(self.admission(with_claim(workload("cv-renderer", "Job"))))
-        job_pod = with_claim(workload("cv-renderer", "Pod"))
-        job_pod["metadata"]["ownerReferences"] = [{"kind": "Job", "name": "fixture", "apiVersion": "batch/v1", "uid": "u"}]
-        self.assertTrue(self.admission(job_pod))
-        for kind in ("Deployment", "ReplicaSet", "Pod"):
+        for kind in ("Job", "Deployment", "ReplicaSet", "Pod"):
             with self.subTest(kind=kind):
                 self.assertFalse(self.admission(with_claim(workload("cv-renderer", kind))))
-
-    def test_orphaned_worker_pod_update_admitted(self):
-        # Deleting a Job with default propagation orphans its Pods: the garbage
-        # collector removes the Job owner in a Pod UPDATE, which must stay allowed.
-        old = workload("cv-renderer", "Pod")
-        old["spec"]["volumes"] = [
-            {"name": "requests", "persistentVolumeClaim": {"claimName": "cv-requests", "readOnly": True}}
-        ]
-        old["spec"]["containers"][0]["volumeMounts"] = [
-            {"name": "requests", "mountPath": "/input", "subPath": "requests/r1/input", "readOnly": True}
-        ]
-        old["metadata"]["ownerReferences"] = [
-            {"kind": "Job", "name": "fixture", "apiVersion": "batch/v1", "uid": "u"}
-        ]
-        new = copy.deepcopy(old)
-        del new["metadata"]["ownerReferences"]
-        self.assertTrue(self.admission(new, operation="UPDATE", old=old))
+        self.assertFalse(self.admission(with_claim(job_pod("cv-renderer"))))
+        self.assertFalse(self.admission(job_pod("cv-renderer")))
 
     def test_renderer_deployment_escalations_denied(self):
         def pod(obj):
@@ -1366,7 +1348,7 @@ class RendererServiceTests(ApplicationFixture, unittest.TestCase):
             "large workspace": lambda o: pod(o)["volumes"][2]["emptyDir"].update(sizeLimit="2Gi"),
             "cpu limit": lambda o: pod(o)["containers"][0]["resources"]["limits"].update(cpu="2"),
             "platform configmap": lambda o: pod(o)["volumes"][0]["configMap"].update(
-                name="career-ops-boundary-program"
+                name="career-ops-platform"
             ),
         }
         for name, mutate in cases.items():
@@ -1508,15 +1490,12 @@ class ApplicationMonitoringTests(unittest.TestCase):
             [r["alert"] for r in rules if "alert" in r],
             ["CareerOpsCVServiceDown", "CareerOpsCVWorkStuck", "CareerOpsCVRendersFailing"],
         )
+        # Alerts are always armed: no recorded gate series can silence them.
+        self.assertEqual([r for r in rules if "record" in r], [])
         for alert in (r for r in rules if "alert" in r):
-            self.assertTrue(
-                alert["expr"].endswith("and on() (career_ops_coordinator_expected == 1)"),
-                alert["alert"],
-            )
-        expected = next(r for r in rules if "record" in r)
-        self.assertEqual(
-            expected, {"record": "career_ops_coordinator_expected", "expr": "vector(1)"}
-        )
+            with self.subTest(alert=alert["alert"]):
+                self.assertNotIn("career_ops_", alert["expr"])
+                self.assertNotIn("and on()", alert["expr"])
 
 
 if __name__ == "__main__":

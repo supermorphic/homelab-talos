@@ -7,7 +7,6 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from scripts.test.core.test_application_boundary import PLATFORM, ROOT, render
 
@@ -104,47 +103,7 @@ class ApplicationCommandTests(unittest.TestCase):
                     "csi": {"driver": "driver.longhorn.io"},
                 },
             }
-        self.objects["job/cv-bootstrap-smoke"] = {
-            "metadata": {
-                "name": "cv-bootstrap-smoke",
-                "namespace": "career-ops",
-                "uid": "synthetic-bootstrap",
-            },
-            "status": {"succeeded": 1, "conditions": [{"type": "Complete", "status": "True"}]},
-        }
-        self.objects["pods"] = {
-            "items": [
-                {
-                    "metadata": {
-                        "namespace": "career-ops",
-                        "ownerReferences": [
-                            {
-                                "apiVersion": "batch/v1",
-                                "kind": "Job",
-                                "name": "cv-bootstrap-smoke",
-                                "uid": "synthetic-bootstrap",
-                                "controller": True,
-                            }
-                        ],
-                    },
-                    "spec": {
-                        "serviceAccountName": "cv-renderer",
-                        "automountServiceAccountToken": False,
-                    },
-                    "status": {
-                        "phase": "Succeeded",
-                        "containerStatuses": [
-                            {
-                                "name": "bootstrap",
-                                "state": {
-                                    "terminated": {"exitCode": 0, "message": "bootstrap-ok\n"}
-                                },
-                            }
-                        ],
-                    },
-                }
-            ]
-        }
+        self.objects["pods"] = {"items": []}
         self.environment = {
             **os.environ,
             "PATH": str(self.path) + os.pathsep + os.environ["PATH"],
@@ -176,30 +135,18 @@ class ApplicationCommandTests(unittest.TestCase):
     def calls(self):
         return [json.loads(line) for line in (self.path / "calls.jsonl").read_text().splitlines()]
 
-    def test_observational_verifier_checks_bootstrap_without_secret_reads_or_mutation(self):
+    def test_observational_verifier_reads_no_secrets_and_mutates_nothing(self):
         result = self.run_command()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("bootstrap", result.stdout)
         self.assertTrue(all(c[0] in ["get", "auth"] for c in self.calls()))
         self.assertFalse(any("secret" in c[1].lower() for c in self.calls() if c[0] == "get"))
 
-    def test_bootstrap_requires_current_job_ownership_and_exact_termination_result(self):
-        pod = self.objects["pods"]["items"][0]
-        for path, value in [
-            (("status", "containerStatuses", 0, "state", "terminated", "exitCode"), 1),
-            (("status", "containerStatuses", 0, "state", "terminated", "message"), "wrong-result"),
-            (("metadata", "ownerReferences", 0, "uid"), "stale-job"),
-            (("spec", "automountServiceAccountToken"), True),
-        ]:
-            target = pod
-            for key in path[:-1]:
-                target = target[key]
-            old = target[path[-1]]
-            target[path[-1]] = value
-            result = self.run_command()
-            self.assertNotEqual(result.returncode, 0, path)
-            self.assertIn("bootstrap", result.stderr)
-            target[path[-1]] = old
+    def test_observational_verifier_requires_no_retired_worker_job(self):
+        # The renderer runs only as a Deployment; no renderer Job exists to observe.
+        result = self.run_command()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any("cv-bootstrap-smoke" in c for c in self.calls()))
+        self.assertNotIn("bootstrap", result.stdout)
 
     def enroll_second_smoke(self):
         self.objects["kustomization/career-ops-apps"]["status"]["inventory"] = {
@@ -217,17 +164,35 @@ class ApplicationCommandTests(unittest.TestCase):
             },
             "status": {"succeeded": 1, "conditions": [{"type": "Complete", "status": "True"}]},
         }
-        pod = copy.deepcopy(self.objects["pods"]["items"][0])
-        pod["metadata"]["ownerReferences"][0].update(
-            name="application-json-smoke", uid="synthetic-json"
-        )
-        pod["spec"]["serviceAccountName"] = "career-ops-service"
-        pod["status"]["containerStatuses"] = [
-            {
-                "name": "json-check",
-                "state": {"terminated": {"exitCode": 0, "message": "application-json-ok\n"}},
-            }
-        ]
+        pod = {
+            "metadata": {
+                "namespace": "career-ops",
+                "ownerReferences": [
+                    {
+                        "apiVersion": "batch/v1",
+                        "kind": "Job",
+                        "name": "application-json-smoke",
+                        "uid": "synthetic-json",
+                        "controller": True,
+                    }
+                ],
+            },
+            "spec": {
+                "serviceAccountName": "career-ops-service",
+                "automountServiceAccountToken": False,
+            },
+            "status": {
+                "phase": "Succeeded",
+                "containerStatuses": [
+                    {
+                        "name": "json-check",
+                        "state": {
+                            "terminated": {"exitCode": 0, "message": "application-json-ok\n"}
+                        },
+                    }
+                ],
+            },
+        }
         self.objects["pods"]["items"].append(pod)
         return pod
 
@@ -373,7 +338,8 @@ class ApplicationCommandTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.calls()
         requests = [i for i, c in enumerate(calls) if c[0] == "create"]
-        self.assertEqual(len(requests), 7)
+        # One permitted control and nine intended workload-policy denials.
+        self.assertEqual(len(requests), 10)
         for i in requests:
             self.assertIn("--dry-run=server", calls[i])
             self.assertEqual(
@@ -420,285 +386,6 @@ class ApplicationCommandTests(unittest.TestCase):
         result = self.run_command(scenario=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(any(c[0] == "create" for c in self.calls()))
-
-    def native_runner(self):
-        from scripts.test.scenarios.application_boundary_native import NativeRunner, job
-
-        # These retained-storage fixtures exercise the pre-enrollment phase.
-        for key in (
-            "kustomization/career-ops-connection",
-            "gitrepository/career-ops",
-            "kustomization/career-ops-apps",
-        ):
-            self.objects[key]["spec"]["suspend"] = True
-        runner = NativeRunner(self.path / "config")
-        self.addCleanup(__import__("shutil").rmtree, runner.directory)
-        runner.templates = {
-            mode: job(mode, runner.run, ["192.0.2.1", "192.0.2.2", "192.0.2.3"])
-            for mode in ["seed", "write", "read", "cleanup"]
-        }
-        for name in ["career-ops-platform", "career-ops-fixture-storage"]:
-            self.objects["kustomization/" + name]["status"]["lastAppliedRevision"] = (
-                "main@sha1:" + runner.revision
-            )
-        (self.path / "objects.json").write_text(json.dumps(self.objects))
-        return runner
-
-    def test_native_create_stops_before_mutation_when_scope_changes(self):
-        self.environment["APPLICATION_BOUNDARY_FIXTURE_IDENTITY"] = (
-            "system:serviceaccount:kube-system:homelab-test-runner"
-        )
-        with patch.dict(os.environ, self.environment):
-            runner = self.native_runner()
-            self.objects["role/career-ops-boundary-test"]["rules"][0]["verbs"].append("patch")
-            (self.path / "objects.json").write_text(json.dumps(self.objects))
-            with self.assertRaisesRegex(RuntimeError, "controls differ"):
-                runner.mutate_owned("create", "seed")
-        self.assertTrue(all(c[0] in {"get", "auth"} for c in self.calls()))
-
-    def test_native_delete_stops_if_a_fixture_claim_was_replaced(self):
-        self.environment["APPLICATION_BOUNDARY_FIXTURE_IDENTITY"] = (
-            "system:serviceaccount:kube-system:homelab-test-runner"
-        )
-        with patch.dict(os.environ, self.environment):
-            runner = self.native_runner()
-            runner.precondition()
-            claim = self.objects["persistentvolumeclaim/career-ops-boundary-requests"]
-            claim["metadata"]["uid"] = "synthetic-replacement"
-            self.objects["persistentvolume/" + claim["spec"]["volumeName"]]["spec"]["claimRef"][
-                "uid"
-            ] = "synthetic-replacement"
-            (self.path / "objects.json").write_text(json.dumps(self.objects))
-            with self.assertRaisesRegex(RuntimeError, "claim identity changed"):
-                runner.mutate_owned("delete", "seed")
-        self.assertTrue(all(c[0] in {"get", "auth"} for c in self.calls()))
-
-    def test_native_precondition_rejects_a_different_credential_identity(self):
-        with patch.dict(os.environ, self.environment):
-            runner = self.native_runner()
-            with self.assertRaisesRegex(RuntimeError, "selected test-runner"):
-                runner.precondition()
-
-    def test_native_precondition_requires_current_ready_fixture_storage(self):
-        self.environment["APPLICATION_BOUNDARY_FIXTURE_IDENTITY"] = (
-            "system:serviceaccount:kube-system:homelab-test-runner"
-        )
-        with patch.dict(os.environ, self.environment):
-            runner = self.native_runner()
-            fixture = self.objects.setdefault(
-                "kustomization/career-ops-fixture-storage",
-                {
-                    "metadata": {"generation": 1},
-                    "status": {},
-                },
-            )
-            for status in [
-                {"lastAppliedRevision": "main@sha1:" + "0" * 40},
-                {
-                    "lastAppliedRevision": "main@sha1:" + runner.revision,
-                    "observedGeneration": 1,
-                    "conditions": [{"type": "Ready", "status": "False", "observedGeneration": 1}],
-                },
-            ]:
-                fixture["status"] = status
-                (self.path / "objects.json").write_text(json.dumps(self.objects))
-                with self.assertRaisesRegex(RuntimeError, "exact deployed|reported Ready"):
-                    runner.precondition()
-        self.assertTrue(all(c[0] in {"get", "auth"} for c in self.calls()))
-
-    def test_native_stops_before_mutation_for_invalid_or_unvalidated_cilium_policy(self):
-        self.environment["APPLICATION_BOUNDARY_FIXTURE_IDENTITY"] = (
-            "system:serviceaccount:kube-system:homelab-test-runner"
-        )
-        with patch.dict(os.environ, self.environment):
-            runner = self.native_runner()
-            for status in [{}, {"conditions": [{"type": "Valid", "status": "False"}]}]:
-                self.objects["ciliumnetworkpolicy/career-ops-deny"]["status"] = status
-                (self.path / "objects.json").write_text(json.dumps(self.objects))
-                with self.assertRaisesRegex(RuntimeError, "Cilium policy"):
-                    runner.mutate_owned("create", "seed")
-        self.assertTrue(all(c[0] in {"get", "auth"} for c in self.calls()))
-
-    def test_native_cli_reaches_its_confirmation_guard_without_pythonpath(self):
-        result = subprocess.run(
-            [
-                "uv",
-                "run",
-                "--locked",
-                "python",
-                str(ROOT / "scripts/test/scenarios/application_boundary_native.py"),
-            ],
-            cwd=ROOT,
-            env={**self.environment, "PYTHONPATH": ""},
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn("APPLICATION_BOUNDARY_NATIVE_CONFIRM", result.stderr)
-        self.assertFalse((self.path / "calls.jsonl").exists())
-
-    def test_native_wait_uses_drop_evidence_without_deprecated_cep_policy(self):
-        runner = self.native_runner()
-        witnesses = []
-        runner.require_drops = witnesses.append
-        job = {"metadata": {"uid": "synthetic-owned-job"}, "status": {"succeeded": 1}}
-        pod = {
-            "metadata": {
-                "ownerReferences": [
-                    {"kind": "Job", "uid": "synthetic-owned-job", "controller": True}
-                ]
-            },
-            "spec": {"nodeName": "synthetic-node"},
-            "status": {
-                "phase": "Succeeded",
-                "containerStatuses": [
-                    {
-                        "state": {
-                            "terminated": {
-                                "exitCode": 0,
-                                "message": json.dumps(
-                                    {"result": "passed", "phase": "network-write-api"}
-                                ),
-                            }
-                        }
-                    }
-                ],
-            },
-        }
-        runner.read = lambda kind, *args, **kwargs: job if kind == "job" else {"items": [pod]}
-        try:
-            self.assertEqual(runner.wait("network-write-api"), "synthetic-node")
-            self.assertEqual(witnesses, ["network-write-api"])
-        except RuntimeError as error:
-            self.fail(str(error))
-
-    def test_drop_oracle_requires_one_target_phase_run_identity_and_protocol(self):
-        from scripts.test.scenarios.application_boundary_native import denial_metrics
-
-        run = "0123456789abcdef0123456789abcdef"
-        for stage in ["write", "read"]:
-            for target in ["api", "database", "dns-tcp", "dns-udp"]:
-                phase = "network-" + stage + "-" + target
-                source = ",".join(
-                    [
-                        "k8s:homelab.supermorphic.com/test-run=" + run,
-                        "k8s:homelab.supermorphic.com/test-phase=" + phase,
-                        "k8s:io.cilium.k8s.policy.serviceaccount=career-ops-boundary-renderer",
-                        "k8s:io.kubernetes.pod.namespace=career-ops",
-                    ]
-                )
-                protocol = "UDP" if target == "dns-udp" else "TCP"
-                # Service-IP drops can omit destination workload context entirely.
-                response = {
-                    "status": "success",
-                    "data": {
-                        "resultType": "vector",
-                        "result": [
-                            {
-                                "metric": {
-                                    "source": source,
-                                    "reason": "POLICY_DENIED",
-                                    "protocol": protocol,
-                                },
-                                "value": [1, "2"],
-                            }
-                        ],
-                    },
-                }
-                self.assertTrue(denial_metrics(response, run, phase), phase)
-                self.assertFalse(denial_metrics(response, "f" * 32, phase))
-                self.assertFalse(denial_metrics(response, run, "network-unknown-api"))
-                self.assertFalse(denial_metrics(response, run, "read"))
-                for value in ["0", "-1", "NaN", "Inf", "invalid"]:
-                    bad = copy.deepcopy(response)
-                    bad["data"]["result"][0]["value"][1] = value
-                    self.assertFalse(denial_metrics(bad, run, phase))
-                for key, value in [
-                    ("reason", "NO_ROUTE"),
-                    ("protocol", "ICMPv6"),
-                    ("source", source.replace("test-phase=" + phase, "test-phase=write")),
-                    ("source", source.replace("career-ops-boundary-renderer", "cv-renderer")),
-                    ("source", source.replace("pod.namespace=career-ops", "pod.namespace=other")),
-                ]:
-                    bad = copy.deepcopy(response)
-                    bad["data"]["result"][0]["metric"][key] = value
-                    self.assertFalse(denial_metrics(bad, run, phase), (phase, key))
-
-    def test_native_execution_checks_every_target_on_both_worker_nodes(self):
-        runner = self.native_runner()
-        runner.precondition = lambda: None
-        events = []
-
-        def read(kind, name=None, *args, **kwargs):
-            if kind == "job":
-                return None
-            if kind == "service":
-                return {"spec": {"clusterIP": "192.0.2.1"}}
-            if kind == "nodes":
-                return {
-                    "items": [
-                        {
-                            "metadata": {"name": n, "labels": {"kubernetes.io/hostname": n}},
-                            "spec": {},
-                            "status": {"conditions": [{"type": "Ready", "status": "True"}]},
-                        }
-                        for n in ["node-a", "node-b"]
-                    ]
-                }
-            raise AssertionError(kind)
-
-        runner.read = read
-        runner.mutate_owned = lambda operation, mode: events.append((operation, mode))
-
-        def wait(mode):
-            pod = runner.templates[mode]["spec"]["template"]["spec"]
-            if mode.startswith("network-"):
-                events.append(("probe", mode, pod["nodeSelector"]["kubernetes.io/hostname"]))
-                self.assertEqual(len(pod["volumes"]), 1)
-            return pod.get("nodeSelector", {}).get("kubernetes.io/hostname", "node-a")
-
-        runner.wait = wait
-        with patch("subprocess.check_output", return_value=""):
-            runner.execute()
-        wanted = [
-            ("probe", "network-" + stage + "-" + target, node)
-            for stage, node in [("write", "node-b"), ("read", "node-a")]
-            for target in ["api", "database", "dns-tcp", "dns-udp"]
-        ]
-        self.assertEqual([e for e in events if e[0] == "probe"], wanted)
-        for _, mode, _ in wanted:
-            self.assertEqual(events.count(("create", mode)), 1)
-            self.assertIn(("delete", mode), events)
-
-    def test_native_rejects_writer_running_on_an_unselected_third_node(self):
-        runner = self.native_runner()
-        runner.precondition = lambda: None
-        nodes = [
-            {
-                "metadata": {"name": n, "labels": {"kubernetes.io/hostname": n}},
-                "spec": {},
-                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
-            }
-            for n in ["node-a", "node-b"]
-        ]
-
-        def read(kind, *args, **kwargs):
-            if kind == "nodes":
-                return {"items": nodes}
-            if kind == "service":
-                return {"spec": {"clusterIP": "192.0.2.1"}}
-            return None
-
-        runner.read = read
-        runner.mutate_owned = lambda operation, mode: None
-        runner.wait = lambda mode: "node-c" if mode == "write" else "node-a"
-        runner.network_probes = lambda *args: self.fail("Probe ran on a different worker node")
-        with (
-            patch("subprocess.check_output", return_value=""),
-            self.assertRaisesRegex(RuntimeError, "Writer.*selected"),
-        ):
-            runner.execute()
 
 
 if __name__ == "__main__":

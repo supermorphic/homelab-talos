@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Server admission only; persistent fixture, network, RWX and recovery proofs are separate.
+# Server admission only; network, delivery and recovery proofs are separate.
 set -euo pipefail
 [[ "$#" -eq 1 ]] || { echo 'Usage: application-boundary.sh <selected-test-kubeconfig>' >&2; exit 2; }
 [[ "${APPLICATION_BOUNDARY_TEST_CONFIRM:-}" == 'test:application-boundary:server-admission' ]] || {
@@ -51,18 +51,25 @@ def precondition():
                 sys.exit('Application admission scope policy is not type-checked for its current generation.')
 
 fixture=yaml.safe_load(Path('tests/fixtures/application-boundary/job.yaml').read_text())
-cases=[('permitted offline template', fixture, True)]
+cases=[('permitted one-shot service Job', fixture, True)]
+# The coordinator and renderer run only as Deployments; cv-prepare is retired.
+for account in ['cv-renderer','cv-coordinator','cv-prepare']:
+    bad=copy.deepcopy(fixture)
+    for labels in (bad['metadata']['labels'],bad['spec']['template']['metadata']['labels']):
+        labels['app.kubernetes.io/name']=account
+    bad['spec']['template']['spec']['serviceAccountName']=account
+    cases.append((account+' Job',bad,False))
 for name,field,value in [
     ('host networking','hostNetwork',True),
     ('reconciliation identity','serviceAccountName','career-ops-reconciler'),
-    ('worker token','automountServiceAccountToken',True),
+    ('token mounting','automountServiceAccountToken',True),
     ('source credential','volumes',[{'name':'source','secret':{'secretName':'career-ops-source'}}]),
-    ('artifact access','volumes',[{'name':'artifacts','persistentVolumeClaim':{'claimName':'cv-artifacts'}}]),
+    ('artifact claim','volumes',[{'name':'artifacts','persistentVolumeClaim':{'claimName':'cv-artifacts'}}]),
 ]:
     bad=copy.deepcopy(fixture);bad['spec']['template']['spec'][field]=value
     cases.append((name,bad,False))
 bad=copy.deepcopy(fixture);bad['spec']['template']['spec']['containers'][0]['resources']['limits']['cpu']='2'
-cases.append(('worker resource ceiling',bad,False))
+cases.append(('resource ceiling',bad,False))
 
 with tempfile.TemporaryDirectory(prefix='application-admission-') as directory:
     for name,job,allowed in cases:
@@ -78,5 +85,5 @@ with tempfile.TemporaryDirectory(prefix='application-admission-') as directory:
               or not any(status in result.stderr for status in ['Forbidden', '(Invalid)', 'is invalid'])):
             sys.exit('Negative admission did not identify the intended application workload control: '+name)
         print('Server admission case passed: '+name)
-print('Server-side Job admission passed. No resources persisted; controller Pods, networking, RWX, pruning, source reconciliation, delivery and restore remain separate native acceptance.')
+print('Server-side Job admission passed. No resources persisted; controller Pods, networking, pruning, source reconciliation, delivery and restore remain separate native acceptance.')
 PY
