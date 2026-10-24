@@ -218,6 +218,8 @@ def campaign_exclusions() -> set[str]:
     exclusions = set(STANDALONE_SUITES) | {
         "test.nocodb-access-source-pair",
         "test.nocodb-restore-drill-extension",
+        # Requires an application-owned probe supplied at run time.
+        "test.automation-data-restore-drill-application-probe",
     }
     nocodb_source = yaml.safe_load(
         (REPO_ROOT / "kubernetes/apps/automation-data/nocodb/ks.yaml").read_text(encoding="utf-8")

@@ -282,7 +282,7 @@ spec:
     - name: prefix
       expression: "(variables.nc ? 'nc' : 'ad') + '-restore-' + variables.run"
     - name: helper
-      expression: "variables.n8n ? 'n8n-test-helpers-v1' : 'automation-data-test-helpers-v1'"
+      expression: "variables.n8n ? 'n8n-test-helpers-v1' : 'automation-data-test-helpers-v2'"
     - name: expectedValues
       expression: >-
         variables.preflight ? {'BACKUP_DIR': '/backups'} : variables.n8n ?
@@ -299,10 +299,20 @@ spec:
       expression: variables.job.spec.template.spec
     - name: container
       expression: variables.pod.containers[0]
+    # The optional application probe adds one run-owned input; any probe piece selects
+    # the probe shape, which then requires all pieces exactly.
+    - name: probeEnv
+      expression: "['RESTORE_PROBE_DATABASE', 'RESTORE_PROBE_SHA256']"
+    - name: probe
+      expression: >-
+        variables.pod.volumes.exists(v, v.name == 'probe') ||
+        variables.container.volumeMounts.exists(m, m.name == 'probe') ||
+        variables.container.env.exists(e, e.name in variables.probeEnv)
   validations:
     - expression: >-
         request.operation != 'UPDATE' && variables.run.matches('^[0-9a-f]{12}$') &&
         variables.job.metadata.labels == {'homelab-talos/test': variables.family, 'homelab-talos/run-id': variables.run, 'homelab-talos/role': variables.role} &&
+        (!variables.probe || (!variables.nc && variables.role == 'ad-restore')) &&
         ((variables.nc && request.namespace == 'automation-data' && variables.role in ['restore', 'preflight'] &&
           variables.job.metadata.name == variables.prefix + (variables.preflight ? '-preflight' : '-load')) ||
          (!variables.nc && ((variables.n8n && request.namespace == 'automation' && variables.job.metadata.name == variables.prefix + '-n8n-load') ||
@@ -331,13 +341,19 @@ spec:
           e.valueFrom.secretKeyRef.name == 'postgresql-credentials' && e.valueFrom.secretKeyRef.key == variables.expectedSecrets[k] &&
           !has(e.valueFrom.configMapKeyRef) && !has(e.valueFrom.fieldRef) && !has(e.valueFrom.resourceFieldRef))) &&
         variables.container.env.size() == variables.expectedValues.size() + variables.expectedSecrets.size() +
-          (variables.container.env.exists(e, e.name == variables.selector) ? 1 : 0) &&
+          (variables.container.env.exists(e, e.name == variables.selector) ? 1 : 0) + (variables.probe ? 2 : 0) &&
+        (!variables.probe || variables.probeEnv.all(k, variables.container.env.exists(e, e.name == k))) &&
         variables.container.env.all(e, e.name in variables.expectedValues || e.name in variables.expectedSecrets ||
           (!variables.preflight && !variables.nc && e.name == variables.selector && !has(e.valueFrom) &&
-           e.value.matches(variables.n8n ? '^n8n-postgresql-[0-9]{8}T[0-9]{6}Z\\.dump$' : '^automation-data-[0-9]{8}T[0-9]{6}Z$')))
+           e.value.matches(variables.n8n ? '^n8n-postgresql-[0-9]{8}T[0-9]{6}Z\\.dump$' : '^automation-data-[0-9]{8}T[0-9]{6}Z$')) ||
+          (variables.probe && e.name == 'RESTORE_PROBE_DATABASE' && !has(e.valueFrom) && e.value.matches('^[a-z][a-z0-9_]{0,47}$')) ||
+          (variables.probe && e.name == 'RESTORE_PROBE_SHA256' && !has(e.valueFrom) && e.value.matches('^[0-9a-f]{64}$')))
       message: Restore jobs may use only their fixed namespace credentials and a validated backup selector.
     - expression: >-
-        variables.pod.volumes.size() == (variables.preflight || variables.n8n ? 3 : variables.nc ? 4 : 5) &&
+        variables.pod.volumes.size() == (variables.preflight || variables.n8n ? 3 : variables.nc ? 4 : 5) + (variables.probe ? 1 : 0) &&
+        (!variables.probe || variables.pod.volumes.exists(v, v.name == 'probe' &&
+          v.configMap.name == variables.prefix + '-ad-probe' && !has(v.configMap.items) &&
+          (!has(v.configMap.optional) || !v.configMap.optional))) &&
         variables.pod.volumes.exists(v, v.name == (variables.nc && !variables.preflight ? 'scripts' : 'helpers') &&
           v.configMap.name == variables.helper && !has(v.configMap.items) && (!has(v.configMap.optional) || !v.configMap.optional)) &&
         (variables.preflight || variables.n8n || variables.nc || variables.pod.volumes.exists(v, v.name == 'scripts' &&
@@ -347,7 +363,9 @@ spec:
           v.persistentVolumeClaim.readOnly) &&
         variables.pod.volumes.exists(v, v.name == 'tmp' && has(v.emptyDir)) &&
         (variables.preflight || variables.n8n || variables.pod.volumes.exists(v, v.name == 'post-recovery' && has(v.emptyDir))) &&
-        variables.container.volumeMounts.size() == (variables.preflight || variables.n8n ? 3 : 6) &&
+        variables.container.volumeMounts.size() == (variables.preflight || variables.n8n ? 3 : 6) + (variables.probe ? 1 : 0) &&
+        (!variables.probe || variables.container.volumeMounts.exists(m, m.name == 'probe' && m.mountPath == '/probe' &&
+          m.readOnly && !has(m.subPath) && !has(m.subPathExpr))) &&
         variables.container.volumeMounts.exists(m, m.name == (variables.nc && !variables.preflight ? 'scripts' : 'helpers') &&
           m.mountPath == '/helpers' && m.readOnly && !has(m.subPath) && !has(m.subPathExpr)) &&
         variables.container.volumeMounts.exists(m, m.name == 'tmp' && m.mountPath == '/tmp' && !has(m.subPath) && !has(m.subPathExpr)) &&

@@ -113,7 +113,7 @@ spec:
         variables.pod.volumes.exists(v, v.name == 'credential' && v.secret.secretName == 'nocodb-restore-application-credential' &&
           v.secret.defaultMode == 256 && !has(v.secret.items) && (!has(v.secret.optional) || !v.secret.optional)) &&
         variables.pod.volumes.exists(v, v.name == 'scratch' && has(v.emptyDir)) &&
-        variables.pod.volumes.exists(v, v.name == 'helpers' && v.configMap.name == 'automation-data-test-helpers-v1' &&
+        variables.pod.volumes.exists(v, v.name == 'helpers' && v.configMap.name == 'automation-data-test-helpers-v2' &&
           !has(v.configMap.items) && (!has(v.configMap.optional) || !v.configMap.optional)) &&
         variables.container.volumeMounts.size() == 3 &&
         variables.container.volumeMounts.exists(m, m.name == 'credential' && m.mountPath == '/credentials' && m.readOnly) &&
@@ -129,4 +129,48 @@ metadata:
   name: homelab-test-nocodb-application-probe
 spec:
   policyName: homelab-test-nocodb-application-probe
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: homelab-test-restore-probe-inputs
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [configmaps]
+  matchConditions:
+    - name: test-runner
+      expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+    - name: automation-data
+      expression: request.namespace == 'automation-data'
+  variables:
+    - name: item
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: run
+      expression: variables.item.metadata.labels['homelab-talos/run-id']
+  validations:
+    - expression: >-
+        request.operation != 'UPDATE' && variables.run.matches('^[0-9a-f]{12}$') &&
+        variables.item.metadata.namespace == request.namespace &&
+        variables.item.metadata.name == 'ad-restore-' + variables.run + '-ad-probe' &&
+        variables.item.metadata.labels == {'homelab-talos/test': 'automation-data-restore-drill',
+          'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'ad-probe'} &&
+        !has(variables.item.metadata.annotations) && !has(variables.item.metadata.ownerReferences) &&
+        (!has(variables.item.metadata.finalizers) || variables.item.metadata.finalizers.size() == 0) &&
+        has(variables.item.immutable) && variables.item.immutable && !has(variables.item.binaryData) &&
+        variables.item.data.size() == 1 && 'probe.sql' in variables.item.data &&
+        variables.item.data['probe.sql'].size() > 0 && bytes(variables.item.data['probe.sql']).size() <= 65536
+      message: The restore test identity may create or remove only its run-owned immutable application probe input.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: homelab-test-restore-probe-inputs
+spec:
+  policyName: homelab-test-restore-probe-inputs
   validationActions: [Deny]

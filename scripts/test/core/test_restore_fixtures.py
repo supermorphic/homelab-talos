@@ -99,7 +99,7 @@ expected_database_set_base64=YXV0b21hdGlvbl9kYXRhX2FjY2VwdGFuY2UK
             self.assertFalse(pod["automountServiceAccountToken"])
             helpers = [v["configMap"] for v in pod["volumes"] if "configMap" in v]
             self.assertEqual(len(helpers), 1)
-            self.assertEqual(helpers[0]["name"], "automation-data-test-helpers-v1")
+            self.assertEqual(helpers[0]["name"], "automation-data-test-helpers-v2")
 
         def claim(job):
             return next(
@@ -327,6 +327,98 @@ restore_job=nc-restore-$run_hash-load
             documents.append(yaml.safe_load(rendered.stdout))
         return documents
 
+    PROBE_SHA256 = "0" * 63 + "1"
+
+    @staticmethod
+    def render_probe_restore_artifacts(probe_file=None):
+        """Render the application-probe variant Job and its run-owned ConfigMap."""
+        source = (ROOT / "scripts/test/scenarios/automation-data-restore-drill.sh").read_text()
+        functions = []
+        for name in ("restore_job_manifest", "probe_configmap_manifest"):
+            start = source.index(name + "() {")
+            functions.append(source[start : source.index("\n}\n", start) + 3])
+        prelude = f"""set -euo pipefail
+run_hash=0123456789ab
+backup_configmap=automation-data-postgresql-backup-synthetic
+ad_namespace=automation-data
+ad_service=ad-restore-$run_hash-db
+ad_restore_job=ad-restore-$run_hash-ad-load
+probe_enabled=true
+probe_configmap=ad-restore-$run_hash-ad-probe
+probe_database=domain_one
+probe_sha256={RestoreFixtureTests.PROBE_SHA256}
+probe_file="$1"
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            if probe_file is None:
+                probe_file = Path(directory, "probe.sql")
+                probe_file.write_text("SELECT 'synthetic';\n")
+            rendered = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    prelude
+                    + "\n".join(functions)
+                    + '\nrestore_job_manifest automation-data\nprintf "\\n---\\n"\n'
+                    + "probe_configmap_manifest\n",
+                    "fixture",
+                    str(probe_file),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+        job, configmap = yaml.safe_load_all(rendered.stdout)
+        return job, configmap
+
+    def test_probe_variant_adds_only_its_run_owned_input_to_the_base_restore_job(self):
+        base = self.render_restore_jobs()[0]
+        probe, _ = self.render_probe_restore_artifacts()
+        expected = json.loads(json.dumps(base))
+        pod = expected["spec"]["template"]["spec"]
+        pod["containers"][0]["env"] += [
+            {"name": "RESTORE_PROBE_DATABASE", "value": "domain_one"},
+            {"name": "RESTORE_PROBE_SHA256", "value": self.PROBE_SHA256},
+        ]
+        pod["containers"][0]["volumeMounts"].append(
+            {"name": "probe", "mountPath": "/probe", "readOnly": True}
+        )
+        pod["volumes"].append(
+            {"name": "probe", "configMap": {"name": "ad-restore-0123456789ab-ad-probe"}}
+        )
+        self.assertEqual(probe, expected)
+        base_pod = base["spec"]["template"]["spec"]
+        self.assertFalse(any(v["name"] == "probe" for v in base_pod["volumes"]))
+        self.assertFalse(
+            any(e["name"].startswith("RESTORE_PROBE_") for e in base_pod["containers"][0]["env"])
+        )
+
+    def test_probe_configmap_preserves_exact_bytes_under_run_ownership(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe_file = Path(directory, "probe.sql")
+            content = "SELECT jsonb_build_object('assertions', '{}'::jsonb);\r\n\n"
+            probe_file.write_bytes(content.encode())
+            _, configmap = self.render_probe_restore_artifacts(probe_file)
+        self.assertEqual(
+            configmap,
+            {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "name": "ad-restore-0123456789ab-ad-probe",
+                    "namespace": "automation-data",
+                    "labels": {
+                        "homelab-talos/test": "automation-data-restore-drill",
+                        "homelab-talos/run-id": "0123456789ab",
+                        "homelab-talos/role": "ad-probe",
+                    },
+                },
+                "immutable": True,
+                "data": {"probe.sql": content},
+            },
+        )
+
     def test_restore_jobs_execute_only_immutable_canonical_helpers(self):
         jobs = self.render_restore_jobs()
         self.assertEqual(len(jobs), 4)
@@ -339,10 +431,10 @@ restore_job=nc-restore-$run_hash-load
                 "/helpers/nocodb-restore-preflight.sh",
             ),
             (
-                "automation-data-test-helpers-v1",
+                "automation-data-test-helpers-v2",
                 "n8n-test-helpers-v1",
-                "automation-data-test-helpers-v1",
-                "automation-data-test-helpers-v1",
+                "automation-data-test-helpers-v2",
+                "automation-data-test-helpers-v2",
             ),
             strict=True,
         ):
@@ -370,7 +462,7 @@ restore_job=nc-restore-$run_hash-load
                 doc
                 for doc in yaml.safe_load_all(rendered.stdout)
                 if doc["kind"] == "ConfigMap"
-                and doc["metadata"]["name"] == "automation-data-test-helpers-v1"
+                and doc["metadata"]["name"] == "automation-data-test-helpers-v2"
             ),
             None,
         )
@@ -390,6 +482,7 @@ restore_job=nc-restore-$run_hash-load
             "nocodb-application-probe.sh",
             "provision-error.sh",
             "automation-data-bundle.sh",
+            "restore-probes.allow",
         ):
             self.assertEqual(helpers["data"][name], (POSTGRES / "test-helpers" / name).read_text())
 

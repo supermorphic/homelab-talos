@@ -275,7 +275,7 @@ database_manifests() {
 restore_job_manifest() {
 	JOB_NAME="$restore_job" DATABASE_SERVICE="$database_service" \
 		RUN_HASH="$run_hash" SELECTED_BUNDLE="$selected_bundle" \
-		BACKUP_CONFIGMAP="automation-data-test-helpers-v1" yq --null-input --output-format yaml '
+		BACKUP_CONFIGMAP="automation-data-test-helpers-v2" yq --null-input --output-format yaml '
       {
         "apiVersion":"batch/v1","kind":"Job",
         "metadata":{"name":strenv(JOB_NAME),"namespace":"automation-data","labels":{

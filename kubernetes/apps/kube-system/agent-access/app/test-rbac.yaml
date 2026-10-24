@@ -524,6 +524,32 @@ subjects:
     name: homelab-test-runner
     namespace: kube-system
 ---
+# Optional restore application probe input. Admission limits it to one immutable,
+# run-owned ConfigMap; reads use the existing view binding.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: homelab-test-restore-probe
+  namespace: automation-data
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: homelab-test-restore-probe
+  namespace: automation-data
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: homelab-test-restore-probe
+subjects:
+  - kind: ServiceAccount
+    name: homelab-test-runner
+    namespace: kube-system
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

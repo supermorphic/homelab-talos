@@ -209,6 +209,17 @@ ordinary_role_contracts := {
 			},
 		],
 	},
+	"homelab-test-restore-probe": {
+		"namespaces": ["automation-data"],
+		"rules": [{
+			"apiGroups": [""],
+			"resources": ["configmaps"],
+			"verbs": [
+				"create",
+				"delete",
+			],
+		}],
+	},
 	"homelab-test-nocodb-credential": {
 		"namespaces": ["automation-data"],
 		"rules": [{
@@ -497,6 +508,16 @@ ordinary_admission_rules := {
 			"UPDATE",
 		],
 		"resources": ["jobs"],
+	}],
+	"homelab-test-restore-probe-inputs": [{
+		"apiGroups": [""],
+		"apiVersions": ["v1"],
+		"operations": [
+			"CREATE",
+			"UPDATE",
+			"DELETE",
+		],
+		"resources": ["configmaps"],
 	}],
 	"homelab-test-nocodb-credential": [{
 		"apiGroups": [""],

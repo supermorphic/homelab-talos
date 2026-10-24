@@ -138,6 +138,7 @@ def _canonical_entry(repo_root: Path, suite_id: str) -> tuple[dict, str]:
     for variable, default in (
         ("NOCODB_ACCESS_EXTENSION_CONFIRM", "test.nocodb-access"),
         ("NOCODB_RESTORE_EXTENSION_CONFIRM", "test.nocodb-restore-drill"),
+        ("AUTOMATION_DATA_RESTORE_PROBE_CONFIRM", "test.automation-data-restore-drill"),
     ):
         if suite_id == default and os.environ.get(variable):
             raise SafeError("invalid-source")

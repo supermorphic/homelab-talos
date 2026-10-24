@@ -934,6 +934,12 @@ suites:
     runner: {command: "AUTOMATION_DATA_RESTORE_CONFIRM=restore:automation-data:full-chain mise exec -- just kube automation-data-restore-drill", implementation: scripts/test/scenarios/automation-data-restore-drill.sh}
     native_results: {strategy: wrapper-junit}
     dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/automation-data-restore-drill.sh, args: ["@test-kubeconfig@"], selector: null}
+  - metadata: {id: test.automation-data-restore-drill-application-probe, source: test, framework: bash, suite: platform, tier: integration, target: automation-data-restore-drill, scenario: application-probe, scope: system, intent: resilience, mutates_cluster: true, execution_owner: shared}
+    access: {profile: test-runner, prerequisites: []}
+    confirmation: {type: exact, variable: AUTOMATION_DATA_RESTORE_PROBE_CONFIRM, expected: "restore:automation-data:application-probe"}
+    runner: {command: "AUTOMATION_DATA_RESTORE_PROBE_CONFIRM=restore:automation-data:application-probe AUTOMATION_DATA_RESTORE_CONFIRM=restore:automation-data:full-chain mise exec -- just kube automation-data-restore-drill-application-probe", implementation: scripts/test/scenarios/automation-data-restore-drill.sh}
+    native_results: {strategy: wrapper-junit}
+    dispatch: {mode: direct, runtime: bash, path: scripts/test/scenarios/automation-data-restore-drill.sh, args: ["@test-kubeconfig@"], selector: null}
   - metadata: {id: test.ntfy-publish, source: test, framework: bash, suite: platform, tier: integration, target: ntfy, scenario: publish, scope: application, intent: feature, mutates_cluster: true, execution_owner: shared}
     access: {profile: debugger, prerequisites: [talos-reader]}
     confirmation: {type: exact, variable: NTFY_PUBLISH_TEST_CONFIRM, expected: "test:ntfy:publish:media-critical-homelab"}
