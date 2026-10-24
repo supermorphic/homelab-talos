@@ -158,8 +158,8 @@ spec:
         request.operation != 'UPDATE' && variables.run.matches('^[0-9a-f]{12}$') &&
         variables.item.metadata.namespace == request.namespace &&
         variables.item.metadata.name == 'ad-restore-' + variables.run + '-ad-probe' &&
-        variables.item.metadata.labels == {'homelab-talos/test': 'automation-data-restore-drill',
-          'homelab-talos/run-id': variables.run, 'homelab-talos/role': 'ad-probe'} &&
+        variables.item.metadata.labels == {'homelab-talos/test': dyn('automation-data-restore-drill'),
+          'homelab-talos/run-id': dyn(variables.run), 'homelab-talos/role': dyn('ad-probe')} &&
         !has(variables.item.metadata.annotations) && !has(variables.item.metadata.ownerReferences) &&
         (!has(variables.item.metadata.finalizers) || variables.item.metadata.finalizers.size() == 0) &&
         has(variables.item.immutable) && variables.item.immutable && !has(variables.item.binaryData) &&
