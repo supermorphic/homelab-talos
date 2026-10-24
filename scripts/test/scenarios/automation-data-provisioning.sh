@@ -299,7 +299,7 @@ error_job_manifest() {
                 {"name": "helpers", "mountPath": "/helpers", "readOnly": true}]
             }],
             "volumes": [{"name": "tmp", "emptyDir": {}},
-              {"name": "helpers", "configMap": {"name": "automation-data-test-helpers-v1"}}]
+              {"name": "helpers", "configMap": {"name": "automation-data-test-helpers-v2"}}]
           }
         }
       }
@@ -363,7 +363,7 @@ backup_job_manifest() { # <client-generated CronJob Job manifest>
     .spec.template.metadata.labels."homelab-talos/test" = "automation-data-provisioning" |
     .spec.template.metadata.labels."homelab-talos/run-id" = strenv(RUN_HASH) |
     .spec.template.metadata.labels."homelab-talos/role" = "backup" |
-    (.spec.template.spec.volumes[] | select(.name == "backup-script") | .configMap.name) = "automation-data-test-helpers-v1"
+    (.spec.template.spec.volumes[] | select(.name == "backup-script") | .configMap.name) = "automation-data-test-helpers-v2"
   ' "$1"
 }
 "${kc[@]}" create job "$backup_job" \
@@ -463,7 +463,7 @@ helper_job_manifest() {
                   "claimName": "automation-data-postgresql-backups", "readOnly": true
                 }},
                 {"name": "tmp", "emptyDir": {}},
-                {"name": "helpers", "configMap": {"name": "automation-data-test-helpers-v1"}}
+                {"name": "helpers", "configMap": {"name": "automation-data-test-helpers-v2"}}
               ]
             }
           }

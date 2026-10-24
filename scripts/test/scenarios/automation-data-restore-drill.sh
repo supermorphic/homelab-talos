@@ -329,8 +329,8 @@ restore_job_manifest() {
   case "$kind" in
     automation-data)
       [[ "$backup_configmap" =~ ^automation-data-postgresql-backup-[a-z0-9]+$ ]] || return 2
-      backup_configmap_name=automation-data-test-helpers-v1
-      helper_name=automation-data-test-helpers-v1
+      backup_configmap_name=automation-data-test-helpers-v2
+      helper_name=automation-data-test-helpers-v2
       name="$ad_restore_job"; command='/helpers/automation-data-restore.sh'
       namespace="$ad_namespace"; role='ad-restore'; host="$ad_service"
       user='postgres'; secret_name='postgresql-credentials'; secret_key='postgres-superuser-password'
