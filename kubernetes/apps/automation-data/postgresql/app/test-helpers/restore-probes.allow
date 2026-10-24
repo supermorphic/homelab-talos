@@ -1,0 +1,5 @@
+# Reviewed restore application probes. One entry per line: <sha256> <database>.
+# Approving a probe is a reviewed Git change to this file; the SQL itself is supplied
+# by the application owner at run time and never committed. Blank lines and lines
+# starting with '#' are ignored. A malformed entry refuses every probe.
+6b112cb7434a8bc0aebf3ca5501e70e47f459f8c9052a61bea2920a32ee56bb0 career_ops

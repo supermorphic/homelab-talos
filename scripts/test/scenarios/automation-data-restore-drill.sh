@@ -140,9 +140,12 @@ validate_reported_restore_selection() {
   [[ "$reported_bundle" == "$requested_bundle" && "$reported_dump" == "$requested_dump" ]]
 }
 
-# The application owner supplies the probe at run time; its digest pins the exact bytes.
-validate_probe_inputs() { # <absolute-file> <sha256> <database>
-  local file="$1" digest="$2" database="$3" size actual
+# The application owner supplies the probe at run time; its digest pins the exact bytes,
+# and the reviewed allowlist shipped with the immutable helpers approves that digest for
+# one database. The in-Job helper repeats this check; this copy only fails early.
+validate_probe_inputs() { # <absolute-file> <sha256> <database> [allowlist]
+  local file="$1" digest="$2" database="$3" size actual allowed
+  local allowlist="${4:-kubernetes/apps/automation-data/postgresql/app/test-helpers/restore-probes.allow}"
   [[ "$file" == /* && -f "$file" && ! -L "$file" && -O "$file" ]] || {
     echo 'AUTOMATION_DATA_RESTORE_PROBE_FILE must be an absolute regular file owned by the caller.' >&2
     return 1
@@ -167,6 +170,21 @@ validate_probe_inputs() { # <absolute-file> <sha256> <database>
   }
   [[ "$database" =~ ^[a-z][a-z0-9_]{0,47}$ ]] || {
     echo 'AUTOMATION_DATA_RESTORE_PROBE_DATABASE must be a canonical database name.' >&2
+    return 1
+  }
+  allowed="$(awk -v digest="$digest" '
+    /^[[:space:]]*(#|$)/ { next }
+    NF != 2 || length($1) != 64 || $1 ~ /[^0-9a-f]/ ||
+      $2 !~ /^[a-z][a-z0-9_]*$/ || length($2) > 48 { malformed = 1; next }
+    $1 == digest { count += 1; database = $2 }
+    END { if (malformed || count != 1) exit 1; print database }
+  ' "$allowlist" 2>/dev/null)" || allowed=''
+  [[ -n "$allowed" && "$allowed" == "$database" ]] || {
+    echo 'The application probe digest is not approved for that database in the reviewed allowlist.' >&2
+    return 1
+  }
+  [[ "$(tr -d ' \t\r\n\f\v' <"$file" | head -c 1)" != "\\" ]] || {
+    echo 'The application probe must be SQL, not a psql meta-command.' >&2
     return 1
   }
 }

@@ -178,7 +178,9 @@ spec:
   matchConditions:
   - name: test-runner
     expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
-  # homelab-test-restore-probe-inputs owns automation-data ConfigMaps.
+  # The live binding already limits this policy to news-recovery-test. This condition
+  # keeps the offline harness, which ignores binding matchResources, from applying it
+  # to the restore probe ConfigMaps that homelab-test-restore-probe-inputs governs.
   - name: outside-restore-probe-inputs
     expression: request.resource.resource != 'configmaps' || request.namespace != 'automation-data'
   variables:

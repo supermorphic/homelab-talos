@@ -12,10 +12,10 @@ from scripts.test.core.test_n8n_restore_ownership import ROOT, RestoreBackendFix
 
 
 class AutomationDataRestoreOwnershipTests(RestoreBackendFixture, unittest.TestCase):
-    def execute(self, **environment):
+    def execute(self, cwd=ROOT, **environment):
         return subprocess.run(
             ["scripts/test/scenarios/automation-data-restore-drill.sh", str(self.root / "config")],
-            cwd=ROOT,
+            cwd=cwd,
             env={
                 **os.environ,
                 "PATH": f"{self.root / 'bin'}:{os.environ['PATH']}",
@@ -108,6 +108,20 @@ class AutomationDataRestoreOwnershipTests(RestoreBackendFixture, unittest.TestCa
             **overrides,
         }
 
+    ALLOWLIST = "kubernetes/apps/automation-data/postgresql/app/test-helpers/restore-probes.allow"
+
+    def synthetic_repository(self, database="domain_one"):
+        """A checkout view whose reviewed allowlist approves only the synthetic probe."""
+        repository = self.root / "repository"
+        if not repository.exists():
+            repository.mkdir()
+            (repository / "scripts").symlink_to(ROOT / "scripts")
+        allowlist = repository / self.ALLOWLIST
+        allowlist.parent.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256(self.PROBE_SQL.encode()).hexdigest()
+        allowlist.write_text(f"# synthetic\n{digest} {database}\n")
+        return repository
+
     def created(self):
         path = self.root / "created.jsonl"
         if not path.exists():
@@ -115,7 +129,7 @@ class AutomationDataRestoreOwnershipTests(RestoreBackendFixture, unittest.TestCa
         return [json.loads(line) for line in path.read_text().splitlines()]
 
     def test_probe_variant_delivers_pinned_input_and_removes_it_by_creation_uid(self):
-        result = self.execute(**self.probe_environment())
+        result = self.execute(cwd=self.synthetic_repository(), **self.probe_environment())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         run = self.root / "fixture-run"
         configmaps = [obj for obj in self.created() if obj["kind"] == "ConfigMap"]
@@ -171,7 +185,7 @@ class AutomationDataRestoreOwnershipTests(RestoreBackendFixture, unittest.TestCa
         environment = self.probe_environment(
             {"assertions": {"rows_match": True, "digest_match": False, "count_match": False}}
         )
-        result = self.execute(**environment)
+        result = self.execute(cwd=self.synthetic_repository(), **environment)
         self.assertNotEqual(result.returncode, 0)
         run = self.root / "fixture-run"
         assertion = json.loads((run / "assertion.json").read_text())
@@ -184,7 +198,10 @@ class AutomationDataRestoreOwnershipTests(RestoreBackendFixture, unittest.TestCa
         self.assertEqual(json.loads((self.root / "state.json").read_text()), {})
 
     def test_out_of_contract_probe_result_fails_the_assertion(self):
-        result = self.execute(**self.probe_environment({"assertions": {}, "extra": 1}))
+        result = self.execute(
+            cwd=self.synthetic_repository(),
+            **self.probe_environment({"assertions": {}, "extra": 1}),
+        )
         self.assertNotEqual(result.returncode, 0)
         run = self.root / "fixture-run"
         self.assertEqual(json.loads((run / "assertion.json").read_text())["status"], "failed")
@@ -202,16 +219,26 @@ class AutomationDataRestoreOwnershipTests(RestoreBackendFixture, unittest.TestCa
             ),
             ("binding", {}, "test.automation-data-restore-drill", None),
             ("unconfirmed-inputs", {}, None, "AUTOMATION_DATA_RESTORE_PROBE_CONFIRM"),
+            ("unlisted-digest", {}, None, None),
+            ("other-database", {}, None, None),
         )
         for name, overrides, suite, removed in cases:
             # The fake binding is rewritten per case, so build each environment in turn.
             environment = self.probe_environment(suite=suite, **overrides)
             environment.pop(removed, None)
+            # The committed allowlist never approves the synthetic probe.
+            cwd = (
+                ROOT
+                if name == "unlisted-digest"
+                else self.synthetic_repository(
+                    "other_application" if name == "other-database" else "domain_one"
+                )
+            )
             with self.subTest(case=name):
                 (self.root / "calls.jsonl").unlink(missing_ok=True)
                 ledger = self.root / "fixture-run/diagnostics/automation-data-restore-owned.jsonl"
                 ledger.unlink(missing_ok=True)
-                result = self.execute(**environment)
+                result = self.execute(cwd=cwd, **environment)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse((self.root / "calls.jsonl").exists(), name)
 

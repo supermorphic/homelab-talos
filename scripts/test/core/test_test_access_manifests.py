@@ -1529,6 +1529,7 @@ class TestAccessPolicyTests(unittest.TestCase):
             "binary",
             "empty",
             "oversize",
+            "multibyte-oversize",
             "annotation",
             "owner",
         ):
@@ -1560,6 +1561,9 @@ class TestAccessPolicyTests(unittest.TestCase):
                 bad["data"]["probe.sql"] = ""
             elif change == "oversize":
                 bad["data"]["probe.sql"] = "x" * 65537
+            elif change == "multibyte-oversize":
+                # 32769 code points but 65538 UTF-8 bytes: the bound counts bytes.
+                bad["data"]["probe.sql"] = "\u00e9" * 32769
             elif change == "annotation":
                 bad["metadata"]["annotations"] = {"example.test/inject": "true"}
             else:

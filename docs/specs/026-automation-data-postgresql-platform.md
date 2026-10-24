@@ -600,11 +600,17 @@ The attended full-chain restore drill:
     The application owner supplies the SQL at run time, so it never enters this
     repository. The operator passes its path (`AUTOMATION_DATA_RESTORE_PROBE_FILE`), its
     SHA-256 (`AUTOMATION_DATA_RESTORE_PROBE_SHA256`), and one restored database
-    (`AUTOMATION_DATA_RESTORE_PROBE_DATABASE`). The drill checks the digest before any
-    Kubernetes request and again in the restore Job, which runs the SQL as the restore
+    (`AUTOMATION_DATA_RESTORE_PROBE_DATABASE`). Approving a probe is a reviewed Git
+    change: its digest and database must appear in
+    `kubernetes/apps/automation-data/postgresql/app/test-helpers/restore-probes.allow`,
+    which ships in the immutable helper ConfigMap. Only the digest is committed. The
+    drill checks the digest and the allowlist before any Kubernetes request, and the
+    restore Job checks both again before any database connection. The Job sends the SQL
+    to the server unparsed with `psql --command`, so psql meta-commands and variables
+    never run; a file that starts with a backslash is refused. It runs as the restore
     superuser in one read-only transaction with a 300-second statement timeout.
-    Read-only mode prevents accidental writes but is not a sandbox; the digest pins the
-    exact SQL that runs. A run-owned immutable ConfigMap delivers the file
+    Read-only mode prevents accidental writes but is not a sandbox, so review of the
+    allowlisted SQL is the control. A run-owned immutable ConfigMap delivers the file
     and is removed with the other run-owned resources.
 
     The probe must print one line: a JSON object of at most 16 KiB with a non-empty

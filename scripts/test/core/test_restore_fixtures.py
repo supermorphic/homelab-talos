@@ -482,6 +482,7 @@ probe_file="$1"
             "nocodb-application-probe.sh",
             "provision-error.sh",
             "automation-data-bundle.sh",
+            "restore-probes.allow",
         ):
             self.assertEqual(helpers["data"][name], (POSTGRES / "test-helpers" / name).read_text())
 

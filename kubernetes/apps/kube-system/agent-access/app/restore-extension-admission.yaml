@@ -164,7 +164,7 @@ spec:
         (!has(variables.item.metadata.finalizers) || variables.item.metadata.finalizers.size() == 0) &&
         has(variables.item.immutable) && variables.item.immutable && !has(variables.item.binaryData) &&
         variables.item.data.size() == 1 && 'probe.sql' in variables.item.data &&
-        variables.item.data['probe.sql'].size() > 0 && variables.item.data['probe.sql'].size() <= 65536
+        variables.item.data['probe.sql'].size() > 0 && bytes(variables.item.data['probe.sql']).size() <= 65536
       message: The restore test identity may create or remove only its run-owned immutable application probe input.
 ---
 apiVersion: admissionregistration.k8s.io/v1
