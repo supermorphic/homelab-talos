@@ -593,8 +593,29 @@ The attended full-chain restore drill:
    Failed or missing permission assertions report only the domain and fixed
    check name; validator credential fields are not printed. These diagnostics preserve
    the failing permission-validation stage and prevent post-recovery backup on failure.
-10. Creates and validates a fresh logical bundle from the restored instance.
-11. Removes and proves absence of all run-owned workloads, policies, Services, and two
+10. Optionally runs one application-owned probe before the fresh backup. The catalog
+    variant `test.automation-data-restore-drill-application-probe` adds this step and
+    also requires
+    `AUTOMATION_DATA_RESTORE_PROBE_CONFIRM=restore:automation-data:application-probe`.
+    The application owner supplies the SQL at run time, so it never enters this
+    repository. The operator passes its path (`AUTOMATION_DATA_RESTORE_PROBE_FILE`), its
+    SHA-256 (`AUTOMATION_DATA_RESTORE_PROBE_SHA256`), and one restored database
+    (`AUTOMATION_DATA_RESTORE_PROBE_DATABASE`). The drill checks the digest before any
+    Kubernetes request and again in the restore Job, which runs the SQL as the restore
+    superuser in one read-only transaction with a 300-second statement timeout.
+    Read-only mode prevents accidental writes but is not a sandbox; the digest pins the
+    exact SQL that runs. A run-owned immutable ConfigMap delivers the file
+    and is removed with the other run-owned resources.
+
+    The probe must print one line: a JSON object of at most 16 KiB with a non-empty
+    `assertions` object of booleans and an optional `evidence` object, and no other
+    keys. A false assertion or an out-of-contract result fails the drill and names only
+    the failed assertion keys. The published run diagnostics record the result with the
+    probe digest, database, and selected bundle, so it must hold only counts and
+    digests. A pass proves that the restored data meets the application owner's checks;
+    it does not prove application behavior, and it is only as strong as those checks.
+11. Creates and validates a fresh logical bundle from the restored instance.
+12. Removes and proves absence of all run-owned workloads, policies, Services, and two
     temporary 20 GiB data claims. It creates no HTTPRoute.
 
 This drill is the independent recovery oracle. Artifact creation, `pg_restore --list`,

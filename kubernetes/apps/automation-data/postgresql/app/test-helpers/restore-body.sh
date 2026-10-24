@@ -278,6 +278,39 @@ WHERE login.state = 'ready';
   *) restore_fail platform-revision-validation ;;
 esac
 
+# Optional application probe: application-owned read-only SQL, pinned by SHA-256, that
+# must print exactly one JSON object line. The caller validates the result contract.
+application_probe_result=''
+probe_path="${RESTORE_PROBE_PATH:-/probe/probe.sql}"
+if test -n "${RESTORE_PROBE_SHA256:-}${RESTORE_PROBE_DATABASE:-}" || test -e "$probe_path"; then
+  printf '%s\n' 'restore_stage=application-probe'
+  printf '%s\n' "${RESTORE_PROBE_SHA256:-}" | grep -Eqx '[0-9a-f]{64}' ||
+    restore_fail application-probe-input
+  printf '%s\n' "${RESTORE_PROBE_DATABASE:-}" | grep -Eqx '[a-z][a-z0-9_]{0,47}' ||
+    restore_fail application-probe-input
+  test -f "$probe_path" -a -s "$probe_path" || restore_fail application-probe-input
+  probe_digest="$(sha256sum "$probe_path" | cut -d' ' -f1)" ||
+    restore_fail application-probe-digest
+  test "$probe_digest" = "$RESTORE_PROBE_SHA256" || restore_fail application-probe-digest
+  probe_database_base64="$(printf '%s' "$RESTORE_PROBE_DATABASE" | base64 | tr -d '\n')" ||
+    restore_fail application-probe-database
+  grep -Fxq "$probe_database_base64" /tmp/restore-expected-databases-base64 ||
+    restore_fail application-probe-database
+  PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=300s' \
+    psql --dbname="$RESTORE_PROBE_DATABASE" --no-psqlrc --quiet --single-transaction \
+      --set=ON_ERROR_STOP=1 --tuples-only --no-align --file="$probe_path" \
+      >/tmp/restore-application-probe.out 2>/tmp/restore-application-probe.log ||
+    restore_fail application-probe
+  test "$(wc -l < /tmp/restore-application-probe.out | tr -d ' ')" = 1 ||
+    restore_fail application-probe-result
+  test "$(wc -c < /tmp/restore-application-probe.out | tr -d ' ')" -le 16385 ||
+    restore_fail application-probe-result
+  grep -Eqx '[{].*[}]' /tmp/restore-application-probe.out ||
+    restore_fail application-probe-result
+  application_probe_result="$(base64 < /tmp/restore-application-probe.out | tr -d '\n')" ||
+    restore_fail application-probe-result
+fi
+
 printf '%s\n' 'restore_stage=post-recovery-backup'
 mkdir -p "$POST_RECOVERY_BACKUP_DIR"
 PGDATABASE=automation_data_control \
@@ -302,3 +335,6 @@ printf '%s\n' 'restore_stage=complete'
 printf 'selected_bundle=%s\n' "$selected_name"
 printf 'database_count=%s\n' "$(wc -l < /tmp/restore-expected-databases-base64 | tr -d ' ')"
 printf 'post_recovery_bundle=%s\n' "$post_recovery_bundle"
+if test -n "$application_probe_result"; then
+  printf 'application_probe_result=%s\n' "$application_probe_result"
+fi

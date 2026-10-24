@@ -217,6 +217,11 @@ automation-data-provisioning-test: require-bash
 automation-data-restore-drill: require-bash
     @scripts/test/run-catalog-suite.sh test.automation-data-restore-drill -- scripts/test/scenarios/automation-data-restore-drill.sh {{quote(test_kubeconfig)}}
 
+# Optional variant: also run an application-owned read-only probe, supplied at run time
+# and pinned by SHA-256, against the restored database before the fresh backup.
+automation-data-restore-drill-application-probe: require-bash
+    @scripts/test/run-catalog-suite.sh test.automation-data-restore-drill-application-probe -- scripts/test/scenarios/automation-data-restore-drill.sh {{quote(test_kubeconfig)}}
+
 # Run the observational n8n live acceptance contract. It sends no canary request;
 # private bootstrap sets N8N_VERIFY_MODE=private while the public route is absent.
 n8n-verify: require-bash

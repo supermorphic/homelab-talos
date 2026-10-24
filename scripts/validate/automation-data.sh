@@ -124,6 +124,8 @@ just --dry-run kube automation-data-provisioning-test >/dev/null 2>&1 ||
   fail 'the attended automation-data provisioning recipe is missing'
 just --dry-run kube automation-data-restore-drill >/dev/null 2>&1 ||
   fail 'the attended automation-data restore drill recipe is missing'
+just --dry-run kube automation-data-restore-drill-application-probe >/dev/null 2>&1 ||
+  fail 'the optional automation-data restore application-probe recipe is missing'
 
 catalog='tests/catalog.yaml'
 verification_contract="$(yq -o=json -I=0 '
@@ -170,6 +172,24 @@ restore_contract="$(yq -o=json -I=0 '
 [[ "$restore_contract" == \
   '{"mutates":true,"owner":"shared","confirmation":{"type":"exact","variable":"AUTOMATION_DATA_RESTORE_CONFIRM","expected":"restore:automation-data:full-chain"},"command":"AUTOMATION_DATA_RESTORE_CONFIRM=restore:automation-data:full-chain mise exec -- just kube automation-data-restore-drill","implementation":"scripts/test/scenarios/automation-data-restore-drill.sh","dispatch":{"mode":"direct","runtime":"bash","path":"scripts/test/scenarios/automation-data-restore-drill.sh","args":["@test-kubeconfig@"],"selector":null}}' ]] ||
   fail 'the attended automation-data restore catalog contract is missing or unsafe'
+
+probe_contract="$(yq -o=json -I=0 '
+  .suites[] | select(.metadata.id == "test.automation-data-restore-drill-application-probe") |
+  {
+    "mutates": .metadata.mutates_cluster,
+    "owner": .metadata.execution_owner,
+    "target": .metadata.target,
+    "scenario": .metadata.scenario,
+    "access": .access,
+    "confirmation": .confirmation,
+    "command": .runner.command,
+    "implementation": .runner.implementation,
+    "dispatch": .dispatch
+  }
+' "$catalog")"
+[[ "$probe_contract" == \
+  '{"mutates":true,"owner":"shared","target":"automation-data-restore-drill","scenario":"application-probe","access":{"profile":"test-runner","prerequisites":[]},"confirmation":{"type":"exact","variable":"AUTOMATION_DATA_RESTORE_PROBE_CONFIRM","expected":"restore:automation-data:application-probe"},"command":"AUTOMATION_DATA_RESTORE_PROBE_CONFIRM=restore:automation-data:application-probe AUTOMATION_DATA_RESTORE_CONFIRM=restore:automation-data:full-chain mise exec -- just kube automation-data-restore-drill-application-probe","implementation":"scripts/test/scenarios/automation-data-restore-drill.sh","dispatch":{"mode":"direct","runtime":"bash","path":"scripts/test/scenarios/automation-data-restore-drill.sh","args":["@test-kubeconfig@"],"selector":null}}' ]] ||
+  fail 'the optional automation-data restore application-probe catalog contract is missing or unsafe'
 
 verifier='scripts/verify/automation-data.sh'
 scenario='scripts/test/scenarios/automation-data-provisioning.sh'

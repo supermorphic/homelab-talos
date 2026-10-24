@@ -234,6 +234,34 @@ class AccessContractTests(unittest.TestCase):
         ):
             access.resolve_suite_access(ROOT, "test.nocodb-access")
 
+    def test_restore_probe_variant_resolves_and_base_suite_refuses_probe_confirmation(self):
+        access = self.router()
+        variant = "test.automation-data-restore-drill-application-probe"
+        self.assertEqual(access.resolve_suite_access(ROOT, variant)["profile"], "test-runner")
+        entry = self.entry(variant)
+        self.assertEqual(
+            entry["confirmation"],
+            {
+                "type": "exact",
+                "variable": "AUTOMATION_DATA_RESTORE_PROBE_CONFIRM",
+                "expected": "restore:automation-data:application-probe",
+            },
+        )
+        self.assertIn(
+            "AUTOMATION_DATA_RESTORE_CONFIRM=restore:automation-data:full-chain",
+            entry["runner"]["command"],
+        )
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "AUTOMATION_DATA_RESTORE_PROBE_CONFIRM": "restore:automation-data:application-probe"
+                },
+            ),
+            self.assertRaises(SafeError),
+        ):
+            access.resolve_suite_access(ROOT, "test.automation-data-restore-drill")
+
     def test_n8n_persistence_retains_attended_application_credential(self):
         entry = self.entry("test.n8n-persistence")
         self.assertEqual(entry["metadata"]["execution_owner"], "human")

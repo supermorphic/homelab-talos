@@ -28,6 +28,23 @@ expected_confirmation='restore:automation-data:full-chain'
   exit 1
 }
 
+# The optional application probe is a separate catalog variant with its own exact
+# confirmation. Probe inputs never run, or silently drop, without that variant.
+probe_enabled=false
+probe_file="${AUTOMATION_DATA_RESTORE_PROBE_FILE:-}"
+probe_sha256="${AUTOMATION_DATA_RESTORE_PROBE_SHA256:-}"
+probe_database="${AUTOMATION_DATA_RESTORE_PROBE_DATABASE:-}"
+if [[ -n "${AUTOMATION_DATA_RESTORE_PROBE_CONFIRM:-}" ]]; then
+  [[ "$AUTOMATION_DATA_RESTORE_PROBE_CONFIRM" == 'restore:automation-data:application-probe' ]] || {
+    echo 'Refusing application probe confirmation: expected restore:automation-data:application-probe.' >&2
+    exit 1
+  }
+  probe_enabled=true
+elif [[ -n "$probe_file$probe_sha256$probe_database" ]]; then
+  echo 'Application probe inputs require AUTOMATION_DATA_RESTORE_PROBE_CONFIRM and its catalog variant.' >&2
+  exit 1
+fi
+
 kubeconfig="$1"
 run_dir="${HOMELAB_TEST_RUN_DIR:-}"
 [[ -n "$run_dir" && -d "$run_dir" ]] || {
@@ -38,6 +55,19 @@ run_dir="${HOMELAB_TEST_RUN_DIR:-}"
   echo 'The restore drill requires the selected invocation config.' >&2
   exit 1
 }
+if [[ "$probe_enabled" == true ]]; then
+  # Variant authority comes from the checked invocation, not an environment flag.
+  variant_binding="$(uv run --locked python -m scripts.test.access validate "$kubeconfig")" || {
+    echo 'The application probe requires its bound canonical suite.' >&2
+    exit 1
+  }
+  [[ "$(jq -er '.suite_id // empty' <<<"$variant_binding")" == \
+    'test.automation-data-restore-drill-application-probe' ]] || {
+    echo 'The application probe requires its bound canonical suite.' >&2
+    exit 1
+  }
+  unset variant_binding
+fi
 
 run_id="$(basename "$run_dir")"
 run_hash="$(printf '%s' "$run_id" | shasum -a 256 | cut -c1-12)"
@@ -59,6 +89,7 @@ request_job="$prefix-request"
 ad_policy="$prefix-ad-policy"
 n8n_policy="$prefix-n8n-policy"
 request_policy="$prefix-request-policy"
+probe_configmap="$prefix-ad-probe"
 backup_configmap=''
 automation_data_restore_bundle="${AUTOMATION_DATA_RESTORE_BUNDLE:-}"
 n8n_restore_dump="${N8N_RESTORE_DUMP:-}"
@@ -109,6 +140,51 @@ validate_reported_restore_selection() {
   [[ "$reported_bundle" == "$requested_bundle" && "$reported_dump" == "$requested_dump" ]]
 }
 
+# The application owner supplies the probe at run time; its digest pins the exact bytes.
+validate_probe_inputs() { # <absolute-file> <sha256> <database>
+  local file="$1" digest="$2" database="$3" size actual
+  [[ "$file" == /* && -f "$file" && ! -L "$file" && -O "$file" ]] || {
+    echo 'AUTOMATION_DATA_RESTORE_PROBE_FILE must be an absolute regular file owned by the caller.' >&2
+    return 1
+  }
+  size="$(wc -c <"$file" | tr -d ' ')" || return 1
+  [[ "$size" =~ ^[0-9]+$ && "$size" -ge 1 && "$size" -le 65536 ]] || {
+    echo 'The application probe must contain 1 byte to 64 KiB.' >&2
+    return 1
+  }
+  iconv -f UTF-8 -t UTF-8 "$file" >/dev/null 2>&1 || {
+    echo 'The application probe must be UTF-8 text.' >&2
+    return 1
+  }
+  [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || {
+    echo 'AUTOMATION_DATA_RESTORE_PROBE_SHA256 must be 64 lowercase hexadecimal characters.' >&2
+    return 1
+  }
+  actual="$(shasum -a 256 "$file" | cut -d' ' -f1)" || return 1
+  [[ "$actual" == "$digest" ]] || {
+    echo 'The application probe does not match AUTOMATION_DATA_RESTORE_PROBE_SHA256.' >&2
+    return 1
+  }
+  [[ "$database" =~ ^[a-z][a-z0-9_]{0,47}$ ]] || {
+    echo 'AUTOMATION_DATA_RESTORE_PROBE_DATABASE must be a canonical database name.' >&2
+    return 1
+  }
+}
+
+# Print the sorted names of false assertions, or fail for a result outside the contract:
+# exactly one object with non-empty boolean "assertions" and an optional object "evidence".
+validate_probe_result() {
+  jq -ser '
+    select(length == 1) | .[0] |
+    select(type == "object" and has("assertions") and
+      ((keys - ["assertions", "evidence"]) | length) == 0) |
+    select(.assertions | type == "object" and length > 0 and
+      all(to_entries[]; (.key | test("^[a-z][a-z0-9_]{0,63}$")) and (.value | type == "boolean"))) |
+    select((has("evidence") | not) or (.evidence | type == "object")) |
+    [.assertions | to_entries[] | select(.value == false) | .key] | sort | join(",")
+  ' 2>/dev/null
+}
+
 write_phase assertion not-classified 'full-chain restore assertions have not completed'
 write_phase cleanup not-classified 'run-owned workloads and storage have not been removed'
 write_phase recovery not-required 'production workloads and databases are not modified'
@@ -117,6 +193,13 @@ validate_restore_selectors "$automation_data_restore_bundle" "$n8n_restore_dump"
   write_phase cleanup not-required 'no restore resources were created'
   exit 1
 }
+if [[ "$probe_enabled" == true ]]; then
+  validate_probe_inputs "$probe_file" "$probe_sha256" "$probe_database" || {
+    write_phase external-dependency failed 'the application probe input is missing, unsafe, or differs from its pinned digest'
+    write_phase cleanup not-required 'no restore resources were created'
+    exit 1
+  }
+fi
 
 verify_lease() {
   verify_test_lease_holder "$kubeconfig" "$lease_holder" || {
@@ -325,7 +408,7 @@ policy_manifests() {
 
 restore_job_manifest() {
   local kind="$1" name command namespace role host user secret_name secret_key mounts volumes extra_env helper_name backup_configmap_name=''
-  local selector_name='' selector_value='' selector_env='[]'
+  local selector_name='' selector_value='' selector_env='[]' probe_env='[]' probe_volumes='[]'
   case "$kind" in
     automation-data)
       [[ "$backup_configmap" =~ ^automation-data-postgresql-backup-[a-z0-9]+$ ]] || return 2
@@ -339,6 +422,17 @@ restore_job_manifest() {
       extra_env='[{"name":"BACKUP_DIR","value":"/backups"},{"name":"POST_RECOVERY_BACKUP_DIR","value":"/post-recovery"},{"name":"AUTOMATION_DATA_BACKUP_PASSWORD","valueFrom":{"secretKeyRef":{"name":"postgresql-credentials","key":"backup-password"}}}]'
       selector_name='AUTOMATION_DATA_RESTORE_BUNDLE'
       selector_value="${automation_data_restore_bundle:-}"
+      if [[ "${probe_enabled:-false}" == true ]]; then
+        # The probe variant adds exactly one run-owned read-only input and its pins.
+        mounts="$(MOUNTS="$mounts" yq --null-input --output-format json --indent 0 \
+          '(strenv(MOUNTS) | from_json) + [{"name":"probe","mountPath":"/probe","readOnly":true}]')" || return 1
+        probe_volumes="$(PROBE_CONFIGMAP="$probe_configmap" \
+          yq --null-input --output-format json --indent 0 \
+          '[{"name":"probe","configMap":{"name": strenv(PROBE_CONFIGMAP)}}]')" || return 1
+        probe_env="$(PROBE_DATABASE="$probe_database" PROBE_SHA256="$probe_sha256" \
+          yq --null-input --output-format json --indent 0 \
+          '[{"name":"RESTORE_PROBE_DATABASE","value": strenv(PROBE_DATABASE)},{"name":"RESTORE_PROBE_SHA256","value": strenv(PROBE_SHA256)}]')" || return 1
+      fi
       ;;
     n8n)
       helper_name=n8n-test-helpers-v1
@@ -364,7 +458,7 @@ restore_job_manifest() {
     MOUNTS="$mounts" VOLUMES="$volumes" EXTRA_ENV="$extra_env" \
     HELPER_CONFIGMAP_NAME="$helper_name" \
     BACKUP_CONFIGMAP_NAME="$backup_configmap_name" SELECTOR_ENV="$selector_env" \
-    yq --null-input --output-format yaml '
+    PROBE_ENV="$probe_env" PROBE_VOLUMES="$probe_volumes" yq --null-input --output-format yaml '
       {
         "apiVersion": "batch/v1", "kind": "Job",
         "metadata": {"name": strenv(JOB_NAME), "namespace": strenv(NAMESPACE), "labels": {
@@ -382,14 +476,15 @@ restore_job_manifest() {
                 {"name": "PGHOST", "value": strenv(PGHOST_VALUE)}, {"name": "PGPORT", "value": "5432"},
                 {"name": "PGUSER", "value": strenv(PGUSER_VALUE)},
                 {"name": "PGPASSWORD", "valueFrom": {"secretKeyRef": {"name": strenv(SECRET_NAME), "key": strenv(SECRET_KEY)}}}
-              ] + (strenv(EXTRA_ENV) | from_json) + (strenv(SELECTOR_ENV) | from_json)),
+              ] + (strenv(EXTRA_ENV) | from_json) + (strenv(SELECTOR_ENV) | from_json) +
+                (strenv(PROBE_ENV) | from_json)),
               "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"memory": "512Mi"}},
               "securityContext": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}, "readOnlyRootFilesystem": true},
               "volumeMounts": (strenv(MOUNTS) | from_json)
             }],
             "volumes": ((strenv(VOLUMES) | from_json) + [{"name":"helpers","configMap":{"name": strenv(HELPER_CONFIGMAP_NAME)}}] |
               (.[] | select(.name == "scripts") | .configMap.name) =
-                strenv(BACKUP_CONFIGMAP_NAME))
+                strenv(BACKUP_CONFIGMAP_NAME)) + (strenv(PROBE_VOLUMES) | from_json)
           }
         }}
       }'
@@ -443,6 +538,18 @@ n8n_application_manifests() {
       ] | .[] | split_doc'
 }
 
+probe_configmap_manifest() {
+  PROBE_CONFIGMAP="$probe_configmap" RUN_HASH="$run_hash" PROBE_FILE="$probe_file" \
+    yq --null-input --output-format json '{
+      "apiVersion": "v1", "kind": "ConfigMap",
+      "metadata": {"name": strenv(PROBE_CONFIGMAP), "namespace": "automation-data", "labels": {
+        "homelab-talos/test": "automation-data-restore-drill", "homelab-talos/run-id": strenv(RUN_HASH), "homelab-talos/role": "ad-probe"
+      }},
+      "immutable": true,
+      "data": {"probe.sql": load_str(strenv(PROBE_FILE))}
+    }'
+}
+
 request_job_manifest() {
   REQUEST_JOB="$request_job" APP_NAME="$n8n_app" RUN_HASH="$run_hash" \
     yq --null-input --output-format yaml '
@@ -471,6 +578,9 @@ request_job_manifest() {
       }'
 }
 
+ad_targets="job/$ad_restore_job statefulset/$ad_database service/$ad_service ciliumnetworkpolicy/$ad_policy pvc/$ad_data_pvc"
+[[ "$probe_enabled" != true ]] || ad_targets+=" configmap/$probe_configmap"
+
 cleanup() {
   local original_exit="$?" cleanup_ok=true kind target_namespace rest target namespace_and_targets
   trap - EXIT INT TERM
@@ -478,7 +588,7 @@ cleanup() {
   test_delete_owned "$ledger" Job "$request_namespace" "$request_job" "${k_request[@]}" || cleanup_ok=false
   test_delete_owned "$ledger" Deployment "$n8n_namespace" "$n8n_app" "${k_n8n[@]}" || cleanup_ok=false
   for namespace_and_targets in \
-    "$ad_namespace job/$ad_restore_job statefulset/$ad_database service/$ad_service ciliumnetworkpolicy/$ad_policy pvc/$ad_data_pvc" \
+    "$ad_namespace $ad_targets" \
     "$n8n_namespace job/$n8n_restore_job statefulset/$n8n_database service/$n8n_service service/$n8n_app ciliumnetworkpolicy/$n8n_policy pvc/$n8n_data_pvc" \
     "$request_namespace ciliumnetworkpolicy/$request_policy"; do
     read -r target_namespace rest <<<"$namespace_and_targets"
@@ -489,6 +599,7 @@ cleanup() {
         service) kind=Service ;;
         ciliumnetworkpolicy) kind=CiliumNetworkPolicy ;;
         pvc) kind=PersistentVolumeClaim ;;
+        configmap) kind=ConfigMap ;;
         *) cleanup_ok=false; continue ;;
       esac
       test_delete_owned "$ledger" "$kind" "$target_namespace" "${target#*/}" \
@@ -496,7 +607,7 @@ cleanup() {
     done
   done
   for namespace_and_targets in \
-    "$ad_namespace job/$ad_restore_job statefulset/$ad_database service/$ad_service ciliumnetworkpolicy/$ad_policy pvc/$ad_data_pvc" \
+    "$ad_namespace $ad_targets" \
     "$n8n_namespace job/$n8n_restore_job statefulset/$n8n_database service/$n8n_service deployment/$n8n_app service/$n8n_app ciliumnetworkpolicy/$n8n_policy pvc/$n8n_data_pvc" \
     "$request_namespace job/$request_job ciliumnetworkpolicy/$request_policy"; do
     read -r target_namespace rest <<<"$namespace_and_targets"
@@ -504,7 +615,9 @@ cleanup() {
       resource_absent "$target_namespace" "$target" >/dev/null 2>&1 || cleanup_ok=false
     done
   done
-  if [[ "$cleanup_ok" == 'true' ]]; then
+  if [[ "$cleanup_ok" == 'true' && "$probe_enabled" == true ]]; then
+    write_phase cleanup passed 'all run-owned workloads, policies, Services, Jobs, PVCs, and the probe input are absent'
+  elif [[ "$cleanup_ok" == 'true' ]]; then
     write_phase cleanup passed 'all run-owned workloads, policies, Services, Jobs, and PVCs are absent'
   else
     write_phase cleanup failed 'one or more run-owned restore resources remain'
@@ -525,7 +638,7 @@ if n8n_routes_target_service "$n8n_namespace" "$n8n_app" \
   exit 1
 fi
 for namespace_and_targets in \
-  "$ad_namespace job/$ad_restore_job statefulset/$ad_database service/$ad_service ciliumnetworkpolicy/$ad_policy pvc/$ad_data_pvc" \
+  "$ad_namespace $ad_targets" \
   "$n8n_namespace job/$n8n_restore_job statefulset/$n8n_database service/$n8n_service deployment/$n8n_app service/$n8n_app ciliumnetworkpolicy/$n8n_policy pvc/$n8n_data_pvc" \
   "$request_namespace job/$request_job ciliumnetworkpolicy/$request_policy"; do
   read -r target_namespace rest <<<"$namespace_and_targets"
@@ -547,6 +660,14 @@ verify_lease
 backup_configmaps_json="$("${k_ad[@]}" get configmaps --output json)"
 backup_configmap="$(resolve_backup_configmap <<<"$backup_configmaps_json")"
 unset backup_configmaps_json
+if [[ "$probe_enabled" == true ]]; then
+  # Recheck the pinned bytes immediately before delivery; the Job checks them again.
+  validate_probe_inputs "$probe_file" "$probe_sha256" "$probe_database" || {
+    write_phase external-dependency failed 'the application probe input changed before delivery'
+    exit 1
+  }
+  probe_configmap_manifest | test_create_owned_stream "$ledger" create_restore_resource
+fi
 restore_job_manifest automation-data | test_create_owned_stream "$ledger" create_restore_resource
 wait_for_restore_job "$ad_restore_job" 1800 5 "${k_ad[@]}"
 ad_restore_output="$("${k_ad[@]}" logs "job/$ad_restore_job" --tail=20)"
@@ -557,6 +678,32 @@ post_recovery_bundle="$(sed -n 's/^post_recovery_bundle=//p' <<<"$ad_restore_out
   echo 'The automation-data restore Job omitted bounded bundle evidence.' >&2
   exit 1
 }
+if [[ "$probe_enabled" == true ]]; then
+  probe_result_base64="$(sed -n 's/^application_probe_result=//p' <<<"$ad_restore_output" | tail -n 1)"
+  probe_result=''
+  if [[ "$probe_result_base64" =~ ^[A-Za-z0-9+/]+=*$ ]]; then
+    probe_result="$(base64 --decode <<<"$probe_result_base64" 2>/dev/null)" || probe_result=''
+  fi
+  unset probe_result_base64
+  failed_assertions=''
+  if [[ -z "$probe_result" ]] || (( $(printf '%s' "$probe_result" | wc -c) > 16384 )) ||
+    ! failed_assertions="$(validate_probe_result <<<"$probe_result")"; then
+    write_phase assertion failed 'the application probe result is missing or outside its contract'
+    echo 'The application probe result is missing or outside its contract.' >&2
+    exit 1
+  fi
+  # The application owner guarantees that the result holds only counts and digests.
+  PROBE_RESULT="$probe_result" jq -n \
+    --arg sha "$probe_sha256" --arg database "$probe_database" --arg bundle "$selected_bundle" \
+    '{probeSha256: $sha, database: $database, selectedAutomationDataBundle: $bundle,
+      result: (env.PROBE_RESULT | fromjson)}' \
+    >"$run_dir/diagnostics/automation-data-restore-application-probe.json"
+  [[ -z "$failed_assertions" ]] || {
+    write_phase assertion failed "application probe assertions failed: $failed_assertions"
+    echo "Application probe assertions failed: $failed_assertions." >&2
+    exit 1
+  }
+fi
 
 verify_lease
 restore_job_manifest n8n | test_create_owned_stream "$ledger" create_restore_resource
@@ -614,5 +761,9 @@ RUN_HASH="$run_hash" SELECTED_N8N_DUMP="$selected_n8n_dump" \
     "postRecoveryBundle": strenv(POST_RECOVERY_BUNDLE),
     "productionMutation": false
   }' >"$run_dir/diagnostics/automation-data-restore-evidence.json"
-write_phase assertion passed 'isolated n8n and automation-data restores, credential authentication, permission separation, and fresh backup passed'
+if [[ "$probe_enabled" == true ]]; then
+  write_phase assertion passed 'isolated n8n and automation-data restores, credential authentication, permission separation, application probe, and fresh backup passed'
+else
+  write_phase assertion passed 'isolated n8n and automation-data restores, credential authentication, permission separation, and fresh backup passed'
+fi
 echo "automation-data full-chain restore drill passed with $selected_n8n_dump and $selected_bundle; $post_recovery_bundle was created after recovery. Cleanup will remove all run-owned resources and PVCs."

@@ -1355,6 +1355,231 @@ class TestAccessPolicyTests(unittest.TestCase):
                 with self.subTest(job=obj["metadata"]["name"], change=change):
                     self.assertFalse(allowed(bad, request))
 
+    def test_restore_probe_job_requires_all_run_owned_probe_inputs_together(self):
+        probe, _ = RestoreFixtureTests.render_probe_restore_artifacts()
+        base_jobs = RestoreFixtureTests.render_restore_jobs()
+        req = self.request("jobs", "automation-data", name=probe["metadata"]["name"])
+        req["resource"]["group"] = "batch"
+
+        def allowed(candidate, request=req):
+            return self.admits_jobs(request, candidate)
+
+        self.assertTrue(allowed(probe))
+        self.assertTrue(allowed(base_jobs[0]))
+        self.assertTrue(
+            self.admits("homelab-test-restore-jobs", {**req, "operation": "DELETE"}, None, probe)
+        )
+        self.assertFalse(allowed(probe, {**req, "operation": "UPDATE"}))
+        probe_env = [
+            e
+            for e in probe["spec"]["template"]["spec"]["containers"][0]["env"]
+            if e["name"].startswith("RESTORE_PROBE_")
+        ]
+        probe_volume = next(
+            v for v in probe["spec"]["template"]["spec"]["volumes"] if v["name"] == "probe"
+        )
+        probe_mount = next(
+            m
+            for m in probe["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]
+            if m["name"] == "probe"
+        )
+
+        def without(job, volume=False, mount=False, env=()):
+            changed = copy.deepcopy(job)
+            pod = changed["spec"]["template"]["spec"]
+            app = pod["containers"][0]
+            if volume:
+                pod["volumes"] = [v for v in pod["volumes"] if v["name"] != "probe"]
+            if mount:
+                app["volumeMounts"] = [m for m in app["volumeMounts"] if m["name"] != "probe"]
+            app["env"] = [e for e in app["env"] if e["name"] not in env]
+            return changed
+
+        all_env = ("RESTORE_PROBE_DATABASE", "RESTORE_PROBE_SHA256")
+        for change in (
+            "volume-only",
+            "volume-and-mount-only",
+            "env-only",
+            "missing-digest",
+            "missing-database",
+            "missing-mount",
+            "duplicate-env",
+            "other-run-configmap",
+            "production-configmap",
+            "optional-configmap",
+            "configmap-items",
+            "secret-volume",
+            "writable-mount",
+            "mount-path",
+            "mount-subpath",
+            "extra-env",
+            "digest-shape",
+            "database-shape",
+            "digest-from-secret",
+        ):
+            if change == "volume-only":
+                bad = without(probe, mount=True, env=all_env)
+            elif change == "volume-and-mount-only":
+                bad = without(probe, env=all_env)
+            elif change == "env-only":
+                bad = without(probe, volume=True, mount=True)
+            elif change == "missing-digest":
+                bad = without(probe, env=("RESTORE_PROBE_SHA256",))
+            elif change == "missing-database":
+                bad = without(probe, env=("RESTORE_PROBE_DATABASE",))
+            elif change == "missing-mount":
+                bad = without(probe, mount=True)
+            else:
+                bad = copy.deepcopy(probe)
+            pod = bad["spec"]["template"]["spec"]
+            app = pod["containers"][0]
+            volume = next((v for v in pod["volumes"] if v["name"] == "probe"), None)
+            mount = next((m for m in app["volumeMounts"] if m["name"] == "probe"), None)
+            env = {e["name"]: e for e in app["env"]}
+            if change == "duplicate-env":
+                env["RESTORE_PROBE_SHA256"].clear()
+                env["RESTORE_PROBE_SHA256"].update(name="RESTORE_PROBE_DATABASE", value="other")
+            elif change == "other-run-configmap":
+                volume["configMap"]["name"] = "ad-restore-ffffffffffff-ad-probe"
+            elif change == "production-configmap":
+                volume["configMap"]["name"] = "automation-data-postgresql-backup-synthetic"
+            elif change == "optional-configmap":
+                volume["configMap"]["optional"] = True
+            elif change == "configmap-items":
+                volume["configMap"]["items"] = [{"key": "probe.sql", "path": "other.sql"}]
+            elif change == "secret-volume":
+                volume.pop("configMap")
+                volume["secret"] = {"secretName": "postgresql-credentials"}
+            elif change == "writable-mount":
+                mount["readOnly"] = False
+            elif change == "mount-path":
+                mount["mountPath"] = "/scripts"
+            elif change == "mount-subpath":
+                mount["subPath"] = "probe.sql"
+            elif change == "extra-env":
+                app["env"].append({"name": "RESTORE_PROBE_OTHER", "value": "synthetic"})
+            elif change == "digest-shape":
+                env["RESTORE_PROBE_SHA256"]["value"] = "A" * 64
+            elif change == "database-shape":
+                env["RESTORE_PROBE_DATABASE"]["value"] = "Domain;other"
+            elif change == "digest-from-secret":
+                env["RESTORE_PROBE_SHA256"].pop("value")
+                env["RESTORE_PROBE_SHA256"]["valueFrom"] = {
+                    "secretKeyRef": {"name": "postgresql-credentials", "key": "backup-password"}
+                }
+            with self.subTest(change=change):
+                self.assertFalse(allowed(bad))
+        for other in base_jobs[1:]:
+            bad = copy.deepcopy(other)
+            pod = bad["spec"]["template"]["spec"]
+            pod["volumes"].append(
+                {
+                    **probe_volume,
+                    "configMap": {"name": other["metadata"]["name"][:-5] + "-ad-probe"},
+                }
+            )
+            pod["containers"][0]["volumeMounts"].append(probe_mount)
+            pod["containers"][0]["env"] += probe_env
+            request = {
+                **req,
+                "namespace": other["metadata"]["namespace"],
+                "name": other["metadata"]["name"],
+            }
+            with self.subTest(job=other["metadata"]["name"]):
+                self.assertFalse(allowed(bad, request))
+
+    def admits_configmaps(self, request, obj, old=None):
+        return all(
+            self.admits(name, request, obj, old)
+            for name in ("homelab-test-news-inputs", "homelab-test-restore-probe-inputs")
+        )
+
+    def test_restore_probe_configmap_is_only_the_runs_immutable_single_key_input(self):
+        _, obj = RestoreFixtureTests.render_probe_restore_artifacts()
+        req = self.request("configmaps", "automation-data", name=obj["metadata"]["name"])
+        self.assertTrue(self.admits_configmaps(req, obj))
+        self.assertTrue(self.admits_configmaps({**req, "operation": "DELETE"}, None, obj))
+        self.assertFalse(self.admits_configmaps({**req, "operation": "UPDATE"}, obj, obj))
+        production = {
+            "metadata": {
+                "name": "automation-data-test-helpers-v2",
+                "namespace": "automation-data",
+            },
+            "immutable": True,
+            "data": {"restore-body.sh": "synthetic"},
+        }
+        self.assertFalse(
+            self.admits_configmaps(
+                {**req, "operation": "DELETE", "name": production["metadata"]["name"]},
+                None,
+                production,
+            )
+        )
+        for change in (
+            "namespace",
+            "name",
+            "other-run",
+            "family",
+            "role",
+            "extra-label",
+            "mutable",
+            "immutable-absent",
+            "extra-key",
+            "other-key",
+            "binary",
+            "empty",
+            "oversize",
+            "annotation",
+            "owner",
+        ):
+            bad, request = copy.deepcopy(obj), copy.deepcopy(req)
+            labels = bad["metadata"]["labels"]
+            if change == "namespace":
+                request["namespace"] = bad["metadata"]["namespace"] = "automation"
+            elif change == "name":
+                bad["metadata"]["name"] = request["name"] = "automation-data-test-helpers-v2"
+            elif change == "other-run":
+                labels["homelab-talos/run-id"] = "ffffffffffff"
+            elif change == "family":
+                labels["homelab-talos/test"] = "nocodb-restore-drill"
+            elif change == "role":
+                labels["homelab-talos/role"] = "ad-restore"
+            elif change == "extra-label":
+                labels["homelab-talos/extra"] = "synthetic"
+            elif change == "mutable":
+                bad["immutable"] = False
+            elif change == "immutable-absent":
+                bad.pop("immutable")
+            elif change == "extra-key":
+                bad["data"]["other.sql"] = "SELECT 1;"
+            elif change == "other-key":
+                bad["data"] = {"other.sql": bad["data"]["probe.sql"]}
+            elif change == "binary":
+                bad["binaryData"] = {"probe.bin": "AA=="}
+            elif change == "empty":
+                bad["data"]["probe.sql"] = ""
+            elif change == "oversize":
+                bad["data"]["probe.sql"] = "x" * 65537
+            elif change == "annotation":
+                bad["metadata"]["annotations"] = {"example.test/inject": "true"}
+            else:
+                bad["metadata"]["ownerReferences"] = [{"uid": "synthetic"}]
+            with self.subTest(change=change):
+                self.assertFalse(self.admits_configmaps(request, bad))
+
+    def test_restore_probe_input_grant_has_only_individual_configmap_actions(self):
+        roles = [
+            d
+            for d in self.documents
+            if d["kind"] == "Role" and d["metadata"]["name"] == "homelab-test-restore-probe"
+        ]
+        self.assertEqual(len(roles), 1)
+        self.assertEqual(roles[0]["metadata"]["namespace"], "automation-data")
+        self.assertEqual(
+            roles[0]["rules"],
+            [{"apiGroups": [""], "resources": ["configmaps"], "verbs": ["create", "delete"]}],
+        )
+
     def test_career_ops_admission_is_owned_by_its_dedicated_policies(self):
         obj = yaml.safe_load((ROOT / "tests/fixtures/application-boundary/job.yaml").read_text())
         req = self.request("jobs", "career-ops", name=obj["metadata"]["name"])

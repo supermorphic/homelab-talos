@@ -178,6 +178,9 @@ spec:
   matchConditions:
   - name: test-runner
     expression: request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'
+  # homelab-test-restore-probe-inputs owns automation-data ConfigMaps.
+  - name: outside-restore-probe-inputs
+    expression: request.resource.resource != 'configmaps' || request.namespace != 'automation-data'
   variables:
   - name: item
     expression: 'request.operation == ''DELETE'' ? oldObject : object'

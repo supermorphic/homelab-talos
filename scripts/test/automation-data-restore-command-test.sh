@@ -39,7 +39,7 @@ sed -n '/^resolve_backup_configmap()/,/^}/p' "$restore_scenario" \
 # shellcheck disable=SC1091 # Extract the production resolver without running the live scenario.
 source "$test_root/resolve-backup-configmap.sh"
 
-sed -n '/^write_phase()/,/^}/p; /^validate_restore_selectors()/,/^}/p; /^validate_reported_restore_selection()/,/^}/p; /^wait_for_restore_job()/,/^}/p; /^restore_job_manifest()/,/^}/p; /^request_job_manifest()/,/^}/p' \
+sed -n '/^write_phase()/,/^}/p; /^validate_restore_selectors()/,/^}/p; /^validate_reported_restore_selection()/,/^}/p; /^wait_for_restore_job()/,/^}/p; /^restore_job_manifest()/,/^}/p; /^request_job_manifest()/,/^}/p; /^validate_probe_inputs()/,/^}/p; /^validate_probe_result()/,/^}/p' \
   "$restore_scenario" >"$test_root/restore-scenario-functions.sh"
 # shellcheck disable=SC1091 # Extract production functions without running the live scenario.
 source "$test_root/restore-scenario-functions.sh"
@@ -216,12 +216,23 @@ printf '\t%s' "$@" >>"$RESTORE_LOG"
 printf '\n' >>"$RESTORE_LOG"
 command_text=''
 file_input=''
+single_transaction=false
 for argument in "$@"; do
   case "$argument" in
     --command=*) command_text="${argument#--command=}" ;;
     --file=*) file_input="${argument#--file=}" ;;
+    --single-transaction) single_transaction=true ;;
   esac
 done
+if [[ "$single_transaction" == true ]]; then
+  printf 'probe-options\t%s\n' "${PGOPTIONS:-}" >>"$RESTORE_LOG"
+  if [[ "${PROBE_FAILURE:-false}" == true ]]; then
+    printf '%s\n' 'ERROR:  relation "synthetic_private_table" does not exist' >&2
+    exit 3
+  fi
+  printf '%b' "${PROBE_OUTPUT:-}"
+  exit 0
+fi
 if [[ -n "$file_input" ]]; then
   if grep -Fxq 'CREATE ROLE postgres;' "$file_input"; then
     printf 'bootstrap role already exists\n' >&2
@@ -374,6 +385,11 @@ run_restore() {
       RESTORE_PERMISSION_MISMATCH="$permission_mismatch" \
       RESTORE_PERMISSION_DUMP_FAILURE="$permission_dump_failure" \
       REAL_SHA256SUM="$real_sha256sum" \
+      RESTORE_PROBE_DATABASE="${PROBE_DATABASE_OVERRIDE:-}" \
+      RESTORE_PROBE_SHA256="${PROBE_SHA256_OVERRIDE:-}" \
+      RESTORE_PROBE_PATH="${PROBE_PATH_OVERRIDE:-}" \
+      PROBE_OUTPUT="${PROBE_OUTPUT_OVERRIDE:-}" \
+      PROBE_FAILURE="${PROBE_FAILURE_OVERRIDE:-false}" \
       /bin/sh -ceu "$command" 2>&1
   )" || status="$?"
   printf '%s\n' "$status" >"$root/status"
@@ -443,6 +459,8 @@ first_database_line="$(rg -n $'^pg_restore\t--exit-on-error' \
 rg -Fq 'backup' "$success/commands.log" || fail 'fresh post-recovery backup was not invoked'
 rg -Fq 'post_recovery_bundle=automation-data-20260828T003000Z' "$success/output" ||
   fail 'fresh post-recovery bundle was not validated'
+! rg -q 'application[-_]probe|^probe-options' "$success/output" "$success/commands.log" ||
+  fail 'the base restore ran or reported an application probe'
 
 exact_bundle="$(new_case exact-bundle)"
 create_bundle "$exact_bundle/backups" 20260825T003000Z
@@ -589,5 +607,134 @@ rg -Fxq 'restore_failure=permission-restore-comparison' \
 ! rg -qi 'synthetic globals|synthetic-.*password|credential.*data|pg_dump' \
   "$permission_restore_dump_failure/output" ||
   fail 'permission candidate dump failure exposed SQL, credentials, or tool details'
+
+# Application probe: a synthetic, application-owned read-only query supplied at run time.
+probe_sql_marker='synthetic_probe_marker_never_print'
+probe_result_json='{"assertions":{"synthetic_rows_present":true},"evidence":{"rows":3}}'
+write_probe() {
+  local root="$1"
+  printf 'SELECT jsonb_build_object(%s);\n' "'$probe_sql_marker'" >"$root/probe.sql"
+  "$real_sha256sum" "$root/probe.sql" | cut -d' ' -f1
+}
+run_probe_case() { # <name> <database> <digest-mode> <output> [psql-failure]
+  # create_bundle assigns the caller-visible name "database", so keep a distinct name.
+  local name="$1" probe_target="$2" digest_mode="$3" output="$4" failure="${5:-false}" root digest
+  root="$(new_case "$name")"
+  create_bundle "$root/backups" 20260827T003000Z
+  digest="$(write_probe "$root")"
+  case "$digest_mode" in
+    match) ;;
+    mismatch) digest="$(printf '%064d' 9)" ;;
+    absent) digest='' ;;
+  esac
+  PROBE_DATABASE_OVERRIDE="$probe_target" PROBE_SHA256_OVERRIDE="$digest" \
+    PROBE_PATH_OVERRIDE="$root/probe.sql" PROBE_OUTPUT_OVERRIDE="$output" \
+    PROBE_FAILURE_OVERRIDE="$failure" run_restore "$root"
+  printf '%s\n' "$root"
+}
+
+probe_success="$(run_probe_case probe-success domain_one match "$probe_result_json\n")"
+[[ "$(<"$probe_success/status")" == '0' ]] || fail 'a valid application probe failed the restore'
+rg -Fxq 'restore_stage=application-probe' "$probe_success/output" ||
+  fail 'the application probe stage was not reported'
+probe_line="$(sed -n 's/^application_probe_result=//p' "$probe_success/output")"
+[[ "$(printf '%s' "$probe_line" | base64 --decode)" == "$probe_result_json" ]] ||
+  fail 'the application probe result was not emitted exactly once on its prefixed line'
+probe_call="$(rg $'^psql\t.*--single-transaction' "$probe_success/commands.log")"
+for argument in --dbname=domain_one --set=ON_ERROR_STOP=1 --single-transaction --tuples-only \
+  --no-align --quiet --no-psqlrc "--file=$probe_success/probe.sql"; do
+  [[ $'\t'"$probe_call"$'\t' == *$'\t'"$argument"$'\t'* ]] ||
+    fail "the application probe omitted $argument"
+done
+probe_options="$(sed -n 's/^probe-options\t//p' "$probe_success/commands.log")"
+[[ "$probe_options" == *'default_transaction_read_only=on'* && \
+  "$probe_options" == *'statement_timeout=300s'* ]] ||
+  fail 'the application probe did not run read-only with a bounded statement timeout'
+probe_line_number="$(rg -n '^probe-options' "$probe_success/commands.log" | cut -d: -f1)"
+backup_line_number="$(rg -n '^backup$' "$probe_success/commands.log" | cut -d: -f1)"
+[[ "$probe_line_number" -lt "$backup_line_number" ]] ||
+  fail 'the application probe did not run before the post-recovery backup'
+! rg -Fq "$probe_sql_marker" "$probe_success/output" ||
+  fail 'the application probe SQL was printed'
+
+for probe_case in \
+  'probe-digest-mismatch|domain_one|mismatch|ok|false|application-probe-digest' \
+  'probe-database-absent|other_domain|match|ok|false|application-probe-database' \
+  'probe-database-shape|Domain_One|match|ok|false|application-probe-input' \
+  'probe-partial-input|domain_one|absent|ok|false|application-probe-input' \
+  'probe-query-error|domain_one|match|ok|true|application-probe' \
+  'probe-empty-result|domain_one|match||false|application-probe-result' \
+  'probe-two-lines|domain_one|match|two|false|application-probe-result' \
+  'probe-not-object|domain_one|match|true\n|false|application-probe-result' \
+  'probe-oversize|domain_one|match|large|false|application-probe-result'; do
+  IFS='|' read -r case_name case_database case_digest case_output case_failure case_stage \
+    <<<"$probe_case"
+  case "$case_output" in
+    ok) case_output="$probe_result_json\n" ;;
+    two) case_output="$probe_result_json\n$probe_result_json\n" ;;
+    large) case_output="{\"assertions\":{\"a\":true},\"evidence\":{\"p\":\"$(printf '%016384d' 0)\"}}\n" ;;
+  esac
+  case_root="$(run_probe_case "$case_name" "$case_database" "$case_digest" "$case_output" \
+    "$case_failure")"
+  [[ "$(<"$case_root/status")" != '0' ]] || fail "$case_name was accepted"
+  rg -Fxq "restore_failure=$case_stage" "$case_root/output" ||
+    fail "$case_name did not fail at $case_stage"
+  ! rg -q '^backup$' "$case_root/commands.log" || fail "$case_name reached fresh backup"
+  ! rg -q 'application_probe_result=|synthetic_private_table' "$case_root/output" ||
+    fail "$case_name exposed a probe result or SQL error detail"
+  ! rg -Fq "$probe_sql_marker" "$case_root/output" || fail "$case_name printed the probe SQL"
+  if [[ "$case_stage" == application-probe-digest || "$case_stage" == application-probe-input || \
+    "$case_stage" == application-probe-database ]]; then
+    ! rg -q '^probe-options' "$case_root/commands.log" ||
+      fail "$case_name ran the probe before validating its inputs"
+  fi
+done
+
+# Scenario-side local input and result contracts.
+probe_inputs="$test_root/probe-inputs"
+mkdir -p "$probe_inputs"
+printf 'SELECT 1;\n' >"$probe_inputs/probe.sql"
+probe_digest="$("$real_sha256sum" "$probe_inputs/probe.sql" | cut -d' ' -f1)"
+validate_probe_inputs "$probe_inputs/probe.sql" "$probe_digest" domain_one ||
+  fail 'a valid local probe input was rejected'
+ln -s "$probe_inputs/probe.sql" "$probe_inputs/link.sql"
+: >"$probe_inputs/empty.sql"
+head -c 65537 /dev/zero | tr '\0' 'x' >"$probe_inputs/large.sql"
+printf 'SELECT \377;\n' >"$probe_inputs/binary.sql"
+for invalid in \
+  "probe.sql|$probe_digest|domain_one" \
+  "$probe_inputs/link.sql|$probe_digest|domain_one" \
+  "$probe_inputs/empty.sql|$("$real_sha256sum" "$probe_inputs/empty.sql" | cut -d' ' -f1)|domain_one" \
+  "$probe_inputs/large.sql|$("$real_sha256sum" "$probe_inputs/large.sql" | cut -d' ' -f1)|domain_one" \
+  "$probe_inputs/binary.sql|$("$real_sha256sum" "$probe_inputs/binary.sql" | cut -d' ' -f1)|domain_one" \
+  "$probe_inputs/missing.sql|$probe_digest|domain_one" \
+  "$probe_inputs/probe.sql|$(printf '%s' "$probe_digest" | tr 'a-f' 'A-F')|domain_one" \
+  "$probe_inputs/probe.sql|$(printf '%064d' 1)|domain_one" \
+  "$probe_inputs/probe.sql|$probe_digest|Domain-One" \
+  "$probe_inputs/probe.sql|$probe_digest|"; do
+  IFS='|' read -r invalid_file invalid_digest invalid_database <<<"$invalid"
+  if validate_probe_inputs "$invalid_file" "$invalid_digest" "$invalid_database" >/dev/null 2>&1; then
+    fail "an unsafe local probe input was accepted: ${invalid_file##*/}"
+  fi
+done
+
+[[ "$(validate_probe_result <<<'{"assertions":{"rows_match":true,"digest_match":true},"evidence":{"rows":2}}')" == '' ]] ||
+  fail 'a passing probe result reported failed assertions'
+[[ "$(validate_probe_result <<<'{"assertions":{"z_ok":true,"b_bad":false,"a_bad":false}}')" == 'a_bad,b_bad' ]] ||
+  fail 'failed probe assertions were not named in a stable order'
+for invalid_result in \
+  '{"assertions":{"a":true},"extra":1}' \
+  '{"evidence":{}}' \
+  '{"assertions":{}}' \
+  '{"assertions":{"a":"true"}}' \
+  '{"assertions":{"Bad-Name":true}}' \
+  '{"assertions":{"a":true},"evidence":[]}' \
+  '{"assertions":{"a":true}} {"assertions":{"b":true}}' \
+  '[{"assertions":{"a":true}}]' \
+  'not json'; do
+  if validate_probe_result <<<"$invalid_result" >/dev/null 2>&1; then
+    fail "an out-of-contract probe result was accepted: $invalid_result"
+  fi
+done
 
 echo 'automation-data restore command behavior passed.'

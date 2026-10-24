@@ -37,7 +37,7 @@ with (root / "calls.jsonl").open("a") as log:
     log.write(json.dumps({"op":op,"args":a}) + "\n")
 state = root / "state.json"
 objects = json.loads(state.read_text()) if state.exists() else {}
-aliases = {"job":"Job","jobs":"Job","deployment":"Deployment","deployments":"Deployment","service":"Service","services":"Service","ciliumnetworkpolicy":"CiliumNetworkPolicy","ciliumnetworkpolicies":"CiliumNetworkPolicy","statefulset":"StatefulSet","statefulsets":"StatefulSet","pvc":"PersistentVolumeClaim","persistentvolumeclaims":"PersistentVolumeClaim"}
+aliases = {"job":"Job","jobs":"Job","deployment":"Deployment","deployments":"Deployment","service":"Service","services":"Service","ciliumnetworkpolicy":"CiliumNetworkPolicy","ciliumnetworkpolicies":"CiliumNetworkPolicy","statefulset":"StatefulSet","statefulsets":"StatefulSet","pvc":"PersistentVolumeClaim","persistentvolumeclaims":"PersistentVolumeClaim","configmap":"ConfigMap","configmaps":"ConfigMap"}
 ns = a[a.index("--namespace")+1] if "--namespace" in a else ""
 if op == "create":
     path = a[a.index("--filename")+1]
@@ -50,6 +50,8 @@ if op == "create":
             assert key not in objects
             objects[key]=obj
             created.append(obj)
+            with (root / "created.jsonl").open("a") as record:
+                record.write(json.dumps(obj) + "\n")
     if "--output" in a:
         assert len(created)==1
         print(json.dumps(created[0]))
@@ -60,7 +62,7 @@ elif op == "get":
         now=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
         holder="another-run" if os.environ.get("RESTORE_TEST_LOSE_LEASE") == "true" and (root / "request-complete").exists() else "fixture-run"
         print(json.dumps({"spec":{"holderIdentity":holder,"renewTime":now,"leaseDurationSeconds":90}}))
-    elif target == "configmaps":
+    elif target == "configmaps" and a[a.index("get")+2].startswith("--"):
         print(json.dumps({"items":[{"metadata":{"name":"automation-data-postgresql-backup-fixture"},"data":{"backup.sh":"fixture","update-backup-status.sql":"fixture"}}]}))
     elif target.startswith("httproutes"):
         print('{"items":[]}')
@@ -95,6 +97,8 @@ elif op == "logs":
     if os.environ.get("RESTORE_TEST_FAMILY") == "full-chain" and a[a.index("logs")+1].endswith("-request"):
         print("restored_runtime_credential=authenticated")
     else:
+        if os.environ.get("RESTORE_TEST_PROBE_RESULT") and a[a.index("logs")+1].endswith("-ad-load"):
+            print("application_probe_result=" + os.environ["RESTORE_TEST_PROBE_RESULT"])
         print("selected_dump=n8n-postgresql-20260101T000000Z.dump")
         print("selected_bundle=automation-data-20260101T000000Z")
         print("post_recovery_bundle=automation-data-20260101T010000Z")
