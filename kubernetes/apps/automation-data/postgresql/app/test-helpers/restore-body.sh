@@ -288,25 +288,65 @@ WHERE source.state = 'ready';
     test "$nocodb_permission_contract" = true || restore_fail nocodb-permission-validation
     ;;
   026-nocodb-v3)
+    # Name each failing source and check, as the domain permission stage does.
     nocodb_permission_contract="$(psql --dbname=automation_data_control --tuples-only --no-align --command="
-SELECT COALESCE(bool_and(
-  (platform_operations.validate_nocodb_access(
-    source.domain, source.pair, source.access_kind
-  )->>'valid')::boolean
-), true)::text
-FROM platform_operations.managed_nocodb_sources AS source
-WHERE source.state = 'ready';
+WITH validations AS MATERIALIZED (
+  SELECT source.domain, source.pair, source.access_kind,
+    platform_operations.validate_nocodb_access(
+      source.domain, source.pair, source.access_kind
+    ) AS result
+  FROM platform_operations.managed_nocodb_sources AS source
+  WHERE source.state = 'ready'
+), failed_checks AS (
+  SELECT validation.domain, validation.pair, validation.access_kind,
+    COALESCE(checks.name, 'valid') AS name
+  FROM validations AS validation
+  LEFT JOIN LATERAL (
+    SELECT entry.key AS name
+    FROM jsonb_each(validation.result) AS entry
+    WHERE entry.key <> 'valid' AND jsonb_typeof(entry.value) IN ('boolean', 'null') AND
+      entry.value IS DISTINCT FROM 'true'::jsonb AND
+      NOT (entry.key = 'controlledDmlPresent' AND validation.access_kind = 'reader')
+  ) AS checks ON true
+  WHERE (validation.result->'valid') IS DISTINCT FROM 'true'::jsonb
+)
+SELECT COALESCE(string_agg(
+  'restore_nocodb_failure domain=' || domain || ' pair=' || pair ||
+    ' access=' || access_kind || ' check=' || name,
+  E'\\n' ORDER BY domain, pair, access_kind, name
+), 'true') FROM failed_checks;
 ")" || restore_fail nocodb-permission-query
-    test "$nocodb_permission_contract" = true || restore_fail nocodb-permission-validation
+    if test "$nocodb_permission_contract" != true; then
+      printf '%s\n' "$nocodb_permission_contract" >&2
+      restore_fail nocodb-permission-validation
+    fi
     application_permission_contract="$(psql --dbname=automation_data_control --tuples-only --no-align --command="
-SELECT COALESCE(bool_and(
-  (platform_operations.validate_application_login(login.domain, login.application)
-    ->>'valid')::boolean
-), true)::text
-FROM platform_operations.managed_application_logins AS login
-WHERE login.state = 'ready';
+WITH validations AS MATERIALIZED (
+  SELECT login.domain, login.application,
+    platform_operations.validate_application_login(login.domain, login.application) AS result
+  FROM platform_operations.managed_application_logins AS login
+  WHERE login.state = 'ready'
+), failed_checks AS (
+  SELECT validation.domain, validation.application, COALESCE(checks.name, 'valid') AS name
+  FROM validations AS validation
+  LEFT JOIN LATERAL (
+    SELECT entry.key AS name
+    FROM jsonb_each(validation.result) AS entry
+    WHERE entry.key <> 'valid' AND jsonb_typeof(entry.value) IN ('boolean', 'null') AND
+      entry.value IS DISTINCT FROM 'true'::jsonb
+  ) AS checks ON true
+  WHERE (validation.result->'valid') IS DISTINCT FROM 'true'::jsonb
+)
+SELECT COALESCE(string_agg(
+  'restore_application_failure domain=' || domain || ' application=' || application ||
+    ' check=' || name,
+  E'\\n' ORDER BY domain, application, name
+), 'true') FROM failed_checks;
 ")" || restore_fail application-permission-query
-    test "$application_permission_contract" = true || restore_fail application-permission-validation
+    if test "$application_permission_contract" != true; then
+      printf '%s\n' "$application_permission_contract" >&2
+      restore_fail application-permission-validation
+    fi
     ;;
   *) restore_fail platform-revision-validation ;;
 esac
