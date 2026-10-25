@@ -21,7 +21,7 @@ nocodb_restore_preflight_manifest() { # <job-name> <run-hash>
               "securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true},
               "volumeMounts":[{"name":"backups","mountPath":"/backups","readOnly":true},{"name":"tmp","mountPath":"/tmp"},{"name":"helpers","mountPath":"/helpers","readOnly":true}]
             }],
-            "volumes":[{"name":"backups","persistentVolumeClaim":{"claimName":"automation-data-postgresql-backups","readOnly":true}},{"name":"tmp","emptyDir":{}},{"name":"helpers","configMap":{"name":"automation-data-test-helpers-v2"}}]
+            "volumes":[{"name":"backups","persistentVolumeClaim":{"claimName":"automation-data-postgresql-backups","readOnly":true}},{"name":"tmp","emptyDir":{}},{"name":"helpers","configMap":{"name":"automation-data-test-helpers-v3"}}]
           }
         }}
       }

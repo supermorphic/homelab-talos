@@ -422,6 +422,16 @@ run_restore "$invalid_application_restore" true true 026-nocodb-v3 false false f
 rg -Fq 'restore_failure=application-permission-validation' \
   "$invalid_application_restore/output" ||
   fail 'invalid restored application login did not fail its validation stage'
+application_detail='restore_application_failure domain=domain_one application=app_one check=publicPrivilegesDenied'
+application_detail_restore="$(new_case application-detail-restore)"
+create_bundle "$application_detail_restore/backups" 20260824T003000Z
+run_restore "$application_detail_restore" true true 026-nocodb-v3 false false false "$application_detail"
+[[ "$(<"$application_detail_restore/status")" != '0' ]] ||
+  fail 'diagnosed application login failure was accepted'
+rg -Fxq "$application_detail" "$application_detail_restore/output" ||
+  fail 'failed application login check did not identify its login and check'
+rg -Fxq 'restore_failure=application-permission-validation' "$application_detail_restore/output" ||
+  fail 'application login diagnostics changed the failure stage'
 
 unknown_schema_restore="$(new_case unknown-schema-restore)"
 create_bundle "$unknown_schema_restore/backups" 20260824T003001Z
@@ -551,6 +561,18 @@ rg -Fq 'restore_failure=nocodb-permission-validation' "$nocodb_permission_failur
   fail 'invalid NocoDB source access did not fail its restore validation'
 ! rg -q '^backup$' "$nocodb_permission_failure/commands.log" ||
   fail 'invalid NocoDB source access reached fresh backup'
+nocodb_detail='restore_nocodb_failure domain=domain_one pair=default access=reader check=outsideSchemaDenied'
+nocodb_detail_failure="$(new_case nocodb-detail-failure)"
+create_bundle "$nocodb_detail_failure/backups" 20260827T003000Z
+run_restore "$nocodb_detail_failure" true "$nocodb_detail"
+[[ "$(<"$nocodb_detail_failure/status")" != '0' ]] ||
+  fail 'diagnosed NocoDB source failure was accepted'
+rg -Fxq "$nocodb_detail" "$nocodb_detail_failure/output" ||
+  fail 'failed NocoDB source check did not identify its source and check'
+rg -Fxq 'restore_failure=nocodb-permission-validation' "$nocodb_detail_failure/output" ||
+  fail 'NocoDB diagnostics changed the failure stage'
+! rg -q '^backup$' "$nocodb_detail_failure/commands.log" ||
+  fail 'diagnosed NocoDB source failure reached fresh backup'
 
 permission_failure="$(new_case permission-failure)"
 create_bundle "$permission_failure/backups" 20260827T003000Z

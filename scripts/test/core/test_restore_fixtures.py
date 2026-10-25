@@ -99,7 +99,7 @@ expected_database_set_base64=YXV0b21hdGlvbl9kYXRhX2FjY2VwdGFuY2UK
             self.assertFalse(pod["automountServiceAccountToken"])
             helpers = [v["configMap"] for v in pod["volumes"] if "configMap" in v]
             self.assertEqual(len(helpers), 1)
-            self.assertEqual(helpers[0]["name"], "automation-data-test-helpers-v2")
+            self.assertEqual(helpers[0]["name"], "automation-data-test-helpers-v3")
 
         def claim(job):
             return next(
@@ -431,10 +431,10 @@ probe_file="$1"
                 "/helpers/nocodb-restore-preflight.sh",
             ),
             (
-                "automation-data-test-helpers-v2",
+                "automation-data-test-helpers-v3",
                 "n8n-test-helpers-v1",
-                "automation-data-test-helpers-v2",
-                "automation-data-test-helpers-v2",
+                "automation-data-test-helpers-v3",
+                "automation-data-test-helpers-v3",
             ),
             strict=True,
         ):
@@ -462,7 +462,7 @@ probe_file="$1"
                 doc
                 for doc in yaml.safe_load_all(rendered.stdout)
                 if doc["kind"] == "ConfigMap"
-                and doc["metadata"]["name"] == "automation-data-test-helpers-v2"
+                and doc["metadata"]["name"] == "automation-data-test-helpers-v3"
             ),
             None,
         )

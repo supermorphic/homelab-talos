@@ -261,7 +261,7 @@ if [[ "$args" == *' create --filename '* ]]; then
             .readOnly == true and .subPath == "automation-data-20260904T023000Z" and
             .mountPath == "/backups/automation-data-20260904T023000Z") and
           ([.spec.template.spec.volumes[] | select(.name == "scripts") |
-            select(.configMap.name == "automation-data-test-helpers-v2")] | length) == 1
+            select(.configMap.name == "automation-data-test-helpers-v3")] | length) == 1
         ' >/dev/null
 		fi
 	fi
