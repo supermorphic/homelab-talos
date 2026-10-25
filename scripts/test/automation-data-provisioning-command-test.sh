@@ -25,7 +25,7 @@ error_job_manifest >"$temp_dir/error-job.yaml"
 
 yq -o=json '.' "$temp_dir/error-job.yaml" | jq -e '.spec.template.spec.containers[0].command == ["/bin/sh", "-eu", "/helpers/provision-error.sh"] and
   (.spec.template.spec.containers[0] | has("args") | not) and
-  ([.spec.template.spec.volumes[] | select(.name == "helpers" and .configMap.name == "automation-data-test-helpers-v2")] | length) == 1 and
+  ([.spec.template.spec.volumes[] | select(.name == "helpers" and .configMap.name == "automation-data-test-helpers-v3")] | length) == 1 and
   ([.spec.template.spec.containers[0].volumeMounts[] | select(.name == "helpers" and .readOnly == true)] | length) == 1' >/dev/null
 
 mkdir "$temp_dir/bin"

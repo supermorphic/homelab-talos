@@ -1502,7 +1502,7 @@ class TestAccessPolicyTests(unittest.TestCase):
         self.assertFalse(self.admits_configmaps({**req, "operation": "UPDATE"}, obj, obj))
         production = {
             "metadata": {
-                "name": "automation-data-test-helpers-v2",
+                "name": "automation-data-test-helpers-v3",
                 "namespace": "automation-data",
             },
             "immutable": True,
@@ -1538,7 +1538,7 @@ class TestAccessPolicyTests(unittest.TestCase):
             if change == "namespace":
                 request["namespace"] = bad["metadata"]["namespace"] = "automation"
             elif change == "name":
-                bad["metadata"]["name"] = request["name"] = "automation-data-test-helpers-v2"
+                bad["metadata"]["name"] = request["name"] = "automation-data-test-helpers-v3"
             elif change == "other-run":
                 labels["homelab-talos/run-id"] = "ffffffffffff"
             elif change == "family":

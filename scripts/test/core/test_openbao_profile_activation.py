@@ -334,7 +334,7 @@ class AgentProfileSourceTests(unittest.TestCase):
             {d["metadata"]["name"] for d in documents if d["kind"] == "ConfigMap"},
             {
                 "n8n-test-helpers-v1",
-                "automation-data-test-helpers-v2",
+                "automation-data-test-helpers-v3",
                 "nocodb-test-helpers-v1",
                 "n8n-test-request-helpers-v1",
                 "qbit-manage-test-helpers-v1",
