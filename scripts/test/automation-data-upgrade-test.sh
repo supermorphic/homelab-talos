@@ -77,10 +77,17 @@ for source in "$upgrade_command" "$upgrade_sql" "$extension_sql" "$control_sql" 
 done
 [[ -x "$upgrade_command" ]] || fail 'upgrade command is not executable'
 
-recipe="$(mise exec -- just --dry-run kube automation-data-upgrade 2>&1)" ||
+# Check the recipe's default independently of the caller's environment: the upgrade runs
+# this validation as a precondition while an authorized TEST_KUBECONFIG is set.
+recipe="$(env -u TEST_KUBECONFIG mise exec -- just --dry-run kube automation-data-upgrade 2>&1)" ||
 	fail 'missing kube automation-data-upgrade recipe'
 rg -Fq -- "scripts/upgrade/automation-data.sh '.kube/config'" <<<"$recipe" ||
 	fail 'upgrade recipe does not pass only the scoped kubeconfig'
+recipe="$(TEST_KUBECONFIG=/synthetic/operator.kubeconfig \
+	mise exec -- just --dry-run kube automation-data-upgrade 2>&1)" ||
+	fail 'missing kube automation-data-upgrade recipe'
+rg -Fq -- "scripts/upgrade/automation-data.sh '/synthetic/operator.kubeconfig'" <<<"$recipe" ||
+	fail 'upgrade recipe does not pass the selected kubeconfig'
 
 [[ "$(yq -r '
   select(.kind == "Kustomization") |
