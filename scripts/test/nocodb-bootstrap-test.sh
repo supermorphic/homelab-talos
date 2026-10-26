@@ -87,7 +87,7 @@ case "$*" in
     if [[ "${FAKE_FAILURE:-}" == origin ]]; then
       printf '%s\n' 'https://example.test/not-the-deployed-repository.git'
     else
-      printf '%s\n' 'https://github.com/supermorphic/homelab-talos.git'
+      printf '%s\n' 'https://forgejo.infra.supermorphic.com/supermorphic/homelab-talos.git'
     fi
     ;;
   'status --porcelain --untracked-files=no')

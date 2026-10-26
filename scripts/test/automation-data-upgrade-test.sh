@@ -137,7 +137,14 @@ cat >"$stub_bin/git" <<'EOF'
 set -euo pipefail
 printf 'git\t%s\n' "$*" >>"$UPGRADE_TEST_LOG"
 case "$*" in
-  'remote get-url origin') printf '%s\n' 'https://github.com/supermorphic/homelab-talos.git' ;;
+  'remote get-url origin')
+    # Flux serves the Forgejo repository; the retired GitHub mirror is not authoritative.
+    if [[ "${UPGRADE_TEST_CASE:-}" == github-origin ]]; then
+      printf '%s\n' 'https://github.com/supermorphic/homelab-talos.git'
+    else
+      printf '%s\n' 'https://forgejo.infra.supermorphic.com/supermorphic/homelab-talos.git'
+    fi
+    ;;
   'status --porcelain') ;;
   'ls-remote --exit-code origin refs/heads/main')
     printf '%s\trefs/heads/main\n' "$UPGRADE_TEST_REMOTE_MAIN"
@@ -347,7 +354,7 @@ run_case() {
 	return "$status"
 }
 
-for rejected in stale-source wrong-target missing-backup overlap api-error stale-kustomization \
+for rejected in github-origin stale-source wrong-target missing-backup overlap api-error stale-kustomization \
 	stale-configmap wrong-generated-name changed-upgrade-sql; do
 	if run_case "$rejected"; then
 		fail "$rejected was accepted"

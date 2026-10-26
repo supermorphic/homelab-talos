@@ -9,7 +9,7 @@ set +x
 }
 
 kubeconfig="$1"
-expected_origin='https://github.com/supermorphic/homelab-talos.git'
+expected_origin='https://forgejo.infra.supermorphic.com/supermorphic/homelab-talos.git'
 expected_confirmation='bootstrap:nocodb'
 nocodb_url='https://nocodb.lab.supermorphic.com'
 n8n_url='https://n8n.lab.supermorphic.com'
