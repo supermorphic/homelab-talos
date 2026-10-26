@@ -9,7 +9,7 @@ set +x
 }
 
 kubeconfig="$1"
-expected_origin='https://github.com/supermorphic/homelab-talos.git'
+expected_origin='https://forgejo.infra.supermorphic.com/supermorphic/homelab-talos.git'
 expected_confirmation='upgrade:automation-data:nocodb-v4'
 expected_revision='026-nocodb-v4'
 job_name=''
