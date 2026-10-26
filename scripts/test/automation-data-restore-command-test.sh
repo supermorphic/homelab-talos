@@ -251,7 +251,7 @@ elif [[ "$command_text" == *'FROM pg_database'* ]]; then
 elif [[ "$command_text" == *operation_tables* && "$command_text" == *assert_nocodb_access_kind* ]]; then
   case "${RESTORED_PLATFORM_REVISION:-026-nocodb-v3}" in
     025-baseline) printf '%s\n' '025-baseline' ;;
-    026-nocodb-v1 | 026-nocodb-v2 | 026-nocodb-v3) printf '%s\n' 'upgraded-candidate' ;;
+    026-nocodb-v1 | 026-nocodb-v2 | 026-nocodb-v3 | 026-nocodb-v4) printf '%s\n' 'upgraded-candidate' ;;
     *) printf '%s\n' 'invalid' ;;
   esac
 elif [[ "$command_text" == *read_platform_revision* ]]; then
@@ -433,6 +433,23 @@ rg -Fxq "$application_detail" "$application_detail_restore/output" ||
 rg -Fxq 'restore_failure=application-permission-validation' "$application_detail_restore/output" ||
   fail 'application login diagnostics changed the failure stage'
 
+v4_schema_restore="$(new_case v4-schema-restore)"
+create_bundle "$v4_schema_restore/backups" 20260824T003000Z
+run_restore "$v4_schema_restore" true true 026-nocodb-v4
+[[ "$(<"$v4_schema_restore/status")" == '0' ]] ||
+  fail 'recognized v4 bundle schema did not restore'
+rg -Fq "login.state IN ('ready', 'retired')" "$v4_schema_restore/commands.log" ||
+  fail 'v4 restore did not validate retired application logins'
+retired_detail='restore_application_failure domain=domain_one application=retired_app check=schemaPrivilegesValid'
+retired_detail_restore="$(new_case retired-detail-restore)"
+create_bundle "$retired_detail_restore/backups" 20260824T003000Z
+run_restore "$retired_detail_restore" true true 026-nocodb-v4 false false false "$retired_detail"
+[[ "$(<"$retired_detail_restore/status")" != '0' ]] ||
+  fail 'a retired login with remaining authority was accepted'
+rg -Fxq "$retired_detail" "$retired_detail_restore/output" ||
+  fail 'a retired login failure did not identify its login and check'
+rg -Fxq 'restore_failure=application-permission-validation' "$retired_detail_restore/output" ||
+  fail 'a retired login failure changed the failure stage'
 unknown_schema_restore="$(new_case unknown-schema-restore)"
 create_bundle "$unknown_schema_restore/backups" 20260824T003001Z
 run_restore "$unknown_schema_restore" true true unknown
