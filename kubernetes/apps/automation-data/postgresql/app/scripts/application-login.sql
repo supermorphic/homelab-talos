@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS platform_operations.managed_application_logins (
   schema_name text NOT NULL CHECK (schema_name ~ '^[a-z][a-z0-9_]{0,47}$'),
   role_name text NOT NULL,
   state text NOT NULL CHECK (state IN (
-    'awaiting_grants', 'activating', 'ready', 'rotating', 'error'
+    'awaiting_grants', 'activating', 'ready', 'rotating', 'error', 'retired'
   )),
   operation_id uuid,
   operation text CHECK (operation IS NULL OR operation IN ('activate', 'rotate')),
@@ -22,9 +22,25 @@ CREATE TABLE IF NOT EXISTS platform_operations.managed_application_logins (
   CHECK (role_name = 'app_' || md5(domain || ':' || application) || '_integration')
 );
 REVOKE ALL ON platform_operations.managed_application_logins FROM PUBLIC;
+-- CREATE TABLE IF NOT EXISTS keeps an older state list on existing installs.
+DO $constraint$
+BEGIN
+  IF pg_get_constraintdef((SELECT oid FROM pg_constraint
+      WHERE conrelid = 'platform_operations.managed_application_logins'::regclass
+        AND conname = 'managed_application_logins_state_check')) !~ '''retired''' THEN
+    ALTER TABLE platform_operations.managed_application_logins
+      DROP CONSTRAINT managed_application_logins_state_check,
+      ADD CONSTRAINT managed_application_logins_state_check CHECK (state IN (
+        'awaiting_grants', 'activating', 'ready', 'rotating', 'error', 'retired'));
+  END IF;
+END;
+$constraint$;
 
-CREATE OR REPLACE FUNCTION platform_operations.validate_application_login(
-  p_domain text, p_application text
+-- Report one login's effective authority. Callers validate input and hold the domain lock.
+-- Mode active requires the reviewed grants. Modes retired and retiring require no authority;
+-- retired also requires a role that cannot log in and has no stored password.
+CREATE OR REPLACE FUNCTION platform_internal.application_login_checks(
+  p_domain text, p_application text, p_mode text
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -44,93 +60,135 @@ DECLARE
   grant_options_denied boolean;
   public_privileges_denied boolean;
 BEGIN
-  PERFORM platform_internal.assert_domain(p_domain);
-  IF p_application IS NULL OR p_application !~ '^[a-z][a-z0-9_]{0,23}$' THEN
-    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_application';
+  IF p_mode IS NULL OR p_mode NOT IN ('active', 'retired', 'retiring') THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_application_check_mode';
   END IF;
-  PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
   SELECT * INTO STRICT managed FROM platform_operations.managed_domains
     WHERE domain = p_domain;
   SELECT * INTO STRICT login FROM platform_operations.managed_application_logins
     WHERE domain = p_domain AND application = p_application;
-  IF login.role_name <> 'app_' || md5(p_domain || ':' || p_application) || '_integration' THEN
-    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_application_role';
-  END IF;
   SELECT NOT role.rolsuper AND NOT role.rolcreatedb AND NOT role.rolcreaterole
       AND NOT role.rolreplication AND NOT role.rolbypassrls AND NOT role.rolinherit
-      AND role.rolcanlogin = (login.state IN ('activating', 'ready', 'rotating'))
+      AND CASE p_mode
+        WHEN 'active' THEN role.rolcanlogin = (login.state IN ('activating', 'ready', 'rotating'))
+        WHEN 'retired' THEN NOT role.rolcanlogin AND role.rolpassword IS NULL
+        ELSE true END
       AND NOT EXISTS (
         SELECT FROM pg_auth_members AS member
         WHERE member.member = role.oid OR member.roleid = role.oid
       )
-    INTO role_valid FROM pg_roles AS role WHERE role.rolname = login.role_name;
-  SELECT COALESCE(bool_and(CASE WHEN database.datname = managed.database_name
-      THEN has_database_privilege(login.role_name, database.datname, 'CONNECT')
-        AND NOT has_database_privilege(login.role_name, database.datname, 'CREATE')
-        AND NOT has_database_privilege(login.role_name, database.datname, 'TEMP')
-      ELSE NOT has_database_privilege(login.role_name, database.datname, 'CONNECT') END), false)
-    INTO database_valid FROM pg_database AS database WHERE database.datallowconn;
-  schema_valid := platform_internal.query_boolean(managed.database_name,
-    format($sql$
-      SELECT CASE WHEN to_regnamespace(%2$L) IS NULL THEN false ELSE
-        has_schema_privilege(%1$L, %2$L, 'USAGE')
-        AND NOT has_schema_privilege(%1$L, %2$L, 'CREATE')
-        AND NOT EXISTS (
+    INTO role_valid FROM pg_authid AS role WHERE role.rolname = login.role_name;
+  IF p_mode = 'active' THEN
+    SELECT COALESCE(bool_and(CASE WHEN database.datname = managed.database_name
+        THEN has_database_privilege(login.role_name, database.datname, 'CONNECT')
+          AND NOT has_database_privilege(login.role_name, database.datname, 'CREATE')
+          AND NOT has_database_privilege(login.role_name, database.datname, 'TEMP')
+        ELSE NOT has_database_privilege(login.role_name, database.datname, 'CONNECT') END), false)
+      INTO database_valid FROM pg_database AS database WHERE database.datallowconn;
+    schema_valid := platform_internal.query_boolean(managed.database_name,
+      format($sql$
+        SELECT CASE WHEN to_regnamespace(%2$L) IS NULL THEN false ELSE
+          has_schema_privilege(%1$L, %2$L, 'USAGE')
+          AND NOT has_schema_privilege(%1$L, %2$L, 'CREATE')
+          AND NOT EXISTS (
+            SELECT FROM pg_namespace AS namespace
+            WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema', %2$L)
+              AND (has_schema_privilege(%1$L, namespace.oid, 'USAGE') OR
+                   has_schema_privilege(%1$L, namespace.oid, 'CREATE'))
+          ) END
+      $sql$, login.role_name, login.schema_name));
+    object_valid := platform_internal.query_boolean(managed.database_name,
+      format($sql$
+        SELECT EXISTS (
+          SELECT FROM pg_class AS relation
+          JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+          WHERE namespace.nspname = %2$L AND relation.relkind IN ('r','p','v','m')
+            AND has_table_privilege(%1$L, relation.oid, 'SELECT')
+        ) AND NOT EXISTS (
+          SELECT FROM pg_class AS relation
+          JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+          WHERE namespace.nspname NOT IN ('pg_catalog','information_schema')
+            AND CASE WHEN relation.relkind IN ('r','p','v','m','f') THEN
+              (namespace.nspname <> %2$L AND
+                (has_table_privilege(%1$L, relation.oid,
+                  'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') OR
+                 has_any_column_privilege(%1$L, relation.oid,
+                  'SELECT,INSERT,UPDATE,REFERENCES')))
+              OR has_table_privilege(%1$L, relation.oid,
+                  'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+              OR has_any_column_privilege(%1$L, relation.oid,
+                  'INSERT,UPDATE,REFERENCES')
+            WHEN relation.relkind = 'S' THEN
+              has_sequence_privilege(%1$L, relation.oid, 'USAGE,SELECT,UPDATE')
+            ELSE false END
+        )
+      $sql$, login.role_name, login.schema_name));
+    routine_valid := platform_internal.query_boolean(managed.database_name,
+      format($sql$
+        SELECT EXISTS (
+          SELECT FROM pg_proc AS routine JOIN pg_namespace AS namespace
+            ON namespace.oid = routine.pronamespace
+          CROSS JOIN LATERAL aclexplode(COALESCE(routine.proacl,
+            acldefault('f', routine.proowner))) AS acl
+          WHERE namespace.nspname = %2$L
+            AND acl.grantee = (SELECT oid FROM pg_roles WHERE rolname = %1$L)
+            AND acl.privilege_type = 'EXECUTE'
+            AND has_function_privilege(%1$L, routine.oid, 'EXECUTE')
+        ) AND NOT EXISTS (
+          SELECT FROM pg_proc AS routine JOIN pg_namespace AS namespace
+            ON namespace.oid = routine.pronamespace
+          WHERE namespace.nspname NOT IN ('pg_catalog','information_schema')
+            AND (namespace.nspname <> %2$L OR EXISTS (
+              SELECT FROM aclexplode(COALESCE(routine.proacl,
+                acldefault('f', routine.proowner))) AS acl
+              WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE'
+            ))
+            AND has_function_privilege(%1$L, routine.oid, 'EXECUTE')
+        )
+      $sql$, login.role_name, login.schema_name));
+  ELSE
+    -- Without CONNECT, PUBLIC's default TEMP on other databases is unusable.
+    SELECT COALESCE(bool_and(
+        NOT has_database_privilege(login.role_name, database.datname, 'CONNECT')
+        AND (database.datname <> managed.database_name OR (
+          NOT has_database_privilege(login.role_name, database.datname, 'CREATE')
+          AND NOT has_database_privilege(login.role_name, database.datname, 'TEMP')))), false)
+      INTO database_valid FROM pg_database AS database WHERE database.datallowconn;
+    schema_valid := platform_internal.query_boolean(managed.database_name,
+      format($sql$
+        SELECT NOT EXISTS (
           SELECT FROM pg_namespace AS namespace
-          WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema', %2$L)
+          WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
             AND (has_schema_privilege(%1$L, namespace.oid, 'USAGE') OR
                  has_schema_privilege(%1$L, namespace.oid, 'CREATE'))
-        ) END
-    $sql$, login.role_name, login.schema_name));
-  object_valid := platform_internal.query_boolean(managed.database_name,
-    format($sql$
-      SELECT EXISTS (
-        SELECT FROM pg_class AS relation
-        JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
-        WHERE namespace.nspname = %2$L AND relation.relkind IN ('r','p','v','m')
-          AND has_table_privilege(%1$L, relation.oid, 'SELECT')
-      ) AND NOT EXISTS (
-        SELECT FROM pg_class AS relation
-        JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
-        WHERE namespace.nspname NOT IN ('pg_catalog','information_schema')
-          AND CASE WHEN relation.relkind IN ('r','p','v','m','f') THEN
-            (namespace.nspname <> %2$L AND
-              (has_table_privilege(%1$L, relation.oid,
+        )
+      $sql$, login.role_name));
+    object_valid := platform_internal.query_boolean(managed.database_name,
+      format($sql$
+        SELECT NOT EXISTS (
+          SELECT FROM pg_class AS relation
+          JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+          WHERE namespace.nspname NOT IN ('pg_catalog','information_schema')
+            AND CASE WHEN relation.relkind IN ('r','p','v','m','f') THEN
+              has_table_privilege(%1$L, relation.oid,
                 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') OR
-               has_any_column_privilege(%1$L, relation.oid,
-                'SELECT,INSERT,UPDATE,REFERENCES')))
-            OR has_table_privilege(%1$L, relation.oid,
-                'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
-            OR has_any_column_privilege(%1$L, relation.oid,
-                'INSERT,UPDATE,REFERENCES')
-          WHEN relation.relkind = 'S' THEN
-            has_sequence_privilege(%1$L, relation.oid, 'USAGE,SELECT,UPDATE')
-          ELSE false END
-      )
-    $sql$, login.role_name, login.schema_name));
-  routine_valid := platform_internal.query_boolean(managed.database_name,
-    format($sql$
-      SELECT EXISTS (
-        SELECT FROM pg_proc AS routine JOIN pg_namespace AS namespace
-          ON namespace.oid = routine.pronamespace
-        CROSS JOIN LATERAL aclexplode(COALESCE(routine.proacl,
-          acldefault('f', routine.proowner))) AS acl
-        WHERE namespace.nspname = %2$L
-          AND acl.grantee = (SELECT oid FROM pg_roles WHERE rolname = %1$L)
-          AND acl.privilege_type = 'EXECUTE'
-          AND has_function_privilege(%1$L, routine.oid, 'EXECUTE')
-      ) AND NOT EXISTS (
-        SELECT FROM pg_proc AS routine JOIN pg_namespace AS namespace
-          ON namespace.oid = routine.pronamespace
-        WHERE namespace.nspname NOT IN ('pg_catalog','information_schema')
-          AND (namespace.nspname <> %2$L OR EXISTS (
-            SELECT FROM aclexplode(COALESCE(routine.proacl,
-              acldefault('f', routine.proowner))) AS acl
-            WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE'
-          ))
-          AND has_function_privilege(%1$L, routine.oid, 'EXECUTE')
-      )
-    $sql$, login.role_name, login.schema_name));
+              has_any_column_privilege(%1$L, relation.oid,
+                'SELECT,INSERT,UPDATE,REFERENCES')
+            WHEN relation.relkind = 'S' THEN
+              has_sequence_privilege(%1$L, relation.oid, 'USAGE,SELECT,UPDATE')
+            ELSE false END
+        )
+      $sql$, login.role_name));
+    routine_valid := platform_internal.query_boolean(managed.database_name,
+      format($sql$
+        SELECT NOT EXISTS (
+          SELECT FROM pg_proc AS routine JOIN pg_namespace AS namespace
+            ON namespace.oid = routine.pronamespace
+          WHERE namespace.nspname NOT IN ('pg_catalog','information_schema')
+            AND has_function_privilege(%1$L, routine.oid, 'EXECUTE')
+        )
+      $sql$, login.role_name));
+  END IF;
   defaults_valid := platform_internal.query_boolean(managed.database_name,
     format($sql$
       SELECT NOT EXISTS (
@@ -185,16 +243,53 @@ BEGIN
   public_privileges_denied := platform_internal.public_data_privileges_denied(
     managed.database_name);
   RETURN jsonb_build_object(
-    'domain', p_domain, 'application', p_application, 'role', login.role_name,
-    'state', login.state, 'valid', COALESCE(role_valid, false) AND database_valid
-      AND schema_valid AND object_valid AND routine_valid AND defaults_valid
-      AND ownership_denied AND grant_options_denied AND public_privileges_denied,
-    'roleValid', COALESCE(role_valid, false), 'databaseIsolationValid', database_valid,
-    'schemaPrivilegesValid', schema_valid, 'objectPrivilegesValid', object_valid,
-    'routinePrivilegesValid', routine_valid, 'defaultPrivilegesValid', defaults_valid,
-    'ownershipDenied', ownership_denied, 'grantOptionsDenied', grant_options_denied,
-    'publicPrivilegesDenied', public_privileges_denied
+    'roleValid', COALESCE(role_valid, false),
+    'databaseIsolationValid', COALESCE(database_valid, false),
+    'schemaPrivilegesValid', COALESCE(schema_valid, false),
+    'objectPrivilegesValid', COALESCE(object_valid, false),
+    'routinePrivilegesValid', COALESCE(routine_valid, false),
+    'defaultPrivilegesValid', COALESCE(defaults_valid, false),
+    'ownershipDenied', COALESCE(ownership_denied, false),
+    'grantOptionsDenied', COALESCE(grant_options_denied, false),
+    'publicPrivilegesDenied', COALESCE(public_privileges_denied, false)
   );
+END;
+$function$;
+REVOKE EXECUTE ON FUNCTION platform_internal.application_login_checks(text, text, text)
+  FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION platform_operations.validate_application_login(
+  p_domain text, p_application text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+DECLARE
+  managed platform_operations.managed_domains%ROWTYPE;
+  login platform_operations.managed_application_logins%ROWTYPE;
+  checks jsonb;
+BEGIN
+  PERFORM platform_internal.assert_domain(p_domain);
+  IF p_application IS NULL OR p_application !~ '^[a-z][a-z0-9_]{0,23}$' THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_application';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
+  SELECT * INTO STRICT managed FROM platform_operations.managed_domains
+    WHERE domain = p_domain;
+  SELECT * INTO STRICT login FROM platform_operations.managed_application_logins
+    WHERE domain = p_domain AND application = p_application;
+  IF login.role_name <> 'app_' || md5(p_domain || ':' || p_application) || '_integration' THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_application_role';
+  END IF;
+  checks := platform_internal.application_login_checks(p_domain, p_application,
+    CASE WHEN login.state = 'retired' THEN 'retired' ELSE 'active' END);
+  RETURN jsonb_build_object(
+    'domain', p_domain, 'application', p_application, 'role', login.role_name,
+    'state', login.state,
+    'valid', (SELECT bool_and(value = 'true'::jsonb) FROM jsonb_each(checks))
+  ) || checks;
 END;
 $function$;
 REVOKE EXECUTE ON FUNCTION platform_operations.validate_application_login(text, text)
@@ -250,6 +345,9 @@ BEGIN
   SELECT * INTO existing FROM platform_operations.managed_application_logins
     WHERE domain = p_domain AND application = p_application FOR UPDATE;
   IF FOUND THEN
+    IF existing.state = 'retired' THEN
+      RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'application_login_retired';
+    END IF;
     IF existing.schema_name <> p_schema OR existing.role_name <> generated_role THEN
       RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'application_binding_conflict';
     END IF;
@@ -321,6 +419,9 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
   SELECT * INTO STRICT login FROM platform_operations.managed_application_logins
     WHERE domain = p_domain AND application = p_application FOR UPDATE;
+  IF login.state = 'retired' THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'application_login_retired';
+  END IF;
   IF login.operation_id = p_operation_id THEN
     IF login.operation IS DISTINCT FROM p_operation OR
        login.expected_generation IS DISTINCT FROM p_expected_generation THEN
@@ -387,6 +488,9 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
   SELECT * INTO STRICT login FROM platform_operations.managed_application_logins
     WHERE domain = p_domain AND application = p_application FOR UPDATE;
+  IF login.state = 'retired' THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'application_login_retired';
+  END IF;
   IF login.operation_id IS DISTINCT FROM p_operation_id OR
      login.credential_generation <> p_credential_generation THEN
     RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'application_operation_stale';
@@ -409,15 +513,74 @@ BEGIN
 END;
 $function$;
 
+-- Disable a login its consumer no longer uses. Refusals return the unchanged login with
+-- errorCode and failedChecks so the provisioner can report them; nothing is revoked or ended.
+CREATE OR REPLACE FUNCTION platform_operations.retire_application_login(
+  p_domain text, p_application text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations
+AS $function$
+DECLARE
+  login platform_operations.managed_application_logins%ROWTYPE;
+  failed_checks jsonb;
+BEGIN
+  PERFORM platform_internal.assert_domain(p_domain);
+  IF p_application IS NULL OR p_application !~ '^[a-z][a-z0-9_]{0,23}$' THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_application';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('automation-data:' || p_domain, 0));
+  SELECT * INTO STRICT login FROM platform_operations.managed_application_logins
+    WHERE domain = p_domain AND application = p_application FOR UPDATE;
+  IF login.role_name <> 'app_' || md5(p_domain || ':' || p_application) || '_integration' THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_application_role';
+  END IF;
+  IF login.state = 'retired' THEN
+    RETURN platform_internal.application_login_result(p_domain, p_application);
+  END IF;
+  IF login.state IN ('activating', 'rotating') THEN
+    RETURN platform_internal.application_login_result(p_domain, p_application) ||
+      jsonb_build_object('errorCode', 'application_operation_active',
+        'failedChecks', '[]'::jsonb);
+  END IF;
+  SELECT COALESCE(jsonb_agg(key ORDER BY key), '[]'::jsonb) INTO failed_checks
+  FROM jsonb_each(platform_internal.application_login_checks(
+    p_domain, p_application, 'retiring'))
+  WHERE value IS DISTINCT FROM 'true'::jsonb;
+  IF jsonb_array_length(failed_checks) > 0 THEN
+    RETURN platform_internal.application_login_result(p_domain, p_application) ||
+      jsonb_build_object('errorCode', 'application_login_still_granted',
+        'failedChecks', failed_checks);
+  END IF;
+  IF EXISTS (SELECT FROM pg_stat_activity WHERE usename = login.role_name) THEN
+    RETURN platform_internal.application_login_result(p_domain, p_application) ||
+      jsonb_build_object('errorCode', 'application_login_in_use',
+        'failedChecks', '[]'::jsonb);
+  END IF;
+  EXECUTE format('ALTER ROLE %I NOLOGIN PASSWORD NULL', login.role_name);
+  UPDATE platform_operations.managed_application_logins SET
+    state = 'retired', operation_id = NULL, operation = NULL,
+    expected_generation = NULL, operation_started_at = NULL, error_code = NULL,
+    updated_at = clock_timestamp()
+  WHERE domain = p_domain AND application = p_application;
+  PERFORM platform_internal.bump_generation();
+  RETURN platform_internal.application_login_result(p_domain, p_application);
+END;
+$function$;
+
 REVOKE EXECUTE ON FUNCTION platform_operations.register_application_login(text, text, text),
   platform_operations.read_application_login_state(text, text),
   platform_operations.install_application_credential(text, text, text, uuid, bigint, text),
-  platform_operations.complete_application_credential(text, text, uuid, bigint)
+  platform_operations.complete_application_credential(text, text, uuid, bigint),
+  platform_operations.retire_application_login(text, text)
   FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION platform_operations.register_application_login(text, text, text),
   platform_operations.read_application_login_state(text, text),
   platform_operations.install_application_credential(text, text, text, uuid, bigint, text),
-  platform_operations.complete_application_credential(text, text, uuid, bigint)
+  platform_operations.complete_application_credential(text, text, uuid, bigint),
+  platform_operations.retire_application_login(text, text)
   TO automation_data_provisioner;
 
 CREATE OR REPLACE FUNCTION platform_internal.assert_application_login_contract()
@@ -441,12 +604,17 @@ BEGIN
          AND attribute.attname = 'expected_generation' AND NOT attribute.attisdropped) OR
      has_table_privilege('public',
        'platform_operations.managed_application_logins', 'SELECT') OR
+     NOT EXISTS (SELECT FROM pg_constraint AS item
+       WHERE item.conrelid =
+         'platform_operations.managed_application_logins'::regclass
+         AND item.conname = 'managed_application_logins_state_check'
+         AND pg_get_constraintdef(item.oid) ~ '''retired''') OR
      (SELECT md5(prosrc) FROM pg_proc WHERE oid =
        'platform_operations.install_application_credential(text,text,text,uuid,bigint,text)'::regprocedure) <>
-       '38f3924185eb006692003eac0cdb3b7e' OR
+       'ba042f8790b68c944a3c6f2aa8ec7d55' OR
      (SELECT md5(prosrc) FROM pg_proc WHERE oid =
        'platform_operations.complete_application_credential(text,text,uuid,bigint)'::regprocedure) <>
-       'f408aac538f1051fde6d4e3ed11e531f' OR
+       '8283003443a50637200cb30c611414af' OR
      (SELECT tableowner FROM pg_tables
        WHERE schemaname = 'platform_operations' AND
          tablename = 'managed_application_logins') <> 'postgres' THEN
@@ -457,7 +625,8 @@ BEGIN
     'platform_operations.read_application_login_state(text,text)'::regprocedure,
     'platform_operations.validate_application_login(text,text)'::regprocedure,
     'platform_operations.install_application_credential(text,text,text,uuid,bigint,text)'::regprocedure,
-    'platform_operations.complete_application_credential(text,text,uuid,bigint)'::regprocedure
+    'platform_operations.complete_application_credential(text,text,uuid,bigint)'::regprocedure,
+    'platform_operations.retire_application_login(text,text)'::regprocedure
   ] LOOP
     IF NOT has_function_privilege('automation_data_provisioner', required_function,
           'EXECUTE') OR
