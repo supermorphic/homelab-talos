@@ -132,7 +132,7 @@ def _agent_profile_source():
     ]
     programs = {
         "automation/n8n": "n8n-test-helpers-v1",
-        "automation-data/postgresql": "automation-data-test-helpers-v3",
+        "automation-data/postgresql": "automation-data-test-helpers-v4",
         "automation-data/nocodb": "nocodb-test-helpers-v1",
         "monitoring/gatus": "n8n-test-request-helpers-v1",
         "media/qbit-manage": "qbit-manage-test-helpers-v1",

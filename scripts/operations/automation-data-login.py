@@ -47,6 +47,25 @@ class RequestError(RuntimeError):
     """The bounded private webhook request did not complete as expected."""
 
 
+RETIREMENT_REFUSALS = {
+    "application_login_still_granted", "application_login_in_use", "application_operation_active",
+}
+LOGIN_CHECKS = {
+    "roleValid", "databaseIsolationValid", "schemaPrivilegesValid", "objectPrivilegesValid",
+    "routinePrivilegesValid", "defaultPrivilegesValid", "ownershipDenied",
+    "grantOptionsDenied", "publicPrivilegesDenied",
+}
+
+
+class RetirementRefused(RuntimeError):
+    """The platform kept the login because it still has access or is in use."""
+
+    def __init__(self, code: str, checks: list[str]):
+        super().__init__(code)
+        self.code = code
+        self.checks = checks
+
+
 class PendingMaterialMissing(PrivateFileError):
     """A retained operation is incomplete and cannot be retried as-is."""
 
@@ -77,7 +96,7 @@ def send_request(payload: dict) -> dict:
         # readback. Preserve their response within the original 20-second operation
         # budget plus readback and margin; observational validation stays shorter.
         timeout = 60 if payload.get("operation") in {
-            "login-register", "login-activate", "login-rotate", "login-complete"
+            "login-register", "login-activate", "login-rotate", "login-complete", "login-retire"
         } else 20
         with WEBHOOK_OPENER.open(request, timeout=timeout) as response:
             content = response.read(65537)
@@ -86,6 +105,11 @@ def send_request(payload: dict) -> dict:
         result = json.loads(content)
     except (OSError, ValueError, urllib.error.URLError) as exc:
         raise RequestError("request_failed") from exc
+    if payload.get("operation") == "login-retire" and isinstance(result, dict) and \
+            result.get("ok") is False and result.get("errorCode") in RETIREMENT_REFUSALS and \
+            isinstance(result.get("failedChecks"), list) and \
+            all(check in LOGIN_CHECKS for check in result["failedChecks"]):
+        raise RetirementRefused(result["errorCode"], result["failedChecks"])
     if not isinstance(result, dict) or result.get("ok") is not True:
         raise RequestError("request_rejected")
     return result
@@ -97,7 +121,8 @@ def require_response(result: dict, domain: str, application: str) -> dict:
     if result.get("domain") != domain or result.get("application") != application or \
             result.get("database") != domain or result.get("role") != role or \
             not isinstance(result.get("schema"), str) or \
-            result.get("state") not in {"awaiting_grants", "activating", "ready", "rotating", "error"} or \
+            result.get("state") not in {"awaiting_grants", "activating", "ready", "rotating", "error",
+                                         "retired"} or \
             type(result.get("credentialGeneration")) is not int or \
             result["credentialGeneration"] < 0 or \
             any(key in result for key in ("password", "credential", "headers", "apiKey")):
@@ -403,6 +428,18 @@ def execute(action: str, domain: str, application: str, schema: str | None = Non
         print(json.dumps({key: result[key] for key in ("domain", "application", "role", "state",
                                                         "credentialGeneration", "valid") if key in result}))
         return
+    if action == "retire":
+        # Retirement never reads or changes the local credential profile.
+        confirmation(action, domain, application)
+        require_deployed_login_sources()
+        result = require_response(send_request({"domain": domain, "operation": "login-retire",
+                                                "application": application}), domain, application)
+        if result["state"] != "retired":
+            raise RequestError("response_invalid")
+        print(json.dumps({"domain": domain, "application": application,
+                          "role": result["role"], "state": result["state"],
+                          "inventoryReadback": lifecycle_readback({**result, "operation": "login-retire"})}))
+        return
     confirmation(action, domain, application)
     require_deployed_login_sources()
     root = private_root()
@@ -423,6 +460,8 @@ def execute(action: str, domain: str, application: str, schema: str | None = Non
                 state["credentialGeneration"] >= 1:
             archive_pending(directory)
             pending = None
+        if state["state"] == "retired":
+            raise ValueError("login_retired")
         if pending is None:
             if state.get("valid") is not True or \
                     (action == "activate" and (state["state"] != "awaiting_grants" or
@@ -499,7 +538,7 @@ def main(argv: list[str]) -> int:
         action, domain, application = argv[:3]
         schema = argv[3] if len(argv) == 4 else None
         if (
-            action not in {"register", "activate", "validate", "rotate"}
+            action not in {"register", "activate", "validate", "rotate", "retire"}
             or (action == "register") != (schema is not None)
             or not DOMAIN.fullmatch(domain)
             or domain in {"postgres", "template0", "template1", "automation_data_control"}
@@ -516,6 +555,10 @@ def main(argv: list[str]) -> int:
             raise ValueError("invalid_arguments")
         execute(action, domain, application, schema)
         return 0
+    except RetirementRefused as refused:
+        print(f"Retirement refused: {refused.code} "
+              f"failedChecks={','.join(refused.checks) or 'none'}", file=sys.stderr)
+        return 1
     except Exception:  # noqa: BLE001 - never print a response body, token, or candidate
         print(
             "Automation-data login operation failed; retained candidate if present.",

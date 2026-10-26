@@ -51,13 +51,13 @@ for _attempt in {1..60}; do
       podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
       --tuples-only --no-align --username postgres --dbname automation_data_control \
       --command='SELECT platform_operations.read_platform_revision()' 2>/dev/null \
-      | rg -qx '026-nocodb-v3'; then break; fi
+      | rg -qx '026-nocodb-v4'; then break; fi
   sleep 1
 done
 podman exec "$container" sh -eu -c 'grep -qx postgres /proc/1/comm'
 podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
   --tuples-only --no-align --username postgres --dbname automation_data_control \
-  --command='SELECT platform_operations.read_platform_revision()' | rg -qx '026-nocodb-v3'
+  --command='SELECT platform_operations.read_platform_revision()' | rg -qx '026-nocodb-v4'
 stage=setup
 
 cat >"$scratch/setup.sql" <<'SQL'
@@ -316,6 +316,60 @@ admin_sql "ALTER DEFAULT PRIVILEGES FOR ROLE scoped_fixture_owner IN SCHEMA extr
     'scoped_fixture', 'interview')" >&2
   exit 1
 }
+# A retired login must hold no effective authority of any kind.
+stage=retired-login
+retired_role="app_$(printf 'scoped_fixture:retired_probe' | md5sum | cut -d' ' -f1)_integration"
+control_value "INSERT INTO platform_operations.managed_application_logins
+    (domain, application, schema_name, role_name, state)
+  VALUES ('scoped_fixture', 'retired_probe', 'extra_read', '$retired_role', 'retired');
+  CREATE ROLE \"$retired_role\" NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT
+    NOREPLICATION NOBYPASSRLS" >/dev/null
+retired_check="SELECT platform_operations.validate_application_login(
+  'scoped_fixture', 'retired_probe')->>'valid'"
+[[ "$(control_value "$retired_check")" == true ]] || {
+  control_value "SELECT platform_operations.validate_application_login(
+    'scoped_fixture', 'retired_probe')" >&2
+  exit 1
+}
+retired_rejects() {
+  admin_sql "$1"
+  assert_invalid "$retired_check" "$3 for a retired login"
+  admin_sql "$2"
+  [[ "$(control_value "$retired_check")" == true ]]
+}
+retired_rejects "GRANT CONNECT ON DATABASE scoped_fixture TO \"$retired_role\"" \
+  "REVOKE CONNECT ON DATABASE scoped_fixture FROM \"$retired_role\"" 'database CONNECT'
+retired_rejects "GRANT TEMP ON DATABASE scoped_fixture TO \"$retired_role\"" \
+  "REVOKE TEMP ON DATABASE scoped_fixture FROM \"$retired_role\"" 'database TEMP'
+retired_rejects "GRANT USAGE ON SCHEMA extra_read TO \"$retired_role\"" \
+  "REVOKE USAGE ON SCHEMA extra_read FROM \"$retired_role\"" 'schema USAGE'
+retired_rejects "GRANT SELECT ON extra_read.present TO \"$retired_role\"" \
+  "REVOKE SELECT ON extra_read.present FROM \"$retired_role\"" 'table SELECT'
+retired_rejects "GRANT SELECT (value) ON extra_read.present TO \"$retired_role\"" \
+  "REVOKE SELECT (value) ON extra_read.present FROM \"$retired_role\"" 'column SELECT'
+retired_rejects "GRANT USAGE ON SEQUENCE extra_read.private_sequence TO \"$retired_role\"" \
+  "REVOKE USAGE ON SEQUENCE extra_read.private_sequence FROM \"$retired_role\"" 'sequence USAGE'
+retired_rejects "GRANT EXECUTE ON FUNCTION extra_read.read_record() TO \"$retired_role\"" \
+  "REVOKE EXECUTE ON FUNCTION extra_read.read_record() FROM \"$retired_role\"" 'routine EXECUTE'
+retired_rejects "ALTER DEFAULT PRIVILEGES FOR ROLE scoped_fixture_owner IN SCHEMA extra_read
+    GRANT SELECT ON TABLES TO \"$retired_role\"" \
+  "ALTER DEFAULT PRIVILEGES FOR ROLE scoped_fixture_owner IN SCHEMA extra_read
+    REVOKE SELECT ON TABLES FROM \"$retired_role\"" 'default privilege'
+retired_rejects "ALTER TABLE extra_read.bookkeeping OWNER TO \"$retired_role\"" \
+  'ALTER TABLE extra_read.bookkeeping OWNER TO scoped_fixture_owner' 'table ownership'
+retired_rejects "GRANT scoped_fixture_owner TO \"$retired_role\"" \
+  "REVOKE scoped_fixture_owner FROM \"$retired_role\"" 'role membership'
+retired_rejects "ALTER ROLE \"$retired_role\" LOGIN" \
+  "ALTER ROLE \"$retired_role\" NOLOGIN" 'LOGIN'
+retired_rejects "ALTER ROLE \"$retired_role\" PASSWORD 'synthetic-retired-verifier'" \
+  "ALTER ROLE \"$retired_role\" PASSWORD NULL" 'a stored password'
+# PUBLIC authority reaches the retired role too, so it fails the routine check.
+admin_sql 'GRANT EXECUTE ON FUNCTION extra_read.privileged_reset() TO PUBLIC'
+[[ "$(control_value "SELECT platform_operations.validate_application_login(
+  'scoped_fixture', 'retired_probe')->>'routinePrivilegesValid'")" == false ]]
+admin_sql 'REVOKE EXECUTE ON FUNCTION extra_read.privileged_reset() FROM PUBLIC'
+[[ "$(control_value "$retired_check")" == true ]]
+[[ "$(control_value "$app_check")" == true ]]
 # The attended fixture must upgrade its existing table into a usable linked-record
 # surface. Exercise the actual workflow SQL and the restricted operator role.
 stage=linked-record-fixture

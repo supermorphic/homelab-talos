@@ -130,7 +130,7 @@ stage=upgrade
 podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
   --username postgres --dbname automation_data_control \
   --file /candidate/upgrade-nocodb.sql >"$scratch/upgrade.out"
-[[ "$(query 'SELECT platform_operations.read_platform_revision()')" == 026-nocodb-v3 ]]
+[[ "$(query 'SELECT platform_operations.read_platform_revision()')" == 026-nocodb-v4 ]]
 query "SELECT to_jsonb(managed)::text FROM platform_operations.managed_domains managed
   WHERE domain = 'v3_never_ready'" >"$scratch/never-ready-after.json"
 cmp -s "$scratch/never-ready-before.json" "$scratch/never-ready-after.json"
@@ -202,7 +202,7 @@ state="$(query 'SELECT platform_operations.capture_backup_state()::text')"
 jq -e '(keys | sort) ==
   ["applicationLogins", "generation", "nocodbOperations", "nocodbSchemaMappings",
    "nocodbSources", "platformRevision", "registry"]' <<<"$state" >/dev/null
-jq -e '.platformRevision == "026-nocodb-v3"' <<<"$state" >/dev/null
+jq -e '.platformRevision == "026-nocodb-v4"' <<<"$state" >/dev/null
 jq -e '
   ([.nocodbSources[] | select(.domain == "v3_fixture" and .pair == "default" and
     .source_id == "synthetic-source")] | length) == 1' <<<"$state" >/dev/null

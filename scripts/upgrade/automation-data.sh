@@ -10,8 +10,8 @@ set +x
 
 kubeconfig="$1"
 expected_origin='https://github.com/supermorphic/homelab-talos.git'
-expected_confirmation='upgrade:automation-data:nocodb-v3'
-expected_revision='026-nocodb-v3'
+expected_confirmation='upgrade:automation-data:nocodb-v4'
+expected_revision='026-nocodb-v4'
 job_name=''
 namespace='automation-data'
 job_cleanup_pending=false
@@ -341,7 +341,7 @@ report_job_failure() {
 	raw_log="$temp_dir/failed-job.log"
 	if kubectl --kubeconfig "$kubeconfig" --namespace "$namespace" logs "job/$job_name" \
 		--container=upgrade >"$raw_log" 2>/dev/null; then
-		failure="$(rg -o -m1 'platform_upgrade_already_running|unknown_platform_revision|incomplete_nocodb_extension|invalid_nocodb_[a-z_]+|incompatible_pre_extension_[a-z_]+' "$raw_log" || true)"
+		failure="$(rg -o -m1 'platform_upgrade_already_running|unknown_platform_revision|incomplete_nocodb_extension|invalid_nocodb_[a-z_]+|incompatible_pre_extension_[a-z_]+|invalid_application_[a-z_]+|incomplete_platform_operation' "$raw_log" || true)"
 		[[ -z "$failure" ]] || printf 'upgrade_failure=%s\n' "$failure" >&2
 	fi
 }

@@ -278,6 +278,94 @@ class LoginCommandTest(unittest.TestCase):
                                              "sample", ROLE)
 
 
+    def run_action(self, *argv):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            result = command.main(list(argv))
+        return result, stdout.getvalue(), stderr.getvalue()
+
+    def answer_retire(self, response):
+        def request(payload):
+            self.requests.append(payload.copy())
+            if payload["operation"] == "login-retire":
+                return response
+            raise AssertionError(payload)
+        self.request_patch.stop()
+        self.request_patch = mock.patch.object(command, "send_request", side_effect=request)
+        self.request_patch.start()
+
+    def test_retire_requires_exact_confirmation(self):
+        self.answer_retire(self.response(state="retired", generation=2))
+        readback = mock.patch.object(command, "lifecycle_readback", return_value={"status": "consistent"})
+        readback.start()
+        self.addCleanup(readback.stop)
+        for value in [None, "retire:automation-data:sample:other", "retire:sample:interview"]:
+            environment = {} if value is None else {"AUTOMATION_DATA_LOGIN_RETIRE_CONFIRM": value}
+            with mock.patch.dict(os.environ, environment):
+                self.assertEqual(self.run_action("retire", "sample", "interview")[0], 1)
+        self.assertEqual(self.requests, [])
+        with mock.patch.dict(os.environ, {
+                "AUTOMATION_DATA_LOGIN_RETIRE_CONFIRM": "retire:automation-data:sample:interview"}):
+            result, output, _ = self.run_action("retire", "sample", "interview")
+        self.assertEqual(result, 0)
+        self.assertEqual(self.requests, [{"domain": "sample", "operation": "login-retire",
+                                          "application": "interview"}])
+        self.assertEqual(json.loads(output)["state"], "retired")
+
+    def test_retire_prints_refusal_code_and_checks(self):
+        refusal = {"ok": False, "domain": "sample", "operation": "login-retire",
+                   "application": "interview", "errorCode": "application_login_still_granted",
+                   "failedChecks": ["objectPrivilegesValid", "schemaPrivilegesValid"]}
+        self.request_patch.stop()
+        self.request_patch = mock.patch.object(command, "send_request", REAL_SEND_REQUEST)
+        self.request_patch.start()
+        responses = [refusal, {**refusal, "errorCode": SENTINEL},
+                     {**refusal, "failedChecks": [SENTINEL]}]
+        opened = mock.patch.object(command.WEBHOOK_OPENER, "open", side_effect=lambda request, timeout:
+                                   io.BytesIO(json.dumps(responses.pop(0)).encode()))
+        opened.start()
+        self.addCleanup(opened.stop)
+        with mock.patch.dict(os.environ, {
+                "AUTOMATION_DATA_LOGIN_RETIRE_CONFIRM": "retire:automation-data:sample:interview"}):
+            result, output, errors = self.run_action("retire", "sample", "interview")
+            self.assertEqual(result, 1)
+            self.assertIn("application_login_still_granted", errors)
+            self.assertIn("objectPrivilegesValid,schemaPrivilegesValid", errors)
+            for _unsafe in range(2):
+                result, output, errors = self.run_action("retire", "sample", "interview")
+                self.assertEqual(result, 1)
+                self.assertNotIn(SENTINEL, output + errors)
+
+    def test_activate_and_rotate_refuse_retired_login(self):
+        def request(payload):
+            self.requests.append(payload.copy())
+            if payload["operation"] == "login-validate":
+                return self.response(state="retired", generation=2, valid=True)
+            raise AssertionError(payload)
+        self.request_patch.stop()
+        self.request_patch = mock.patch.object(command, "send_request", side_effect=request)
+        self.request_patch.start()
+        with mock.patch.dict(os.environ, {
+                "AUTOMATION_DATA_LOGIN_ROTATE_CONFIRM": "rotate:automation-data:sample:interview"}):
+            for action in ["activate", "rotate"]:
+                self.assertEqual(self.run_action(action, "sample", "interview")[0], 1)
+        self.assertEqual([r["operation"] for r in self.requests], ["login-validate"] * 2)
+        self.assertFalse((self.directory / "sample" / "interview" / "pending").exists())
+
+    def test_retire_never_touches_local_profile(self):
+        profile = self.directory / "sample" / "interview"
+        profile.mkdir(parents=True, mode=0o700)
+        (profile / "service.conf").write_text("[synthetic]\n")
+        (profile / "service.conf").chmod(0o600)
+        before = {path.name: path.read_bytes() for path in profile.iterdir()}
+        self.answer_retire(self.response(state="retired", generation=2))
+        with mock.patch.dict(os.environ, {
+                "AUTOMATION_DATA_LOGIN_RETIRE_CONFIRM": "retire:automation-data:sample:interview"}), \
+                mock.patch.object(command, "lifecycle_readback", return_value={"status": "consistent"}):
+            self.assertEqual(self.run_action("retire", "sample", "interview")[0], 0)
+        self.assertEqual({path.name: path.read_bytes() for path in profile.iterdir()}, before)
+
+
 class MigratorEnrollmentTest(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()

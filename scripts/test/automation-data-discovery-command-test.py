@@ -381,6 +381,39 @@ class CommandTests(unittest.TestCase):
             self.resolve("application", application="interview").decision, "setup_required"
         )
 
+    def retire_application(self):
+        login = next(o for o in self.raw["platform"]["objects"] if o["kind"] == "application")
+        login["state"] = "retired"
+        role = next(o for o in self.raw["platform"]["objects"] if o["id"] == APP_ROLE)
+        role["login"] = False
+
+    def test_retired_login_is_listed_but_never_resolved(self):
+        self.retire_application()
+        item = next(i for i in self.build().items if i["family"] == "application")
+        self.assertEqual(item["state"], "retired")
+        result = self.resolve("application", application="interview")
+        self.assertEqual(result.decision, "setup_required")
+        self.assertEqual(result.prerequisites[-1],
+                         {"name": "registered_state", "status": "retired"})
+
+    def test_retired_login_reports_no_discrepancy(self):
+        self.retire_application()
+        built = self.build()
+        item = next(i for i in built.items if i["family"] == "application")
+        self.assertEqual(item["discrepancies"], [])
+        self.assertFalse(any(d.get("id", "").startswith("sample:interview")
+                             for d in built.discrepancies))
+
+    def test_mixed_ready_and_retired_inventory_is_valid(self):
+        retired = copy.deepcopy(
+            next(o for o in self.raw["platform"]["objects"] if o["kind"] == "application"))
+        retired.update(id="sample:retired_app", application="retired_app", state="retired",
+                       role="app_" + "1" * 32 + "_integration")
+        self.raw["platform"]["objects"].append(retired)
+        states = sorted(i["state"] for i in self.build().items if i["family"] == "application")
+        self.assertEqual(states, ["ready", "retired"])
+        self.assertEqual(self.resolve("application", application="interview").decision, "ready")
+
     def test_awaiting_grants_nologin_is_legitimate(self):
         source = next(o for o in self.raw["platform"]["objects"] if o["kind"] == "source")
         source.update(

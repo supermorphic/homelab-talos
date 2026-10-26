@@ -304,7 +304,7 @@ explicit operator approval.
 | 7 | Career Ops C2 | Done | Coordinator copies every receipt-listed file except retired previews into the database, verifying each SHA-256 and honoring deletion records; then removes the volume fallback and its read-only `cv-artifacts` mount |
 | 8 | Joint | Pending | Acceptance below; the application starts accepting render requests only after it passes |
 | 9 | Platform P2b | Done | Deny every claim mount; remove claim management from the application and its reconciler role; deny claim creation and update; remove the fixture-storage Flux unit and the `career-ops-retain` storage class; lower quota to the two Deployments and set claims and storage to zero. Merge only after P3 claim deletion, because a quota below current usage raises the quota alert |
-| 10 | Operator P3 | Pending | Reclaim the three CV claims and three fixture claims after a retained final backup; revoke the preparation token in Forgejo; retire the `cv_render` database login; delete the Flux unit `career-ops-fixture-storage` and the `career-ops-retain` storage class that P2b removed from Git, after the claims and their volumes are gone |
+| 10 | Operator P3 | Pending | Reclaim the three CV claims and three fixture claims after a retained final backup; revoke the preparation token in Forgejo; [retire](026-automation-data-postgresql-platform.md#retiring-an-application-login) the `cv_render` database login; delete the Flux unit `career-ops-fixture-storage` and the `career-ops-retain` storage class that P2b removed from Git, after the claims and their volumes are gone |
 
 Historical ledger rows from the replaced design remain as read-only history.
 

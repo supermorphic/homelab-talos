@@ -752,7 +752,10 @@ cross-pair denials.
 ### Upgrade, recovery, and acceptance
 
 The guarded additive revision `026-nocodb-v3` recognizes baseline/v1/v2 states and rejects
-unknown state. Fresh initialization and upgrade share definitions and validate installed
+unknown state. Revision `026-nocodb-v4` upgrades v3 in one transaction to add
+[application-login retirement](026-automation-data-postgresql-platform.md#retiring-an-application-login);
+the operator runs it with confirmation `upgrade:automation-data:nocodb-v4` after a fresh
+backup, then publishes the provisioner's `retire` operation. Fresh initialization and upgrade share definitions and validate installed
 function contracts. Deploy backup compatibility first. Complete bundles capture every
 mapping, source, claim, application registration, role/verifier, and NocoDB metadata;
 consistency checks cover changes to all of them. Retain prior-format recovery without

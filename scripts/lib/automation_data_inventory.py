@@ -145,6 +145,7 @@ STATES = {
     "ready",
     "rotating",
     "error",
+    "retired",
 }
 FIXED_CREDENTIAL_NAMES = {
     "Automation Data Provisioner",
@@ -1006,7 +1007,7 @@ def _resolve(
     if item.get("state") != "ready":
         return result(
             "setup_required"
-            if item.get("state") in {"awaiting_grants", "provisioning", "activating"}
+            if item.get("state") in {"awaiting_grants", "provisioning", "activating", "retired"}
             else "recovery_required",
             "registered_state",
             item.get("state") or "unknown",

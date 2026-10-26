@@ -113,7 +113,7 @@ spec:
         variables.pod.volumes.exists(v, v.name == 'credential' && v.secret.secretName == 'nocodb-restore-application-credential' &&
           v.secret.defaultMode == 256 && !has(v.secret.items) && (!has(v.secret.optional) || !v.secret.optional)) &&
         variables.pod.volumes.exists(v, v.name == 'scratch' && has(v.emptyDir)) &&
-        variables.pod.volumes.exists(v, v.name == 'helpers' && v.configMap.name == 'automation-data-test-helpers-v3' &&
+        variables.pod.volumes.exists(v, v.name == 'helpers' && v.configMap.name == 'automation-data-test-helpers-v4' &&
           !has(v.configMap.items) && (!has(v.configMap.optional) || !v.configMap.optional)) &&
         variables.container.volumeMounts.size() == 3 &&
         variables.container.volumeMounts.exists(m, m.name == 'credential' && m.mountPath == '/credentials' && m.readOnly) &&

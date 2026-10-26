@@ -12,7 +12,7 @@ resources:
   - ./servicemonitor.yaml
   - ./statefulset.yaml
 configMapGenerator:
-  - name: automation-data-test-helpers-v3
+  - name: automation-data-test-helpers-v4
     options:
       immutable: true
       disableNameSuffixHash: true

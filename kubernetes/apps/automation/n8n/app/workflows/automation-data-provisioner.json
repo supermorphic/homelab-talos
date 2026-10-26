@@ -35,7 +35,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['domain', 'operation', 'credential', 'application', 'schema', 'operationId', 'expectedGeneration', 'credentialGeneration', 'password']);\nif (Object.keys(body).some((key) => !allowedFields.has(key))) throw new Error('unexpected_request_field');\nconst domain = body.domain;\nconst operation = body.operation;\nconst credential = body.credential;\nif (['postgres', 'template0', 'template1', 'automation_data_control'].includes(domain)) throw new Error('invalid_domain');\nif (typeof domain !== 'string' || !/^[a-z][a-z0-9_]{0,47}$/.test(domain)) throw new Error('invalid_domain');\nconst legacy = ['provision', 'reconcile', 'rotate', 'validate'];\nconst login = ['login-register', 'login-activate', 'login-validate', 'login-rotate', 'login-complete'];\nif (!legacy.includes(operation) && !login.includes(operation)) throw new Error('invalid_operation');\nif (legacy.includes(operation)) {\n  if (['application', 'schema', 'operationId', 'expectedGeneration', 'credentialGeneration', 'password'].some(key => body[key] !== undefined)) throw new Error('unexpected_login_field');\n  if (operation === 'rotate') {\n    if (!['migrator', 'runtime'].includes(credential)) throw new Error('invalid_credential');\n  } else if (credential !== undefined) throw new Error('credential_only_allowed_for_rotation');\n  return [{ json: { domain, operation, ...(credential ? { credential } : {}) } }];\n}\nif (credential !== undefined) throw new Error('invalid_login_credential_field');\nif (typeof body.application !== 'string' || !/^[a-z][a-z0-9_]{0,23}$/.test(body.application)) throw new Error('invalid_application');\nconst optional = ['schema', 'operationId', 'expectedGeneration', 'credentialGeneration', 'password'];\nconst required = {\n  'login-register': ['schema'], 'login-activate': ['operationId', 'expectedGeneration', 'password'],\n  'login-validate': [], 'login-rotate': ['operationId', 'expectedGeneration', 'password'],\n  'login-complete': ['operationId', 'credentialGeneration'],\n}[operation];\nif (optional.some(key => (body[key] !== undefined) !== required.includes(key))) throw new Error('invalid_login_fields');\nif (required.includes('schema') && (typeof body.schema !== 'string' || !/^[a-z][a-z0-9_]{0,47}$/.test(body.schema) || ['public', 'pg_catalog', 'information_schema'].includes(body.schema) || body.schema.startsWith('pg_'))) throw new Error('invalid_login_schema');\nif (required.includes('operationId') && (typeof body.operationId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.operationId))) throw new Error('invalid_operation_id');\nif (required.includes('expectedGeneration') && (!Number.isSafeInteger(body.expectedGeneration) || body.expectedGeneration < 0)) throw new Error('invalid_expected_generation');\nif (required.includes('credentialGeneration') && (!Number.isSafeInteger(body.credentialGeneration) || body.credentialGeneration < 1)) throw new Error('invalid_credential_generation');\nif (required.includes('password') && (typeof body.password !== 'string' || !/^[A-Za-z0-9_-]{32,256}$/.test(body.password))) throw new Error('invalid_password');\nreturn [{ json: { domain, operation, application: body.application,\n  ...(body.schema !== undefined ? {schema: body.schema} : {}),\n  ...(body.operationId !== undefined ? {operationId: body.operationId} : {}),\n  ...(body.expectedGeneration !== undefined ? {expectedGeneration: body.expectedGeneration} : {}),\n  ...(body.credentialGeneration !== undefined ? {credentialGeneration: body.credentialGeneration} : {}),\n  ...(body.password !== undefined ? {password: body.password} : {}) } }];"
+        "jsCode": "const body = $json.body;\nif (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('invalid_request');\nconst allowedFields = new Set(['domain', 'operation', 'credential', 'application', 'schema', 'operationId', 'expectedGeneration', 'credentialGeneration', 'password']);\nif (Object.keys(body).some((key) => !allowedFields.has(key))) throw new Error('unexpected_request_field');\nconst domain = body.domain;\nconst operation = body.operation;\nconst credential = body.credential;\nif (['postgres', 'template0', 'template1', 'automation_data_control'].includes(domain)) throw new Error('invalid_domain');\nif (typeof domain !== 'string' || !/^[a-z][a-z0-9_]{0,47}$/.test(domain)) throw new Error('invalid_domain');\nconst legacy = ['provision', 'reconcile', 'rotate', 'validate'];\nconst login = ['login-register', 'login-activate', 'login-validate', 'login-rotate', 'login-complete', 'login-retire'];\nif (!legacy.includes(operation) && !login.includes(operation)) throw new Error('invalid_operation');\nif (legacy.includes(operation)) {\n  if (['application', 'schema', 'operationId', 'expectedGeneration', 'credentialGeneration', 'password'].some(key => body[key] !== undefined)) throw new Error('unexpected_login_field');\n  if (operation === 'rotate') {\n    if (!['migrator', 'runtime'].includes(credential)) throw new Error('invalid_credential');\n  } else if (credential !== undefined) throw new Error('credential_only_allowed_for_rotation');\n  return [{ json: { domain, operation, ...(credential ? { credential } : {}) } }];\n}\nif (credential !== undefined) throw new Error('invalid_login_credential_field');\nif (typeof body.application !== 'string' || !/^[a-z][a-z0-9_]{0,23}$/.test(body.application)) throw new Error('invalid_application');\nconst optional = ['schema', 'operationId', 'expectedGeneration', 'credentialGeneration', 'password'];\nconst required = {\n  'login-register': ['schema'], 'login-activate': ['operationId', 'expectedGeneration', 'password'],\n  'login-validate': [], 'login-rotate': ['operationId', 'expectedGeneration', 'password'],\n  'login-complete': ['operationId', 'credentialGeneration'], 'login-retire': [],\n}[operation];\nif (optional.some(key => (body[key] !== undefined) !== required.includes(key))) throw new Error('invalid_login_fields');\nif (required.includes('schema') && (typeof body.schema !== 'string' || !/^[a-z][a-z0-9_]{0,47}$/.test(body.schema) || ['public', 'pg_catalog', 'information_schema'].includes(body.schema) || body.schema.startsWith('pg_'))) throw new Error('invalid_login_schema');\nif (required.includes('operationId') && (typeof body.operationId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.operationId))) throw new Error('invalid_operation_id');\nif (required.includes('expectedGeneration') && (!Number.isSafeInteger(body.expectedGeneration) || body.expectedGeneration < 0)) throw new Error('invalid_expected_generation');\nif (required.includes('credentialGeneration') && (!Number.isSafeInteger(body.credentialGeneration) || body.credentialGeneration < 1)) throw new Error('invalid_credential_generation');\nif (required.includes('password') && (typeof body.password !== 'string' || !/^[A-Za-z0-9_-]{32,256}$/.test(body.password))) throw new Error('invalid_password');\nreturn [{ json: { domain, operation, application: body.application,\n  ...(body.schema !== undefined ? {schema: body.schema} : {}),\n  ...(body.operationId !== undefined ? {operationId: body.operationId} : {}),\n  ...(body.expectedGeneration !== undefined ? {expectedGeneration: body.expectedGeneration} : {}),\n  ...(body.credentialGeneration !== undefined ? {credentialGeneration: body.credentialGeneration} : {}),\n  ...(body.password !== undefined ? {password: body.password} : {}) } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -257,6 +257,29 @@
               },
               "renameOutput": true,
               "outputKey": "login-complete"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.operation }}",
+                    "rightValue": "login-retire",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "login-retire"
             }
           ]
         },
@@ -1347,7 +1370,25 @@
     },
     {
       "parameters": {
-        "jsCode": "const request = $('Normalize Request').first().json;\nconst result = typeof $json.result === 'string' ? JSON.parse($json.result) : $json.result;\nif (!result || result.domain !== request.domain || result.application !== request.application ||\n  result.database !== request.domain || typeof result.schema !== 'string' ||\n  !/^app_[0-9a-f]{32}_integration$/.test(result.role) ||\n  !['awaiting_grants', 'activating', 'ready', 'rotating', 'error'].includes(result.state) ||\n  !Number.isSafeInteger(result.credentialGeneration) || result.credentialGeneration < 0)\n  throw new Error('invalid_application_response');\nconst output = {ok: true, domain: result.domain, operation: request.operation,\n  application: result.application, database: result.database, schema: result.schema,\n  role: result.role, state: result.state,\n  credentialGeneration: result.credentialGeneration,\n  operationId: result.operationId ?? null, expectedGeneration: result.expectedGeneration ?? null};\nif (result.valid !== undefined) {\n  if (typeof result.valid !== 'boolean') throw new Error('invalid_application_validation');\n  output.valid = result.valid;\n  output.checks = result.checks;\n}\nreturn [{json: output}];"
+        "operation": "executeQuery",
+        "query": "SELECT platform_operations.retire_application_login($1, $2) AS result;",
+        "options": {
+          "queryReplacement": "={{ (() => { const request = $('Normalize Request').first().json; return [request.domain, request.application]; })() }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1000,
+        25520
+      ],
+      "id": "00000000-0000-4000-8000-000000000207",
+      "name": "Retire Application Login",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Normalize Request').first().json;\nconst result = typeof $json.result === 'string' ? JSON.parse($json.result) : $json.result;\nif (!result || result.domain !== request.domain || result.application !== request.application ||\n  result.database !== request.domain || typeof result.schema !== 'string' ||\n  !/^app_[0-9a-f]{32}_integration$/.test(result.role) ||\n  !['awaiting_grants', 'activating', 'ready', 'rotating', 'error', 'retired'].includes(result.state) ||\n  !Number.isSafeInteger(result.credentialGeneration) || result.credentialGeneration < 0)\n  throw new Error('invalid_application_response');\n// Retirement refusals are data: only fixed codes and validator check names leave n8n.\nif (result.errorCode !== undefined) {\n  const checks = ['roleValid', 'databaseIsolationValid', 'schemaPrivilegesValid',\n    'objectPrivilegesValid', 'routinePrivilegesValid', 'defaultPrivilegesValid',\n    'ownershipDenied', 'grantOptionsDenied', 'publicPrivilegesDenied'];\n  if (request.operation !== 'login-retire' || !['application_login_still_granted',\n      'application_login_in_use', 'application_operation_active'].includes(result.errorCode) ||\n    !Array.isArray(result.failedChecks) || result.failedChecks.some(check => !checks.includes(check)))\n    throw new Error('invalid_application_refusal');\n  return [{json: {ok: false, domain: result.domain, operation: request.operation,\n    application: result.application, errorCode: result.errorCode,\n    failedChecks: result.failedChecks}}];\n}\nconst output = {ok: true, domain: result.domain, operation: request.operation,\n  application: result.application, database: result.database, schema: result.schema,\n  role: result.role, state: result.state,\n  credentialGeneration: result.credentialGeneration,\n  operationId: result.operationId ?? null, expectedGeneration: result.expectedGeneration ?? null};\nif (result.valid !== undefined) {\n  if (typeof result.valid !== 'boolean') throw new Error('invalid_application_validation');\n  output.valid = result.valid;\n  output.checks = result.checks;\n}\nreturn [{json: output}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1551,6 +1592,13 @@
         [
           {
             "node": "Complete Application Login",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Retire Application Login",
             "type": "main",
             "index": 0
           }
@@ -2614,6 +2662,24 @@
         [
           {
             "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retire Application Login": {
+      "main": [
+        [
+          {
+            "node": "Prepare Application Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Error Response",
             "type": "main",
             "index": 0
           }

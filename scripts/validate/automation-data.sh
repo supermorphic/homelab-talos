@@ -32,6 +32,7 @@ uv run --locked python scripts/test/automation-data-connect-test.py
 scripts/test/automation-data-provisioning-command-test.sh
 scripts/test/automation-data-exporter-grant-test.sh
 scripts/test/automation-data-upgrade-test.sh --offline
+scripts/test/automation-data-v4-upgrade-test.sh
 scripts/test/automation-data-backup-test.sh
 scripts/test/automation-data-bundle-test.sh
 scripts/test/automation-data-restore-command-test.sh
@@ -332,7 +333,7 @@ request_job_manifest >"$temp_dir/request.yaml"
 kubeconform -strict -summary -ignore-missing-schemas "$temp_dir"/*.yaml >/dev/null
 
 [[ "$(yq -r '.spec.template.spec.volumes[] | select(.name == "scripts") | .configMap.name' \
-  "$temp_dir/automation-data-job.yaml")" == 'automation-data-test-helpers-v3' ]] ||
+  "$temp_dir/automation-data-job.yaml")" == 'automation-data-test-helpers-v4' ]] ||
   fail 'the automation-data restore Job does not use the fixed canonical backup helper'
 for restore_job_file in automation-data-job n8n-job; do
   yq -e '.spec.template.spec.containers[0] | has("args") | not' \

@@ -56,6 +56,16 @@ class LifecycleTests(unittest.TestCase):
         row["credentialGeneration"] = 1
         self.assertEqual(self.readback()["status"], "inconsistent")
 
+    def test_retirement_is_observed_with_unchanged_generation(self):
+        row = next(o for o in self.raw["platform"]["objects"] if o["kind"] == "application")
+        row["state"] = "retired"
+        role = next(o for o in self.raw["platform"]["objects"] if o["id"] == fixtures_module.APP_ROLE)
+        role["login"] = False
+        self.mutation.update(operation="login-retire", state="retired")
+        self.assertEqual(self.readback()["status"], "observed")
+        row["state"] = "ready"
+        self.assertEqual(self.readback()["status"], "inconsistent")
+
     def test_failed_enumeration_is_incomplete_and_retry_has_no_mutation(self):
         self.raw["platform"] = {"source": "platform", "status": "unavailable", "complete": False}
         self.assertEqual(self.readback()["status"], "unavailable")

@@ -38,7 +38,7 @@ for _attempt in {1..60}; do
       podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
       --tuples-only --no-align --username postgres --dbname automation_data_control \
       --command='SELECT platform_operations.read_platform_revision()' 2>/dev/null \
-      | rg -qx '026-nocodb-v3'; then break; fi
+      | rg -qx '026-nocodb-v4'; then break; fi
   sleep 1
 done
 podman exec "$container" sh -eu -c 'grep -qx postgres /proc/1/comm'
@@ -160,4 +160,101 @@ podman exec --env-file "$scratch/postgresql.env" "$container" psql --no-psqlrc \
 [[ "$(query "SELECT rolpassword FROM pg_authid WHERE rolname = '$role'")" != "$verifier_before" ]]
 [[ "$(query "SELECT platform_operations.complete_application_credential(
   'login_fixture','interview','$rotate_id'::uuid,2)->>'state'")" == ready ]]
+# Retirement disables an unused login only after its consumer removed every grant.
+generation() { query 'SELECT generation FROM platform_operations.platform_generation'; }
+retire() {
+  query "SET ROLE automation_data_provisioner;
+    SELECT platform_operations.retire_application_login('login_fixture','$1')" | tail -n 1
+}
+login_state() {
+  query "SELECT state FROM platform_operations.managed_application_logins
+    WHERE domain = 'login_fixture' AND application = '$1'"
+}
+retire interview >"$scratch/granted.out"
+[[ "$(jq -r '.errorCode' "$scratch/granted.out")" == application_login_still_granted ]]
+jq -e '.failedChecks | index("schemaPrivilegesValid")' "$scratch/granted.out" >/dev/null
+[[ "$(login_state interview)" == ready ]]
+[[ "$(query "SELECT rolcanlogin FROM pg_roles WHERE rolname = '$role'")" == t ]]
+if query "SET ROLE login_fixture_owner;
+    SELECT platform_operations.retire_application_login('login_fixture','interview')" \
+  >"$scratch/denied.out" 2>"$scratch/denied.err"; then
+  echo 'A non-provisioner role retired an application login.' >&2; exit 1
+fi
+rg -q 'permission denied' "$scratch/denied.err"
+# An open session survives the consumer's revocation; retirement must not end it.
+podman exec --detach --env-file "$scratch/postgresql.env" "$container" sh -eu -c \
+  "PGPASSWORD=\"\$ROTATED_PASSWORD\" psql --no-psqlrc --host 127.0.0.1 --username '$role' \
+    --dbname login_fixture --command 'SELECT pg_sleep(120)'"
+for _attempt in {1..30}; do
+  [[ "$(query "SELECT count(*) FROM pg_stat_activity WHERE usename = '$role'")" == 1 ]] && break
+  sleep 1
+done
+podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 --username postgres \
+  --dbname login_fixture --command "REVOKE CONNECT ON DATABASE login_fixture FROM \"$role\";
+    REVOKE USAGE ON SCHEMA interview_api FROM \"$role\";
+    REVOKE SELECT ON interview_api.present FROM \"$role\";
+    REVOKE EXECUTE ON FUNCTION interview_api.allowed() FROM \"$role\"" >"$scratch/revoke.out"
+retire interview >"$scratch/in-use.out"
+jq -e '.errorCode == "application_login_in_use"' "$scratch/in-use.out" >/dev/null ||
+  { cat "$scratch/in-use.out" >&2; exit 1; }
+[[ "$(jq -r '.errorCode' "$scratch/in-use.out")" == application_login_in_use ]]
+[[ "$(query "SELECT count(*) FROM pg_stat_activity WHERE usename = '$role'")" == 1 ]]
+query "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = '$role'" >/dev/null
+for _attempt in {1..30}; do
+  [[ "$(query "SELECT count(*) FROM pg_stat_activity WHERE usename = '$role'")" == 0 ]] && break
+  sleep 1
+done
+before="$(generation)"
+retire interview >"$scratch/retired.out"
+[[ "$(jq -r '.state' "$scratch/retired.out")" == retired ]]
+[[ "$(jq -r 'has("errorCode")' "$scratch/retired.out")" == false ]]
+[[ "$(jq -r '.credentialGeneration' "$scratch/retired.out")" == 2 ]]
+[[ "$(query "SELECT rolcanlogin FROM pg_roles WHERE rolname = '$role'")" == f ]]
+[[ "$(query "SELECT rolpassword IS NULL FROM pg_authid WHERE rolname = '$role'")" == t ]]
+[[ "$(query "SELECT concat_ws(',', operation_id, operation, expected_generation,
+  operation_started_at, error_code) FROM platform_operations.managed_application_logins
+  WHERE domain = 'login_fixture' AND application = 'interview'")" == '' ]]
+[[ "$(generation)" == $((before + 1)) ]]
+retire interview >"$scratch/repeat.out"
+[[ "$(jq -r '.state' "$scratch/repeat.out")" == retired ]]
+[[ "$(generation)" == $((before + 1)) ]]
+[[ "$(query "SELECT platform_operations.validate_application_login('login_fixture','interview')->>'valid'")" == true ]]
+expect_retired() {
+  if query "$1" >"$scratch/refused.out" 2>"$scratch/refused.err"; then
+    echo "A retired login accepted: $2" >&2; exit 1
+  fi
+  rg -q 'application_login_retired' "$scratch/refused.err"
+}
+expect_retired "SELECT platform_operations.register_application_login('login_fixture','interview','interview_api')" registration
+expect_retired "SELECT platform_operations.install_application_credential('login_fixture','interview','activate',
+  '00000000-0000-4000-8000-000000000205'::uuid,2,repeat('x',40))" activation
+expect_retired "SELECT platform_operations.install_application_credential('login_fixture','interview','rotate',
+  '00000000-0000-4000-8000-000000000206'::uuid,2,repeat('x',40))" rotation
+expect_retired "SELECT platform_operations.complete_application_credential('login_fixture','interview',
+  '$rotate_id'::uuid,2)" completion
+# A consumer rebuilt on the existing platform may grant the retired role again.
+podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 --username postgres \
+  --dbname login_fixture --command "GRANT USAGE ON SCHEMA interview_api TO \"$role\"" >/dev/null
+query "SELECT platform_operations.validate_application_login('login_fixture','interview')" >"$scratch/regranted.out"
+[[ "$(jq -r '.valid' "$scratch/regranted.out")" == false ]]
+[[ "$(jq -r '.schemaPrivilegesValid' "$scratch/regranted.out")" == false ]]
+podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 --username postgres \
+  --dbname login_fixture --command "REVOKE USAGE ON SCHEMA interview_api FROM \"$role\"" >/dev/null
+# Never-activated and failed logins retire directly; an active operation refuses.
+query "SELECT platform_operations.register_application_login('login_fixture','pending','pending_api');
+  SELECT platform_operations.register_application_login('login_fixture','broken','broken_api');
+  SELECT platform_operations.register_application_login('login_fixture','busy','busy_api');
+  UPDATE platform_operations.managed_application_logins SET state = 'error', error_code = 'synthetic_failure'
+    WHERE domain = 'login_fixture' AND application = 'broken';
+  UPDATE platform_operations.managed_application_logins SET state = 'activating',
+    operation = 'activate', operation_id = '00000000-0000-4000-8000-000000000207'::uuid,
+    expected_generation = 0, operation_started_at = clock_timestamp()
+    WHERE domain = 'login_fixture' AND application = 'busy'" >/dev/null
+[[ "$(retire pending | jq -r '.state')" == retired ]]
+[[ "$(retire broken | jq -r '.state')" == retired ]]
+[[ "$(query "SELECT error_code IS NULL FROM platform_operations.managed_application_logins
+  WHERE domain = 'login_fixture' AND application = 'broken'")" == t ]]
+[[ "$(retire busy | jq -r '.errorCode')" == application_operation_active ]]
+[[ "$(login_state busy)" == activating ]]
+query 'SELECT platform_operations.read_platform_revision()' | rg -qx '026-nocodb-v4'
 echo 'Application login lifecycle PostgreSQL behavior passed.'

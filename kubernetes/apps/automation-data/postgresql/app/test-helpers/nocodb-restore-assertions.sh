@@ -1,5 +1,6 @@
 printf '%s\n' 'restore_stage=nocodb-source-registry'
-if [ "$restored_platform_revision" = '026-nocodb-v3' ]; then
+if [ "$restored_platform_revision" = '026-nocodb-v3' ] ||
+  [ "$restored_platform_revision" = '026-nocodb-v4' ]; then
 source_registry="$(psql --dbname=automation_data_control --tuples-only --no-align --command="
 SELECT jsonb_build_object(
   'items', COALESCE(jsonb_agg(jsonb_build_object(

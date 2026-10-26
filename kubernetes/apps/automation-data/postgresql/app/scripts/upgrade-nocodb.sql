@@ -19,7 +19,7 @@ SELECT (to_regclass('platform_operations.platform_schema_revision') IS NULL)
 \if :first_install
   \set apply_upgrade true
 \else
-  SELECT revision <> '026-nocodb-v3' AS apply_upgrade
+  SELECT revision <> '026-nocodb-v4' AS apply_upgrade
   FROM platform_operations.platform_schema_revision WHERE singleton \gset
 \endif
 
@@ -35,7 +35,8 @@ BEGIN
     EXECUTE 'SELECT CASE WHEN count(*) = 1 THEN min(revision) ELSE NULL END FROM platform_operations.platform_schema_revision'
       INTO recorded_revision;
     IF recorded_revision IS NULL OR
-       recorded_revision NOT IN ('026-nocodb-v1', '026-nocodb-v2', '026-nocodb-v3') THEN
+       recorded_revision NOT IN ('026-nocodb-v1', '026-nocodb-v2', '026-nocodb-v3',
+         '026-nocodb-v4') THEN
       RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'unknown_platform_revision';
     END IF;
     IF recorded_revision = '026-nocodb-v1' AND
@@ -50,7 +51,7 @@ BEGIN
         WHERE state IN ('provisioning', 'waiting_for_source', 'rotating', 'error')) THEN
       RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'incomplete_platform_operation';
     END IF;
-    IF recorded_revision = '026-nocodb-v3' THEN
+    IF recorded_revision IN ('026-nocodb-v3', '026-nocodb-v4') THEN
       IF EXISTS (SELECT FROM platform_operations.nocodb_source_operations
           WHERE phase <> 'complete') OR
          EXISTS (SELECT FROM platform_operations.managed_application_logins
