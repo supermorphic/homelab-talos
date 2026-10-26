@@ -913,6 +913,9 @@ privileges; ownership; membership; or grant option. It refuses with
 `application_login_in_use` while the role has a session and never terminates one. It then
 sets the role `NOLOGIN` with no password, records `retired`, clears operation fields, and
 advances the platform generation. Repeating it returns the retired state unchanged.
+Refusals, including `application_operation_active` for a login mid-operation, return the
+unchanged login with the code and failed check names instead of raising an error, so the
+provisioner and `just kube automation-data-login-retire` can report them.
 
 `retired` is terminal. Registration, credential installation, and completion refuse the
 login with `application_login_retired`, so the application name stays reserved; a later

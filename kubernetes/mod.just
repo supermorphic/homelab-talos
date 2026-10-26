@@ -175,6 +175,9 @@ automation-data-login-validate domain application: require-bash
 automation-data-login-rotate domain application: require-bash
     @uv run --locked python scripts/operations/automation-data-login.py rotate {{quote(domain)}} {{quote(application)}}
 
+automation-data-login-retire domain application: require-bash
+    @uv run --locked python scripts/operations/automation-data-login.py retire {{quote(domain)}} {{quote(application)}}
+
 # Keep one fixed Pod tunnel open for a protected application or migrator CLI profile.
 automation-data-connect domain registered_identity: require-bash
     @uv run --locked python scripts/operations/automation-data-connect.py {{quote(domain)}} {{quote(registered_identity)}}
