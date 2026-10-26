@@ -76,7 +76,7 @@ rules = operation_switch.get("parameters", {}).get("rules", {}).get("values", []
 operations = sorted(rule.get("conditions", {}).get("conditions", [{}])[0].get("rightValue") for rule in rules)
 require(operations == sorted(["provision", "reconcile", "rotate", "validate",
                               "login-register", "login-activate", "login-validate",
-                              "login-rotate", "login-complete"]),
+                              "login-rotate", "login-complete", "login-retire"]),
         "The workflow operation set is not exact.")
 
 approved_functions = {
@@ -90,6 +90,7 @@ approved_functions = {
     "platform_operations.read_application_login_state",
     "platform_operations.install_application_credential",
     "platform_operations.complete_application_credential",
+    "platform_operations.retire_application_login",
 }
 seen_functions = set()
 postgres_nodes = [node for node in nodes if node.get("type") == "n8n-nodes-base.postgres"]
