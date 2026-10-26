@@ -470,11 +470,13 @@ row and its state. NocoDB source rows remain in the control-database dump; their
 state also participates in the stable platform generation. The database set is never
 read from Git.
 
-The backup path recognizes three exact control-schema states. The accepted
+The backup path recognizes exact control-schema states. The accepted
 specification-025 baseline has no platform revision metadata or NocoDB source registry.
 Revision `026-nocodb-v1` has both and includes the validated source array in the
 captured platform state. Revision `026-nocodb-v2` also captures the immutable custom
-schema mappings. Unknown revision metadata, a missing
+schema mappings. Revision `026-nocodb-v3` also captures application logins and NocoDB
+source operations. Revision `026-nocodb-v4` adds the
+[`retired` application-login state](#retiring-an-application-login). Unknown revision metadata, a missing
 registry at the installed revision, or other partial optional state stops publication.
 The bundle format remains version 1, so pre-extension bundles remain valid restore
 inputs. The extension install leaves the domain registry and platform generation
@@ -894,11 +896,41 @@ all effective authority, including PUBLIC, inherited, column, default, and routi
   resolution, exact operations, and grants. Registration supplies no automatic grants.
 - Registry data is limited to identity, role, state, operation ID, credential generation,
   and bounded timestamps/error codes. States are `awaiting_grants`, `activating`, `ready`,
-  `rotating`, and `error`. Validation never rotates credentials.
+  `rotating`, `error`, and terminal `retired`. Validation never rotates credentials.
+
+### Retiring an application login
+
+Retirement disables a login its consumer no longer uses while keeping the role, so
+backups taken before the consumer removed its grants still restore. The provisioner's
+`retire` operation calls `retire_application_login(domain, application)` under the
+domain lock. It accepts `ready`, `awaiting_grants`, or `error` and refuses `activating`
+or `rotating`, which would race a credential installation.
+
+The consumer revokes its own grants first; the platform never revokes them. Retirement
+refuses with `application_login_still_granted`, naming each failed check, while the role
+has any database `CONNECT`, `CREATE`, or `TEMP`; schema, object, routine, or default
+privileges; ownership; membership; or grant option. It refuses with
+`application_login_in_use` while the role has a session and never terminates one. It then
+sets the role `NOLOGIN` with no password, records `retired`, clears operation fields, and
+advances the platform generation. Repeating it returns the retired state unchanged.
+
+`retired` is terminal. Registration, credential installation, and completion refuse the
+login with `application_login_retired`, so the application name stays reserved; a later
+consumer enrolls a new application name. For a retired login, validation instead proves
+that the role cannot log in, has no password, cannot connect to any database, and holds
+no privileges, ownership, or membership. Backups capture retired logins without refusing,
+and restore validates them with that proof. Inventory lists them as retired, never offers
+them for resolution, and does not report them as discrepancies.
+
+A consumer rebuilt on the existing platform keeps the retired record and role. Its
+migrations may grant the role again before a later migration revokes those grants;
+validation reports the retired login invalid until then, and the rebuild must not
+register the name again. Dropping a retired role is a separate, unimplemented lifecycle
+step: it must remove the role and its registration together.
 
 ### Protected credential installation and recovery
 
-The existing private provisioner handles register/activate/validate/rotate. The
+The existing private provisioner handles register/activate/validate/rotate/retire. The
 [login workflow](../../scripts/operations/automation-data-login.py)
 contains commands and file formats. Activation and rotation:
 
