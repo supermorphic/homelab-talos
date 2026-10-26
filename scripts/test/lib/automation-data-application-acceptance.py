@@ -162,7 +162,7 @@ def write_restore_manifests(directory: Path, run_hash: str, run_id: str, passwor
                    'volumes': [{'name': 'credential', 'secret': {'secretName': secret_name,
                                                                 'defaultMode': 0o400}},
                                {'name': 'scratch', 'emptyDir': {}},
-                               {'name': 'helpers', 'configMap': {'name': 'automation-data-test-helpers-v3'}}]}}}}
+                               {'name': 'helpers', 'configMap': {'name': 'automation-data-test-helpers-v4'}}]}}}}
     write_private_file_exclusive(directory / 'application-probe.yaml',
                                  yaml.safe_dump(job, sort_keys=False).encode())
     write_private_file_exclusive(directory / 'application-credential.json',

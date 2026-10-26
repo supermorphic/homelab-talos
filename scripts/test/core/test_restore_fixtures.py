@@ -1,5 +1,6 @@
 """Fixed restore programs keep scratch targets and Git-owned backup programs."""
 
+import hashlib
 import json
 import os
 import subprocess
@@ -12,6 +13,32 @@ import yaml
 ROOT = Path(__file__).resolve().parents[3]
 POSTGRES = ROOT / "kubernetes/apps/automation-data/postgresql/app"
 N8N = ROOT / "kubernetes/apps/automation/n8n/app"
+
+
+# An immutable ConfigMap without a hash suffix cannot be updated in place: Flux fails the
+# whole unit. Any content change must come with a new name, so pin content to name.
+IMMUTABLE_CONFIGMAP_CONTENT = {
+    "automation-data-test-helpers-v4": "449398991eed0fb987948e1f9acb9c72bfa64e1b728db160e9fd88f0922acefd",
+}
+
+
+class ImmutableConfigMapTests(unittest.TestCase):
+    def test_changed_immutable_configmap_content_requires_a_new_name(self):
+        found = {}
+        for kustomization in sorted((ROOT / "kubernetes").rglob("kustomization.yaml")):
+            document = yaml.safe_load(kustomization.read_text()) or {}
+            for generator in document.get("configMapGenerator", []):
+                options = generator.get("options", {})
+                if not (options.get("immutable") and options.get("disableNameSuffixHash")):
+                    continue
+                digest = hashlib.sha256()
+                for entry in sorted(generator.get("files", [])):
+                    key, _, source = entry.partition("=")
+                    digest.update(key.encode() + b"\0")
+                    digest.update((kustomization.parent / (source or key)).read_bytes() + b"\0")
+                found[generator["name"]] = digest.hexdigest()
+        self.assertEqual(found, IMMUTABLE_CONFIGMAP_CONTENT,
+                         "rename the immutable ConfigMap and record its new content digest")
 
 
 class RestoreFixtureTests(unittest.TestCase):
@@ -99,7 +126,7 @@ expected_database_set_base64=YXV0b21hdGlvbl9kYXRhX2FjY2VwdGFuY2UK
             self.assertFalse(pod["automountServiceAccountToken"])
             helpers = [v["configMap"] for v in pod["volumes"] if "configMap" in v]
             self.assertEqual(len(helpers), 1)
-            self.assertEqual(helpers[0]["name"], "automation-data-test-helpers-v3")
+            self.assertEqual(helpers[0]["name"], "automation-data-test-helpers-v4")
 
         def claim(job):
             return next(
@@ -431,10 +458,10 @@ probe_file="$1"
                 "/helpers/nocodb-restore-preflight.sh",
             ),
             (
-                "automation-data-test-helpers-v3",
+                "automation-data-test-helpers-v4",
                 "n8n-test-helpers-v1",
-                "automation-data-test-helpers-v3",
-                "automation-data-test-helpers-v3",
+                "automation-data-test-helpers-v4",
+                "automation-data-test-helpers-v4",
             ),
             strict=True,
         ):
@@ -462,7 +489,7 @@ probe_file="$1"
                 doc
                 for doc in yaml.safe_load_all(rendered.stdout)
                 if doc["kind"] == "ConfigMap"
-                and doc["metadata"]["name"] == "automation-data-test-helpers-v3"
+                and doc["metadata"]["name"] == "automation-data-test-helpers-v4"
             ),
             None,
         )

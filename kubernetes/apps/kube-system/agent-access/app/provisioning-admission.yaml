@@ -96,7 +96,7 @@ spec:
         variables.pod.volumes.size() == (variables.backup || variables.bundle ? 3 : 2) &&
         variables.pod.volumes.exists(v, v.name == 'tmp' && has(v.emptyDir)) &&
         variables.pod.volumes.exists(v, v.name == (variables.backup ? 'backup-script' : 'helpers') &&
-          v.configMap.name == 'automation-data-test-helpers-v3' && !has(v.configMap.items) &&
+          v.configMap.name == 'automation-data-test-helpers-v4' && !has(v.configMap.items) &&
           (!has(v.configMap.optional) || !v.configMap.optional) &&
           (!variables.backup || v.configMap.defaultMode == 365)) &&
         (!(variables.backup || variables.bundle) || variables.pod.volumes.exists(v, v.name == 'backups' &&
