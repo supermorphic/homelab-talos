@@ -42,13 +42,13 @@ for _attempt in {1..60}; do
       podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
       --tuples-only --no-align --username postgres --dbname automation_data_control \
       --command='SELECT platform_operations.read_platform_revision()' 2>/dev/null \
-      | rg -qx '026-nocodb-v3'; then break; fi
+      | rg -qx '026-nocodb-v4'; then break; fi
   sleep 1
 done
 podman exec "$container" sh -eu -c 'grep -qx postgres /proc/1/comm'
 podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
   --tuples-only --no-align --username postgres --dbname automation_data_control \
-  --command='SELECT platform_operations.read_platform_revision()' | rg -qx '026-nocodb-v3'
+  --command='SELECT platform_operations.read_platform_revision()' | rg -qx '026-nocodb-v4'
 
 cat >"$scratch/setup.sql" <<'SQL'
 \getenv migrator_password FIXTURE_MIGRATOR_PASSWORD

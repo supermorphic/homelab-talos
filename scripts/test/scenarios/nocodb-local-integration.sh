@@ -1202,7 +1202,7 @@ prove_logical_restore() { # <ready-source-response> <probe-response>
 	done <"$bundle_host/manifest.tsv"
 	[[ "$("$podman_bin" exec "$restore_postgres_name" psql --no-psqlrc --tuples-only --no-align \
 		--username postgres --dbname automation_data_control --command \
-		"SELECT platform_operations.read_platform_revision();")" == 026-nocodb-v3 ]] ||
+		"SELECT platform_operations.read_platform_revision();")" == 026-nocodb-v4 ]] ||
 		fail 'restored platform revision was not exact.'
 	prove_discovery_restored_projections
 	restore_ip="$("$podman_bin" inspect "$restore_postgres_name" | jq -er --arg network "$network" \

@@ -198,7 +198,7 @@ automation-data-discovery-install action='': require-bash
     @scripts/operations/automation-data-discovery-install.sh {{quote(kubeconfig)}} {{if action == '' { '' } else { quote(action) }}}
 
 # Apply the one fixed existing-platform upgrade for the NocoDB extension. Guard:
-# AUTOMATION_DATA_UPGRADE_CONFIRM='upgrade:automation-data:nocodb-v3'.
+# AUTOMATION_DATA_UPGRADE_CONFIRM='upgrade:automation-data:nocodb-v4'.
 automation-data-upgrade: require-bash
     @scripts/upgrade/automation-data.sh {{quote(kubeconfig)}}
 

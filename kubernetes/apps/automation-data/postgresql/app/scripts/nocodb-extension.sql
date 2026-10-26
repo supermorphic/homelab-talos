@@ -2114,7 +2114,7 @@ BEGIN
   SELECT revision INTO STRICT installed_revision
   FROM platform_operations.platform_schema_revision
   WHERE singleton = true;
-  IF installed_revision <> '026-nocodb-v3' THEN
+  IF installed_revision <> '026-nocodb-v4' THEN
     RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'unknown_platform_revision';
   END IF;
   IF to_regclass('platform_operations.managed_nocodb_sources') IS NULL OR
@@ -2327,7 +2327,7 @@ GRANT SELECT (domain, pair)
   ON platform_operations.managed_nocodb_schema_mappings TO automation_data_exporter;
 
 INSERT INTO platform_operations.platform_schema_revision (singleton, revision)
-VALUES (true, '026-nocodb-v3')
+VALUES (true, '026-nocodb-v4')
 ON CONFLICT (singleton) DO UPDATE SET
   revision = EXCLUDED.revision,
   installed_at = clock_timestamp()

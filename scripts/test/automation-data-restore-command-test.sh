@@ -249,16 +249,16 @@ elif [[ "$command_text" == *'FROM pg_database'* ]]; then
     printf '\n'
   done
 elif [[ "$command_text" == *operation_tables* && "$command_text" == *assert_nocodb_access_kind* ]]; then
-  case "${RESTORED_PLATFORM_REVISION:-026-nocodb-v3}" in
+  case "${RESTORED_PLATFORM_REVISION:-026-nocodb-v4}" in
     025-baseline) printf '%s\n' '025-baseline' ;;
     026-nocodb-v1 | 026-nocodb-v2 | 026-nocodb-v3 | 026-nocodb-v4) printf '%s\n' 'upgraded-candidate' ;;
     *) printf '%s\n' 'invalid' ;;
   esac
 elif [[ "$command_text" == *read_platform_revision* ]]; then
   [[ "${ORACLE_FAILURE:-false}" != true ]] || exit 51
-  printf '%s\n' "${RESTORED_PLATFORM_REVISION:-026-nocodb-v3}"
+  printf '%s\n' "${RESTORED_PLATFORM_REVISION:-026-nocodb-v4}"
 elif [[ "$command_text" == *'025-baseline'* && "$command_text" == *'026-nocodb-v1'* ]]; then
-  printf '%s\n' "${RESTORED_PLATFORM_REVISION:-026-nocodb-v3}"
+  printf '%s\n' "${RESTORED_PLATFORM_REVISION:-026-nocodb-v4}"
 elif [[ "$command_text" == *'managed_application_logins'* && "$command_text" == *'validate_application_login'* ]]; then
   printf '%s\n' "${APPLICATION_VALIDATION_RESULT:-true}"
 elif [[ "$command_text" == *'managed_nocodb_sources'* && "$command_text" == *'validate_nocodb_access'* ]]; then
@@ -359,7 +359,7 @@ EOF
 
 run_restore() {
   local root="$1" validation_result="${2:-true}" nocodb_validation_result="${3:-true}"
-  local platform_revision="${4:-026-nocodb-v3}" oracle_failure="${5:-false}"
+  local platform_revision="${4:-026-nocodb-v4}" oracle_failure="${5:-false}"
   local permission_mismatch="${6:-false}" permission_dump_failure="${7:-false}"
   local application_validation_result="${8:-true}"
   local output status=0 command

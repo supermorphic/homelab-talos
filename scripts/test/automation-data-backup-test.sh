@@ -76,7 +76,7 @@ case "$tool" in
         old)
           [[ "$command_text" == *"025-baseline"* ]] || exit 43
           ;;
-        new | v1 | v2 | v4)
+        new | v1 | v2 | v3)
           [[ "$command_text" == *read_platform_revision* ]] || exit 48
           printf 'revision-oracle\n' >>"$FAKE_LOG"
           ;;
@@ -104,8 +104,8 @@ case "$tool" in
       encoded_state="$(printf '%s' "${STATE_SCHEMA:-new}:$generation:$state_marker" | base64 | tr -d '\n')"
       case "${STATE_SCHEMA:-new}" in
         old) captured_revision='025-baseline' ;;
-        new) captured_revision='026-nocodb-v3' ;;
-        v4) captured_revision='026-nocodb-v4' ;;
+        new) captured_revision='026-nocodb-v4' ;;
+        v3) captured_revision='026-nocodb-v3' ;;
         v2) captured_revision='026-nocodb-v2' ;;
         v1) captured_revision='026-nocodb-v1' ;;
         *) captured_revision='invalid' ;;
@@ -242,14 +242,14 @@ run_backup "$v2_schema_case" '' '' v2
 [[ -s "$v2_schema_case/backups/automation-data-20260827T003000Z/COMPLETE" ]] ||
   fail 'recognized v2 schema did not produce a complete backup during upgrade rollout'
 
-v4_schema_case="$(new_case v4-schema)"
-run_backup "$v4_schema_case" '' '' v4
-[[ -s "$v4_schema_case/backups/automation-data-20260827T003000Z/COMPLETE" ]] ||
-  fail 'recognized v4 schema did not produce a complete backup'
+v3_schema_case="$(new_case v3-schema)"
+run_backup "$v3_schema_case" '' '' v3
+[[ -s "$v3_schema_case/backups/automation-data-20260827T003000Z/COMPLETE" ]] ||
+  fail 'recognized v3 schema did not produce a complete backup during upgrade rollout'
 for database in postgres template1; do
   rg -Fq "REVOKE CONNECT ON DATABASE $database FROM PUBLIC;" \
-    "$v4_schema_case/backups/automation-data-20260827T003000Z/globals.sql" ||
-    fail "v4 backup globals omit the $database maintenance restriction"
+    "$v3_schema_case/backups/automation-data-20260827T003000Z/globals.sql" ||
+    fail "v3 backup globals omit the $database maintenance restriction"
 done
 
 for invalid_schema in unknown partial; do
