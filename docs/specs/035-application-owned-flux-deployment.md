@@ -320,17 +320,25 @@ workflows. Keep feature-branch evidence distinct from deployed-main evidence.
   download, repeated and conflicting requests, download-link scope) is the
   application's acceptance in its CV rendering specification and runs as part of
   the joint gate.
-- Boundary: offline admission cases and a live server-side dry run deny the
-  renderer a token, Secrets, claims, pull Secrets and wider network profiles;
-  the dry run is repeated after P2a and P2b.
+- Boundary: offline admission cases deny the renderer Deployment a token,
+  Secrets, claims, pull Secrets and wider network profiles. A live server-side
+  dry run, repeated after P2a and P2b, proves the installed policies deny Jobs
+  that use the renderer or coordinator identity. The live run submits only
+  Jobs, because the test identity has no Deployment permission; granting it one
+  to repeat the Deployment cases live is not worth the wider test authority.
   At startup the renderer attempts one DNS query and one TCP connection and
   reports through the coordinator's metrics that both were blocked; Hubble drop
   counters for that attempt provide independent positive evidence.
-- Monitoring: offline rule tests cover all three alerts; one real ntfy
-  notification is delivered and resolved for stuck work.
-- Recovery: the existing automation-data restore drill restores a backup
-  containing synthetic artifacts, an upload and a deletion; every restored
-  record's bytes match their checksum and the deletion survives.
+- Monitoring: offline rule tests cover all three alerts, and one alert raised by
+  a real failure reaches the Alertmanager ntfy receiver. Phone delivery of CV
+  alerts is not part of this gate; it depends on the shared
+  [alert delivery](015-alerting-architecture.md#delivery-boundary).
+- Recovery: the existing automation-data restore drill restores a backup of the
+  live Career Ops data and runs the application's read-only restore probe; every
+  restored blob's bytes match their checksum, the probe's checks pass, and its
+  counts and digests match the live database when nothing changed after the
+  backup. A deletion record is checked only when the backup contains one; the
+  drill does not create one in production data.
 
 Platform acceptance does not establish rendering quality or composition behavior.
 Close issue 593 when these pass on deployed main, P2a and P2b are merged, the
