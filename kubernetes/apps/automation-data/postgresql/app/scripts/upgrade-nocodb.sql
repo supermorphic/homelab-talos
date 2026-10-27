@@ -17,9 +17,10 @@ SELECT pg_try_advisory_xact_lock(
 SELECT (to_regclass('platform_operations.platform_schema_revision') IS NULL)
   AS first_install \gset
 \if :first_install
-  \set apply_upgrade true
+  \set backfill_database_boundary true
 \else
-  SELECT revision <> '026-nocodb-v4' AS apply_upgrade
+  -- Only pre-v3 databases lack the boundary; later grants belong to the application.
+  SELECT revision IN ('026-nocodb-v1', '026-nocodb-v2') AS backfill_database_boundary
   FROM platform_operations.platform_schema_revision WHERE singleton \gset
 \endif
 
@@ -129,7 +130,7 @@ WHERE oid IN (
 ) \gset
 \ir nocodb-extension.sql
 \ir application-login.sql
-\if :apply_upgrade
+\if :backfill_database_boundary
   -- Existing databases predate the explicit TEMP and public-schema boundary.
   -- The remote schema REVOKE is monotonic, even if this control transaction aborts.
   -- Never-ready records can lack a database; a missing previously ready one must fail.

@@ -77,6 +77,8 @@ UPDATE platform_operations.managed_application_logins
   WHERE domain = 'v4_fixture' AND application = 'interview';
 SELECT format('ALTER ROLE %I LOGIN PASSWORD %L',
   'app_' || md5('v4_fixture:interview') || '_integration', :'application_password') \gexec
+-- Stand in for an application that narrowed its provisioned TEMP grant.
+REVOKE TEMP ON DATABASE v4_fixture FROM v4_fixture_runtime;
 SQL
 podman cp "$scratch/setup.sql" "$container:/tmp/v4-setup.sql"
 podman exec --env-file "$scratch/postgresql.env" "$container" psql --no-psqlrc \
@@ -109,6 +111,9 @@ query "BEGIN; UPDATE platform_operations.managed_application_logins SET state = 
 [[ "$(query "SELECT has_function_privilege('public',
   'platform_operations.retire_application_login(text,text)', 'EXECUTE')")" == f ]]
 [[ "$(query "SELECT platform_operations.capture_backup_state()->>'platformRevision'")" == 026-nocodb-v4 ]]
+# The pre-v3 TEMP backfill must not re-grant what an application revoked.
+[[ "$(query "SELECT has_database_privilege('v4_fixture_runtime', 'v4_fixture', 'TEMP')")" == f ]]
+[[ "$(query "SELECT has_database_privilege('v4_fixture_migrator', 'v4_fixture', 'TEMP')")" == t ]]
 
 stage=rerun
 generation_before="$(query 'SELECT generation FROM platform_operations.platform_generation')"
@@ -117,4 +122,5 @@ rg -Fxq 'installed_revision=026-nocodb-v4' "$scratch/rerun.out"
 [[ "$(query 'SELECT generation FROM platform_operations.platform_generation')" == "$generation_before" ]]
 query "$login_row" >"$scratch/login-rerun.json"
 cmp -s "$scratch/login-before.json" "$scratch/login-rerun.json"
+[[ "$(query "SELECT has_database_privilege('v4_fixture_runtime', 'v4_fixture', 'TEMP')")" == f ]]
 echo 'automation-data v3-to-v4 upgrade preserved logins and added retirement.'
