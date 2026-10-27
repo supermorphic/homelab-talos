@@ -249,10 +249,9 @@ raises the CV renders failing alert.
 The namespace has no PersistentVolumeClaim. Admission denies every workload
 volume that references a claim, denies creation and update of any claim, and
 gives the application reconciler no claim permission. Claim deletion stays
-allowed so the operator and the volume protection controller can finish the P3
-removal of the replaced design's claims. The `career-ops-retain` storage class
-and the fixture-storage Flux unit are removed from Git; the operator deletes the
-live objects (P3).
+allowed, so the volume protection controller can release a claim that is being
+deleted. The replaced design's claims, the `career-ops-retain` storage class and
+the fixture-storage Flux unit are removed from Git and from the cluster.
 
 ## Failure visibility
 
@@ -304,7 +303,7 @@ explicit operator approval.
 | 7 | Career Ops C2 | Done | Coordinator copies every receipt-listed file except retired previews into the database, verifying each SHA-256 and honoring deletion records; then removes the volume fallback and its read-only `cv-artifacts` mount |
 | 8 | Joint | Pending | Acceptance below; the application starts accepting render requests only after it passes |
 | 9 | Platform P2b | Done | Deny every claim mount; remove claim management from the application and its reconciler role; deny claim creation and update; remove the fixture-storage Flux unit and the `career-ops-retain` storage class; lower quota to the two Deployments and set claims and storage to zero. Merge only after P3 claim deletion, because a quota below current usage raises the quota alert |
-| 10 | Operator P3 | Pending | Reclaim the three CV claims and three fixture claims after a retained final backup; revoke the preparation token in Forgejo; [retire](026-automation-data-postgresql-platform.md#retiring-an-application-login) the `cv_render` database login; delete the Flux unit `career-ops-fixture-storage` and the `career-ops-retain` storage class that P2b removed from Git, after the claims and their volumes are gone |
+| 10 | Operator P3 | Done | Reclaim the three CV claims and three fixture claims after a retained final backup; revoke the preparation token in Forgejo; [retire](026-automation-data-postgresql-platform.md#retiring-an-application-login) the `cv_render` database login; delete the Flux unit `career-ops-fixture-storage` and the `career-ops-retain` storage class that P2b removed from Git, after the claims and their volumes are gone |
 
 Historical ledger rows from the replaced design remain as read-only history.
 
@@ -336,8 +335,7 @@ workflows. Keep feature-branch evidence distinct from deployed-main evidence.
 Platform acceptance does not establish rendering quality or composition behavior.
 Close issue 593 when these pass on deployed main, P2a and P2b are merged, the
 boundary checks have been repeated after them, and this
-specification matches the deployed state. Retiring the `cv_render` login may
-follow as an operator task.
+specification matches the deployed state.
 
 ## Rollback and recovery
 
