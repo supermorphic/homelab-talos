@@ -101,12 +101,29 @@ jobs:
           name: ci-plan-${{ forgejo.run_id }}-${{ forgejo.run_attempt }}
           path: .tmp/ci/plan/
 
+      - name: Install system tools the tests expect
+        # GitHub runner images provided these; the shared Forgejo job image does not.
+        run: dnf install --assumeyes --quiet httpd-tools
+
+      - name: Resolve short image names against Docker Hub
+        # Local Podman fixtures run the cluster's short image names, which Kubernetes
+        # resolves against Docker Hub. The job image has no registries.conf.
+        run: |
+          if [[ ! -e /etc/containers/registries.conf ]]; then
+            install -d /etc/containers
+            printf '%s\n' 'unqualified-search-registries = ["docker.io"]' \
+              >/etc/containers/registries.conf
+          fi
+
       - name: Run validation group
         env:
           CI_GROUP: ${{ matrix.group }}
           # The hosted-CI origin accepted by the canonical result contract.
           TEST_EXECUTION_ORIGIN: github-actions
-        run: mise exec -- just test ci-group "$CI_GROUP" .tmp/ci/plan/ci-plan.json
+        # The pool caps each job at two CPUs, but the container reports every host CPU.
+        # Tools that size parallelism from the CPU count, such as conftest with its
+        # per-test timeout, would oversubscribe the quota and time out.
+        run: taskset --cpu-list 0-1 mise exec -- just test ci-group "$CI_GROUP" .tmp/ci/plan/ci-plan.json
 
       - name: Generate Allure Awesome report
         id: allure_report

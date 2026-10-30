@@ -167,7 +167,7 @@ DOWNLOAD_ACTION="$download_action" UPLOAD_ACTION="$upload_action" mise exec -- y
   )) | length) == 1 and
   (.jobs.groups.steps | map(select(
     .env.CI_GROUP == "${{ matrix.group }}" and
-    .run == "mise exec -- just test ci-group \"$CI_GROUP\" .tmp/ci/plan/ci-plan.json"
+    (.run | test("^(taskset --cpu-list [0-9,-]+ )?mise exec -- just test ci-group \"[$]CI_GROUP\" [.]tmp/ci/plan/ci-plan[.]json$"))
   )) | length) == 1 and
   (.jobs.groups.steps | map(select(
     .uses == strenv(UPLOAD_ACTION) and
