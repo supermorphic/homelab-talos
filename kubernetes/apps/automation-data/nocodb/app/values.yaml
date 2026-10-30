@@ -16,8 +16,8 @@ autoscaling:
 image:
   registry: docker.io
   repository: nocodb/nocodb
-  tag: "2026.08.2"
-  digest: sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9
+  tag: "2026.10.1"
+  digest: sha256:8c2dd06896d95e750d55010e529972c22c1ee73b22dce321b1d2de2e7d5cd6ae
 
 externalDatabase:
   existingSecret: nocodb-credentials

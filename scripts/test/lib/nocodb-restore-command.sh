@@ -126,7 +126,7 @@ nocodb_restore_application_manifests() { # <app> <service> <database-ip> <run-ha
               "securityContext":{"fsGroup":1000,"fsGroupChangePolicy":"OnRootMismatch","seccompProfile":{"type":"RuntimeDefault"}},
               "containers":[{
                 "name":"nocodb",
-                "image":"docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9",
+                "image":"docker.io/nocodb/nocodb@sha256:8c2dd06896d95e750d55010e529972c22c1ee73b22dce321b1d2de2e7d5cd6ae",
                 "imagePullPolicy":"IfNotPresent", "ports":[{"name":"http","containerPort":8080}],
                 "env":[
                   {"name":"DATABASE_URL","valueFrom":{"secretKeyRef":{"name":"nocodb-credentials","key":"DATABASE_URL"}}},
@@ -189,7 +189,7 @@ nocodb_restore_validate_isolation() { # <app-yaml> <policy-yaml> <database-ip> <
     .spec.template.spec.hostAliases[0].hostnames[0] == "automation-data-postgresql" and
     .spec.template.spec.hostAliases[0].hostnames[1] == "automation-data-postgresql.automation-data.svc.cluster.local" and
     (.spec.template.spec.containers | length) == 1 and
-    .spec.template.spec.containers[0].image == "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9"
+    .spec.template.spec.containers[0].image == "docker.io/nocodb/nocodb@sha256:8c2dd06896d95e750d55010e529972c22c1ee73b22dce321b1d2de2e7d5cd6ae"
   ' "$app_yaml" >/dev/null || return 1
 
 	# shellcheck disable=SC2016 # yq evaluates its own variables.

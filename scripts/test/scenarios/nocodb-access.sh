@@ -245,7 +245,7 @@ jq -e '
   $apps[0].status.phase == "Running" and
   ($apps[0].spec.containers | length) == 1 and
   $apps[0].spec.containers[0].name == "nocodb" and
-  $apps[0].spec.containers[0].image == "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9" and
+  $apps[0].spec.containers[0].image == "docker.io/nocodb/nocodb@sha256:8c2dd06896d95e750d55010e529972c22c1ee73b22dce321b1d2de2e7d5cd6ae" and
   (($apps[0].spec.initContainers // []) | length) == 0 and
   (($apps[0].spec.ephemeralContainers // []) | length) == 0 and
   ($apps[0].status.containerStatuses | length) == 1 and
@@ -285,7 +285,7 @@ jq -e '
   $apps[0].spec.strategy.type == "Recreate" and
   ($apps[0].spec.template.spec.containers | length) == 1 and
   $apps[0].spec.template.spec.containers[0].name == "nocodb" and
-  $apps[0].spec.template.spec.containers[0].image == "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9" and
+  $apps[0].spec.template.spec.containers[0].image == "docker.io/nocodb/nocodb@sha256:8c2dd06896d95e750d55010e529972c22c1ee73b22dce321b1d2de2e7d5cd6ae" and
   (($apps[0].spec.template.spec.initContainers // []) | length) == 0 and
   $bootstraps[0].metadata.labels["app.kubernetes.io/name"] == "nocodb-metadata-bootstrap" and
   ($bootstraps[0].spec.template.spec.containers | length) == 1 and

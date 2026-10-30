@@ -179,7 +179,7 @@ yq ea -e '
   .spec.template.spec.hostAliases[0].hostnames[0] == "automation-data-postgresql" and
   .spec.template.spec.hostAliases[0].hostnames[1] == "automation-data-postgresql.automation-data.svc.cluster.local" and
   (.spec.template.spec.containers | length) == 1 and
-  .spec.template.spec.containers[0].image == "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9" and
+  .spec.template.spec.containers[0].image == "docker.io/nocodb/nocodb@sha256:8c2dd06896d95e750d55010e529972c22c1ee73b22dce321b1d2de2e7d5cd6ae" and
   ([.spec.template.spec.volumes[] | select(has("persistentVolumeClaim"))] | length) == 0 and
   ([.spec.template.spec.volumes[] | select(.name == "data" and has("emptyDir"))] | length) == 1 and
   ([.spec.template.spec.containers[0].volumeMounts[] | select(.name == "data" and .mountPath == "/usr/app/data")] | length) == 1 and

@@ -122,7 +122,7 @@ case "$*" in
 	'info') exit "${NOCODB_LOCAL_GUARD_INFO_STATUS:-0}" ;;
 	'image exists postgres:17.11-alpine3.24') exit 0 ;;
 	'image exists docker.n8n.io/n8nio/n8n:2.36.7') exit 0 ;;
-	'image exists docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9') exit 0 ;;
+	'image exists docker.io/nocodb/nocodb@sha256:8c2dd06896d95e750d55010e529972c22c1ee73b22dce321b1d2de2e7d5cd6ae') exit 0 ;;
 	'container exists nocodb-local-'*)
 		[[ "${NOCODB_LOCAL_GUARD_COLLISION:-false}" == true ]] && exit 0
 		exit 1

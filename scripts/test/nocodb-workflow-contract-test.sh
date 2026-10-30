@@ -288,7 +288,7 @@ require(not any(node.get("parameters", {}).get("method") == "DELETE" for node in
         not re.search(r"\bDELETE\s+FROM\b", serialized, re.IGNORECASE), "The source workflow must not call source delete.")
 require(not any("credentials" in node for node in nodes if node["name"] != "Observe Mutation Inventory"), "The source workflow must not embed credential IDs.")
 
-# NocoDB 2026.08.2 (tag commit 28c50ff08c37fe3ced3a7dba021f7cba7b2c51dc)
+# NocoDB 2026.10.1 (tag commit 21b0a0b4e71ffc2895034bbb1431045c661d02f0)
 # defines the database member of IntegrationReq.type as "database". Keep the
 # create and rotation payloads aligned with that pinned public API contract.
 integration_payload_nodes = (

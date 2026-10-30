@@ -190,9 +190,16 @@ uses route discovery. None of these packages gains domain-specific infrastructur
 
 The implemented platform selects the official OCI chart
 `oci://ghcr.io/nocodb/charts/nocodb` version `1.0.0` and NocoDB image version
-`2026.08.2`. Git-managed chart and image references are authoritative for immutable
+`2026.10.1`. Git-managed chart and image references are authoritative for immutable
 pins; this specification does not duplicate their digests. Updates follow repository
 review and validation workflows rather than application self-updates.
+
+The NocoDB metadata-discovery schema revision names the projected metadata columns, not
+the running image. An image update that leaves those columns unchanged keeps the
+revision, so the installed SQL projection and published inventory graphs need no
+change. An update that alters a projected column requires a new revision and the
+[inventory upgrade](026-automation-data-postgresql-platform.md#private-credential-discovery-installation)
+of both installed components.
 
 The application has one replica with `Recreate`, a private `ClusterIP` Service, external
 PostgreSQL, and disposable application scratch. Chart Ingress and NetworkPolicy are

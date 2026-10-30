@@ -27,7 +27,7 @@
     "publishedBinding": "workflow_entity.activeVersionId -> workflow_history.versionId, matched by workflowId; active must be true; workflow_published_version cross-check"
   },
   "nocodb": {
-    "version": "2026.08.2",
+    "version": "2026.10.1",
     "tables": {
       "workspace": {
         "id": "character varying",

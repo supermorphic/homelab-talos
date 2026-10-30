@@ -23,7 +23,7 @@ deployment_count="$(yq ea -r 'select(.kind == "Deployment") | .metadata.name' "$
   fail 'a NocoDB worker Deployment must not render'
 ! rg -q 'NC_REDIS_URL|redis' "$helm_render" || fail 'Redis configuration must not render'
 [[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "nocodb") | .spec.template.spec.containers[] | select(.name == "nocodb") | .image' "$helm_render")" == \
-  'docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9' ]] ||
+  'docker.io/nocodb/nocodb@sha256:8c2dd06896d95e750d55010e529972c22c1ee73b22dce321b1d2de2e7d5cd6ae' ]] ||
   fail 'the NocoDB image digest is not selected'
 [[ "$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "nocodb") |
   [.spec.template.spec.containers[] | select(.name == "nocodb") | .env[]? |
@@ -145,7 +145,7 @@ values='kubernetes/apps/automation-data/nocodb/app/values.yaml'
   fail 'the NocoDB one-pod Recreate values are incorrect'
 [[ "$(yq -r '.updateStrategy | has("rollingUpdate") and .rollingUpdate == null' "$values")" == 'true' ]] ||
   fail 'the NocoDB Recreate values must explicitly clear rollingUpdate'
-[[ "$(yq -r '[.image.registry, .image.repository, .image.tag, .image.digest] | join(",")' "$values")" == 'docker.io,nocodb/nocodb,2026.08.2,sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9' ]] ||
+[[ "$(yq -r '[.image.registry, .image.repository, .image.tag, .image.digest] | join(",")' "$values")" == 'docker.io,nocodb/nocodb,2026.10.1,sha256:8c2dd06896d95e750d55010e529972c22c1ee73b22dce321b1d2de2e7d5cd6ae' ]] ||
   fail 'the NocoDB image value pin is incorrect'
 [[ "$(yq -r '[.externalDatabase.existingSecret, .externalDatabase.existingSecretUrlKey, .auth.existingSecret, .persistence.enabled, (.persistence | has("existingClaim")), .service.type, .service.port, .nocodb.publicUrl] | join(",")' "$values")" == 'nocodb-credentials,DATABASE_URL,nocodb-credentials,false,false,ClusterIP,8080,https://nocodb.lab.supermorphic.com' ]] ||
   fail 'the NocoDB database, auth, persistence, service, or URL values are incorrect'
