@@ -169,11 +169,13 @@ assert child.stdout.readline()==b"READY\\n"
 def stop(number,frame):
  child.wait(timeout=5)
  (root/"backend-cleanup").write_text("cleaned")
- print("CLEANUP",flush=True)
+ os.write(1,b"CLEANUP\\n")
  raise SystemExit(0)
 signal.signal(signal.SIGINT,stop)
 signal.signal(signal.SIGTERM,stop)
-print("READY",flush=True)
+# Unbuffered writes: the signal can arrive while a buffered READY flush still holds
+# the stdout lock, and a buffered write in the handler would then fail as reentrant.
+os.write(1,b"READY\\n")
 while True: time.sleep(0.05)
 """
         for number in (signal.SIGINT, signal.SIGTERM):

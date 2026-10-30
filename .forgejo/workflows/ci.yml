@@ -43,8 +43,14 @@ jobs:
         # Forgejo job token, which GitHub rejects.
         run: |
           mise trust --yes
-          env -u GITHUB_TOKEN -u GH_TOKEN -u GITHUB_API_TOKEN -u MISE_GITHUB_TOKEN \
-            -u FORGEJO_TOKEN mise install --locked
+          # Retry transient download and signature-service failures; the lockfile
+          # still pins every artifact and checksum.
+          for attempt in 1 2 3; do
+            env -u GITHUB_TOKEN -u GH_TOKEN -u GITHUB_API_TOKEN -u MISE_GITHUB_TOKEN \
+              -u FORGEJO_TOKEN mise install --locked && break
+            [[ "$attempt" -lt 3 ]] || exit 1
+            sleep 30
+          done
 
       - name: Plan complete validation
         env:
@@ -92,8 +98,14 @@ jobs:
       - name: Install locked tools
         run: |
           mise trust --yes
-          env -u GITHUB_TOKEN -u GH_TOKEN -u GITHUB_API_TOKEN -u MISE_GITHUB_TOKEN \
-            -u FORGEJO_TOKEN mise install --locked
+          # Retry transient download and signature-service failures; the lockfile
+          # still pins every artifact and checksum.
+          for attempt in 1 2 3; do
+            env -u GITHUB_TOKEN -u GH_TOKEN -u GITHUB_API_TOKEN -u MISE_GITHUB_TOKEN \
+              -u FORGEJO_TOKEN mise install --locked && break
+            [[ "$attempt" -lt 3 ]] || exit 1
+            sleep 30
+          done
 
       - name: Download validation plan
         uses: https://code.forgejo.org/forgejo/download-artifact@246d7188e736d3686f6d19628d253ede9697bd55 # v3-node20
@@ -163,8 +175,14 @@ jobs:
       - name: Install locked tools
         run: |
           mise trust --yes
-          env -u GITHUB_TOKEN -u GH_TOKEN -u GITHUB_API_TOKEN -u MISE_GITHUB_TOKEN \
-            -u FORGEJO_TOKEN mise install --locked
+          # Retry transient download and signature-service failures; the lockfile
+          # still pins every artifact and checksum.
+          for attempt in 1 2 3; do
+            env -u GITHUB_TOKEN -u GH_TOKEN -u GITHUB_API_TOKEN -u MISE_GITHUB_TOKEN \
+              -u FORGEJO_TOKEN mise install --locked && break
+            [[ "$attempt" -lt 3 ]] || exit 1
+            sleep 30
+          done
 
       # Download only exact current-attempt names; the reconciler independently
       # rejects missing, extra, or mismatched group results.

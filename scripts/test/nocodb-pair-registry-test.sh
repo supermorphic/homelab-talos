@@ -18,7 +18,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-scripts="$repo_root/kubernetes/apps/automation-data/postgresql/app/scripts"
+# Podman may run as a sibling engine that sees TMPDIR but not this checkout, so
+# containers mount a staged copy of the scripts.
+cp -R "$repo_root/kubernetes/apps/automation-data/postgresql/app/scripts" "$scratch/scripts"
+scripts="$scratch/scripts"
 cat >"$scratch/postgresql.env" <<EOF
 POSTGRES_USER=postgres
 POSTGRES_DB=automation_data_control

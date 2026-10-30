@@ -19,7 +19,8 @@ trap cleanup EXIT
 # The deployed v3 platform predates the retired state.
 historical_ref=12f672efce8d4da88395cb1d71c879ca443ff000
 scripts_path=kubernetes/apps/automation-data/postgresql/app/scripts
-mkdir -m 700 "$scratch/historical"
+# The container user reads these public scripts through the sibling engine.
+mkdir -m 755 "$scratch/historical"
 for name in init-platform.sh platform-control.sql nocodb-extension.sql nocodb-metadata.sql \
     domain-validation.sql application-login.sql; do
   git show "$historical_ref:$scripts_path/$name" >"$scratch/historical/$name"
@@ -37,11 +38,14 @@ FIXTURE_RUNTIME_PASSWORD=$(openssl rand -hex 24)
 APPLICATION_PASSWORD=$(openssl rand -hex 32)
 EOF
 chmod 600 "$scratch/postgresql.env"
+# Podman may run as a sibling engine that sees TMPDIR but not this checkout, so
+# containers mount a staged copy of the scripts.
+cp -R "$scripts_path" "$scratch/candidate"
 podman run --detach --name "$container" --label "homelab-talos.test-run=$marker" \
   --env-file "$scratch/postgresql.env" \
   --volume "$scratch/historical:/scripts:ro" \
   --volume "$scratch/historical/init-platform.sh:/docker-entrypoint-initdb.d/00-init-platform.sh:ro" \
-  --volume "$(pwd)/$scripts_path:/candidate:ro" \
+  --volume "$scratch/candidate:/candidate:ro" \
   docker.io/library/postgres:17.11-alpine3.24 >"$scratch/container-id"
 query() {
   podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \

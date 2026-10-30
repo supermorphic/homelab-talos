@@ -89,6 +89,33 @@ mise exec -- yq -e '
   ] | length) == 3
 ' "$workflow" >/dev/null
 
+# Installation retries transient failures but still fails the job when every
+# attempt fails. The stub fails a configured number of times, then succeeds.
+install_script="$(mise exec -- yq -r '.jobs.plan.steps[] |
+  select(.name == "Install locked tools") | .run' "$workflow")"
+install_script="${install_script//sleep 30/:}"
+mkdir -p "$fixture_root/install-bin"
+# shellcheck disable=SC2016 # The generated stub expands these values when it runs.
+printf '%s\n' '#!/usr/bin/env bash' \
+	'[[ "$1" == trust ]] && exit 0' \
+	'count=$(( $(cat "$INSTALL_COUNT") + 1 )); echo "$count" >"$INSTALL_COUNT"' \
+	'(( count > INSTALL_FAILURES ))' >"$fixture_root/install-bin/mise"
+chmod +x "$fixture_root/install-bin/mise"
+for failures in 0 2 3; do
+	echo 0 >"$fixture_root/install-count"
+	set +e
+	PATH="$fixture_root/install-bin:$PATH" INSTALL_COUNT="$fixture_root/install-count" \
+		INSTALL_FAILURES="$failures" bash -e -o pipefail -c "$install_script" >/dev/null 2>&1
+	install_status=$?
+	set -e
+	if [[ "$failures" -lt 3 && "$install_status" -ne 0 ]] ||
+		[[ "$failures" -ge 3 && "$install_status" -eq 0 ]] ||
+		[[ "$(<"$fixture_root/install-count")" -ne $((failures < 3 ? failures + 1 : 3)) ]]; then
+		echo "Tool installation mishandled $failures failed attempts." >&2
+		exit 1
+	fi
+done
+
 # The planner command is executed with a synthetic commit so argument order is
 # validated at the command boundary rather than inferred from text matches.
 sha=3333333333333333333333333333333333333333
