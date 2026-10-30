@@ -31,7 +31,7 @@ def literal(value):
     return json.dumps(value)
 
 
-def policy(name, resources, operations, variables, validations):
+def policy(name, resources, operations, variables, validations, conditions=()):
     return [
         {
             "apiVersion": "admissionregistration.k8s.io/v1",
@@ -53,7 +53,8 @@ def policy(name, resources, operations, variables, validations):
                     {
                         "name": "test-runner",
                         "expression": "request.userInfo.username == 'system:serviceaccount:kube-system:homelab-test-runner'",
-                    }
+                    },
+                    *({"name": key, "expression": value} for key, value in conditions),
                 ],
                 "variables": [
                     {"name": key, "expression": value} for key, value in variables.items()
@@ -222,6 +223,15 @@ def documents():
                 + " && variables.item.data[k].size() <= 65536))",
                 "Fixture programs are bounded public input in the isolated namespace.",
             ),
+        ],
+        # The live binding already limits this policy to the news namespace. The
+        # offline harness ignores binding matchResources, so keep it away from the
+        # restore probe ConfigMaps that homelab-test-restore-probe-inputs governs.
+        [
+            (
+                "outside-restore-probe-inputs",
+                "request.resource.resource != 'configmaps' || request.namespace != 'automation-data'",
+            )
         ],
     )
     execute = policy(
