@@ -71,6 +71,24 @@ mise exec -- yq -e '
   ] | length) == 3
 ' "$workflow" >/dev/null
 
+# Manual and nightly runs use separate concurrency groups, so neither cancels the other.
+# shellcheck disable=SC2016 # Literal workflow expression.
+mise exec -- yq -e '
+  (.concurrency.group | contains("${{ forgejo.event_name }}")) and
+  (.concurrency.group | contains("${{ forgejo.ref }}"))
+' "$workflow" >/dev/null
+
+# Each job installs locked tools once, without the job token: GitHub rejects it for
+# anonymous attestation checks, and validation never needs it.
+mise exec -- yq -e '
+  ([.jobs[] | .steps | map(select(.run // "" | contains("mise install"))) |
+    select(length == 1 and (.[0].run | contains("mise install --locked")) and
+      (.[0].run | contains("-u GITHUB_TOKEN")) and (.[0].run | contains("-u GH_TOKEN")) and
+      (.[0].run | contains("-u GITHUB_API_TOKEN")) and
+      (.[0].run | contains("-u MISE_GITHUB_TOKEN")) and (.[0].run | contains("-u FORGEJO_TOKEN")))
+  ] | length) == 3
+' "$workflow" >/dev/null
+
 # The planner command is executed with a synthetic commit so argument order is
 # validated at the command boundary rather than inferred from text matches.
 sha=3333333333333333333333333333333333333333
@@ -184,6 +202,15 @@ for group in "${impact_groups[@]}"; do
   ' "$workflow" >/dev/null
 done
 
+# shellcheck disable=SC2016
+DOWNLOAD_ACTION="$download_action" mise exec -- yq -e '
+  (.jobs.ci.steps | map(select(
+    .uses == strenv(DOWNLOAD_ACTION) and
+    .with.name == "ci-plan-${{ forgejo.run_id }}-${{ forgejo.run_attempt }}" and
+    .with.path == ".tmp/ci/plan/"
+  )) | length) == 1
+' "$workflow" >/dev/null
+
 # Reconciliation combines its outcome with provider plan/matrix conclusions, so
 # stale passing artifacts cannot mask a failed, cancelled, or skipped job.
 # shellcheck disable=SC2016
@@ -224,8 +251,8 @@ for failed_input in plan group reconcile; do
 	fi
 done
 
-if rg -q '\$\{\{[[:space:]]*secrets\.' "$workflow"; then
-	echo 'The CI workflow must not pass secrets to validation jobs.' >&2
+if rg -q '\$\{\{[^}]*\b(secrets\.|(forgejo|github)\.token\b)' "$workflow"; then
+	echo 'The CI workflow must not pass secrets or the job token to validation jobs.' >&2
 	exit 1
 fi
 
