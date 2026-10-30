@@ -100,8 +100,9 @@ Kubernetes renders and schemas, Rego policies, shell and Python tooling, the tes
 catalog, and component-specific source invariants without a usable kubeconfig or SOPS
 age key.
 
-GitHub Actions runs the groups selected by the repository-owned plan and reconciles
-their canonical results in the required `merge-gate`, as defined by specification 027.
+The local merge check and the nightly Forgejo run execute the groups selected by the
+repository-owned plan and reconcile their canonical results, as defined by
+specification 027.
 It retains canonical results on success or failure and has no cluster or
 report-publication path. Live verification, tests,
 probes, resilience, and conformance therefore cannot enter the CI execution list even

@@ -17,7 +17,8 @@ cost—not achieving an arbitrary two-minute runtime.
 
 ## Goals and constraints
 
-- Fresh required evidence covers the complete candidate containing the current main base.
+- Fresh required evidence covers the complete candidate containing the main base it was
+  tested against. The nightly run covers merged changes together.
 - `mise exec -- just ci` remains the full, offline, secret-free union of retained validation.
 - Runtime classification is deterministic and repository-owned.
 - Human, agent, and author input can escalate to full validation, never remove a requirement.
@@ -60,7 +61,7 @@ current-main base + complete rebased candidate
   -> core + selected conditional groups
   -> isolated group execution and canonical results
   -> always-running reconciliation
-  -> static required merge-gate
+  -> passing local merge check, or a failed nightly run
 ```
 
 ### Execution groups
@@ -199,9 +200,31 @@ without reevaluating validators.
 
 ## Merge enforcement and contributor trust
 
-After the authorized transition, branch protection requires one static `merge-gate`,
-not separate conditional branch checks. The workflow always starts; top-level path
-filters must not skip the required workflow entirely.
+The merge check is local. Before merge, the final candidate must pass
+`mise exec -- just test ci-publish` on a clean committed tree rebased on freshly
+fetched `main`; the PR reports the command, tested commit, tested base and result.
+[Repository validation policy](../../AGENTS.md#validation) owns when to run and
+rerun it. Hosted pull-request CI does not run.
+
+The shared Forgejo runner pool serves career-ops, homelab-playbook and this
+repository. Hosted runs on every pull request could not finish before `main` moved
+on, so a hosted required check would block most merges. The local check runs the
+same planner, groups and reconciler as hosted CI, so the local and hosted results
+cover the same validation.
+
+The [Forgejo workflow](../../.forgejo/workflows/ci.yml) runs the full plan on `main`
+nightly and on manual dispatch. It has no `pull_request` trigger;
+restoring `pull_request: {branches: [main]}` brings hosted PR runs back without
+redesign. The nightly run tests merged changes together and catches failures that a
+passing local check on an older base did not see. Agents check its latest result at
+the start of a task, as the validation policy describes.
+
+Start a manual run with
+`mise exec -- fj api -X POST repos/supermorphic/homelab-talos/actions/workflows/ci.yml/dispatches -f ref=<branch>`.
+The typed dispatch in `fj` 0.6.0 creates the run and then exits 1, so confirm the run
+by listing runs; never retry a dispatch on exit status alone. Forgejo counts attempts
+per job and has no REST rerun operation. Rerunning one job changes its artifact names,
+and reconciliation then fails; start a fresh run instead.
 
 Reconciliation checks both required provider job conclusions and canonical artifacts.
 Missing, duplicate, unexpected, failed, cancelled, unexpectedly skipped, or mismatched
@@ -215,19 +238,21 @@ passed independently of aggregate status. Downloaded group artifacts remain sepa
 rather than overwriting one another.
 
 The current single-operator, trusted-contributor model relies on branch/review policy,
-full selection for framework changes, and the static required check. Trusted repository
-administrators can change their own validation policy. A protected base-owned planner or
+full selection for framework changes, the reported local merge check and the nightly
+run. Trusted repository administrators can change their own validation policy. A protected base-owned planner or
 hostile-PR bootstrap architecture is not required. Interfaces remain compatible with a
 later base-owned planner if the contributor model changes.
 
-These assumptions do not relax public-artifact handling or runner isolation. Forgejo
-deployment and runner-isolation initiatives must prove their own PR execution and
-credential boundaries before Forgejo becomes authoritative. No author label, agent
-judgment, or risk declaration can de-escalate the repository's plan.
+These assumptions do not relax public-artifact handling or runner isolation. The
+nightly workflow receives no secrets and no cluster or deployment credentials. It
+checks out commits without persisting the job token and keeps that token away from
+tool installation. No author label, agent judgment, or risk declaration can
+de-escalate the repository's plan.
 
 ## Rollout and rollback
 
-The rollout establishes correctness before skipping validation:
+The Stage 2 rollout ran on GitHub and established correctness before skipping
+validation:
 
 1. **Shadow planning:** full `ci` remains authoritative while the planner reports its
    proposed groups. Review natural PR plans and use local fixtures for absent change classes.
@@ -244,21 +269,20 @@ Provider evidence follows publication; protection proof covers the merged workfl
 Keep the temporary full-plus-split phase bounded to parity work. No merge or protection
 change is implied by general implementation approval.
 
-Rollback selection by forcing full through the same groups and reconciler. If grouped
-execution itself is defective, restore the known full workflow with a coordinated
-protection change; never bypass validation or leave a nonexistent required check.
+Roll back selection by forcing full through the same groups and reconciler with
+`ci-publish-full`. If grouped execution itself is defective, use full `just ci` as the
+merge check until it is fixed; never bypass validation.
 
 ## Measurement and acceptance
 
-### Local publication validation
+### Local merge check
 
-The optional local `ci-publish` command reuses the hosted planner, grouped execution,
-and canonical reconciliation. Its receipt binds the clean candidate and freshly fetched
-base, so an edited branch or newer main needs fresh validation. This shared selection
-path avoids a second classification system. Current contributor procedure is in the
-[repository validation policy](../../AGENTS.md#validation);
-the executable contract is in the [CI impact map](../../tests/impact.yaml) and
-[planner](../../scripts/test/ci_plan.py).
+`ci-publish` reuses the hosted planner, grouped execution, and canonical
+reconciliation. Its receipt binds the clean candidate and freshly fetched base, and it
+fails when `main` advances during validation, so an edited or rebased branch needs a
+fresh run. This shared selection path avoids a second classification system.
+`ci-publish-full` escalates to every group. The executable contract is in the
+[CI impact map](../../tests/impact.yaml) and [planner](../../scripts/test/ci_plan.py).
 
 ### Evidence requirements
 
@@ -291,12 +315,13 @@ categories. No runtime number overrides correctness or justifies unnecessary mac
 
 ## Implementation status
 
-Stage 2 rollout is complete: pull requests plan affected groups, manual dispatch selects
-full validation, and protection requires `merge-gate` with strict current-main checks.
-The optional local publisher uses the same planner and checks candidate/base identity.
-The [rollout closeout](https://github.com/supermorphic/homelab-talos/pull/402) records
+Stage 2 rollout completed on GitHub: pull requests planned affected groups, manual
+dispatch selected full validation, and protection required `merge-gate`. The
+[rollout closeout](https://github.com/supermorphic/homelab-talos/pull/402) records
 full/grouped equivalence, cancellation failing the gate, selective execution, protection
-readback, and local publication acceptance.
+readback, and local publication acceptance. After the move to Forgejo, the local
+`ci-publish` run became the merge check and the Forgejo workflow runs the full plan
+nightly.
 
 Initial provider observations showed comparable core and longest-group durations.
 Selection can save aggregate validation work while providing smaller wall-time savings;
@@ -310,31 +335,26 @@ Command help owns invocation details; retained reports and PRs own execution evi
 
 ## Deferred work
 
-Runner placement and advanced evidence reuse are outside this implementation.
+Dedicated runner placement and advanced evidence reuse are outside this implementation.
 The Stage 3 boundary and deployment/isolation dependency handoff remain in
 [specification 024](024-ci-runtime-and-merge-throughput-optimization.md).
 A later measured decision and new numbered implementation specification must authorize
 that work. This design does not assume an off-cluster runner is faster, prescribe a benchmark protocol,
 or introduce trusted cross-run attestations.
 
-## Repository protection recovery
+## Repository protection and GitHub fallback
 
-[The tracked checker](../../scripts/repository/github_protection.py) owns exact required
-repository settings and rules. Its objective is that `main` advances only through a
-current successful squash pull-request merge, without bypass actors. Repository merge
-settings and the ruleset must agree; an update restriction with no bypass actors would
-also block valid GitHub merges.
+Forgejo protection on `main` blocks direct, force and deleting pushes for every user,
+including administrators, and requires no status check while the merge check is
+local. Read the rule with
+`mise exec -- fj api repos/supermorphic/homelab-talos/branch_protections`; expect one
+`main` rule with `enable_push` false, `apply_to_admins` true and `enable_status_check`
+false. Repository merge settings allow squash merges only. Changing protection
+requires specific operator authorization. Never probe protection with a direct push to
+`main`: a broken rule could let Flux deploy it.
 
-The checker needs Administration access to inspect the bypass list and effective rules.
-A passing ruleset check does not inspect the separate legacy branch-protection API:
-also verify no legacy rule targets `main` in GitHub Settings. Ruleset availability is a
-protection prerequisite; a plan/visibility-related HTTP 403 is failed protection, not
-permission to continue without enforcement. Confirm support before changing visibility.
-
-Use `mise exec -- just repo github-protection-check`, then `github-protection-plan` to
-review drift. Repair only through `github-protection-apply` with specific operator
-administrative authorization and its exact repository-bound confirmation; it reads back
-the effective contract. Duplicate managed rulesets or unrelated effective rules require
-deliberate resolution rather than guessing. That authorization does not permit a merge.
-Verify functional behavior using a real PR and a new candidate commit. Never probe
-protection with a direct push to production: a broken rule could let Flux deploy it.
+GitHub holds a one-way push-mirror recovery copy with no branch protection, because
+protection would reject mirror updates. The [GitHub workflow](../../.github/workflows/ci.yml)
+remains as an unmaintained fallback, and GitHub Actions stays disabled on the recovery
+copy. If GitHub must become the primary forge again, restore protection and a
+maintained workflow there before relying on it.

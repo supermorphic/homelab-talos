@@ -485,7 +485,7 @@ cleanup_integration() {
 trap cleanup_integration EXIT
 
 baseline='508a1b8f4562'
-image='postgres:17.11-alpine3.24'
+image='docker.io/library/postgres:17.11-alpine3.24'
 baseline_scripts="$integration_root/baseline-scripts"
 candidate_scripts="$repo_root/kubernetes/apps/automation-data/postgresql/app/scripts"
 mkdir -p "$baseline_scripts" "$integration_root/backups/old" \

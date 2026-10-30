@@ -17,7 +17,7 @@ test_root="$(mktemp -d "${TMPDIR:-/tmp}/automation-data-permission-restore-test.
 chmod 700 "$test_root"
 run_marker="permission-restore-${test_root##*.}-$$"
 container="automation-data-permission-restore-$$"
-image='postgres:17.11-alpine3.24'
+image='docker.io/library/postgres:17.11-alpine3.24'
 
 podman_command() {
 	mise exec -- podman "$@"

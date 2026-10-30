@@ -25,7 +25,7 @@ mod kube "kubernetes"
 mod test "tests"
 
 # Canonical full validation fallback, independent of the cluster and secret-free.
-# For PR publication use `just test ci-publish`; GitHub selects the same groups. Requires
+# The merge check `just test ci-publish` and nightly CI select the same groups. Requires
 # the mise toolchain and network egress (Helm pulls public charts) but NO kubeconfig,
 # SOPS age key, or cluster access. Cluster-dependent checks (*-verify, *-status,
 # bootstrap, pihole-status) are intentionally excluded. AGENTS.md defines their

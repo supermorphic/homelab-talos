@@ -21,7 +21,7 @@ The governing principle is:
 
 Stage 1 changes the work performed by the full gate, not which changes receive it.
 The separate [Stage 2 specification](027-deterministic-ci-gates.md) owns selective
-execution. Runner placement remains deferred.
+execution and the current hosted runner placement.
 
 ## Governing constraints
 
@@ -334,14 +334,15 @@ work dominates later measurements, optimize that work rather than adding categor
 
 ## Deferred Stage 3 boundary
 
-Runner-placement work remains deferred. It depends on Forgejo deployment and runner
-isolation: [homelab-playbook issue 7](https://github.com/supermorphic/homelab-playbook/issues/7)
-and [issue 292](https://github.com/supermorphic/homelab-talos/issues/292), which supersede
-the historical issue 275 dependency.
+[Issue 292](https://forgejo.infra.supermorphic.com/supermorphic/homelab-talos/issues/292)
+placed hosted CI on the shared Forgejo runner pool that homelab-playbook owns, as a
+nightly run with a local merge check. [Specification 027](027-deterministic-ci-gates.md)
+records that placement. It was an operational decision for the shared pool, not a
+measured runtime optimization.
 
 Any executor must preserve the same repository-owned validation semantics and protection
 boundary. A later measured decision and new numbered implementation specification must
-authorize runner placement and any advanced evidence-reuse design. This specification
+authorize dedicated runner placement and any advanced evidence-reuse design. This specification
 does not prescribe benchmark quotas, orchestration, operator procedures, or a NUC placement.
 
 ## Rejected alternatives

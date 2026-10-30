@@ -51,18 +51,22 @@ version = "1.13.0"
 backend = "aqua:bats-core/bats-core"
 
 [tools."aqua:bats-core/bats-core"."platforms.linux-arm64"]
+checksum = "sha256:a85e12b8828271a152b338ca8109aa23493b57950987c8e6dff97ba492772ff3"
 url = "https://github.com/bats-core/bats-core/archive/refs/tags/v1.13.0.tar.gz"
 url_api = "https://api.github.com/repos/bats-core/bats-core/tarball/v1.13.0"
 
 [tools."aqua:bats-core/bats-core"."platforms.linux-arm64-musl"]
+checksum = "sha256:a85e12b8828271a152b338ca8109aa23493b57950987c8e6dff97ba492772ff3"
 url = "https://github.com/bats-core/bats-core/archive/refs/tags/v1.13.0.tar.gz"
 url_api = "https://api.github.com/repos/bats-core/bats-core/tarball/v1.13.0"
 
 [tools."aqua:bats-core/bats-core"."platforms.linux-x64"]
+checksum = "sha256:a85e12b8828271a152b338ca8109aa23493b57950987c8e6dff97ba492772ff3"
 url = "https://github.com/bats-core/bats-core/archive/refs/tags/v1.13.0.tar.gz"
 url_api = "https://api.github.com/repos/bats-core/bats-core/tarball/v1.13.0"
 
 [tools."aqua:bats-core/bats-core"."platforms.linux-x64-musl"]
+checksum = "sha256:a85e12b8828271a152b338ca8109aa23493b57950987c8e6dff97ba492772ff3"
 url = "https://github.com/bats-core/bats-core/archive/refs/tags/v1.13.0.tar.gz"
 url_api = "https://api.github.com/repos/bats-core/bats-core/tarball/v1.13.0"
 
@@ -72,6 +76,7 @@ url = "https://github.com/bats-core/bats-core/archive/refs/tags/v1.13.0.tar.gz"
 url_api = "https://api.github.com/repos/bats-core/bats-core/tarball/v1.13.0"
 
 [tools."aqua:bats-core/bats-core"."platforms.macos-x64"]
+checksum = "sha256:a85e12b8828271a152b338ca8109aa23493b57950987c8e6dff97ba492772ff3"
 url = "https://github.com/bats-core/bats-core/archive/refs/tags/v1.13.0.tar.gz"
 url_api = "https://api.github.com/repos/bats-core/bats-core/tarball/v1.13.0"
 
@@ -351,51 +356,32 @@ url_api = "https://api.github.com/repos/fluxcd/flux2/releases/assets/475505381"
 [tools.flux2."platforms.windows-x64".provenance.slsa]
 url = "https://github.com/fluxcd/flux2/releases/download/v2.9.2/provenance.intoto.jsonl"
 
-[[tools.github-cli]]
-version = "2.96.0"
-backend = "aqua:cli/cli"
+[[tools."forgejo:rasterstate/fj"]]
+version = "0.6.0"
+backend = "forgejo:rasterstate/fj"
 
-[tools.github-cli."platforms.linux-arm64"]
-checksum = "sha256:06f86ec7103d41993b76cd78072f43595c34aaa56506d971d9860e67140bf909"
-url = "https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_linux_arm64.tar.gz"
-url_api = "https://api.github.com/repos/cli/cli/releases/assets/464728549"
-provenance = "github-attestations"
+[tools."forgejo:rasterstate/fj".options]
+api_url = "https://rasterhub.com/api/v1"
 
-[tools.github-cli."platforms.linux-arm64-musl"]
-checksum = "sha256:06f86ec7103d41993b76cd78072f43595c34aaa56506d971d9860e67140bf909"
-url = "https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_linux_arm64.tar.gz"
-url_api = "https://api.github.com/repos/cli/cli/releases/assets/464728549"
-provenance = "github-attestations"
+[tools."forgejo:rasterstate/fj"."platforms.linux-x64"]
+checksum = "sha256:297a8bbd5941423479615df7c9a02421329f6898f56f5825917634fb2d70cf27"
+url = "https://rasterhub.com/rasterstate/fj/releases/download/v0.6.0/fj-v0.6.0-linux-x86_64.tar.gz"
+url_api = "https://rasterhub.com/attachments/3d7e1484-2306-40b9-a089-b651cc38594a"
 
-[tools.github-cli."platforms.linux-x64"]
-checksum = "sha256:83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60"
-url = "https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/cli/cli/releases/assets/464728543"
-provenance = "github-attestations"
+[tools."forgejo:rasterstate/fj"."platforms.linux-x64-musl"]
+checksum = "sha256:297a8bbd5941423479615df7c9a02421329f6898f56f5825917634fb2d70cf27"
+url = "https://rasterhub.com/rasterstate/fj/releases/download/v0.6.0/fj-v0.6.0-linux-x86_64.tar.gz"
+url_api = "https://rasterhub.com/attachments/3d7e1484-2306-40b9-a089-b651cc38594a"
 
-[tools.github-cli."platforms.linux-x64-musl"]
-checksum = "sha256:83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60"
-url = "https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/cli/cli/releases/assets/464728543"
-provenance = "github-attestations"
+[tools."forgejo:rasterstate/fj"."platforms.macos-arm64"]
+checksum = "sha256:24d936a21a6b2ff773c08a0df148312169c4b5d6f189d5cbef813516ad481d3f"
+url = "https://rasterhub.com/rasterstate/fj/releases/download/v0.6.0/fj-v0.6.0-darwin-aarch64.tar.gz"
+url_api = "https://rasterhub.com/attachments/d1f3f6e4-792c-445d-9d60-2602d238e4bd"
 
-[tools.github-cli."platforms.macos-arm64"]
-checksum = "sha256:f23a0c37d963aacc3bed703ccbd59b41c5ca22101fab7f00eb2b7cad23aba463"
-url = "https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_macOS_arm64.zip"
-url_api = "https://api.github.com/repos/cli/cli/releases/assets/464728562"
-provenance = "github-attestations"
-
-[tools.github-cli."platforms.macos-x64"]
-checksum = "sha256:4bd449df9ad639391bc62b8032546f0fe9edcd8526e06682a4f88abd8c5d163c"
-url = "https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_macOS_amd64.zip"
-url_api = "https://api.github.com/repos/cli/cli/releases/assets/464728560"
-provenance = "github-attestations"
-
-[tools.github-cli."platforms.windows-x64"]
-checksum = "sha256:c2d6acc935cd2f00e2144d7e036d5cd82e6b6bd5594e8c75aa75ef2a4ed6aac3"
-url = "https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_windows_amd64.zip"
-url_api = "https://api.github.com/repos/cli/cli/releases/assets/464728577"
-provenance = "github-attestations"
+[tools."forgejo:rasterstate/fj"."platforms.macos-x64"]
+checksum = "sha256:056807d5630944bc474a5548261fa467605657a7aabe02f6cad704de55c0500c"
+url = "https://rasterhub.com/rasterstate/fj/releases/download/v0.6.0/fj-v0.6.0-darwin-x86_64.tar.gz"
+url_api = "https://rasterhub.com/attachments/3327f915-1577-4263-a3b4-eab31d91879a"
 
 [[tools."github:mikefarah/yq"]]
 version = "4.53.3"
@@ -545,6 +531,45 @@ url = "https://get.helm.sh/helm-v4.2.3-darwin-amd64.tar.gz"
 [tools.helm."platforms.windows-x64"]
 checksum = "sha256:02c6137bb5f050479193afad5a28804e9edc3beeab7e7b53a6e1499c9ba387ef"
 url = "https://get.helm.sh/helm-v4.2.3-windows-amd64.tar.gz"
+
+[[tools.jq]]
+version = "1.7.1"
+backend = "aqua:jqlang/jq"
+
+[tools.jq."platforms.linux-arm64"]
+checksum = "sha256:4dd2d8a0661df0b22f1bb9a1f9830f06b6f3b8f7d91211a1ef5d7c4f06a8b4a5"
+url = "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-arm64"
+url_api = "https://api.github.com/repos/jqlang/jq/releases/assets/140520982"
+
+[tools.jq."platforms.linux-arm64-musl"]
+checksum = "sha256:4dd2d8a0661df0b22f1bb9a1f9830f06b6f3b8f7d91211a1ef5d7c4f06a8b4a5"
+url = "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-arm64"
+url_api = "https://api.github.com/repos/jqlang/jq/releases/assets/140520982"
+
+[tools.jq."platforms.linux-x64"]
+checksum = "sha256:5942c9b0934e510ee61eb3e30273f1b3fe2590df93933a93d7c58b81d19c8ff5"
+url = "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64"
+url_api = "https://api.github.com/repos/jqlang/jq/releases/assets/140520984"
+
+[tools.jq."platforms.linux-x64-musl"]
+checksum = "sha256:5942c9b0934e510ee61eb3e30273f1b3fe2590df93933a93d7c58b81d19c8ff5"
+url = "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64"
+url_api = "https://api.github.com/repos/jqlang/jq/releases/assets/140520984"
+
+[tools.jq."platforms.macos-arm64"]
+checksum = "sha256:0bbe619e663e0de2c550be2fe0d240d076799d6f8a652b70fa04aea8a8362e8a"
+url = "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-macos-arm64"
+url_api = "https://api.github.com/repos/jqlang/jq/releases/assets/140521010"
+
+[tools.jq."platforms.macos-x64"]
+checksum = "sha256:4155822bbf5ea90f5c79cf254665975eb4274d426d0709770c21774de5407443"
+url = "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-macos-amd64"
+url_api = "https://api.github.com/repos/jqlang/jq/releases/assets/140521009"
+
+[tools.jq."platforms.windows-x64"]
+checksum = "sha256:7451fbbf37feffb9bf262bd97c54f0da558c63f0748e64152dd87b0a07b6d6ab"
+url = "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-windows-amd64.exe"
+url_api = "https://api.github.com/repos/jqlang/jq/releases/assets/140521015"
 
 [[tools.just]]
 version = "1.57.0"

@@ -501,7 +501,7 @@ source inspection, and mechanical documentation validation. Local or hosted
 offline checks cannot prove the intended reading experience. Production
 deployment requires admitted base-platform packages, encrypted bootstrap material,
 the complete recovery and workload lifecycle, and successful isolated cluster
-recovery. Its exact candidate and base must pass hosted validation and receive
+recovery. Its exact candidate and base must pass the local merge check and receive
 explicit authorization for the specific merge. Then verify the deployed route,
 monitoring, storage and network boundaries, confirm a paired set is recoverable
 from off-cluster storage, and complete the attended client checks above. The

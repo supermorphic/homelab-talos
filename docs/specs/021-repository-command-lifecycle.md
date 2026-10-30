@@ -155,7 +155,7 @@ initialization, and experimental evidence.
 The following concepts are not peer-level primary terms:
 
 - `check` is a specialized form of live or external verification, normally reporting
-  drift or compliance. `github-protection-check` remains clear.
+  drift or compliance. `node maintenance-check` remains clear.
 - `plan` is an optional stage that previews a later operation. It is not an operation
   family and is not a synonym for dry-run.
 - `preflight` and `dry-run` are safeguards or stages.

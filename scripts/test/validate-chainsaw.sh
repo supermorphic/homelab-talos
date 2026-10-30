@@ -278,7 +278,7 @@ if group_selected ci-framework; then
 fi
 if group_selected core; then
 	ruff_files=(
-		scripts/repository/github_protection.py scripts/test/catalog_compatibility.py
+		scripts/test/catalog_compatibility.py
 		scripts/test/agent-access-kubectl-contract.py
 		scripts/test/catalog_validator.py scripts/test/allure_report.py
 		scripts/test/test_allure_report.py scripts/test/report_publish.py
@@ -293,7 +293,7 @@ if group_selected core; then
 		scripts/test/test_repository_secret_scan.py
 		scripts/test/core/test_public_webhook_routes.py
 		scripts/test/core/test_internal_dns_endpoints.py
-		scripts/test/test_github_protection.py scripts/test/helpers/qbit_manage_policy_api.py
+		scripts/test/helpers/qbit_manage_policy_api.py
 		scripts/test/scenarios/resilience_support.py scripts/test/scenarios/plex_cross_node_reschedule.py
 		scripts/test/scenarios/qbittorrent_pod_recreation.py scripts/test/scenarios/qbittorrent_vpn_disconnect.py
 		scripts/test/scenarios/tailscale_subnet_router_replica_recovery.py scripts/test/scenarios/test_reports_persistence.py

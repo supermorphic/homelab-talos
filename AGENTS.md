@@ -95,8 +95,8 @@ Preserve important decisions and authorization history.
   remote feature branch. If the remote feature branch contains unexpected commits absent
   locally, stop rather than overwriting or automatically reconciling it. Otherwise, if
   `origin/main` advanced, rebase the clean feature branch onto it and rerun relevant
-  focused checks as needed. Require fresh hosted validation for the updated candidate
-  and required base before merge.
+  focused checks as needed. A rebase changes the candidate, so rerun the merge
+  check described under Validation.
 - Never rebase with uncommitted changes. If unrelated changes prevent a required rebase,
   stop and ask the operator. When pushing rebased commits requires rewriting the assigned
   remote feature branch, use only `--force-with-lease`; a failed lease is a hard stop.
@@ -106,11 +106,12 @@ Preserve important decisions and authorization history.
 
 ## Authority boundaries
 
-- Use Git for repository content. Use the configured `teacli` client for issues,
-  pull requests, reviews, comments, labels, and other forge metadata.
+- Use Git for repository content. Use the pinned `fj` client through
+  `mise exec -- fj ...` for issues, pull requests, reviews, comments, labels,
+  and other forge metadata.
 - Do not manipulate Forgejo's database or invoke its server-side CLI directly.
-- Use the Forgejo REST API only when `teacli` does not expose the
-  required operation. Use configured client credentials within the task's
+- Use `mise exec -- fj api` for Forgejo REST operations that `fj` commands do
+  not expose. Use configured client credentials within the task's
   authorization; do not expose secrets or broaden access.
 - For n8n workflow work, use established repository workflows where provided and
   the configured n8n MCP tools for other supported operations within task authority.
@@ -335,25 +336,37 @@ Preserve important decisions and authorization history.
   checks and ensure commit-time checks pass. Ordinary documentation changes use
   applicable mechanical checks. Omitting optional full local CI does not
   require an operator exception.
-- A successful hosted `merge-gate` for the exact candidate and required base is the
-  authoritative validation gate before merge. Missing or failed hosted validation must
-  not fall back to a local passing result. Do not manually reduce required validation
-  groups. Passing validation does not replace explicit operator authorization for that
-  specific merge.
+- Before merge, the final candidate must pass `mise exec -- just test ci-publish`
+  on a clean committed tree rebased on `origin/main`. The command fetches `main`,
+  runs the groups that the repository's CI plan selects, and fails if `main`
+  advances during the run. Report the command, tested commit, tested base and
+  result in the pull request. Hosted pull-request CI is not part of the merge
+  check. Do not manually reduce the selected groups; `ci-publish-full` runs all
+  of them. Keep the worktree clean and untouched while the command runs.
+- Run `ci-publish` when the candidate is ready to merge, not on every push. If the
+  candidate then changes, including by a rebase, rerun it. When `main` advances
+  after a pass, rebase and rerun only if the candidate conflicts with it; the
+  nightly hosted run tests merged changes together. Do not present earlier
+  results as proof of a changed candidate. A passing check does not replace
+  explicit operator authorization for that specific merge.
 - Use full local `mise exec -- just ci` to reproduce failures, check broad or
   shared changes when useful, validate CI/harness changes, or satisfy an explicit
   operator request. Do not run it automatically for every PR creation or update.
-  Hosted `merge-gate` must pass the checks required by the repository’s trusted CI policy
-  for the current candidate and base.
-- Local `mise exec -- just test ci-publish` and `mise exec -- just test ci-publish-full`
-  are optional under the same conditions. Keep the committed feature worktree clean and
-  untouched while either command runs.
 - `just ci` is the canonical full, cluster-independent, secret-free validation command.
   Cluster-dependent verification, status, preflight, and diagnostic workflows remain
   outside it.
-- After edits or rebases, rerun affected local checks and require fresh hosted
-  validation for the updated candidate and applicable base before merge. Do not
-  present earlier results as proof of the changed candidate.
+- At the start of a task, check the latest nightly hosted `CI` run on `main`: the
+  newest run with `trigger_event` `schedule` from
+  `mise exec -- fj api 'repos/supermorphic/homelab-talos/actions/runs?limit=20'`.
+  If it failed, or no scheduled run exists, or the call fails, tell the operator;
+  do not treat a missing result as a pass. Continue unrelated work; fix the failure first
+  when it affects the task's area. Before fixing, look for an open issue about
+  that failure and open one if none exists, so others do not duplicate the fix.
+- In the same check, read the GitHub recovery mirror's state from
+  `mise exec -- fj api repos/supermorphic/homelab-talos/push_mirrors`. Tell the
+  operator if `last_error` is set or `last_update` is more than 36 hours old.
+- Start hosted manual CI only when it adds needed evidence, such as for a CI
+  change; each run occupies the runner pool shared with other repositories.
 - Commit-time hooks provide staged-file feedback. Use `mise exec -- just repo lint` when
   repository-wide hook coverage is useful.
 - Preserve required native or attended acceptance for affected integration and
@@ -366,8 +379,8 @@ Preserve important decisions and authorization history.
 
 Report changed files, validation performed and its result, validation not
 performed and why, remaining non-sensitive risks, and required operator actions.
-Distinguish focused local results, hosted CI status, and native or attended
-acceptance. Report pending validation as pending. An intentionally omitted
+Distinguish focused local results, the `ci-publish` merge check, and native or
+attended acceptance. Report pending validation as pending. An intentionally omitted
 optional full local CI run is not a policy violation.
 
 Report actionable security-sensitive risks to the operator outside repository artifacts

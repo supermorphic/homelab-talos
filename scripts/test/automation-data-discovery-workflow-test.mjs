@@ -58,8 +58,10 @@ assert.ok(!JSON.stringify(partial).includes('SENTINEL_SECRET_ERROR'));
 values['Observe n8n 1.2']={snapshot:{source:'n8n',status:'unavailable',complete:false,errorCode:'unsupported_schema'}};
 assert.equal(collect().sources.find(s=>s.source==='n8n').errorCode,'unsupported_schema');
 // A retired application login is a valid platform state, never an invalid response.
+// Both observation passes share one timestamp, as a stable source would report.
+const applicationUpdatedAt=new Date().toISOString();
 for (const attempt of [1,2]) {
-  const application=(name,state)=>({kind:'application',id:`sample:${name}`,domain:'sample',application:name,schema:`${name}_api`,role:`app_${'0'.repeat(32)}_integration`,state,operation:null,operationId:null,credentialGeneration:1,updatedAt:new Date().toISOString(),errorCode:null});
+  const application=(name,state)=>({kind:'application',id:`sample:${name}`,domain:'sample',application:name,schema:`${name}_api`,role:`app_${'0'.repeat(32)}_integration`,state,operation:null,operationId:null,credentialGeneration:1,updatedAt:applicationUpdatedAt,errorCode:null});
   const mixed={'Validate Request':init};
   for(const source of Object.keys(revisions)) for(const pass of [1,2]) {
     mixed[`Observe ${source} ${attempt}.${pass}`]={snapshot:snapshot(source,source==='platform'?[application('interview','ready'),application('retired_app','retired')]:[])};

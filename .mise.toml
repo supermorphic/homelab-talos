@@ -13,10 +13,10 @@ cilium-cli = "0.19.6"
 "aqua:cilium/hubble" = "1.19.3"
 conftest = "0.68.2"
 flux2 = "2.9.2"
-github-cli = "2.96.0"
 gitleaks = "8.30.1"
 go = "1.26.8"
 helm = "4.2.3"
+jq = "1.7.1"
 just = "1.57.0"
 kubeconform = "0.8.0"
 kubectl = "1.35.6"
@@ -33,3 +33,12 @@ talhelper = "3.1.14"
 talosctl = "1.13.7"
 uv = "0.11.32"
 "github:mikefarah/yq" = { version = "4.53.3", rename_exe = "yq" }
+
+# Forgejo client for agents and operators; CI jobs never need it.
+[tools."forgejo:rasterstate/fj"]
+version = "0.6.0"
+api_url = "https://rasterhub.com/api/v1"
+strip_components = 1
+lazy = true
+lazy_bins = ["fj"]
+install_env = { FORGEJO_TOKEN = false, GITHUB_TOKEN = false }
