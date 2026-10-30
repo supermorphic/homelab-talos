@@ -95,8 +95,8 @@ Preserve important decisions and authorization history.
   remote feature branch. If the remote feature branch contains unexpected commits absent
   locally, stop rather than overwriting or automatically reconciling it. Otherwise, if
   `origin/main` advanced, rebase the clean feature branch onto it and rerun relevant
-  focused checks as needed. A rebased candidate needs a fresh local merge check
-  before merge.
+  focused checks as needed. A rebase changes the candidate, so rerun the merge
+  check described under Validation.
 - Never rebase with uncommitted changes. If unrelated changes prevent a required rebase,
   stop and ask the operator. When pushing rebased commits requires rewriting the assigned
   remote feature branch, use only `--force-with-lease`; a failed lease is a hard stop.
@@ -358,7 +358,8 @@ Preserve important decisions and authorization history.
 - At the start of a task, check the latest nightly hosted `CI` run on `main`: the
   newest run with `trigger_event` `schedule` from
   `mise exec -- fj api 'repos/supermorphic/homelab-talos/actions/runs?limit=20'`.
-  If it failed, tell the operator. Continue unrelated work; fix the failure first
+  If it failed, or no scheduled run exists, or the call fails, tell the operator;
+  do not treat a missing result as a pass. Continue unrelated work; fix the failure first
   when it affects the task's area. Before fixing, look for an open issue about
   that failure and open one if none exists, so others do not duplicate the fix.
 - In the same check, read the GitHub recovery mirror's state from

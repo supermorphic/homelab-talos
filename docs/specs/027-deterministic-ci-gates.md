@@ -17,7 +17,8 @@ cost—not achieving an arbitrary two-minute runtime.
 
 ## Goals and constraints
 
-- Fresh required evidence covers the complete candidate containing the current main base.
+- Fresh required evidence covers the complete candidate containing the main base it was
+  tested against. The nightly run covers merged changes together.
 - `mise exec -- just ci` remains the full, offline, secret-free union of retained validation.
 - Runtime classification is deterministic and repository-owned.
 - Human, agent, and author input can escalate to full validation, never remove a requirement.
@@ -218,6 +219,13 @@ redesign. The nightly run tests merged changes together and catches failures tha
 passing local check on an older base did not see. Agents check its latest result at
 the start of a task, as the validation policy describes.
 
+Start a manual run with
+`mise exec -- fj api -X POST repos/supermorphic/homelab-talos/actions/workflows/ci.yml/dispatches -f ref=<branch>`.
+The typed dispatch in `fj` 0.6.0 creates the run and then exits 1, so confirm the run
+by listing runs; never retry a dispatch on exit status alone. Forgejo counts attempts
+per job and has no REST rerun operation. Rerunning one job changes its artifact names,
+and reconciliation then fails; start a fresh run instead.
+
 Reconciliation checks both required provider job conclusions and canonical artifacts.
 Missing, duplicate, unexpected, failed, cancelled, unexpectedly skipped, or mismatched
 required results fail the gate. Apparently passing artifacts cannot override failed
@@ -243,7 +251,8 @@ de-escalate the repository's plan.
 
 ## Rollout and rollback
 
-The rollout establishes correctness before skipping validation:
+The Stage 2 rollout ran on GitHub and established correctness before skipping
+validation:
 
 1. **Shadow planning:** full `ci` remains authoritative while the planner reports its
    proposed groups. Review natural PR plans and use local fixtures for absent change classes.
@@ -260,9 +269,9 @@ Provider evidence follows publication; protection proof covers the merged workfl
 Keep the temporary full-plus-split phase bounded to parity work. No merge or protection
 change is implied by general implementation approval.
 
-Rollback selection by forcing full through the same groups and reconciler. If grouped
-execution itself is defective, restore the known full workflow with a coordinated
-protection change; never bypass validation or leave a nonexistent required check.
+Roll back selection by forcing full through the same groups and reconciler with
+`ci-publish-full`. If grouped execution itself is defective, use full `just ci` as the
+merge check until it is fixed; never bypass validation.
 
 ## Measurement and acceptance
 
@@ -270,8 +279,8 @@ protection change; never bypass validation or leave a nonexistent required check
 
 `ci-publish` reuses the hosted planner, grouped execution, and canonical
 reconciliation. Its receipt binds the clean candidate and freshly fetched base, and it
-fails when `main` advances during validation, so an edited branch or newer `main`
-needs a fresh run. This shared selection path avoids a second classification system.
+fails when `main` advances during validation, so an edited or rebased branch needs a
+fresh run. This shared selection path avoids a second classification system.
 `ci-publish-full` escalates to every group. The executable contract is in the
 [CI impact map](../../tests/impact.yaml) and [planner](../../scripts/test/ci_plan.py).
 

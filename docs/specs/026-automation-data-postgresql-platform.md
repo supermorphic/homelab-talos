@@ -1060,7 +1060,7 @@ sentinels, noninteractive helper use, and create/rotate/removal sequences. Regis
 `test.nocodb-local-integration` proves actual pinned schemas and published bindings,
 restricted-reader authentication and denials, targeted rotations, pooled-transaction recovery
 after timeout, synthetic attended removal, and restored projections. Candidate evidence does
-not establish deployed access or replace hosted validation and attended live acceptance.
+not establish deployed access or replace the merge check and attended live acceptance.
 
 ## Review triggers
 

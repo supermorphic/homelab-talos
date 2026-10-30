@@ -338,7 +338,7 @@ Cut over in reviewable stages: deploy the reviewed RBAC and OpenBao role
 configuration; apply it through the operator workflow; enroll the workstation;
 prove issuance; then activate the new caller representation and retire Kubernetes
 minting in the old installer. No merge or privileged live step is implied by
-design approval. Each published candidate needs its own hosted merge gate.
+design approval. Each published candidate needs its own local merge check.
 
 ## Validation and completion
 
@@ -408,7 +408,7 @@ The campaign runner's future multi-credential architecture,
 test-specific write profiles, and privileged disruption remain outside scope.
 
 Complete focused tests, staged secret checks, independent final implementation
-review, and exact-candidate hosted validation before requesting merge. Reconcile
+review, and the exact-candidate local merge check before requesting merge. Reconcile
 this specification with observed results. A passing local test or an approved
 design does not establish live acceptance or authorize activation.
 
