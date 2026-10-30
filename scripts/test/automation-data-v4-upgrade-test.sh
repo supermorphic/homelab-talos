@@ -19,7 +19,8 @@ trap cleanup EXIT
 # The deployed v3 platform predates the retired state.
 historical_ref=12f672efce8d4da88395cb1d71c879ca443ff000
 scripts_path=kubernetes/apps/automation-data/postgresql/app/scripts
-mkdir -m 700 "$scratch/historical"
+# The container user reads these public scripts through the sibling engine.
+mkdir -m 755 "$scratch/historical"
 for name in init-platform.sh platform-control.sql nocodb-extension.sql nocodb-metadata.sql \
     domain-validation.sql application-login.sql; do
   git show "$historical_ref:$scripts_path/$name" >"$scratch/historical/$name"
