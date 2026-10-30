@@ -1,0 +1,243 @@
+---
+name: CI
+
+# Cluster-independent, secret-free full validation of main. Pull requests use the
+# local merge check (`just test ci-publish`); there is no pull_request trigger.
+on:
+  workflow_dispatch:
+  # Nightly at 05:00 UTC, clear of the career-ops (07:00 UTC) and homelab-playbook
+  # (Monday 08:17 UTC) runs on the shared runner pool.
+  schedule:
+    - cron: "0 5 * * *"
+
+# Retain the declaration for GitHub-aware tooling; Forgejo owns job-token scope.
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  # Manual and nightly runs on the same ref do not cancel each other.
+  group: ci-${{ forgejo.workflow }}-${{ forgejo.ref }}-${{ forgejo.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: plan
+    outputs:
+      groups: ${{ steps.selection.outputs.groups }}
+    runs-on: homelab-podman-amd64
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact candidate
+        uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ forgejo.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install locked tools
+        # Locked attestation checks query GitHub anonymously; never send it the
+        # Forgejo job token, which GitHub rejects.
+        run: |
+          mise trust --yes
+          env -u GITHUB_TOKEN -u GH_TOKEN -u GITHUB_API_TOKEN -u MISE_GITHUB_TOKEN \
+            -u FORGEJO_TOKEN mise install --locked
+
+      - name: Plan complete validation
+        env:
+          CANDIDATE_SHA: ${{ forgejo.sha }}
+        run: |
+          mkdir -p .tmp/ci/plan
+          mise exec -- just test ci-plan-full \
+            "$CANDIDATE_SHA" \
+            "$CANDIDATE_SHA" \
+            .tmp/ci/plan/ci-plan.json
+
+      - name: Export selected groups
+        id: selection
+        run: |
+          groups="$(mise exec -- uv run --locked python scripts/test/ci_plan.py groups \
+            --plan .tmp/ci/plan/ci-plan.json)"
+          echo "groups=$groups" >> "$GITHUB_OUTPUT"
+
+      - name: Upload validation plan
+        uses: https://code.forgejo.org/forgejo/upload-artifact@97a0fba1372883ab732affbe8f94b823f91727db # v3-node20
+        with:
+          name: ci-plan-${{ forgejo.run_id }}-${{ forgejo.run_attempt }}
+          path: .tmp/ci/plan/
+          retention-days: 14
+          if-no-files-found: error
+
+  groups:
+    name: ci-group (${{ matrix.group }})
+    needs: plan
+    runs-on: homelab-podman-amd64
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        group: ${{ fromJSON(needs.plan.outputs.groups) }}
+    steps:
+      - name: Check out exact candidate
+        uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ forgejo.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install locked tools
+        run: |
+          mise trust --yes
+          env -u GITHUB_TOKEN -u GH_TOKEN -u GITHUB_API_TOKEN -u MISE_GITHUB_TOKEN \
+            -u FORGEJO_TOKEN mise install --locked
+
+      - name: Download validation plan
+        uses: https://code.forgejo.org/forgejo/download-artifact@246d7188e736d3686f6d19628d253ede9697bd55 # v3-node20
+        with:
+          name: ci-plan-${{ forgejo.run_id }}-${{ forgejo.run_attempt }}
+          path: .tmp/ci/plan/
+
+      - name: Run validation group
+        env:
+          CI_GROUP: ${{ matrix.group }}
+          # The hosted-CI origin accepted by the canonical result contract.
+          TEST_EXECUTION_ORIGIN: github-actions
+        run: mise exec -- just test ci-group "$CI_GROUP" .tmp/ci/plan/ci-plan.json
+
+      - name: Generate Allure Awesome report
+        id: allure_report
+        if: always()
+        continue-on-error: true
+        run: mise exec -- just test report-latest
+
+      - name: Print test summary
+        if: always()
+        continue-on-error: true
+        run: mise exec -- just test summary-latest
+
+      - name: Upload canonical group results
+        if: always()
+        uses: https://code.forgejo.org/forgejo/upload-artifact@97a0fba1372883ab732affbe8f94b823f91727db # v3-node20
+        with:
+          name: ci-group-${{ matrix.group }}-${{ forgejo.run_id }}-${{ forgejo.run_attempt }}
+          path: .test-results/
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload static group report
+        if: always() && steps.allure_report.outcome == 'success'
+        uses: https://code.forgejo.org/forgejo/upload-artifact@97a0fba1372883ab732affbe8f94b823f91727db # v3-node20
+        with:
+          name: allure-group-report-${{ matrix.group }}-${{ forgejo.run_id }}-${{ forgejo.run_attempt }}
+          path: .test-reports/
+          retention-days: 14
+          if-no-files-found: error
+
+  ci:
+    name: ci
+    needs:
+      - plan
+      - groups
+    if: always()
+    runs-on: homelab-podman-amd64
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact candidate
+        uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ forgejo.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install locked tools
+        run: |
+          mise trust --yes
+          env -u GITHUB_TOKEN -u GH_TOKEN -u GITHUB_API_TOKEN -u MISE_GITHUB_TOKEN \
+            -u FORGEJO_TOKEN mise install --locked
+
+      # Download only exact current-attempt names; the reconciler independently
+      # rejects missing, extra, or mismatched group results.
+      - name: Download validation plan
+        uses: https://code.forgejo.org/forgejo/download-artifact@246d7188e736d3686f6d19628d253ede9697bd55 # v3-node20
+        with:
+          name: ci-plan-${{ forgejo.run_id }}-${{ forgejo.run_attempt }}
+          path: .tmp/ci/plan/
+
+      - name: Download core results
+        if: always() && contains(fromJSON(needs.plan.outputs.groups || '[]'), 'core')
+        uses: https://code.forgejo.org/forgejo/download-artifact@246d7188e736d3686f6d19628d253ede9697bd55 # v3-node20
+        with:
+          name: ci-group-core-${{ forgejo.run_id }}-${{ forgejo.run_attempt }}
+          path: .tmp/ci/results/core/
+
+      - name: Download observability results
+        if: always() && contains(fromJSON(needs.plan.outputs.groups || '[]'), 'observability')
+        uses: https://code.forgejo.org/forgejo/download-artifact@246d7188e736d3686f6d19628d253ede9697bd55 # v3-node20
+        with:
+          name: ci-group-observability-${{ forgejo.run_id }}-${{ forgejo.run_attempt }}
+          path: .tmp/ci/results/observability/
+
+      - name: Download automation results
+        if: always() && contains(fromJSON(needs.plan.outputs.groups || '[]'), 'automation')
+        uses: https://code.forgejo.org/forgejo/download-artifact@246d7188e736d3686f6d19628d253ede9697bd55 # v3-node20
+        with:
+          name: ci-group-automation-${{ forgejo.run_id }}-${{ forgejo.run_attempt }}
+          path: .tmp/ci/results/automation/
+
+      - name: Download ci-framework results
+        if: always() && contains(fromJSON(needs.plan.outputs.groups || '[]'), 'ci-framework')
+        uses: https://code.forgejo.org/forgejo/download-artifact@246d7188e736d3686f6d19628d253ede9697bd55 # v3-node20
+        with:
+          name: ci-group-ci-framework-${{ forgejo.run_id }}-${{ forgejo.run_attempt }}
+          path: .tmp/ci/results/ci-framework/
+
+      - name: Reconcile canonical group results
+        id: reconcile
+        if: always()
+        continue-on-error: true
+        run: |
+          mkdir -p .tmp/ci/results
+          mise exec -- just test ci-reconcile \
+            .tmp/ci/plan/ci-plan.json \
+            .tmp/ci/results \
+            .tmp/ci/gate
+
+      - name: Print reconciliation summary
+        if: always()
+        continue-on-error: true
+        run: |
+          summary=.tmp/ci/gate/merge-gate.md
+          [[ ! -f "$summary" ]] || cat "$summary"
+
+      - name: Upload reconciliation result
+        if: always()
+        uses: https://code.forgejo.org/forgejo/upload-artifact@97a0fba1372883ab732affbe8f94b823f91727db # v3-node20
+        with:
+          name: ci-gate-${{ forgejo.run_id }}-${{ forgejo.run_attempt }}
+          path: .tmp/ci/gate/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Enforce provider and reconciliation results
+        if: always()
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          GROUP_RESULT: ${{ needs.groups.result }}
+          RECONCILE_OUTCOME: ${{ steps.reconcile.outcome }}
+        run: |
+          [[ "$PLAN_RESULT" == success ]] || {
+            echo "Validation plan job concluded: $PLAN_RESULT" >&2
+            exit 1
+          }
+          [[ "$GROUP_RESULT" == success ]] || {
+            echo "Validation group matrix concluded: $GROUP_RESULT" >&2
+            exit 1
+          }
+          [[ "$RECONCILE_OUTCOME" == success ]] || {
+            echo "Canonical reconciliation concluded: $RECONCILE_OUTCOME" >&2
+            exit 1
+          }
