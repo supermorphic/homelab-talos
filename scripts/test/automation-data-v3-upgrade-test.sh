@@ -41,7 +41,7 @@ podman run --detach --name "$container" --label "homelab-talos.test-run=$marker"
   --volume "$scratch/historical:/scripts:ro" \
   --volume "$scratch/historical/init-platform.sh:/docker-entrypoint-initdb.d/00-init-platform.sh:ro" \
   --volume "$candidate:/candidate:ro" \
-  postgres:17.11-alpine3.24 >"$scratch/container-id"
+  docker.io/library/postgres:17.11-alpine3.24 >"$scratch/container-id"
 query() {
   podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \
     --tuples-only --no-align --username postgres --dbname automation_data_control \

@@ -41,7 +41,7 @@ podman run --detach --name "$container" --label "homelab-talos.test-run=$marker"
 	--env-file "$scratch/postgres.env" \
 	--volume "$PWD/kubernetes/apps/automation-data/postgresql/app/scripts:/scripts:ro" \
 	--volume "$PWD/kubernetes/apps/automation-data/postgresql/app/scripts/init-platform.sh:/docker-entrypoint-initdb.d/init.sh:ro" \
-	postgres:17.11-alpine3.24 >/dev/null
+	docker.io/library/postgres:17.11-alpine3.24 >/dev/null
 for _ in {1..60}; do
 	if podman exec "$container" sh -c 'test "$(cat /proc/1/comm)" = postgres' &&
 		podman exec "$container" psql -X -U postgres -d automation_data_control -Atc 'SELECT 1' >/dev/null 2>&1; then break; fi
@@ -121,7 +121,7 @@ PY
 install_reader() {
 	podman run --rm --name "$client" --label "homelab-talos.test-run=$marker" --network "container:$container" --env-file "$scratch/client.env" \
 		--volume "$client_scripts:/scripts:ro" --volume "$scratch/candidates:/candidates:ro" \
-		--entrypoint /bin/sh postgres:17.11-alpine3.24 /scripts/install-reader.sh
+		--entrypoint /bin/sh docker.io/library/postgres:17.11-alpine3.24 /scripts/install-reader.sh
 }
 install_reader >"$scratch/reader-install.out" 2>&1
 [[ "$(tail -1 "$scratch/reader-install.out")" == discovery_installation=applied ]]
