@@ -197,7 +197,7 @@ spec:
         (!has(variables.pod.restartPolicy) || variables.pod.restartPolicy == 'Always') &&
         variables.pod.securityContext.fsGroup == 1000 && variables.pod.securityContext.fsGroupChangePolicy == 'OnRootMismatch' &&
         variables.container.name == 'nocodb' &&
-        variables.container.image == 'docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9' &&
+        variables.container.image == 'docker.io/nocodb/nocodb@sha256:8c2dd06896d95e750d55010e529972c22c1ee73b22dce321b1d2de2e7d5cd6ae' &&
         variables.container.imagePullPolicy == 'IfNotPresent' &&
         !has(variables.container.command) && !has(variables.container.args) &&
         variables.container.securityContext.runAsUser == 1000 && variables.container.securityContext.runAsGroup == 1000 &&
@@ -440,7 +440,7 @@ spec:
         variables.pod.securityContext.runAsNonRoot && !has(variables.pod.securityContext.runAsUser) &&
         !has(variables.pod.securityContext.runAsGroup) && !has(variables.pod.securityContext.fsGroup) &&
         variables.container.name == 'request' && variables.container.image == (variables.nc ?
-          'docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9' : 'docker.n8n.io/n8nio/n8n:2.36.7') &&
+          'docker.io/nocodb/nocodb@sha256:8c2dd06896d95e750d55010e529972c22c1ee73b22dce321b1d2de2e7d5cd6ae' : 'docker.n8n.io/n8nio/n8n:2.36.7') &&
         variables.container.command == [dyn('node'), dyn('/helpers/' + (variables.nc ? 'nocodb' : 'automation-data') + '-restore-request.mjs')] &&
         !has(variables.container.args) && variables.container.imagePullPolicy == 'IfNotPresent' &&
         variables.container.securityContext.runAsUser == 1000 && variables.container.securityContext.runAsGroup == 1000 &&

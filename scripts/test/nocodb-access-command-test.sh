@@ -77,33 +77,33 @@ elif [[ "$args" == *' get pods '* ]]; then
     empty) jq -n '{items: []}' ;;
     pod)
       jq -n '{items: [
-        {metadata: {name: "nocodb-0", labels: {"app.kubernetes.io/name": "nocodb"}}, spec: {containers: [{name: "nocodb", image: "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9"}]}, status: {phase: "Running", containerStatuses: [{name: "nocodb", ready: true}]}},
-        {metadata: {name: "opaque-helper", labels: {component: "alternate"}}, spec: {containers: [{name: "helper", image: "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9"}]}, status: {phase: "Running", containerStatuses: [{name: "helper", ready: true}]}}
+        {metadata: {name: "nocodb-0", labels: {"app.kubernetes.io/name": "nocodb"}}, spec: {containers: [{name: "nocodb", image: "docker.io/nocodb/nocodb@sha256:8c2dd06896d95e750d55010e529972c22c1ee73b22dce321b1d2de2e7d5cd6ae"}]}, status: {phase: "Running", containerStatuses: [{name: "nocodb", ready: true}]}},
+        {metadata: {name: "opaque-helper", labels: {component: "alternate"}}, spec: {containers: [{name: "helper", image: "docker.io/nocodb/nocodb@sha256:8c2dd06896d95e750d55010e529972c22c1ee73b22dce321b1d2de2e7d5cd6ae"}]}, status: {phase: "Running", containerStatuses: [{name: "helper", ready: true}]}}
       ]}'
       ;;
     *)
-      jq -n '{items: [{metadata: {name: "nocodb-0", labels: {"app.kubernetes.io/name": "nocodb"}}, spec: {containers: [{name: "nocodb", image: "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9"}]}, status: {phase: "Running", containerStatuses: [{name: "nocodb", ready: true}]}}]}'
+      jq -n '{items: [{metadata: {name: "nocodb-0", labels: {"app.kubernetes.io/name": "nocodb"}}, spec: {containers: [{name: "nocodb", image: "docker.io/nocodb/nocodb@sha256:8c2dd06896d95e750d55010e529972c22c1ee73b22dce321b1d2de2e7d5cd6ae"}]}, status: {phase: "Running", containerStatuses: [{name: "nocodb", ready: true}]}}]}'
       ;;
   esac
 elif [[ "$args" == *' get deployments,statefulsets,daemonsets,jobs,cronjobs '* ]]; then
   case "${NOCODB_ACCESS_BAD_RUNTIME_KIND:-none}" in
     daemonset)
       jq -n '{items: [
-        {kind: "Deployment", metadata: {name: "nocodb", labels: {"app.kubernetes.io/name": "nocodb"}}, spec: {replicas: 1, strategy: {type: "Recreate"}, template: {spec: {containers: [{name: "nocodb", image: "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9"}]}}}},
+        {kind: "Deployment", metadata: {name: "nocodb", labels: {"app.kubernetes.io/name": "nocodb"}}, spec: {replicas: 1, strategy: {type: "Recreate"}, template: {spec: {containers: [{name: "nocodb", image: "docker.io/nocodb/nocodb@sha256:8c2dd06896d95e750d55010e529972c22c1ee73b22dce321b1d2de2e7d5cd6ae"}]}}}},
         {kind: "Job", metadata: {name: "nocodb-metadata-bootstrap", labels: {"app.kubernetes.io/name": "nocodb-metadata-bootstrap"}}, spec: {template: {spec: {containers: [{name: "bootstrap", image: "postgres:17.11-alpine3.24"}]}}}},
-        {kind: "DaemonSet", metadata: {name: "opaque-runtime", labels: {component: "alternate"}}, spec: {template: {spec: {containers: [{name: "executor", image: "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9"}]}}}}
+        {kind: "DaemonSet", metadata: {name: "opaque-runtime", labels: {component: "alternate"}}, spec: {template: {spec: {containers: [{name: "executor", image: "docker.io/nocodb/nocodb@sha256:8c2dd06896d95e750d55010e529972c22c1ee73b22dce321b1d2de2e7d5cd6ae"}]}}}}
       ]}'
       ;;
     job)
       jq -n '{items: [
-        {kind: "Deployment", metadata: {name: "nocodb", labels: {"app.kubernetes.io/name": "nocodb"}}, spec: {replicas: 1, strategy: {type: "Recreate"}, template: {spec: {containers: [{name: "nocodb", image: "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9"}]}}}},
+        {kind: "Deployment", metadata: {name: "nocodb", labels: {"app.kubernetes.io/name": "nocodb"}}, spec: {replicas: 1, strategy: {type: "Recreate"}, template: {spec: {containers: [{name: "nocodb", image: "docker.io/nocodb/nocodb@sha256:8c2dd06896d95e750d55010e529972c22c1ee73b22dce321b1d2de2e7d5cd6ae"}]}}}},
         {kind: "Job", metadata: {name: "nocodb-metadata-bootstrap", labels: {"app.kubernetes.io/name": "nocodb-metadata-bootstrap"}}, spec: {template: {spec: {containers: [{name: "bootstrap", image: "postgres:17.11-alpine3.24"}]}}}},
         {kind: "Job", metadata: {name: "opaque-cache", labels: {component: "alternate"}}, spec: {template: {spec: {containers: [{name: "cache", image: "docker.io/library/redis:8"}]}}}}
       ]}'
       ;;
     *)
       jq -n '{items: [
-        {kind: "Deployment", metadata: {name: "nocodb", labels: {"app.kubernetes.io/name": "nocodb"}}, spec: {replicas: 1, strategy: {type: "Recreate"}, template: {spec: {containers: [{name: "nocodb", image: "docker.io/nocodb/nocodb@sha256:4b760f0d25471fb49707d515f161d9d36b49c88e7ecbe25eded774af385be5a9", env: [{name: "NC_SITE_URL", value: "https://nocodb.lab.supermorphic.com"}]}]}}}},
+        {kind: "Deployment", metadata: {name: "nocodb", labels: {"app.kubernetes.io/name": "nocodb"}}, spec: {replicas: 1, strategy: {type: "Recreate"}, template: {spec: {containers: [{name: "nocodb", image: "docker.io/nocodb/nocodb@sha256:8c2dd06896d95e750d55010e529972c22c1ee73b22dce321b1d2de2e7d5cd6ae", env: [{name: "NC_SITE_URL", value: "https://nocodb.lab.supermorphic.com"}]}]}}}},
         {kind: "Job", metadata: {name: "nocodb-metadata-bootstrap", labels: {"app.kubernetes.io/name": "nocodb-metadata-bootstrap"}}, spec: {template: {spec: {containers: [{name: "bootstrap", image: "postgres:17.11-alpine3.24"}]}}}}
       ]}'
       ;;
