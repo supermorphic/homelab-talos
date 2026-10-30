@@ -252,7 +252,7 @@ class ClassificationTests(unittest.TestCase):
         for path in (
             "kubernetes/apps/monitoring/test-reports/app/install-report.sh",
             "kubernetes/apps/monitoring/test-reports/app/bootstrap-storage.sh",
-            "scripts/repository/github_protection.py",
+            ".forgejo/workflows/ci.yml",
         ):
             with self.subTest(path=path):
                 self.assertEqual(

@@ -71,20 +71,6 @@ toolchain-validate:
     printf 'Python %s: %s (mise-managed)\n' "$python_version" "$python_path"
     printf 'uv Python: %s (mise-managed)\n' "$uv_python"
 
-# Read GitHub merge settings, the complete Protect main ruleset, and rules effective
-# on main; fail when they differ from the tracked protection contract.
-github-protection-check:
-    uv run --locked --no-dev python scripts/repository/github_protection.py check
-
-# Show the GitHub protection changes the guarded apply recipe would make.
-github-protection-plan:
-    uv run --locked --no-dev python scripts/repository/github_protection.py plan
-
-# Reconcile squash-only merging and Protect main after explicit authorization.
-# Guard: GITHUB_PROTECTION_CONFIRM='apply:github-protection:supermorphic/homelab-talos'.
-github-protection-apply:
-    uv run --locked --no-dev python scripts/repository/github_protection.py apply
-
 # Verify that the loaded private age identity matches this repository.
 secrets:
     #!/usr/bin/env bash
