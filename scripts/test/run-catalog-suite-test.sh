@@ -99,22 +99,27 @@ EOF
 cat >"$blocked_nodes" <<'EOF'
 {"items":[{"metadata":{"name":"nuc1","annotations":{"homelab.supermorphic.com/node-lifecycle":""}},"spec":{"unschedulable":true},"status":{"conditions":[{"type":"Ready","status":"False"}]}},{"metadata":{"name":"nuc2"},"spec":{"unschedulable":false},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}
 EOF
-NOW="$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)" \
-  yq --null-input --output-format json '{
-    "apiVersion": "coordination.k8s.io/v1",
-    "kind": "Lease",
-    "metadata": {
-      "name": "homelab-test-run-lock",
-      "namespace": "flux-system",
-      "resourceVersion": "1"
-    },
-    "spec": {
-      "holderIdentity": "campaign:fixture",
-      "leaseDurationSeconds": 90,
-      "acquireTime": strenv(NOW),
-      "renewTime": strenv(NOW)
-    }
-  }' >"$lease_state"
+# The campaign holder's Lease lasts 90 seconds from its renewal time. Rewrite it
+# before each use so slow runners do not see an expired holder.
+write_campaign_lease() {
+  NOW="$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)" \
+    yq --null-input --output-format json '{
+      "apiVersion": "coordination.k8s.io/v1",
+      "kind": "Lease",
+      "metadata": {
+        "name": "homelab-test-run-lock",
+        "namespace": "flux-system",
+        "resourceVersion": "1"
+      },
+      "spec": {
+        "holderIdentity": "campaign:fixture",
+        "leaseDurationSeconds": 90,
+        "acquireTime": strenv(NOW),
+        "renewTime": strenv(NOW)
+      }
+    }' >"$lease_state"
+}
+write_campaign_lease
 # shellcheck disable=SC2016  # Expansion must occur in the child command.
 CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity \
 CAMPAIGN_TEST_LEASE_STATE="$lease_state" \
@@ -134,6 +139,7 @@ mapfile -t joined_runs < <(find "$fixture_root/joined" -mindepth 1 -maxdepth 1 -
 [[ "$(yq -r '.spec.holderIdentity' "$lease_state")" == 'campaign:fixture' ]]
 
 blocked_marker="$fixture_root/blocked-command-ran"
+write_campaign_lease
 set +e
 CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity \
 CAMPAIGN_TEST_LEASE_STATE="$lease_state" \
@@ -165,6 +171,7 @@ set -euo pipefail
 EOF
 chmod +x "$fixture_root/admission-then-renewal-failure"
 renewal_failure_marker="$fixture_root/parent-renewal-failed"
+write_campaign_lease
 renewal_child_marker="$fixture_root/renewal-failure-command-ran"
 set +e
 CILIUM_CONNECTIVITY_CONFIRM=test:cilium-connectivity \
@@ -363,6 +370,7 @@ printf 'Typed agent dispatch authority rejection: %s\n' "$agent_typed_exit"
 [[ "$agent_typed_exit" -eq 1 ]]
 
 # An exact opted-in proof adds evidence after a successful original backend.
+write_campaign_lease
 # Original failures retain their exit and do not run the additional proof.
 for variant in passed proof-failed primary-failed; do
   : >"$TEST_FIXTURE_ACCESS_TRACE"
