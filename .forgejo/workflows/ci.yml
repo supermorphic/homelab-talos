@@ -105,16 +105,6 @@ jobs:
         # GitHub runner images provided these; the shared Forgejo job image does not.
         run: dnf install --assumeyes --quiet httpd-tools
 
-      - name: Resolve short image names against Docker Hub
-        # Local Podman fixtures run the cluster's short image names, which Kubernetes
-        # resolves against Docker Hub. The job image has no registries.conf.
-        run: |
-          if [[ ! -e /etc/containers/registries.conf ]]; then
-            install -d /etc/containers
-            printf '%s\n' 'unqualified-search-registries = ["docker.io"]' \
-              >/etc/containers/registries.conf
-          fi
-
       - name: Run validation group
         env:
           CI_GROUP: ${{ matrix.group }}
