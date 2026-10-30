@@ -33,3 +33,12 @@ talhelper = "3.1.14"
 talosctl = "1.13.7"
 uv = "0.11.32"
 "github:mikefarah/yq" = { version = "4.53.3", rename_exe = "yq" }
+
+# Forgejo client for agents and operators; CI jobs never need it.
+[tools."forgejo:rasterstate/fj"]
+version = "0.6.0"
+api_url = "https://rasterhub.com/api/v1"
+strip_components = 1
+lazy = true
+lazy_bins = ["fj"]
+install_env = { FORGEJO_TOKEN = false, GITHUB_TOKEN = false }
