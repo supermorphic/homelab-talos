@@ -37,11 +37,14 @@ FIXTURE_RUNTIME_PASSWORD=$(openssl rand -hex 24)
 APPLICATION_PASSWORD=$(openssl rand -hex 32)
 EOF
 chmod 600 "$scratch/postgresql.env"
+# Podman may run as a sibling engine that sees TMPDIR but not this checkout, so
+# containers mount a staged copy of the scripts.
+cp -R "$scripts_path" "$scratch/candidate"
 podman run --detach --name "$container" --label "homelab-talos.test-run=$marker" \
   --env-file "$scratch/postgresql.env" \
   --volume "$scratch/historical:/scripts:ro" \
   --volume "$scratch/historical/init-platform.sh:/docker-entrypoint-initdb.d/00-init-platform.sh:ro" \
-  --volume "$(pwd)/$scripts_path:/candidate:ro" \
+  --volume "$scratch/candidate:/candidate:ro" \
   docker.io/library/postgres:17.11-alpine3.24 >"$scratch/container-id"
 query() {
   podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 \

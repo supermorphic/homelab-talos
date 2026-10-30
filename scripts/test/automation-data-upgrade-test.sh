@@ -467,7 +467,7 @@ rg -Fq 'scripts/test/automation-data-upgrade-test.sh --offline' \
 command -v podman >/dev/null || fail 'Podman is required for the upgrade integration test'
 podman info >/dev/null 2>&1 || fail 'Podman engine is unavailable'
 
-integration_root="$(mktemp -d "$repo_root/.tmp/automation-data-upgrade-pg.XXXXXX")"
+integration_root="$(mktemp -d "${TMPDIR:-/tmp}/automation-data-upgrade-pg.XXXXXX")"
 chmod 700 "$integration_root"
 containers=()
 podman_run_marker="task1-${integration_root##*.}-$$"
@@ -487,7 +487,10 @@ trap cleanup_integration EXIT
 baseline='508a1b8f4562'
 image='docker.io/library/postgres:17.11-alpine3.24'
 baseline_scripts="$integration_root/baseline-scripts"
-candidate_scripts="$repo_root/kubernetes/apps/automation-data/postgresql/app/scripts"
+# Podman may run as a sibling engine that sees TMPDIR but not this checkout, so
+# containers mount a staged copy of the scripts.
+candidate_scripts="$integration_root/candidate-scripts"
+cp -R "$repo_root/kubernetes/apps/automation-data/postgresql/app/scripts" "$candidate_scripts"
 mkdir -p "$baseline_scripts" "$integration_root/backups/old" \
 	"$integration_root/backups/new" "$integration_root/backups/malformed-old" \
 	"$integration_root/backups/malformed-new" "$integration_root/backups/race" \
