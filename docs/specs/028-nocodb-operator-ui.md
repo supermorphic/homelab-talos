@@ -524,6 +524,12 @@ readiness and identity checks, changes the selected PostgreSQL credential and th
 NocoDB integration, then validates authentication, denials, and generation convergence.
 It preserves source identity and does not rotate the other access kind.
 
+Each integration limits its NocoDB connection pool to two connections. NocoDB runs one
+grid load as several concurrent statements. When a read-model view is expensive to plan,
+an unbounded pool lets one page load exhaust the shared PostgreSQL container.
+Creation and rotation write the limit. Ordinary sync preserves a ready integration, so an
+existing integration receives the limit at its next rotation.
+
 The two-system change is convergent, not transactional. Partial rotation retains its
 operation kind and exact base/integration/source identity. Explicit retry may converge
 both sides only after those identities match current state. Ordinary sync, another
