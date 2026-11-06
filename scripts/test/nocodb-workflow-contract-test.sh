@@ -301,6 +301,10 @@ for name in integration_payload_nodes:
     code = by_name.get(name, {}).get("parameters", {}).get("jsCode", "")
     require("type: 'database'" in code, f"{name} must use the pinned NocoDB database integration type.")
     require("type: 'db'" not in code, f"{name} uses the obsolete NocoDB integration type.")
+    # NocoDB passes the integration config to knex and ignores a source-level
+    # pool. Three connections stop one grid load from planning six heavy
+    # statements at once in the shared database container.
+    require("pool: { min: 0, max: 3 }" in code, f"{name} must bound the NocoDB connection pool.")
 
 connections = workflow.get("connections", {})
 
