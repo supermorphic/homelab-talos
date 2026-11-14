@@ -333,9 +333,16 @@ Preserve native CBZ/CBR files and optionally Mylar's `series.json` metadata for
 reader interoperability. Upstream disables embedded tagging in hardlink mode;
 conversion or metadata rewriting of a seeded inode would invalidate torrent
 hashes. Mylar can fall back to copying on `EXDEV`, so matching mount paths alone
-do not prove hardlinks. The `comics` category remains outside qbit_manage's public
-cleanup groups; generic tracker tagging and existing private-tracker rules still
-apply. Automatic comic cleanup needs separate import-survival acceptance.
+do not prove hardlinks.
+
+qbit_manage's `comics` group applies the music limits to public comic torrents: it
+seeds for at least seven days, then stops at ratio `2.0` or at 30 days, and cleans
+up. Cleanup moves only the download-side names into the seven-day recycle bin; the
+library hardlink remains. Private-tracker tags exclude a torrent from this group.
+Cleanup does not check whether Mylar imported each file. Mylar imports only through
+the folder monitor and skips names it cannot match, so an unimported file is deleted
+when the recycle bin empties. The operator accepted this risk. Before a torrent
+reaches its limit, import or move any wanted file that Mylar left unmatched.
 
 ### Acceptance and recovery
 
