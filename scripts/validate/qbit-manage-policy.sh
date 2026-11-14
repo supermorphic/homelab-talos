@@ -73,10 +73,10 @@ czteam_mapping="$(yq -r '
 }
 
 # Generic private-torrent safety net: settings.private_tag auto-tags EVERY private torrent
-# tracker-private, which both public share-limit groups (music and public) exclude. This
-# host-independent layer keeps any private torrent (even from a tracker not named above) out of
-# the public music and tv/movie policies, so it must stay set while both groups exclude
-# tracker-private.
+# tracker-private, which every public share-limit group (music, comics and public) excludes.
+# This host-independent layer keeps any private torrent (even from a tracker not named above)
+# out of the public music, comic and tv/movie policies, so it must stay set while those groups
+# exclude tracker-private.
 [[ "$(yq -r '.settings.private_tag // "none"' "$config")" == 'tracker-private' ]] || {
   echo 'config.yml settings.private_tag must be tracker-private (generic private-torrent safety net).' >&2
   exit 1
@@ -115,24 +115,33 @@ assert_share_limit_group() {
   }
 }
 
-assert_share_limit_group public 1.5 1d 7d Stop true
-assert_share_limit_group music 2.0 7d 30d Stop true
-music='.share_limits.music'
-[[ "$(yq -r "$music.priority" "$config")" == '50' ]] || {
-  echo 'share_limits.music.priority must be 50.' >&2
-  exit 1
-}
-music_categories="$(yq -o=json -I=0 "$music.categories | sort" "$config")"
-[[ "$music_categories" == '["music"]' ]] || {
-  echo 'share_limits.music.categories must contain exactly music.' >&2
-  exit 1
-}
-for private_tag in tracker-private tracker-czteam; do
-  [[ "$(yq -r "($music.exclude_any_tags // []) | contains([\"$private_tag\"])" "$config")" == 'true' ]] || {
-    echo "share_limits.music.exclude_any_tags must include $private_tag." >&2
+# A single-category public group: its priority, its one category, and both private-tag
+# exclusions.
+assert_single_category_group() {
+  local name="$1" expected_priority="$2" category="$3"
+  local group=".share_limits.$name" private_tag
+
+  [[ "$(yq -r "$group.priority" "$config")" == "$expected_priority" ]] || {
+    echo "share_limits.$name.priority must be $expected_priority." >&2
     exit 1
   }
-done
+  [[ "$(yq -o=json -I=0 "$group.categories | sort" "$config")" == "[\"$category\"]" ]] || {
+    echo "share_limits.$name.categories must contain exactly $category." >&2
+    exit 1
+  }
+  for private_tag in tracker-private tracker-czteam; do
+    [[ "$(yq -r "($group.exclude_any_tags // []) | contains([\"$private_tag\"])" "$config")" == 'true' ]] || {
+      echo "share_limits.$name.exclude_any_tags must include $private_tag." >&2
+      exit 1
+    }
+  done
+}
+
+assert_share_limit_group public 1.5 1d 7d Stop true
+assert_share_limit_group music 2.0 7d 30d Stop true
+assert_single_category_group music 50 music
+assert_share_limit_group comics 2.0 7d 30d Stop true
+assert_single_category_group comics 60 comics
 assert_share_limit_group czteam 2.0 7d -1 Stop false
 
 sl='.share_limits.public'

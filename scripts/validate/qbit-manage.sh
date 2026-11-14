@@ -104,8 +104,8 @@ for cmd in rem_unregistered rem_orphaned tag_nohardlinks tag_tracker_error reche
 done
 scripts/validate/qbit-manage-policy.sh "$config"
 
-# The active policy classifies trackers, applies limits, and cleans up eligible public music and
-# tv/movie torrents. The tracker/category safety gates above are intentionally validated separately.
+# The active policy classifies trackers, applies limits, and cleans up eligible public music,
+# comic and tv/movie torrents. The tracker/category safety gates above are intentionally validated separately.
 [[ "$(yq -r '.commands.dry_run' "$config")" == 'false' ]] || { echo 'commands.dry_run must be false (the reviewed policy is active).' >&2; exit 1; }
 [[ "$(yq -r '.commands.tag_update' "$config")" == 'true' ]] || { echo 'commands.tag_update must be true (classification is active).' >&2; exit 1; }
 [[ "$(yq -r '.commands.share_limits' "$config")" == 'true' ]] || { echo 'commands.share_limits must be true (limits are active).' >&2; exit 1; }

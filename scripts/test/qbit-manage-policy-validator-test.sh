@@ -100,6 +100,36 @@ expect_fail 'music missing tracker-czteam exclusion' \
   'share_limits.music.exclude_any_tags must include tracker-czteam.'
 
 reset_config
+yq -i 'del(.share_limits.comics)' "$test_config"
+expect_fail 'comics group removed' \
+  'config.yml must define share_limits.comics.'
+
+reset_config
+yq -i '.share_limits.comics.max_seeding_time = "-1"' "$test_config"
+expect_fail 'comics would seed indefinitely' \
+  'share_limits.comics.max_seeding_time must be 30d.'
+
+reset_config
+yq -i '.share_limits.comics.cleanup = false' "$test_config"
+expect_fail 'comics cleanup disabled' \
+  'share_limits.comics.cleanup must be true.'
+
+reset_config
+yq -i '.share_limits.comics.priority = 50' "$test_config"
+expect_fail 'comics priority collides with music' \
+  'share_limits.comics.priority must be 60.'
+
+reset_config
+yq -i '.share_limits.comics.categories = ["comics", "music"]' "$test_config"
+expect_fail 'comics group also claims music' \
+  'share_limits.comics.categories must contain exactly comics.'
+
+reset_config
+yq -i '.share_limits.comics.exclude_any_tags = ["tracker-czteam"]' "$test_config"
+expect_fail 'comics missing tracker-private exclusion' \
+  'share_limits.comics.exclude_any_tags must include tracker-private.'
+
+reset_config
 yq -i '.tracker."private.example".tag = "tracker-private"' "$test_config"
 expect_pass 'named private tracker scalar tag'
 
