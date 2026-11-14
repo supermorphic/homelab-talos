@@ -342,8 +342,9 @@ not contain `Unable to create ddl_location`, which means Mylar reverted to the c
 Each DDL file then shares its inode with the library file and uses no extra space.
 Keep `cleanup_strays` at its default `False`. When enabled, Mylar deletes archives
 in the DDL location each time it loads or saves its configuration, whether or not
-they were imported. Remove DDL-side names only after confirming the library file's
-link count.
+they were imported. Remove a DDL-side name only after confirming that the library
+file has the same inode number. Do not rely on the link count: on the `/data` SMB
+mount, an older hardlink reports a link count of 1 once the client cache expires.
 
 Enable renaming and inspect its preview for series/year/issue organization.
 Preserve native CBZ/CBR files and optionally Mylar's `series.json` metadata for
