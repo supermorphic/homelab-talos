@@ -309,6 +309,7 @@ ownership changes to the existing library. Set the following cross-system values
 | Enable Folder Monitoring | Enabled |
 | Folder location to monitor | `/data/downloads/comics` |
 | Folder Monitor Scan Interval | Five minutes |
+| DDL location (`config.ini` `[DDL]` `ddl_location`) | `/data/downloads/comics-ddl` |
 | Prowlarr Server in the Mylar application | `http://prowlarr.media.svc.cluster.local:9696` |
 | Application Server in Prowlarr | `http://mylar3.media.svc.cluster.local:8090` |
 | Prowlarr sync | Full Sync, approved torrent indexers and their comic categories |
@@ -327,6 +328,22 @@ Both directories are on the same filesystem; qBittorrent must move completed fil
 into the comics directory. No incomplete archive may appear there. Stop if this
 precondition fails; a longer scan delay is not a substitute. Monitor only the
 completed-comics directory, never the download root, incomplete tree or library.
+
+Direct downloads (DDL, such as GetComics) bypass qBittorrent. Without a DDL location,
+Mylar writes them to its cache directory on the Longhorn config volume. The
+hardlink into `/data/media/comics` then fails with `EXDEV`, Mylar copies the file,
+and the cache keeps the original until the volume fills. Before enabling DDL, set
+the DDL location to `/data/downloads/comics-ddl`. It is on the library's filesystem,
+so hardlinks succeed. It is outside the monitored directory, so the folder monitor
+never sees a partial download. Mylar v0.11.0 has no UI field for this setting. Stop
+Mylar first, because it rewrites `config.ini` from memory, then set `ddl_location`
+in the `[DDL]` section of `/config/mylar/config.ini`. After startup, the log must
+not contain `Unable to create ddl_location`, which means Mylar reverted to the cache.
+Each DDL file then shares its inode with the library file and uses no extra space.
+Keep `cleanup_strays` at its default `False`. When enabled, Mylar deletes archives
+in the DDL location each time it loads or saves its configuration, whether or not
+they were imported. Remove DDL-side names only after confirming the library file's
+link count.
 
 Enable renaming and inspect its preview for series/year/issue organization.
 Preserve native CBZ/CBR files and optionally Mylar's `series.json` metadata for
@@ -403,6 +420,15 @@ trusted Longhorn backup through the operator-run storage recovery procedure in
 [the platform spec](010-talos-flux-platform.md), and restore comics through NAS
 recovery. An empty config needs the attended setup above again. Keep the source
 image pinned during recovery and verify login/resources before retrying acquisition.
+
+A full config volume does not fail the probes, Gatus or `MediaEndpointDown`: the
+login page still loads while every database write fails. The signal is the critical
+`KubePersistentVolumeFillingUp` alert for `media/mylar3`. Recovery is operator-run
+with Mylar stopped. Remove only cache archives that have a same-size library copy,
+and remove partial downloads. Run `PRAGMA integrity_check` on
+`/config/mylar/mylar.db` and require `ok` before restarting Mylar. After restart,
+require new job-history entries and a successful search. If DDL files caused the
+fill, set the DDL location described above before resuming acquisition.
 
 Upstream implementation references:
 [container startup](https://github.com/linuxserver/docker-mylar3/tree/v0.11.0-ls274/root/etc/s6-overlay/s6-rc.d),
