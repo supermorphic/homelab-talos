@@ -252,11 +252,11 @@ past expiry, records `revoked_by='sweeper'`, and writes a heartbeat row.
 Operator-only kill-switch functions, run with the platform superuser credential
 and independent of OpenBao:
 
-- `suspend_capability(domain, capability)` updates the capability row to
+- `suspend_access_capability(domain, capability)` updates the capability row to
   `suspended` and commits, which serializes with issuance through the row lock.
-- `revoke_capability_logins(domain, capability)` revokes all of its registered
+- `revoke_access_capability_logins(domain, capability)` revokes all of its registered
   logins with `revoked_by='operator'`.
-- `resume_capability(domain, capability)` is a separate, explicitly confirmed step.
+- `resume_access_capability(domain, capability)` is a separate, explicitly confirmed step.
 
 ## Sweeper and monitoring
 
