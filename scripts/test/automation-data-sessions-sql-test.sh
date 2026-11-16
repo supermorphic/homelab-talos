@@ -161,16 +161,18 @@ login_name() { printf 'v-session-read-%s' "$(openssl rand -hex 10)"; }
 scram_verifier() {
   printf 'LOGIN_PASSWORD=%s\n' "$(openssl rand -hex 24)" >"$scratch/$1.env"
   chmod 600 "$scratch/$1.env"
-  (set -a; source "$scratch/$1.env"; python3 -I -c '
-import base64, hashlib, hmac, os
-password = os.environ["LOGIN_PASSWORD"].encode()
+  # shellcheck disable=SC2016 # Python source, not shell expansion.
+  python3 -I -c '
+import base64, hashlib, hmac, os, sys
+with open(sys.argv[1], encoding="ascii") as env:
+    password = env.read().strip().partition("=")[2].encode()
 salt, iterations = os.urandom(16), 4096
 salted = hashlib.pbkdf2_hmac("sha256", password, salt, iterations)
 client = hmac.new(salted, b"Client Key", hashlib.sha256).digest()
 server = hmac.new(salted, b"Server Key", hashlib.sha256).digest()
 encode = lambda value: base64.b64encode(value).decode()
 print(f"SCRAM-SHA-256${iterations}:{encode(salt)}${encode(hashlib.sha256(client).digest())}:{encode(server)}")
-')
+' "$scratch/$1.env"
 }
 expiration_in() {
   query "SELECT to_char(clock_timestamp() + make_interval(secs => $1), 'YYYY-MM-DD HH24:MI:SSOF')"
