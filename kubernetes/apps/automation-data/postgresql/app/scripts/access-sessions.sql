@@ -38,6 +38,7 @@ BEGIN
     EXECUTE format('ALTER ROLE %I SET log_statement = %L', identity, 'none');
     EXECUTE format('ALTER ROLE %I SET log_min_error_statement = %L', identity, 'panic');
     EXECUTE format('GRANT CONNECT ON DATABASE automation_data_control TO %I', identity);
+    EXECUTE format('GRANT USAGE ON SCHEMA platform_operations TO %I', identity);
   END LOOP;
 END;
 $roles$;
@@ -373,6 +374,263 @@ BEGIN
 END;
 $function$;
 
+-- Remove one temporary login. The NOLOGIN change commits separately so no session can
+-- start while existing ones are terminated; every later failure raises, leaving the
+-- role NOLOGIN for OpenBao or the sweeper to retry.
+CREATE OR REPLACE FUNCTION platform_internal.revoke_session_login_as(
+  p_name text, p_revoked_by text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations, pg_temp
+AS $function$
+DECLARE
+  login platform_operations.managed_dynamic_logins%ROWTYPE;
+  observed_oid oid;
+  remaining integer;
+BEGIN
+  IF p_name IS NULL OR p_name !~ '^v-[a-z0-9-]{1,40}-[a-z0-9]{20}$' THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_session_login_name';
+  END IF;
+  SELECT * INTO login FROM platform_operations.managed_dynamic_logins
+    WHERE role_name = p_name FOR UPDATE;
+  SELECT oid INTO observed_oid FROM pg_roles WHERE rolname = p_name;
+  IF login.role_name IS NULL THEN
+    IF observed_oid IS NULL THEN
+      RETURN;
+    END IF;
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'unregistered_session_login';
+  END IF;
+  IF observed_oid IS NULL THEN
+    IF login.revoked_at IS NULL THEN
+      UPDATE platform_operations.managed_dynamic_logins
+      SET revoked_at = clock_timestamp(), revoked_by = p_revoked_by
+      WHERE role_name = p_name;
+    END IF;
+    RETURN;
+  END IF;
+  IF observed_oid <> login.role_oid THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'session_login_identity_mismatch';
+  END IF;
+  PERFORM platform_internal.exec_in_database('automation_data_control',
+    format('ALTER ROLE %I NOLOGIN', p_name));
+  FOR attempt IN 1..3 LOOP
+    PERFORM pg_terminate_backend(activity.pid, 5000)
+      FROM pg_stat_activity AS activity WHERE activity.usesysid = observed_oid;
+    -- Backend status is cached per transaction; refresh it before counting.
+    PERFORM pg_stat_clear_snapshot();
+    SELECT count(*) INTO remaining FROM pg_stat_activity WHERE usesysid = observed_oid;
+    EXIT WHEN remaining = 0;
+  END LOOP;
+  IF remaining > 0 THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'session_login_backends_remaining';
+  END IF;
+  -- A read login can still own large objects created with lo_create().
+  PERFORM platform_internal.exec_in_database(
+    (SELECT database_name FROM platform_operations.managed_domains WHERE domain = login.domain),
+    format('DROP OWNED BY %I', p_name));
+  EXECUTE format('DROP ROLE %I', p_name);
+  IF EXISTS (SELECT FROM pg_authid WHERE oid = observed_oid) THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'session_login_drop_failed';
+  END IF;
+  UPDATE platform_operations.managed_dynamic_logins
+  SET revoked_at = clock_timestamp(), revoked_by = p_revoked_by
+  WHERE role_name = p_name;
+END;
+$function$;
+
+-- Revoke the selected active logins, each in its own subtransaction so one failure
+-- cannot block the rest.
+CREATE OR REPLACE FUNCTION platform_internal.revoke_session_logins(
+  p_overdue_only boolean, p_domain text, p_capability text, p_revoked_by text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations, pg_temp
+AS $function$
+DECLARE
+  selected record;
+  revoked integer := 0;
+  failed integer := 0;
+BEGIN
+  FOR selected IN SELECT role_name FROM platform_operations.managed_dynamic_logins
+      WHERE revoked_at IS NULL
+        AND (NOT p_overdue_only OR expires_at <= clock_timestamp())
+        AND (p_domain IS NULL OR (domain = p_domain AND capability = p_capability))
+      ORDER BY expires_at, role_name LOOP
+    BEGIN
+      PERFORM platform_internal.revoke_session_login_as(selected.role_name, p_revoked_by);
+      revoked := revoked + 1;
+    EXCEPTION WHEN OTHERS THEN
+      failed := failed + 1;
+    END;
+  END LOOP;
+  RETURN jsonb_build_object('revoked', revoked, 'failed', failed);
+END;
+$function$;
+
+-- Called by OpenBao's creation statement inside its single transaction.
+CREATE OR REPLACE FUNCTION platform_operations.issue_session_login(
+  p_name text, p_verifier text, p_expiration text, p_domain text, p_capability text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations, pg_temp
+AS $function$
+DECLARE
+  registered platform_operations.managed_access_capabilities%ROWTYPE;
+  expires timestamptz;
+  heartbeat timestamptz;
+  checks jsonb;
+BEGIN
+  PERFORM platform_internal.assert_access_capability_identity(p_domain, p_capability);
+  IF p_name IS NULL OR p_name !~ '^v-[a-z0-9-]{1,40}-[a-z0-9]{20}$' THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_session_login_name';
+  END IF;
+  IF p_verifier IS NULL OR p_verifier !~
+      '^SCRAM-SHA-256\$[0-9]{4,7}:[A-Za-z0-9+/]+={0,2}\$[A-Za-z0-9+/]+={0,2}:[A-Za-z0-9+/]+={0,2}$' THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_session_login_verifier';
+  END IF;
+  BEGIN
+    expires := p_expiration::timestamptz;
+  EXCEPTION WHEN OTHERS THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_session_login_expiration';
+  END;
+  PERFORM pg_advisory_xact_lock_shared(hashtextextended('automation-data:' || p_domain, 0));
+  -- Suspension updates this row, so it serializes with issuance.
+  SELECT * INTO registered FROM platform_operations.managed_access_capabilities
+    WHERE domain = p_domain AND capability = p_capability FOR SHARE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'unknown_access_capability';
+  END IF;
+  IF registered.state <> 'ready' THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'capability_suspended';
+  END IF;
+  SELECT completed_at INTO heartbeat FROM platform_operations.access_session_sweeps
+    WHERE singleton;
+  IF heartbeat IS NULL OR heartbeat < clock_timestamp() - interval '15 minutes' THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'reconciliation_unhealthy';
+  END IF;
+  -- Allow five seconds for clock differences between OpenBao and PostgreSQL.
+  IF expires <= clock_timestamp() OR expires > clock_timestamp() +
+      make_interval(secs => registered.max_ttl_seconds) + interval '5 seconds' THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid_session_login_expiration';
+  END IF;
+  checks := platform_internal.access_capability_checks(p_domain, p_capability);
+  IF NOT (SELECT bool_and(value = 'true'::jsonb) FROM jsonb_each(checks)) THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'access_capability_invalid';
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = p_name) OR
+     EXISTS (SELECT FROM platform_operations.managed_dynamic_logins WHERE role_name = p_name) THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'session_login_collision';
+  END IF;
+  PERFORM platform_internal.revoke_session_logins(true, NULL, NULL, 'sweeper');
+  EXECUTE format('CREATE ROLE %I LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE '
+    || 'NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 4 VALID UNTIL %L PASSWORD %L',
+    p_name, expires, p_verifier);
+  -- Defaults limit accidents; a login can change its own session settings.
+  EXECUTE format('ALTER ROLE %I SET statement_timeout = %L', p_name, '300s');
+  EXECUTE format('ALTER ROLE %I SET idle_session_timeout = %L', p_name, '120s');
+  EXECUTE format('ALTER ROLE %I SET idle_in_transaction_session_timeout = %L', p_name, '60s');
+  EXECUTE format('ALTER ROLE %I SET default_transaction_read_only = %L', p_name, 'on');
+  EXECUTE format('GRANT %I TO %I WITH ADMIN FALSE, INHERIT TRUE, SET FALSE',
+    registered.role_name, p_name);
+  INSERT INTO platform_operations.managed_dynamic_logins
+    (role_name, role_oid, domain, capability, expires_at)
+  SELECT p_name, oid, p_domain, p_capability, expires FROM pg_roles WHERE rolname = p_name;
+END;
+$function$;
+
+-- Called by OpenBao's revocation statement.
+CREATE OR REPLACE FUNCTION platform_operations.revoke_session_login(p_name text)
+RETURNS void
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations, pg_temp
+AS $function$
+  SELECT platform_internal.revoke_session_login_as(p_name, 'openbao');
+$function$;
+
+-- Independent backstop for revocations OpenBao or the runner did not complete.
+CREATE OR REPLACE FUNCTION platform_operations.sweep_session_logins()
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations, pg_temp
+AS $function$
+DECLARE
+  result jsonb;
+BEGIN
+  result := platform_internal.revoke_session_logins(true, NULL, NULL, 'sweeper');
+  INSERT INTO platform_operations.access_session_sweeps
+    (singleton, completed_at, revoked_count, failed_count)
+  VALUES (true, clock_timestamp(), (result->>'revoked')::integer, (result->>'failed')::integer)
+  ON CONFLICT (singleton) DO UPDATE SET completed_at = EXCLUDED.completed_at,
+    revoked_count = EXCLUDED.revoked_count, failed_count = EXCLUDED.failed_count;
+  RETURN result;
+END;
+$function$;
+
+-- Operator kill switch; superuser only, independent of OpenBao.
+CREATE OR REPLACE FUNCTION platform_internal.set_access_capability_state(
+  p_domain text, p_capability text, p_state text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations, pg_temp
+AS $function$
+BEGIN
+  PERFORM platform_internal.assert_access_capability_identity(p_domain, p_capability);
+  UPDATE platform_operations.managed_access_capabilities
+  SET state = p_state, updated_at = clock_timestamp()
+  WHERE domain = p_domain AND capability = p_capability;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'unknown_access_capability';
+  END IF;
+  RETURN platform_internal.access_capability_result(p_domain, p_capability);
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.suspend_access_capability(
+  p_domain text, p_capability text
+)
+RETURNS jsonb
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations, pg_temp
+AS $function$
+  SELECT platform_internal.set_access_capability_state(p_domain, p_capability, 'suspended');
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.resume_access_capability(
+  p_domain text, p_capability text
+)
+RETURNS jsonb
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations, pg_temp
+AS $function$
+  SELECT platform_internal.set_access_capability_state(p_domain, p_capability, 'ready');
+$function$;
+
+CREATE OR REPLACE FUNCTION platform_operations.revoke_access_capability_logins(
+  p_domain text, p_capability text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations, pg_temp
+AS $function$
+BEGIN
+  PERFORM platform_internal.assert_access_capability_identity(p_domain, p_capability);
+  RETURN platform_internal.revoke_session_logins(false, p_domain, p_capability, 'operator');
+END;
+$function$;
+
 -- Verify ownership, function hardening, exact EXECUTE grants, and the dedicated
 -- issuer and sweeper roles.
 CREATE OR REPLACE FUNCTION platform_internal.assert_access_session_contract()
@@ -394,7 +652,22 @@ BEGIN
     ('platform_internal.assert_access_capability_identity(text,text)'::regprocedure,
       ARRAY[]::text[]),
     ('platform_internal.access_capability_result(text,text)'::regprocedure, ARRAY[]::text[]),
-    ('platform_internal.assert_access_session_contract()'::regprocedure, ARRAY[]::text[])
+    ('platform_internal.assert_access_session_contract()'::regprocedure, ARRAY[]::text[]),
+    ('platform_internal.revoke_session_login_as(text,text)'::regprocedure, ARRAY[]::text[]),
+    ('platform_internal.revoke_session_logins(boolean,text,text,text)'::regprocedure,
+      ARRAY[]::text[]),
+    ('platform_internal.set_access_capability_state(text,text,text)'::regprocedure,
+      ARRAY[]::text[]),
+    ('platform_operations.issue_session_login(text,text,text,text,text)'::regprocedure,
+      ARRAY['automation_data_openbao_issuer']),
+    ('platform_operations.revoke_session_login(text)'::regprocedure,
+      ARRAY['automation_data_openbao_issuer']),
+    ('platform_operations.sweep_session_logins()'::regprocedure,
+      ARRAY['automation_data_session_sweeper']),
+    ('platform_operations.suspend_access_capability(text,text)'::regprocedure, ARRAY[]::text[]),
+    ('platform_operations.resume_access_capability(text,text)'::regprocedure, ARRAY[]::text[]),
+    ('platform_operations.revoke_access_capability_logins(text,text)'::regprocedure,
+      ARRAY[]::text[])
   ) AS contract(routine, grantees) LOOP
     SELECT COALESCE(array_agg(CASE WHEN privilege.grantee = 0 THEN 'PUBLIC'
         ELSE grantee_role.rolname::text END ORDER BY 1), ARRAY[]::text[])
@@ -438,9 +711,22 @@ REVOKE ALL ON FUNCTION platform_internal.access_capability_checks(text, text),
   platform_internal.access_capability_result(text, text),
   platform_internal.assert_access_session_contract(),
   platform_operations.register_access_capability(text, text, text[], integer),
-  platform_operations.validate_access_capability(text, text) FROM PUBLIC;
+  platform_operations.validate_access_capability(text, text),
+  platform_internal.revoke_session_login_as(text, text),
+  platform_internal.revoke_session_logins(boolean, text, text, text),
+  platform_internal.set_access_capability_state(text, text, text),
+  platform_operations.issue_session_login(text, text, text, text, text),
+  platform_operations.revoke_session_login(text),
+  platform_operations.sweep_session_logins(),
+  platform_operations.suspend_access_capability(text, text),
+  platform_operations.resume_access_capability(text, text),
+  platform_operations.revoke_access_capability_logins(text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION platform_operations.register_access_capability(text, text, text[], integer),
   platform_operations.validate_access_capability(text, text) TO automation_data_provisioner;
+GRANT EXECUTE ON FUNCTION platform_operations.issue_session_login(text, text, text, text, text),
+  platform_operations.revoke_session_login(text) TO automation_data_openbao_issuer;
+GRANT EXECUTE ON FUNCTION platform_operations.sweep_session_logins()
+  TO automation_data_session_sweeper;
 
 SELECT platform_internal.assert_access_session_contract();
 COMMIT;

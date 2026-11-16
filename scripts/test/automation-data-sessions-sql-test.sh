@@ -32,6 +32,7 @@ BACKUP_PASSWORD=$(openssl rand -hex 24)
 EXPORTER_PASSWORD=$(openssl rand -hex 24)
 FIXTURE_MIGRATOR_PASSWORD=$(openssl rand -hex 24)
 FIXTURE_RUNTIME_PASSWORD=$(openssl rand -hex 24)
+POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 --auth-local=trust
 EOF
 chmod 600 "$scratch/postgresql.env"
 podman run --detach --name "$container" --label "homelab-talos.test-run=$marker" \
@@ -150,6 +151,185 @@ query "GRANT \"$cap\" TO session_fixture_runtime" >/dev/null
 [[ "$(valid)" == false ]] || fail 'an unregistered member must invalidate the capability'
 query "REVOKE \"$cap\" FROM session_fixture_runtime" >/dev/null
 [[ "$(valid)" == true ]] || fail 'capability must be valid after removing the member'
+query "SELECT platform_internal.assert_access_session_contract()" >/dev/null
+
+# Temporary logins: OpenBao calls issue/revoke as the issuer with a SCRAM verifier.
+issuer=automation_data_openbao_issuer
+sweeper=automation_data_session_sweeper
+login_name() { printf 'v-session-read-%s' "$(openssl rand -hex 10)"; }
+# Create a password in a private env file and print its SCRAM-SHA-256 verifier.
+scram_verifier() {
+  printf 'LOGIN_PASSWORD=%s\n' "$(openssl rand -hex 24)" >"$scratch/$1.env"
+  chmod 600 "$scratch/$1.env"
+  (set -a; source "$scratch/$1.env"; python3 -I -c '
+import base64, hashlib, hmac, os
+password = os.environ["LOGIN_PASSWORD"].encode()
+salt, iterations = os.urandom(16), 4096
+salted = hashlib.pbkdf2_hmac("sha256", password, salt, iterations)
+client = hmac.new(salted, b"Client Key", hashlib.sha256).digest()
+server = hmac.new(salted, b"Server Key", hashlib.sha256).digest()
+encode = lambda value: base64.b64encode(value).decode()
+print(f"SCRAM-SHA-256${iterations}:{encode(salt)}${encode(hashlib.sha256(client).digest())}:{encode(server)}")
+')
+}
+expiration_in() {
+  query "SELECT to_char(clock_timestamp() + make_interval(secs => $1), 'YYYY-MM-DD HH24:MI:SSOF')"
+}
+# issue NAME SECONDS [VERIFIER] [CAPABILITY]; runs as the issuer.
+issue() {
+  local name="$1" verifier="${3:-}" capability="${4:-read}"
+  [[ -n "$verifier" ]] || verifier="$(scram_verifier "$name")"
+  printf "SET ROLE %s;\nSELECT platform_operations.issue_session_login('%s', '%s', '%s', 'session_fixture', '%s');\n" \
+    "$issuer" "$name" "$verifier" "$(expiration_in "$2")" "$capability" >"$scratch/issue.sql"
+  podman cp "$scratch/issue.sql" "$container:/tmp/sessions-issue.sql"
+  podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 --username postgres \
+    --dbname automation_data_control --file /tmp/sessions-issue.sql
+}
+# expect_issue_error CODE NAME SECONDS [VERIFIER] [CAPABILITY]
+expect_issue_error() {
+  local code="$1"
+  shift
+  if issue "$@" >"$scratch/expect.out" 2>"$scratch/expect.err"; then
+    fail "issuance unexpectedly succeeded for $1"
+  fi
+  rg -q -- "$code" "$scratch/expect.err" || {
+    cat "$scratch/expect.err" >&2
+    fail "issuance expected $code"
+  }
+}
+as_role() { query "SET ROLE $1; $2"; }
+# as_login NAME DATABASE SQL authenticates over TCP with the login's password.
+as_login() {
+  podman exec --env-file "$scratch/$1.env" "$container" sh -c \
+    'PGPASSWORD="$LOGIN_PASSWORD" exec psql --no-psqlrc --set=ON_ERROR_STOP=1 \
+      --tuples-only --no-align --host 127.0.0.1 --username "$1" --dbname "$2" --command "$3"' \
+    sh "$1" "$2" "$3"
+}
+expect_login_error() {
+  if as_login "$@" >"$scratch/expect.out" 2>"$scratch/expect.err"; then
+    fail "login $1 unexpectedly ran: $3"
+  fi
+}
+sessions_of() { query "SELECT pg_stat_clear_snapshot(); SELECT count(*) FROM pg_stat_activity WHERE usename = '$1'" | tail -1; }
+wait_for_session() {
+  for _attempt in {1..50}; do
+    [[ "$(sessions_of "$1")" -ge 1 ]] && return 0
+    sleep 0.2
+  done
+  fail "no session appeared for $1"
+}
+revoked_by() { query "SELECT revoked_by FROM platform_operations.managed_dynamic_logins WHERE role_name = '$1'"; }
+role_exists() { query "SELECT count(*) FROM pg_roles WHERE rolname = '$1'"; }
+
+first="$(login_name)"
+expect_issue_error reconciliation_unhealthy "$first" 600
+as_role "$sweeper" 'SELECT platform_operations.sweep_session_logins()' >/dev/null
+
+expect_issue_error invalid_session_login_name 'v-bad' 600
+expect_issue_error invalid_session_login_verifier "$(login_name)" 600 'plaintext-password'
+expect_issue_error invalid_session_login_expiration "$(login_name)" 700
+expect_issue_error invalid_session_login_expiration "$(login_name)" -5
+expect_issue_error unknown_access_capability "$(login_name)" 600 '' missing
+dbquery session_fixture "GRANT INSERT ON read_api.present TO \"$cap\"" >/dev/null
+expect_issue_error access_capability_invalid "$(login_name)" 600
+dbquery session_fixture "REVOKE INSERT ON read_api.present FROM \"$cap\"" >/dev/null
+
+# An issued login inherits only the capability's read grants.
+issue "$first" 600 >/dev/null
+[[ "$(as_login "$first" session_fixture 'SELECT session_user')" == "$first" ]] ||
+  fail 'the issued login must authenticate as itself'
+cp "$scratch/$first.env" "$scratch/wrong.env"
+printf 'LOGIN_PASSWORD=%s\n' "$(openssl rand -hex 24)" >"$scratch/$first.env"
+expect_login_error "$first" session_fixture 'SELECT 1'
+rg -q 'password authentication failed' "$scratch/expect.err" ||
+  fail 'login checks must use password authentication, as in production'
+mv "$scratch/wrong.env" "$scratch/$first.env"
+[[ "$(as_login "$first" session_fixture "SELECT pg_has_role(session_user, '$cap', 'USAGE')::text
+  || pg_has_role(session_user, '$cap', 'SET')::text || current_setting('transaction_read_only')")" == truefalseon ]] ||
+  fail 'the login must inherit without SET and start read-only transactions'
+[[ "$(as_login "$first" session_fixture 'SELECT count(*) FROM read_api.present')" == 1 ]] ||
+  fail 'the login must read granted tables'
+expect_login_error "$first" session_fixture 'SET transaction_read_only = off; INSERT INTO read_api.present VALUES (9)'
+rg -q 'permission denied' "$scratch/expect.err" || fail 'direct writes must be denied by grants'
+expect_login_error "$first" session_fixture "SET ROLE \"$cap\""
+expect_login_error "$first" session_fixture 'CREATE TEMP TABLE scratch_table (id integer)'
+expect_login_error "$first" automation_data_control 'SELECT 1'
+[[ "$(query "SELECT platform_operations.validate_access_capability('session_fixture','read')->>'membersValid'")" == true ]] ||
+  fail 'an issued login must be an accepted member'
+
+# Revocation ends existing sessions, refuses new ones, and drops the role.
+as_login "$first" session_fixture 'SELECT pg_sleep(30)' >/dev/null 2>&1 &
+sleeper=$!
+wait_for_session "$first"
+as_role "$issuer" "SELECT platform_operations.revoke_session_login('$first')" >/dev/null
+if wait "$sleeper"; then fail 'revocation must terminate an open session'; fi
+expect_login_error "$first" session_fixture 'SELECT 1'
+[[ "$(role_exists "$first")" == 0 ]] || fail 'revocation must drop the role'
+[[ "$(revoked_by "$first")" == openbao ]] || fail 'OpenBao revocation must be recorded'
+as_role "$issuer" "SELECT platform_operations.revoke_session_login('$first')" >/dev/null
+
+# Large objects owned by the login do not block revocation.
+owner="$(login_name)"
+issue "$owner" 600 >/dev/null
+as_login "$owner" session_fixture 'SET transaction_read_only = off; SELECT lo_create(0)' >/dev/null
+as_role "$issuer" "SELECT platform_operations.revoke_session_login('$owner')" >/dev/null
+[[ "$(role_exists "$owner")" == 0 ]] || fail 'a large-object owner must still be revoked'
+
+# Revocation never drops an unregistered role and checks the recorded identity.
+stray="$(login_name)"
+query "CREATE ROLE \"$stray\" NOLOGIN" >/dev/null
+expect_error unregistered_session_login automation_data_control \
+  "SET ROLE $issuer; SELECT platform_operations.revoke_session_login('$stray')"
+[[ "$(role_exists "$stray")" == 1 ]] || fail 'an unregistered role must remain'
+as_role "$issuer" "SELECT platform_operations.revoke_session_login('$(login_name)')" >/dev/null
+moved="$(login_name)"
+issue "$moved" 600 >/dev/null
+query "UPDATE platform_operations.managed_dynamic_logins SET role_oid = 1 WHERE role_name = '$moved'" >/dev/null
+expect_error session_login_identity_mismatch automation_data_control \
+  "SET ROLE $issuer; SELECT platform_operations.revoke_session_login('$moved')"
+query "UPDATE platform_operations.managed_dynamic_logins SET role_oid =
+  (SELECT oid FROM pg_roles WHERE rolname = '$moved') WHERE role_name = '$moved'" >/dev/null
+as_role "$issuer" "SELECT platform_operations.revoke_session_login('$moved')" >/dev/null
+
+# Expiry rejects new connections; the sweeper ends sessions that outlive it.
+short="$(login_name)"
+issue "$short" 3 >/dev/null
+as_login "$short" session_fixture 'SELECT pg_sleep(30)' >/dev/null 2>&1 &
+sleeper=$!
+wait_for_session "$short"
+sleep 4
+expect_login_error "$short" session_fixture 'SELECT 1'
+[[ "$(sessions_of "$short")" -ge 1 ]] || fail 'expiry alone must not be assumed to end sessions'
+as_role "$sweeper" 'SELECT platform_operations.sweep_session_logins()' >/dev/null
+if wait "$sleeper"; then fail 'the sweeper must terminate an expired session'; fi
+[[ "$(revoked_by "$short")" == sweeper ]] || fail 'sweeper revocation must be recorded'
+
+# A stale heartbeat stops issuance; suspension blocks issuance and the operator
+# kill switch revokes active logins.
+query "UPDATE platform_operations.access_session_sweeps SET completed_at = clock_timestamp() - interval '16 minutes'" >/dev/null
+expect_issue_error reconciliation_unhealthy "$(login_name)" 600
+as_role "$sweeper" 'SELECT platform_operations.sweep_session_logins()' >/dev/null
+active="$(login_name)"
+issue "$active" 600 >/dev/null
+query "SELECT platform_operations.suspend_access_capability('session_fixture','read')" >/dev/null
+expect_issue_error capability_suspended "$(login_name)" 600
+[[ "$(query "SELECT platform_operations.revoke_access_capability_logins('session_fixture','read')->>'revoked'")" == 1 ]] ||
+  fail 'the kill switch must revoke the active login'
+[[ "$(revoked_by "$active")" == operator ]] || fail 'operator revocation must be recorded'
+query "SELECT platform_operations.resume_access_capability('session_fixture','read')" >/dev/null
+resumed="$(login_name)"
+issue "$resumed" 600 >/dev/null
+as_role "$issuer" "SELECT platform_operations.revoke_session_login('$resumed')" >/dev/null
+
+# Each fixed identity can call only its own functions.
+expect_error 'permission denied' automation_data_control \
+  "SET ROLE $issuer; SELECT platform_operations.sweep_session_logins()"
+expect_error 'permission denied' automation_data_control \
+  "SET ROLE $issuer; SELECT count(*) FROM platform_operations.managed_dynamic_logins"
+expect_error 'permission denied' automation_data_control \
+  "SET ROLE $sweeper; SELECT platform_operations.revoke_session_login('$resumed')"
+expect_error 'permission denied' automation_data_control \
+  "SET ROLE $issuer; SELECT platform_operations.suspend_access_capability('session_fixture','read')"
 query "SELECT platform_internal.assert_access_session_contract()" >/dev/null
 
 echo 'automation-data sessions SQL test passed'
