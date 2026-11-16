@@ -140,6 +140,14 @@ dbquery session_fixture "
 [[ "$(valid)" == false ]] || fail 'a PUBLIC SECURITY DEFINER function must invalidate read'
 dbquery session_fixture "REVOKE EXECUTE ON FUNCTION read_api.write_present() FROM PUBLIC" >/dev/null
 [[ "$(valid)" == true ]] || fail 'revoking the definer function must restore validity'
+dbquery session_fixture "
+  SET ROLE session_fixture_owner;
+  SELECT lo_create(424242);
+  RESET ROLE;
+  GRANT UPDATE ON LARGE OBJECT 424242 TO PUBLIC;" >/dev/null
+[[ "$(valid)" == false ]] || fail 'a large object writable by PUBLIC must invalidate read'
+dbquery session_fixture "SELECT lo_unlink(424242)" >/dev/null
+[[ "$(valid)" == true ]] || fail 'removing the writable large object must restore validity'
 dbquery session_fixture "GRANT TEMP ON DATABASE session_fixture TO \"$cap\"" >/dev/null
 [[ "$(valid)" == false ]] || fail 'TEMP must invalidate the capability'
 dbquery session_fixture "REVOKE TEMP ON DATABASE session_fixture FROM \"$cap\"" >/dev/null
@@ -235,6 +243,33 @@ expect_issue_error unknown_access_capability "$(login_name)" 600 '' missing
 dbquery session_fixture "GRANT INSERT ON read_api.present TO \"$cap\"" >/dev/null
 expect_issue_error access_capability_invalid "$(login_name)" 600
 dbquery session_fixture "REVOKE INSERT ON read_api.present FROM \"$cap\"" >/dev/null
+
+# A CREATE ROLE failure must not echo the verifier to the client or the server log.
+# An uncommitted role with the same name makes issuance wait until its timeout.
+blocked="$(login_name)"
+blocked_verifier="$(scram_verifier "$blocked")"
+query "BEGIN; CREATE ROLE \"$blocked\"; SELECT pg_sleep(4); ROLLBACK" >/dev/null &
+blocker=$!
+sleep 1
+# The issuer's login settings keep statements out of the log; emulate them here.
+printf "SET log_min_error_statement = panic;\nSET statement_timeout = '2s';\nSET ROLE %s;\nSELECT platform_operations.issue_session_login('%s', '%s', '%s', 'session_fixture', 'read');\n" \
+  "$issuer" "$blocked" "$blocked_verifier" "$(expiration_in 600)" >"$scratch/issue.sql"
+podman cp "$scratch/issue.sql" "$container:/tmp/sessions-issue.sql"
+if podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 --username postgres \
+    --dbname automation_data_control --file /tmp/sessions-issue.sql \
+    >"$scratch/expect.out" 2>"$scratch/expect.err"; then
+  fail 'issuance must fail while a conflicting role creation is pending'
+fi
+wait "$blocker"
+podman logs "$container" >"$scratch/server.log" 2>&1
+for output in "$scratch/expect.err" "$scratch/server.log"; do
+  if rg -qF -- "${blocked_verifier#*\$}" "$output"; then
+    fail "a failed role creation exposed the verifier in $(basename "$output")"
+  fi
+done
+rg -q session_login_create_failed "$scratch/expect.err" ||
+  fail 'a failed role creation must report session_login_create_failed'
+[[ "$(role_exists "$blocked")" == 0 ]] || fail 'the blocked login must not exist'
 
 # An issued login inherits only the capability's read grants.
 issue "$first" 600 >/dev/null

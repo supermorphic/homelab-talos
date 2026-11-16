@@ -176,6 +176,12 @@ BEGIN
             OR (namespace.nspname <> ALL (%2$L::text[]) AND
               has_sequence_privilege(%1$L, relation.oid, 'SELECT'))
           ELSE false END
+      ) AND NOT EXISTS (
+        -- The capability role has no memberships, so direct and PUBLIC grants suffice.
+        SELECT FROM pg_largeobject_metadata AS object
+        CROSS JOIN LATERAL aclexplode(object.lomacl) AS acl
+        WHERE acl.privilege_type = 'UPDATE'
+          AND acl.grantee IN (0, (SELECT oid FROM pg_roles WHERE rolname = %1$L))
       )
     $sql$, registered.role_name, registered.schemas));
   -- A definer routine is the only way a login without write grants can write.
@@ -529,9 +535,14 @@ BEGIN
     RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'session_login_collision';
   END IF;
   PERFORM platform_internal.revoke_session_logins(true, NULL, NULL, 'sweeper');
-  EXECUTE format('CREATE ROLE %I LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE '
-    || 'NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 4 VALID UNTIL %L PASSWORD %L',
-    p_name, expires, p_verifier);
+  -- An error here would carry the statement, and so the verifier, in its context.
+  BEGIN
+    EXECUTE format('CREATE ROLE %I LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE '
+      || 'NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 4 VALID UNTIL %L PASSWORD %L',
+      p_name, expires, p_verifier);
+  EXCEPTION WHEN OTHERS OR query_canceled THEN
+    RAISE EXCEPTION USING ERRCODE = SQLSTATE, MESSAGE = 'session_login_create_failed';
+  END;
   -- Defaults limit accidents; a login can change its own session settings.
   EXECUTE format('ALTER ROLE %I SET statement_timeout = %L', p_name, '300s');
   EXECUTE format('ALTER ROLE %I SET idle_session_timeout = %L', p_name, '120s');
