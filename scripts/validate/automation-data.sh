@@ -25,6 +25,8 @@ scripts/test/automation-data-secrets-test.sh
 scripts/test/automation-data-control-contract-test.sh
 scripts/test/automation-data-scoped-permissions-test.sh
 scripts/test/automation-data-login-lifecycle-test.sh
+scripts/test/automation-data-sessions-sql-test.sh
+scripts/test/automation-data-sessions-install-test.sh
 scripts/test/automation-data-workflow-contract-test.sh
 node scripts/test/automation-data-login-workflow-test.mjs
 uv run --locked python scripts/test/automation-data-login-command-test.py

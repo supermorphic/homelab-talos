@@ -332,4 +332,22 @@ expect_error 'permission denied' automation_data_control \
   "SET ROLE $issuer; SELECT platform_operations.suspend_access_capability('session_fixture','read')"
 query "SELECT platform_internal.assert_access_session_contract()" >/dev/null
 
+# Reinstallation leaves roles, settings, memberships, and registries unchanged.
+state_digest() {
+  query "SELECT md5(concat_ws('|',
+    (SELECT string_agg(concat_ws(':', rolname, rolcanlogin, rolinherit, rolconnlimit,
+      rolvaliduntil, rolpassword IS NULL), ',' ORDER BY rolname) FROM pg_authid),
+    (SELECT string_agg(concat_ws(':', setrole, setdatabase, setconfig::text), ','
+      ORDER BY setrole, setdatabase) FROM pg_db_role_setting),
+    (SELECT string_agg(concat_ws(':', roleid, member, inherit_option, set_option), ','
+      ORDER BY roleid, member) FROM pg_auth_members),
+    (SELECT string_agg(to_jsonb(c)::text, ',' ORDER BY domain, capability)
+      FROM platform_operations.managed_access_capabilities AS c),
+    (SELECT string_agg(to_jsonb(l)::text, ',' ORDER BY role_name)
+      FROM platform_operations.managed_dynamic_logins AS l)))"
+}
+before="$(state_digest)"
+install_sessions
+[[ "$(state_digest)" == "$before" ]] || fail 'reinstallation must not change installed state'
+
 echo 'automation-data sessions SQL test passed'

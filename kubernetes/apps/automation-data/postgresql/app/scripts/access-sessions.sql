@@ -5,6 +5,7 @@
 BEGIN;
 SET LOCAL lock_timeout = '10s';
 SET LOCAL statement_timeout = '60s';
+SET LOCAL client_min_messages = warning;
 SET LOCAL ROLE postgres;
 
 DO $guard$
