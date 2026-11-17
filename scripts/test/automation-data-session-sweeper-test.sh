@@ -13,46 +13,84 @@ fail() {
 }
 app=kubernetes/apps/automation-data/postgresql/app
 
-kustomize build "$app" >"$temp_dir/rendered.yaml"
-yq ea -o=json 'select(.kind == "CronJob" and .metadata.name == "automation-data-session-sweeper")' \
-  "$temp_dir/rendered.yaml" >"$temp_dir/cronjob.json"
-jq -e '
-  .spec.schedule == "*/5 * * * *" and .spec.timeZone == "Etc/UTC" and
-  .spec.concurrencyPolicy == "Forbid" and .spec.suspend == true and
-  .spec.successfulJobsHistoryLimit == 1 and .spec.failedJobsHistoryLimit == 1 and
-  .spec.jobTemplate.spec.activeDeadlineSeconds == 240 and
-  .spec.jobTemplate.spec.backoffLimit == 0 and
-  .spec.jobTemplate.spec.ttlSecondsAfterFinished == 900 and
-  (.spec.jobTemplate.spec.template.spec |
-    .automountServiceAccountToken == false and .restartPolicy == "Never" and
-    .securityContext.runAsNonRoot == true and .securityContext.runAsUser == 70 and
-    (.containers | length) == 1 and
-    (.containers[0] |
-      .image == "postgres:17.11-alpine3.24" and
-      .command == ["/bin/sh"] and .args == ["/scripts/sweep-session-logins.sh"] and
-      ([.env[].name] == ["PGCONNECT_TIMEOUT","PGDATABASE","PGHOST","PGPORT","PGUSER","PGPASSWORD"]) and
-      ([.env[] | select(.name == "PGUSER") | .value] == ["automation_data_session_sweeper"]) and
-      ([.env[] | select(.valueFrom) | .valueFrom.secretKeyRef] ==
-        [{"name":"automation-data-session-sweeper","key":"password"}]) and
-      .securityContext.readOnlyRootFilesystem == true and
-      .securityContext.allowPrivilegeEscalation == false))
-' "$temp_dir/cronjob.json" >/dev/null || fail 'the sweeper CronJob is not the reviewed staged shape'
-sweeper_configmap="$(jq -r '.spec.jobTemplate.spec.template.spec.volumes[] |
-  select(.name == "scripts") | .configMap.name' "$temp_dir/cronjob.json")"
-[[ "$sweeper_configmap" =~ ^automation-data-session-sweeper-[a-z0-9]+$ ]] ||
-  fail 'the sweeper must mount its generated script ConfigMap'
-NAME="$sweeper_configmap" yq ea -o=json 'select(.kind == "ConfigMap" and .metadata.name == strenv(NAME))' \
-  "$temp_dir/rendered.yaml" >"$temp_dir/configmap.json"
-[[ "$(jq -r '.data | keys | join(",")' "$temp_dir/configmap.json")" == sweep-session-logins.sh ]] ||
-  fail 'the sweeper ConfigMap must contain only the sweep script'
-jq -j '.data."sweep-session-logins.sh"' "$temp_dir/configmap.json" |
-  cmp -s - "$app/scripts/sweep-session-logins.sh" || fail 'the packaged sweep script differs from source'
-yq ea -e 'select(.kind == "StatefulSet") |
-    [.spec.template.spec.volumes[].configMap.name // ""] |
-    map(select(test("session-sweeper"))) | length == 0' "$temp_dir/rendered.yaml" >/dev/null ||
-  fail 'the StatefulSet must not mount the sweeper ConfigMap'
-! rg -q 'session-sweeper-credentials' "$app/kustomization.yaml" ||
-  fail 'the staged sweeper must not reference its Secret before the operator writes it'
+# check_workload PACKAGE OUTPUT_DIR checks the rendered sweeper workload.
+check_workload() {
+  local package="$1" out="$2"
+  kustomize build "$package" >"$out/rendered.yaml"
+  yq ea -o=json 'select(.kind == "CronJob" and .metadata.name == "automation-data-session-sweeper")' \
+    "$out/rendered.yaml" >"$out/cronjob.json"
+  jq -e '
+    .spec.schedule == "*/5 * * * *" and .spec.timeZone == "Etc/UTC" and
+    .spec.concurrencyPolicy == "Forbid" and
+    .spec.successfulJobsHistoryLimit == 1 and .spec.failedJobsHistoryLimit == 1 and
+    .spec.jobTemplate.spec.activeDeadlineSeconds == 240 and
+    .spec.jobTemplate.spec.backoffLimit == 0 and
+    .spec.jobTemplate.spec.ttlSecondsAfterFinished == 900 and
+    (.spec.jobTemplate.spec.template.spec |
+      .automountServiceAccountToken == false and .restartPolicy == "Never" and
+      .securityContext.runAsNonRoot == true and .securityContext.runAsUser == 70 and
+      (.containers | length) == 1 and
+      (.containers[0] |
+        .image == "postgres:17.11-alpine3.24" and
+        .command == ["/bin/sh"] and .args == ["/scripts/sweep-session-logins.sh"] and
+        ([.env[].name] == ["PGCONNECT_TIMEOUT","PGDATABASE","PGHOST","PGPORT","PGUSER","PGPASSWORD"]) and
+        ([.env[] | select(.name == "PGUSER") | .value] == ["automation_data_session_sweeper"]) and
+        ([.env[] | select(.valueFrom) | .valueFrom.secretKeyRef] ==
+          [{"name":"automation-data-session-sweeper","key":"password"}]) and
+        .securityContext.readOnlyRootFilesystem == true and
+        .securityContext.allowPrivilegeEscalation == false))
+  ' "$out/cronjob.json" >/dev/null || fail 'the sweeper CronJob is not the reviewed shape'
+  sweeper_configmap="$(jq -r '.spec.jobTemplate.spec.template.spec.volumes[] |
+    select(.name == "scripts") | .configMap.name' "$out/cronjob.json")"
+  [[ "$sweeper_configmap" =~ ^automation-data-session-sweeper-[a-z0-9]+$ ]] ||
+    fail 'the sweeper must mount its generated script ConfigMap'
+  NAME="$sweeper_configmap" yq ea -o=json 'select(.kind == "ConfigMap" and .metadata.name == strenv(NAME))' \
+    "$out/rendered.yaml" >"$out/configmap.json"
+  [[ "$(jq -r '.data | keys | join(",")' "$out/configmap.json")" == sweep-session-logins.sh ]] ||
+    fail 'the sweeper ConfigMap must contain only the sweep script'
+  jq -j '.data."sweep-session-logins.sh"' "$out/configmap.json" |
+    cmp -s - "$package/scripts/sweep-session-logins.sh" || fail 'the packaged sweep script differs from source'
+  yq ea -e 'select(.kind == "StatefulSet") |
+      [.spec.template.spec.volumes[].configMap.name // ""] |
+      map(select(test("session-sweeper"))) | length == 0' "$out/rendered.yaml" >/dev/null ||
+    fail 'the StatefulSet must not mount the sweeper ConfigMap'
+  # Staged: suspended without its Secret. After the operator's writer runs, the
+  # encrypted Secret is selected and the CronJob may be resumed.
+  if rg -Fxq '  - ./session-sweeper-credentials.sops.yaml' "$package/kustomization.yaml"; then
+    yq -o=json "$package/session-sweeper-credentials.sops.yaml" | jq -e '
+      .kind == "Secret" and .metadata.name == "automation-data-session-sweeper" and
+      .metadata.namespace == "automation-data" and (.stringData | keys) == ["password"] and
+      has("sops")' >/dev/null ||
+      fail 'a selected sweeper Secret must be the SOPS-encrypted password Secret'
+  else
+    ! rg -q 'session-sweeper-credentials' "$package/kustomization.yaml" ||
+      fail 'the sweeper Secret must be selected exactly as the writer selects it'
+    jq -e '.spec.suspend == true' "$out/cronjob.json" >/dev/null ||
+      fail 'the sweeper must stay suspended until its Secret is selected'
+  fi
+
+}
+check_workload "$app" "$temp_dir"
+# The enabled state that the operator's writer and a later resume produce.
+mkdir -p "$temp_dir/enabled"
+cp -R "$app" "$temp_dir/enabled/app"
+awk '$0 == "  - ./session-sweeper.yaml" { print "  - ./session-sweeper-credentials.sops.yaml" } { print }' \
+  "$app/kustomization.yaml" >"$temp_dir/enabled/app/kustomization.yaml"
+cat >"$temp_dir/enabled/app/session-sweeper-credentials.sops.yaml" <<'YAML'
+apiVersion: v1
+kind: Secret
+metadata:
+  name: automation-data-session-sweeper
+  namespace: automation-data
+type: Opaque
+stringData:
+  password: ENC[synthetic]
+sops:
+  age:
+    - recipient: age1synthetic
+YAML
+yq -i '.spec.suspend = false' "$temp_dir/enabled/app/session-sweeper.yaml"
+check_workload "$temp_dir/enabled/app" "$temp_dir/enabled"
 
 sweeper_egress="$(yq ea -r '
   select(.kind == "CiliumNetworkPolicy" and .metadata.name == "automation-data-session-sweeper") |

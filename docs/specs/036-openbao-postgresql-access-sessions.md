@@ -299,7 +299,8 @@ The sweeper is delivered suspended, without its Secret. To enable it, the operat
 3. Sets `suspend: false` on the CronJob through Git.
 
 To rotate the password, repeat steps 1 and 2. Sweeps fail between the Flux apply and
-step 2, so run step 2 promptly; the heartbeat alert allows about 20 minutes.
+step 2, so run step 2 promptly: issuance stops 15 minutes after the last successful
+sweep, and the heartbeat alert fires about 5 minutes later.
 
 With the sweeper healthy, a connection left by failed revocation lasts at most the
 capability lifetime plus one sweep interval: about 15 minutes for `read`. When the

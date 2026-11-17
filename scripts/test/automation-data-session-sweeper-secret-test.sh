@@ -53,7 +53,9 @@ chmod 700 "$stub_bin/just" "$stub_bin/sops"
 
 mkdir -p "$tree/$app" "$tree/scripts/operations"
 cp "$repo_root/$script" "$tree/$script"
-cp "$repo_root/$app/kustomization.yaml" "$tree/$app/kustomization.yaml"
+# Start from the staged package even after the real one selects the Secret.
+grep -vxF '  - ./session-sweeper-credentials.sops.yaml' "$repo_root/$app/kustomization.yaml" \
+  >"$tree/$app/kustomization.yaml"
 cat >"$tree/.sops.yaml" <<EOF
 creation_rules:
   - path_regex: ^talos/talsecret\\.sops\\.ya?ml$

@@ -1899,7 +1899,7 @@ tests:
           - exp_labels: {severity: warning, namespace: automation-data, cronjob: automation-data-session-sweeper}
             exp_annotations:
               summary: automation-data session sweeper is not completing clean sweeps
-              description: The automation-data/automation-data-session-sweeper CronJob has not completed a clean sweep for more than 15 minutes, so new temporary session logins are refused.
+              description: The automation-data/automation-data-session-sweeper CronJob has not completed a clean sweep for more than 15 minutes. Issuance stops when no sweep completes within 15 minutes; a sweep with failed revocations still counts for issuance.
       - eval_time: 27m
         alertname: AutomationDataPostgresqlSessionSweeperStale
         exp_alerts: []
@@ -1921,7 +1921,7 @@ tests:
           - exp_labels: {severity: warning, namespace: automation-data, cronjob: automation-data-session-sweeper}
             exp_annotations:
               summary: automation-data session sweeper is not completing clean sweeps
-              description: The automation-data/automation-data-session-sweeper CronJob has not completed a clean sweep for more than 15 minutes, so new temporary session logins are refused.
+              description: The automation-data/automation-data-session-sweeper CronJob has not completed a clean sweep for more than 15 minutes. Issuance stops when no sweep completes within 15 minutes; a sweep with failed revocations still counts for issuance.
 
   - name: automation-data suspended session sweeper stays silent
     interval: 1m

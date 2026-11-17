@@ -9,17 +9,15 @@ SET LOCAL statement_timeout = '60s';
 SET LOCAL log_statement = 'none';
 SET LOCAL log_min_error_statement = 'panic';
 
+-- Refuse unless the access-session objects and both fixed roles match the installed
+-- contract, including the marker, attributes, and absence of memberships.
 DO $guard$
 BEGIN
-  IF current_database() <> 'automation_data_control' OR NOT EXISTS (
-      SELECT FROM pg_catalog.pg_roles AS role
-      WHERE role.rolname = 'automation_data_session_sweeper'
-        AND NOT role.rolsuper AND NOT role.rolinherit AND NOT role.rolcreaterole
-        AND pg_catalog.shobj_description(role.oid, 'pg_authid') = 'homelab:access-sessions:v1'
-        AND NOT EXISTS (SELECT FROM pg_catalog.pg_auth_members AS member
-          WHERE member.member = role.oid OR member.roleid = role.oid)) THEN
+  IF current_database() <> 'automation_data_control' OR
+      to_regprocedure('platform_internal.assert_access_session_contract()') IS NULL THEN
     RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'session_sweeper_not_installed';
   END IF;
+  PERFORM platform_internal.assert_access_session_contract();
 END;
 $guard$;
 

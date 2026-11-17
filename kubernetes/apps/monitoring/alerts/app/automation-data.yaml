@@ -209,8 +209,9 @@ spec:
             summary: automation-data session sweeper is not completing clean sweeps
             description: >-
               The {{ $labels.namespace }}/{{ $labels.cronjob }} CronJob has not completed
-              a clean sweep for more than 15 minutes, so new temporary session logins are
-              refused.
+              a clean sweep for more than 15 minutes. Issuance stops when no sweep
+              completes within 15 minutes; a sweep with failed revocations still counts
+              for issuance.
         - alert: AutomationDataPostgresqlSessionLoginsOverdue
           expr: >-
             automation_data_postgresql_session_logins_overdue{

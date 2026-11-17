@@ -195,8 +195,9 @@ issue() {
   podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 --username postgres \
     --dbname automation_data_control --file /tmp/sessions-issue.sql || {
     local result="$?"
-    echo "issuance of $name failed; sweeper heartbeat age: $(query "SELECT clock_timestamp() -
-      completed_at FROM platform_operations.access_session_sweeps")" >&2
+    echo "issuance of $name failed at $(date -u +%T); sweeper heartbeat: $(query "SELECT
+      concat_ws(' ', completed_at, clock_timestamp(), revoked_count, failed_count)
+      FROM platform_operations.access_session_sweeps")" >&2
     return "$result"
   }
 }
@@ -401,6 +402,10 @@ query "COMMENT ON ROLE $sweeper IS 'unrelated'" >/dev/null
 [[ "$(query "SELECT rolcanlogin FROM pg_roles WHERE rolname = '$sweeper'")" == f ]] ||
   fail 'a refused enable must leave the sweeper unable to log in'
 query "COMMENT ON ROLE $sweeper IS 'homelab:access-sessions:v1'" >/dev/null
+query "ALTER ROLE $sweeper BYPASSRLS" >/dev/null
+[[ "$(enable_sweeper "$scratch/$sweeper.env" 2>&1)" == 'session_sweeper_login=failed' ]] ||
+  fail 'enabling must refuse a sweeper role that drifted from the installed contract'
+query "ALTER ROLE $sweeper NOBYPASSRLS" >/dev/null
 [[ "$(enable_sweeper "$scratch/$sweeper.env" 2>&1)" == 'session_sweeper_login=enabled' ]] ||
   fail 'enabling must report only the fixed success marker'
 [[ "$(as_login "$sweeper" automation_data_control 'SELECT session_user')" == "$sweeper" ]] ||
