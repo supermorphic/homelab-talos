@@ -434,6 +434,8 @@ PLATFORM_ROLES = {
     "automation_data_provisioner",
     "automation_data_backup",
     "automation_data_exporter",
+    "automation_data_openbao_issuer",
+    "automation_data_session_sweeper",
     "automation_data_inventory",
     "automation_data_inventory_projection",
     "nocodb_inventory",

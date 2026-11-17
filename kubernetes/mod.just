@@ -196,6 +196,11 @@ automation-data-login-enroll-migrator domain: require-bash
 automation-data-control-migrate: require-bash
     @scripts/operations/automation-data-control-migrate.sh {{quote(kubeconfig)}}
 
+# Operator-run: install or reapply the specification 036 access-session SQL after a
+# fresh backup. Guard: AUTOMATION_DATA_SESSIONS_INSTALL_CONFIRM.
+automation-data-sessions-install: require-bash
+    @scripts/operations/automation-data-sessions-install.sh {{quote(kubeconfig)}}
+
 # Operator-run one-time discovery installation; never a routine credential fallback.
 automation-data-discovery-install action='': require-bash
     @scripts/operations/automation-data-discovery-install.sh {{quote(kubeconfig)}} {{if action == '' { '' } else { quote(action) }}}

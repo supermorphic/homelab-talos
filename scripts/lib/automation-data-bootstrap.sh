@@ -76,6 +76,24 @@ automation_data_exporter_grant_job_manifest() {
 }
 
 # Reuse the hardened, pinned PostgreSQL Job and its existing backup Secret binding.
+automation_data_access_sessions_job_manifest() {
+  [[ "$#" -eq 3 && "$3" =~ ^automation-data-postgresql-access-sessions-[a-z0-9]+$ ]] || return 2
+  automation_data_exporter_grant_job_manifest "$1" "$2" |
+    SCRIPTS_CONFIGMAP="$3" yq '
+      .metadata.labels."homelab-talos/role" = "access-sessions-install" |
+      .spec.template.metadata.labels."homelab-talos/role" = "access-sessions-install" |
+      .spec.template.spec.containers[0].name = "install-access-sessions" |
+      .spec.template.spec.containers[0].command = ["/bin/sh"] |
+      .spec.template.spec.containers[0].args = ["/scripts/install-access-sessions.sh"] |
+      .spec.template.spec.containers[0].volumeMounts += [{
+        "name": "scripts", "mountPath": "/scripts", "readOnly": true
+      }] |
+      .spec.template.spec.volumes += [{
+        "name": "scripts", "configMap": {"name": strenv(SCRIPTS_CONFIGMAP)}
+      }]
+    '
+}
+
 automation_data_control_migration_job_manifest() {
   [[ "$#" -eq 3 && "$3" =~ ^automation-data-postgresql-init-[a-z0-9]+$ ]] || return 2
   automation_data_exporter_grant_job_manifest "$1" "$2" |
