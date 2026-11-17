@@ -1,0 +1,86 @@
+---
+# Specification 036 backstop: revokes temporary session logins past expiry. Staged
+# with suspend: true until the operator enables the sweeper login.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: automation-data-session-sweeper
+  labels:
+    app.kubernetes.io/name: automation-data-session-sweeper
+spec:
+  schedule: "*/5 * * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  suspend: true
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    metadata:
+      labels:
+        app.kubernetes.io/name: automation-data-session-sweeper
+    spec:
+      activeDeadlineSeconds: 240
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 900
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: automation-data-session-sweeper
+        spec:
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsGroup: 70
+            runAsNonRoot: true
+            runAsUser: 70
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: sweeper
+              image: postgres:17.11-alpine3.24
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/sh
+              args:
+                - /scripts/sweep-session-logins.sh
+              env:
+                - name: PGCONNECT_TIMEOUT
+                  value: "10"
+                - name: PGDATABASE
+                  value: automation_data_control
+                - name: PGHOST
+                  value: automation-data-postgresql
+                - name: PGPORT
+                  value: "5432"
+                - name: PGUSER
+                  value: automation_data_session_sweeper
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: automation-data-session-sweeper
+                      key: password
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+                readOnlyRootFilesystem: true
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: scripts
+              configMap:
+                name: automation-data-session-sweeper
+                defaultMode: 0555
+            - name: tmp
+              emptyDir: {}

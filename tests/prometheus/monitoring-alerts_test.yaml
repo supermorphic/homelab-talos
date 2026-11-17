@@ -1882,6 +1882,81 @@ tests:
         alertname: AutomationDataPostgresqlRegistryCatalogInconsistent
         exp_alerts: []
 
+  - name: automation-data session sweeper staleness fires and recovers
+    interval: 1m
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{namespace="automation-data",cronjob="automation-data-session-sweeper"}'
+        values: '0x25 1560x10'
+      - series: 'kube_cronjob_spec_suspend{namespace="automation-data",cronjob="automation-data-session-sweeper"}'
+        values: '0x35'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: AutomationDataPostgresqlSessionSweeperStale
+        exp_alerts: []
+      - eval_time: 22m
+        alertname: AutomationDataPostgresqlSessionSweeperStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: automation-data, cronjob: automation-data-session-sweeper}
+            exp_annotations:
+              summary: automation-data session sweeper is not completing clean sweeps
+              description: The automation-data/automation-data-session-sweeper CronJob has not completed a clean sweep for more than 15 minutes, so new temporary session logins are refused.
+      - eval_time: 27m
+        alertname: AutomationDataPostgresqlSessionSweeperStale
+        exp_alerts: []
+
+  - name: automation-data session sweeper that never succeeded fires
+    interval: 1m
+    input_series:
+      - series: 'kube_cronjob_created{namespace="automation-data",cronjob="automation-data-session-sweeper"}'
+        values: '0x30'
+      - series: 'kube_cronjob_spec_suspend{namespace="automation-data",cronjob="automation-data-session-sweeper"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: AutomationDataPostgresqlSessionSweeperStale
+        exp_alerts: []
+      - eval_time: 27m
+        alertname: AutomationDataPostgresqlSessionSweeperStale
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: automation-data, cronjob: automation-data-session-sweeper}
+            exp_annotations:
+              summary: automation-data session sweeper is not completing clean sweeps
+              description: The automation-data/automation-data-session-sweeper CronJob has not completed a clean sweep for more than 15 minutes, so new temporary session logins are refused.
+
+  - name: automation-data suspended session sweeper stays silent
+    interval: 1m
+    input_series:
+      - series: 'kube_cronjob_created{namespace="automation-data",cronjob="automation-data-session-sweeper"}'
+        values: '0x30'
+      - series: 'kube_cronjob_status_last_successful_time{namespace="automation-data",cronjob="automation-data-session-sweeper"}'
+        values: '0x30'
+      - series: 'kube_cronjob_spec_suspend{namespace="automation-data",cronjob="automation-data-session-sweeper"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 28m
+        alertname: AutomationDataPostgresqlSessionSweeperStale
+        exp_alerts: []
+
+  - name: automation-data overdue temporary session logins fire and recover
+    interval: 1m
+    input_series:
+      - series: 'automation_data_postgresql_session_logins_overdue{namespace="automation-data",service="automation-data-postgresql"}'
+        values: '0x3 1x13 0x5'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: AutomationDataPostgresqlSessionLoginsOverdue
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: AutomationDataPostgresqlSessionLoginsOverdue
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: automation-data, service: automation-data-postgresql}
+            exp_annotations:
+              summary: automation-data temporary session logins outlived their expiry
+              description: At least one temporary session login has stayed past its expiry for more than ten minutes.
+      - eval_time: 19m
+        alertname: AutomationDataPostgresqlSessionLoginsOverdue
+        exp_alerts: []
+
   - name: automation-data incomplete provisioning age fires and recovers
     interval: 1m
     input_series:

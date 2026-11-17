@@ -20,9 +20,10 @@ yq ea -o=json 'select(.kind == "ConfigMap" and
 [[ "$(jq -s 'length' "$temp_dir/configmap.json")" == 1 ]] ||
   fail 'exactly one access-sessions ConfigMap must be rendered'
 [[ "$(jq -r '.data | keys | join(",")' "$temp_dir/configmap.json")" == \
-  'access-sessions.sql,install-access-sessions.sh' ]] ||
-  fail 'the access-sessions ConfigMap must contain exactly the SQL and its installer'
-for key in access-sessions.sql install-access-sessions.sh; do
+  'access-sessions.sql,enable-session-sweeper.sh,enable-session-sweeper.sql,install-access-sessions.sh' ]] ||
+  fail 'the access-sessions ConfigMap must contain exactly the reviewed SQL and wrappers'
+for key in access-sessions.sql install-access-sessions.sh enable-session-sweeper.sql \
+    enable-session-sweeper.sh; do
   jq -j --arg key "$key" '.data[$key]' "$temp_dir/configmap.json" >"$temp_dir/$key"
   cmp -s "$temp_dir/$key" "$scripts_dir/$key" || fail "$key differs from reviewed source"
 done

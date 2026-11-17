@@ -350,6 +350,11 @@ automation-data-secrets:
     committed=true
     echo "Wrote SOPS-encrypted $target."
 
+# Write the SOPS-encrypted specification 036 session sweeper Secret with a newly
+# generated password and select it in the PostgreSQL package.
+automation-data-session-sweeper-secret:
+    @scripts/operations/automation-data-session-sweeper-secret.sh
+
 # Write the SOPS-encrypted NocoDB runtime Secret from operator-supplied values. The
 # connection encryption key is recovery material and cannot be replaced by this writer.
 nocodb-secrets:

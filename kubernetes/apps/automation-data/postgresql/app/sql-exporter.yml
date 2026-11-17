@@ -138,3 +138,26 @@ collectors:
             FROM platform_operations.managed_application_logins
             WHERE state IN ('activating', 'rotating', 'error')
           ) AS incomplete
+      # Specification 036 temporary logins, counted from the catalog so the counts do
+      # not depend on the registry that the sweeper maintains.
+      - metric_name: automation_data_postgresql_session_logins_active
+        type: gauge
+        help: Temporary session logins that can log in and have not expired.
+        values:
+          - logins
+        query: |
+          SELECT count(*)::double precision AS logins
+          FROM pg_roles
+          WHERE rolname ~ '^v-[a-z0-9-]{1,40}-[a-z0-9]{20}$'
+            AND rolcanlogin
+            AND (rolvaliduntil IS NULL OR rolvaliduntil > clock_timestamp())
+      - metric_name: automation_data_postgresql_session_logins_overdue
+        type: gauge
+        help: Temporary session logins past their expiry that have not been removed.
+        values:
+          - logins
+        query: |
+          SELECT count(*)::double precision AS logins
+          FROM pg_roles
+          WHERE rolname ~ '^v-[a-z0-9-]{1,40}-[a-z0-9]{20}$'
+            AND rolvaliduntil <= clock_timestamp()

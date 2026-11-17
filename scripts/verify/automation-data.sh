@@ -122,7 +122,7 @@ rules_response="$(
   flux_alerts_prometheus_get "$prometheus_base_url" "$prometheus_resolve" \
     '/api/v1/rules?type=alert'
 )"
-expected_rules=$'AutomationDataE2EDown\nAutomationDataE2EProbeMissing\nAutomationDataPostgresqlBackupJobFailed\nAutomationDataPostgresqlBackupJobOverdue\nAutomationDataPostgresqlBackupStale\nAutomationDataPostgresqlContainerOomKilled\nAutomationDataPostgresqlContainerRestarting\nAutomationDataPostgresqlPersistentVolumeClaimNotBound\nAutomationDataPostgresqlPersistentVolumeUsageCritical\nAutomationDataPostgresqlPersistentVolumeUsageWarning\nAutomationDataPostgresqlProvisioningStuck\nAutomationDataPostgresqlRegistryCatalogInconsistent\nAutomationDataPostgresqlUnavailable\nAutomationDataPostgresqlWorkloadUnavailable'
+expected_rules=$'AutomationDataE2EDown\nAutomationDataE2EProbeMissing\nAutomationDataPostgresqlBackupJobFailed\nAutomationDataPostgresqlBackupJobOverdue\nAutomationDataPostgresqlBackupStale\nAutomationDataPostgresqlContainerOomKilled\nAutomationDataPostgresqlContainerRestarting\nAutomationDataPostgresqlPersistentVolumeClaimNotBound\nAutomationDataPostgresqlPersistentVolumeUsageCritical\nAutomationDataPostgresqlPersistentVolumeUsageWarning\nAutomationDataPostgresqlProvisioningStuck\nAutomationDataPostgresqlRegistryCatalogInconsistent\nAutomationDataPostgresqlSessionLoginsOverdue\nAutomationDataPostgresqlSessionSweeperStale\nAutomationDataPostgresqlUnavailable\nAutomationDataPostgresqlWorkloadUnavailable'
 actual_rules="$(yq -r '
   [.data.groups[]? | select(.name == "automation-data-postgresql") | .rules[]?.name] |
   sort | .[]
@@ -133,7 +133,7 @@ rule_health="$(yq -r '
 ' - <<<"$rules_response")"
 [[ "$(yq -r '.status // ""' - <<<"$rules_response")" == 'success' && \
   "$actual_rules" == "$expected_rules" && "$rule_health" == 'ok|' ]] || {
-  echo 'The loaded automation-data alert group differs from the exact healthy 14-rule contract.' >&2
+  echo 'The loaded automation-data alert group differs from the exact healthy 16-rule contract.' >&2
   exit 1
 }
 

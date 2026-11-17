@@ -27,6 +27,8 @@ scripts/test/automation-data-scoped-permissions-test.sh
 scripts/test/automation-data-login-lifecycle-test.sh
 scripts/test/automation-data-sessions-sql-test.sh
 scripts/test/automation-data-sessions-install-test.sh
+scripts/test/automation-data-session-sweeper-test.sh
+scripts/test/automation-data-session-sweeper-secret-test.sh
 scripts/test/automation-data-workflow-contract-test.sh
 node scripts/test/automation-data-login-workflow-test.mjs
 uv run --locked python scripts/test/automation-data-login-command-test.py
@@ -65,10 +67,12 @@ expected_metrics=(
   automation_data_postgresql_oldest_incomplete_provisioning_age_seconds
   automation_data_postgresql_optional_registry_consistent
   automation_data_postgresql_registry_catalog_consistent
+  automation_data_postgresql_session_logins_active
+  automation_data_postgresql_session_logins_overdue
   automation_data_postgresql_transactions_total
 )
 [[ "${metrics[*]}" == "${expected_metrics[*]}" ]] ||
-  fail 'SQL Exporter must expose only the four baseline and four platform-health metrics'
+  fail 'SQL Exporter must expose only the four baseline, four platform-health, and two session-login metrics'
 
 dynamic_metrics="$(yq -r '
   [.collectors[].metrics[] |
@@ -103,7 +107,7 @@ dashboard='kubernetes/apps/monitoring/kube-prometheus-stack/config/dashboards/au
     select(. == "dashboards/automation-data-postgresql.json")] | length' \
     kubernetes/apps/monitoring/kube-prometheus-stack/config/kustomization.yaml)" == 1 ]] ||
   fail 'the automation-data Grafana dashboard must be packaged exactly once'
-jq -e --argjson expected 15 '
+jq -e --argjson expected 18 '
   .uid == "automation-data-postgresql" and
   (.panels | length) == $expected and
   ([.panels[] | select(.datasource != {"type":"prometheus","uid":"${datasource}"})] | length) == 0
@@ -116,10 +120,10 @@ done
   kubernetes/apps/monitoring/alerts/app/kustomization.yaml)" == 1 ]] ||
   fail 'the automation-data PrometheusRule must be selected exactly once'
 
-expected_alerts='AutomationDataE2EDown,AutomationDataE2EProbeMissing,AutomationDataPostgresqlBackupJobFailed,AutomationDataPostgresqlBackupJobOverdue,AutomationDataPostgresqlBackupStale,AutomationDataPostgresqlContainerOomKilled,AutomationDataPostgresqlContainerRestarting,AutomationDataPostgresqlPersistentVolumeClaimNotBound,AutomationDataPostgresqlPersistentVolumeUsageCritical,AutomationDataPostgresqlPersistentVolumeUsageWarning,AutomationDataPostgresqlProvisioningStuck,AutomationDataPostgresqlRegistryCatalogInconsistent,AutomationDataPostgresqlUnavailable,AutomationDataPostgresqlWorkloadUnavailable'
+expected_alerts='AutomationDataE2EDown,AutomationDataE2EProbeMissing,AutomationDataPostgresqlBackupJobFailed,AutomationDataPostgresqlBackupJobOverdue,AutomationDataPostgresqlBackupStale,AutomationDataPostgresqlContainerOomKilled,AutomationDataPostgresqlContainerRestarting,AutomationDataPostgresqlPersistentVolumeClaimNotBound,AutomationDataPostgresqlPersistentVolumeUsageCritical,AutomationDataPostgresqlPersistentVolumeUsageWarning,AutomationDataPostgresqlProvisioningStuck,AutomationDataPostgresqlRegistryCatalogInconsistent,AutomationDataPostgresqlSessionLoginsOverdue,AutomationDataPostgresqlSessionSweeperStale,AutomationDataPostgresqlUnavailable,AutomationDataPostgresqlWorkloadUnavailable'
 [[ "$(yq -r '[.spec.groups[] | select(.name == "automation-data-postgresql") | .rules[].alert] | sort | join(",")' \
   kubernetes/apps/monitoring/alerts/app/automation-data.yaml)" == "$expected_alerts" ]] ||
-  fail 'the automation-data rule group must contain exactly the 14 approved alerts'
+  fail 'the automation-data rule group must contain exactly the 16 approved alerts'
 
 just --dry-run kube automation-data-verify >/dev/null 2>&1 ||
   fail 'the read-only automation-data verification recipe is missing'
