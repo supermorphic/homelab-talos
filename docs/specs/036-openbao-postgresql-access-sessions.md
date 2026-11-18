@@ -172,7 +172,18 @@ Each row records:
 The role is `NOLOGIN NOINHERIT` with no special attributes and no membership in any
 other role. Registration is a guarded operator operation through the existing
 provisioner, like application-login registration. It creates the role and grants
-nothing.
+nothing:
+
+```sh
+AUTOMATION_DATA_CAPABILITY_REGISTER_CONFIRM=register:automation-data:career_ops:read \
+  mise exec -- just kube automation-data-capability-register career_ops read <schemas> 600
+```
+
+`<schemas>` is a comma-separated list. The command prints the capability and its
+validation as one JSON line. Rerun it with the same values after the consumer's
+grant migration; `valid` must be `true` before issuance can succeed. A different
+schema list or lifetime for an existing capability is refused with
+`access_capability_binding_conflict`.
 
 The consumer grants authority through a reviewed migration. For Career Ops `read`,
 the grants are SELECT on the tables and views that readbacks, diagnostics, and
@@ -486,7 +497,7 @@ separate checks.
 | Workstation lost | Treat as compromised: revoke, then re-enroll (specification 031). |
 | Workstation compromised | Run workstation revocation with the steps above. |
 | OpenBao unavailable | No new sessions. Use the kill switch if needed. Operator recovery paths remain: platform superuser, migrator profile, and n8n credentials. |
-| OpenBao or PostgreSQL restored | Revoke all registered temporary logins with `revoked_by='restore'` and verify none remain. Then run the issuer reset. Restored leases whose roles are gone revoke cleanly. |
+| OpenBao or PostgreSQL restored | Revoke all registered temporary logins with `revoked_by='restore'` and verify none remain (below). Then run the issuer reset. Restored leases whose roles are gone revoke cleanly. |
 | Issuer credential state unknown | Issuer reset. |
 
 Issuer reset: with the platform superuser credential, set a new issuer password;
@@ -494,7 +505,20 @@ rewrite the OpenBao connection; run `rotate-root`; issue and revoke one test log
 through the runner.
 
 Capability roles and registries are in logical backups. Temporary logins are not
-recoverable credentials and are never restored as usable logins.
+recoverable credentials. A restore brings them back with new OIDs, which normal
+revocation and the sweeper refuse as identity mismatches. They cannot log in after
+their expiry, but run the restore cleanup immediately after a PostgreSQL restore:
+
+```sh
+AUTOMATION_DATA_SESSIONS_RESTORE_CLEANUP_CONFIRM=cleanup:automation-data:restored-sessions \
+  mise exec -- just kube automation-data-sessions-restore-cleanup
+```
+
+It rebinds each registered login to its restored role only when the role has the
+shape issuance creates, then revokes every registered login. Expected final line:
+`session_restore_cleanup revoked=<n> failed=0 remaining=0 run=<run-id>`. A non-zero
+`failed` or `remaining` means a temporary-login role does not have the issued shape
+or is unregistered; inspect it before dropping it manually.
 
 ## Delivery and cutover
 
