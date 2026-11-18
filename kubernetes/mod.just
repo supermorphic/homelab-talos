@@ -201,6 +201,11 @@ automation-data-control-migrate: require-bash
 automation-data-sessions-install: require-bash
     @scripts/operations/automation-data-sessions-install.sh {{quote(kubeconfig)}}
 
+# Operator-run: set the specification 036 session sweeper's password login from the
+# deployed Secret; rerun after rotating it. Guard: AUTOMATION_DATA_SESSION_SWEEPER_ENABLE_CONFIRM.
+automation-data-session-sweeper-enable: require-bash
+    @scripts/operations/automation-data-session-sweeper-enable.sh {{quote(kubeconfig)}}
+
 # Operator-run one-time discovery installation; never a routine credential fallback.
 automation-data-discovery-install action='': require-bash
     @scripts/operations/automation-data-discovery-install.sh {{quote(kubeconfig)}} {{if action == '' { '' } else { quote(action) }}}

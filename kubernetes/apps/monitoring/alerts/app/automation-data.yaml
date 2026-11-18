@@ -176,6 +176,56 @@ spec:
             description: >-
               The {{ $labels.namespace }}/{{ $labels.cronjob }} CronJob is more than one
               hour past its next scheduled run.
+        # A sweeper Job succeeds only when every overdue revocation succeeded.
+        - alert: AutomationDataPostgresqlSessionSweeperStale
+          expr: >-
+            (
+              time() - kube_cronjob_status_last_successful_time{
+                namespace="automation-data",
+                cronjob="automation-data-session-sweeper"
+              } > 15 * 60
+              or
+              (
+                time() - kube_cronjob_created{
+                  namespace="automation-data",
+                  cronjob="automation-data-session-sweeper"
+                } > 20 * 60
+                unless on (namespace, cronjob)
+                kube_cronjob_status_last_successful_time{
+                  namespace="automation-data",
+                  cronjob="automation-data-session-sweeper"
+                }
+              )
+            )
+            unless on (namespace, cronjob)
+            kube_cronjob_spec_suspend{
+              namespace="automation-data",
+              cronjob="automation-data-session-sweeper"
+            } == 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: automation-data session sweeper is not completing clean sweeps
+            description: >-
+              The {{ $labels.namespace }}/{{ $labels.cronjob }} CronJob has not completed
+              a clean sweep for more than 15 minutes. Issuance stops when no sweep
+              completes within 15 minutes; a sweep with failed revocations still counts
+              for issuance.
+        - alert: AutomationDataPostgresqlSessionLoginsOverdue
+          expr: >-
+            automation_data_postgresql_session_logins_overdue{
+              namespace="automation-data",
+              service="automation-data-postgresql"
+            } > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: automation-data temporary session logins outlived their expiry
+            description: >-
+              At least one temporary session login has stayed past its expiry for more
+              than ten minutes.
         - alert: AutomationDataPostgresqlPersistentVolumeClaimNotBound
           expr: >-
             (

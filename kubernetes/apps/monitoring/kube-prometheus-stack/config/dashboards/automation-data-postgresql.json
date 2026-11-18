@@ -283,6 +283,63 @@
         "refId": "A",
         "expr": "max(automation_data_postgresql_oldest_incomplete_optional_operation_age_seconds{namespace=\"automation-data\",service=\"automation-data-postgresql\"})"
       }]
+    },
+    {
+      "id": 16,
+      "title": "Active temporary session logins",
+      "type": "stat",
+      "gridPos": {"h": 5, "w": 8, "x": 0, "y": 36},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}
+        },
+        "overrides": []
+      },
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{
+        "refId": "A",
+        "expr": "max(automation_data_postgresql_session_logins_active{namespace=\"automation-data\",service=\"automation-data-postgresql\"})"
+      }]
+    },
+    {
+      "id": 17,
+      "title": "Overdue temporary session logins",
+      "type": "stat",
+      "gridPos": {"h": 5, "w": 8, "x": 8, "y": 36},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}
+        },
+        "overrides": []
+      },
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{
+        "refId": "A",
+        "expr": "max(automation_data_postgresql_session_logins_overdue{namespace=\"automation-data\",service=\"automation-data-postgresql\"})"
+      }]
+    },
+    {
+      "id": 18,
+      "title": "Session sweeper last success age",
+      "type": "stat",
+      "gridPos": {"h": 5, "w": 8, "x": 16, "y": 36},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 900}]}
+        },
+        "overrides": []
+      },
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{
+        "refId": "A",
+        "expr": "time() - max(kube_cronjob_status_last_successful_time{namespace=\"automation-data\",cronjob=\"automation-data-session-sweeper\"})"
+      }]
     }
   ],
   "refresh": "1m",

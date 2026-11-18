@@ -193,7 +193,13 @@ issue() {
     "$issuer" "$name" "$verifier" "$(expiration_in "$2")" "$capability" >"$scratch/issue.sql"
   podman cp "$scratch/issue.sql" "$container:/tmp/sessions-issue.sql"
   podman exec "$container" psql --no-psqlrc --set=ON_ERROR_STOP=1 --username postgres \
-    --dbname automation_data_control --file /tmp/sessions-issue.sql
+    --dbname automation_data_control --file /tmp/sessions-issue.sql || {
+    local result="$?"
+    echo "issuance of $name failed at $(date -u +%T); sweeper heartbeat: $(query "SELECT
+      concat_ws(' ', completed_at, clock_timestamp(), revoked_count, failed_count)
+      FROM platform_operations.access_session_sweeps")" >&2
+    return "$result"
+  }
 }
 # expect_issue_error CODE NAME SECONDS [VERIFIER] [CAPABILITY]
 expect_issue_error() {
@@ -368,6 +374,96 @@ expect_error 'permission denied' automation_data_control \
 expect_error 'permission denied' automation_data_control \
   "SET ROLE $issuer; SELECT platform_operations.suspend_access_capability('session_fixture','read')"
 query "SELECT platform_internal.assert_access_session_contract()" >/dev/null
+
+# The guarded enable step gives the sweeper a password login from its Secret value.
+# enable_sweeper ENV_FILE runs the packaged wrapper as the backup identity.
+enable_sweeper() {
+  podman exec --env-file "$1" "$container" sh -c 'SWEEPER_PASSWORD="$LOGIN_PASSWORD" \
+    PGUSER=automation_data_backup PGDATABASE=automation_data_control \
+    exec sh /scripts/enable-session-sweeper.sh'
+}
+# run_sweep ENV_FILE runs the CronJob script over TCP as the sweeper.
+run_sweep() {
+  podman exec --env-file "$1" "$container" sh -c 'PGPASSWORD="$LOGIN_PASSWORD" \
+    PGHOST=127.0.0.1 PGUSER=automation_data_session_sweeper \
+    PGDATABASE=automation_data_control exec sh /scripts/sweep-session-logins.sh'
+}
+new_password_file() {
+  printf 'LOGIN_PASSWORD=%s\n' "$(openssl rand -hex "$2")" >"$scratch/$1"
+  chmod 600 "$scratch/$1"
+}
+new_password_file short-sweeper.env 8
+[[ "$(enable_sweeper "$scratch/short-sweeper.env" 2>&1)" == 'session_sweeper_login=failed' ]] ||
+  fail 'enabling must refuse a short password with only a fixed marker'
+new_password_file "$sweeper.env" 32
+query "COMMENT ON ROLE $sweeper IS 'unrelated'" >/dev/null
+[[ "$(enable_sweeper "$scratch/$sweeper.env" 2>&1)" == 'session_sweeper_login=failed' ]] ||
+  fail 'enabling must refuse a sweeper role without the installation marker'
+[[ "$(query "SELECT rolcanlogin FROM pg_roles WHERE rolname = '$sweeper'")" == f ]] ||
+  fail 'a refused enable must leave the sweeper unable to log in'
+query "COMMENT ON ROLE $sweeper IS 'homelab:access-sessions:v1'" >/dev/null
+query "ALTER ROLE $sweeper BYPASSRLS" >/dev/null
+[[ "$(enable_sweeper "$scratch/$sweeper.env" 2>&1)" == 'session_sweeper_login=failed' ]] ||
+  fail 'enabling must refuse a sweeper role that drifted from the installed contract'
+query "ALTER ROLE $sweeper NOBYPASSRLS" >/dev/null
+[[ "$(enable_sweeper "$scratch/$sweeper.env" 2>&1)" == 'session_sweeper_login=enabled' ]] ||
+  fail 'enabling must report only the fixed success marker'
+[[ "$(as_login "$sweeper" automation_data_control 'SELECT session_user')" == "$sweeper" ]] ||
+  fail 'the enabled sweeper must authenticate with its password'
+expect_login_error "$sweeper" automation_data_control \
+  'SELECT count(*) FROM platform_operations.managed_dynamic_logins'
+expect_login_error "$sweeper" session_fixture 'SELECT 1'
+
+# Exporter metrics count temporary logins from the catalog without new grants.
+exporter_config=kubernetes/apps/automation-data/postgresql/app/sql-exporter.yml
+metric() {
+  local sql
+  sql="$(NAME="$1" yq -r '.collectors[].metrics[] | select(.metric_name == strenv(NAME)) | .query' \
+    "$exporter_config")"
+  [[ -n "$sql" ]] || fail "SQL Exporter does not define $1"
+  query "SET ROLE automation_data_exporter; $sql" | tail -1
+}
+metered="$(login_name)"
+issue "$metered" 600 >/dev/null
+[[ "$(metric automation_data_postgresql_session_logins_active)" == 1 &&
+  "$(metric automation_data_postgresql_session_logins_overdue)" == 0 ]] ||
+  fail "metrics must count one active and no overdue temporary login, got $(metric automation_data_postgresql_session_logins_active)/$(metric automation_data_postgresql_session_logins_overdue)"
+expiring="$(login_name)"
+issue "$expiring" 3 >/dev/null
+sleep 4
+[[ "$(metric automation_data_postgresql_session_logins_active)" == 1 &&
+  "$(metric automation_data_postgresql_session_logins_overdue)" == 1 ]] ||
+  fail 'metrics must count an expired, unrevoked login as overdue'
+
+# The CronJob script sweeps as the sweeper login and prints only counts.
+[[ "$(run_sweep "$scratch/$sweeper.env" 2>&1)" == 'session_sweep revoked=1 failed=0' ]] ||
+  fail 'the sweep script must report the revoked overdue login'
+[[ "$(metric automation_data_postgresql_session_logins_overdue)" == 0 ]] ||
+  fail 'the sweep must clear the overdue login'
+new_password_file wrong-sweeper.env 32
+if run_sweep "$scratch/wrong-sweeper.env" >"$scratch/sweep.out" 2>&1; then
+  fail 'the sweep script must fail when it cannot authenticate'
+fi
+[[ "$(cat "$scratch/sweep.out")" == 'session_sweep=failed' ]] ||
+  fail 'a failed sweep must print only the fixed failure marker'
+
+# Reapplying with a new Secret value rotates the password.
+cp "$scratch/$sweeper.env" "$scratch/previous-sweeper.env"
+new_password_file "$sweeper.env" 32
+[[ "$(enable_sweeper "$scratch/$sweeper.env" 2>&1)" == 'session_sweeper_login=enabled' ]] ||
+  fail 'enabling again must rotate the password'
+[[ "$(run_sweep "$scratch/$sweeper.env" 2>&1)" == 'session_sweep revoked=0 failed=0' ]] ||
+  fail 'the sweeper must authenticate with the rotated password'
+if run_sweep "$scratch/previous-sweeper.env" >/dev/null 2>&1; then
+  fail 'the previous sweeper password must stop working'
+fi
+podman logs "$container" >"$scratch/server.log" 2>&1
+for password_file in previous-sweeper.env "$sweeper.env" short-sweeper.env; do
+  if rg -qF -- "$(cut -d= -f2 "$scratch/$password_file")" "$scratch/server.log"; then
+    fail 'a sweeper password reached the server log'
+  fi
+done
+as_role "$issuer" "SELECT platform_operations.revoke_session_login('$metered')" >/dev/null
 
 # Reinstallation leaves roles, settings, memberships, and registries unchanged.
 state_digest() {

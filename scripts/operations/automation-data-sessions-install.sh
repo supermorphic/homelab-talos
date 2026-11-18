@@ -129,7 +129,8 @@ import sys
 from pathlib import Path
 config = json.loads(Path(sys.argv[1]).read_text())[0]["data"]
 base = Path("kubernetes/apps/automation-data/postgresql/app/scripts")
-names = ("access-sessions.sql", "install-access-sessions.sh")
+names = ("access-sessions.sql", "install-access-sessions.sh",
+         "enable-session-sweeper.sql", "enable-session-sweeper.sh")
 if sorted(config) != sorted(names) or any(config[name] != (base / name).read_text() for name in names):
     raise SystemExit("Deployed installation inputs differ from reviewed source.")
 PYTHON

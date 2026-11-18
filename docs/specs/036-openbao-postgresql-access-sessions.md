@@ -270,16 +270,37 @@ The sweeper is a CronJob in the automation-data PostgreSQL package, following th
 automation-data backup job: pinned `postgres` image, `timeZone: Etc/UTC`, schedule
 every 5 minutes, `concurrencyPolicy: Forbid`, a short `activeDeadlineSeconds`, no
 retries, history limits of one, and `ttlSecondsAfterFinished` so finished pods are
-removed. Its credential is an operator-created SOPS Secret.
+removed. Its credential is an operator-created SOPS Secret. A Job succeeds only when
+every revocation in its sweep succeeded, and the script prints only the counts.
 
 Alternatives considered: a sidecar in the PostgreSQL pod could take the database
 off its Service when crash-looping and restarts the database on every change;
 `pg_cron` requires a custom image; an n8n or Gatus trigger would make the backstop
 depend on n8n; SQL Exporter must remain read-only.
 
-SQL Exporter exports the heartbeat age, the number of active temporary logins, and
-the number of overdue unrevoked logins. PrometheusRule alerts cover a stale
-heartbeat and any overdue login.
+SQL Exporter counts active and overdue temporary logins from `pg_roles`, so the
+counts do not depend on the registry that the sweeper maintains and need no new
+grants. The heartbeat alert uses the CronJob's last successful run, as the backup
+alerts do. It fires when no clean sweep has completed for 15 minutes, or when a new
+CronJob has never succeeded within 20 minutes, and it stays silent while the CronJob
+is suspended. A second alert fires when a temporary login stays past its expiry for
+10 minutes.
+
+The sweeper is delivered suspended, without its Secret. To enable it, the operator:
+
+1. On a branch, runs
+   `AUTOMATION_DATA_SESSION_SWEEPER_SECRET_CONFIRM=write:automation-data:session-sweeper:sops mise exec -- just repo automation-data-session-sweeper-secret`.
+   It generates the password, writes the encrypted Secret, and selects it in the
+   PostgreSQL kustomization. Commit both files and merge.
+2. After Flux applies the Secret, runs
+   `AUTOMATION_DATA_SESSION_SWEEPER_ENABLE_CONFIRM=enable:automation-data:session-sweeper mise exec -- just kube automation-data-session-sweeper-enable`.
+   It sets the sweeper's password login from the deployed Secret. Expected final
+   line: `session_sweeper_login=enabled run=<run-id>`.
+3. Sets `suspend: false` on the CronJob through Git.
+
+To rotate the password, repeat steps 1 and 2. Sweeps fail between the Flux apply and
+step 2, so run step 2 promptly: issuance stops 15 minutes after the last successful
+sweep, and the heartbeat alert fires about 5 minutes later.
 
 With the sweeper healthy, a connection left by failed revocation lasts at most the
 capability lifetime plus one sweep interval: about 15 minutes for `read`. When the
