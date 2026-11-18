@@ -145,6 +145,17 @@ automation_data_session_sweeper_enable_job_manifest() {
   return "${PIPESTATUS[0]}"
 }
 
+automation_data_session_restore_cleanup_job_manifest() {
+  automation_data_access_sessions_job_manifest "$@" |
+    yq '
+      .metadata.labels."homelab-talos/role" = "session-restore-cleanup" |
+      .spec.template.metadata.labels."homelab-talos/role" = "session-restore-cleanup" |
+      .spec.template.spec.containers[0].name = "restore-session-logins" |
+      .spec.template.spec.containers[0].args = ["/scripts/restore-session-logins.sh"]
+    '
+  return "${PIPESTATUS[0]}"
+}
+
 automation_data_control_migration_job_manifest() {
   [[ "$#" -eq 3 && "$3" =~ ^automation-data-postgresql-init-[a-z0-9]+$ ]] || return 2
   automation_data_exporter_grant_job_manifest "$1" "$2" |

@@ -465,6 +465,38 @@ for password_file in previous-sweeper.env "$sweeper.env" short-sweeper.env; do
 done
 as_role "$issuer" "SELECT platform_operations.revoke_session_login('$metered')" >/dev/null
 
+# A restore recreates temporary logins with new OIDs, so normal revocation refuses
+# them. The restore cleanup rebinds only logins with the issued shape and revokes them.
+query "DROP ROLE \"$stray\"" >/dev/null
+restore_cleanup() {
+  podman exec "$container" sh -c 'PGUSER=automation_data_backup \
+    PGDATABASE=automation_data_control exec sh /scripts/restore-session-logins.sh'
+}
+# recreate NAME [ATTRIBUTE] imitates a restored role: same name, new OID.
+recreate() {
+  query "DROP ROLE \"$1\"; CREATE ROLE \"$1\" LOGIN ${2:-} VALID UNTIL 'infinity';
+    GRANT \"$cap\" TO \"$1\" WITH INHERIT TRUE, SET FALSE, ADMIN FALSE" >/dev/null
+}
+restored="$(login_name)"
+odd="$(login_name)"
+issue "$restored" 600 >/dev/null
+issue "$odd" 600 >/dev/null
+recreate "$restored"
+recreate "$odd" CREATEDB
+expect_error session_login_identity_mismatch automation_data_control \
+  "SET ROLE $issuer; SELECT platform_operations.revoke_session_login('$restored')"
+if restore_cleanup >"$scratch/restore.out" 2>&1; then
+  fail 'restore cleanup must fail while a login cannot be revoked'
+fi
+[[ "$(cat "$scratch/restore.out")" == 'session_restore_cleanup revoked=1 failed=1 remaining=1' ]] ||
+  fail "restore cleanup must revoke the restored login and report the other: $(cat "$scratch/restore.out")"
+[[ "$(revoked_by "$restored")" == restore && "$(role_exists "$restored")" == 0 ]] ||
+  fail 'the restored login must be revoked by restore'
+[[ "$(role_exists "$odd")" == 1 ]] || fail 'a role without the issued shape must not be dropped'
+query "ALTER ROLE \"$odd\" NOCREATEDB" >/dev/null
+[[ "$(restore_cleanup 2>&1)" == 'session_restore_cleanup revoked=1 failed=0 remaining=0' ]] ||
+  fail 'restore cleanup must finish once every login has the issued shape'
+
 # Reinstallation leaves roles, settings, memberships, and registries unchanged.
 state_digest() {
   query "SELECT md5(concat_ws('|',

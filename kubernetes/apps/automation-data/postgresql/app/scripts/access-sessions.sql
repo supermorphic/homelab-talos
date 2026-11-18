@@ -643,6 +643,45 @@ BEGIN
 END;
 $function$;
 
+-- After a restore, temporary logins come back with new OIDs and normal revocation
+-- refuses them. Rebind a registered login to its same-named restored role only when
+-- that role has the issued shape, then revoke every registered login.
+CREATE OR REPLACE FUNCTION platform_operations.revoke_session_logins_after_restore()
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, platform_operations, pg_temp
+AS $function$
+DECLARE
+  result jsonb;
+  remaining integer;
+BEGIN
+  UPDATE platform_operations.managed_dynamic_logins AS login
+  SET role_oid = restored.oid
+  FROM pg_roles AS restored
+  JOIN platform_operations.managed_access_capabilities AS registered ON true
+  WHERE login.revoked_at IS NULL AND restored.rolname = login.role_name
+    AND restored.oid <> login.role_oid
+    AND registered.domain = login.domain AND registered.capability = login.capability
+    AND NOT restored.rolsuper AND NOT restored.rolcreatedb AND NOT restored.rolcreaterole
+    AND NOT restored.rolreplication AND NOT restored.rolbypassrls
+    AND (SELECT count(*) FROM pg_auth_members AS member
+      WHERE member.member = restored.oid OR member.roleid = restored.oid) = 1
+    AND EXISTS (SELECT FROM pg_auth_members AS member
+      JOIN pg_roles AS capability_role ON capability_role.oid = member.roleid
+      WHERE member.member = restored.oid
+        AND capability_role.rolname = registered.role_name
+        AND member.inherit_option AND NOT member.set_option AND NOT member.admin_option);
+  result := platform_internal.revoke_session_logins(false, NULL, NULL, 'restore');
+  SELECT count(*) INTO remaining FROM (
+    SELECT rolname FROM pg_roles WHERE rolname ~ '^v-[a-z0-9-]{1,40}-[a-z0-9]{20}$'
+    UNION
+    SELECT role_name FROM platform_operations.managed_dynamic_logins WHERE revoked_at IS NULL
+  ) AS unresolved;
+  RETURN result || jsonb_build_object('remaining', remaining);
+END;
+$function$;
+
 -- Verify ownership, function hardening, exact EXECUTE grants, and the dedicated
 -- issuer and sweeper roles.
 CREATE OR REPLACE FUNCTION platform_internal.assert_access_session_contract()
@@ -679,6 +718,8 @@ BEGIN
     ('platform_operations.suspend_access_capability(text,text)'::regprocedure, ARRAY[]::text[]),
     ('platform_operations.resume_access_capability(text,text)'::regprocedure, ARRAY[]::text[]),
     ('platform_operations.revoke_access_capability_logins(text,text)'::regprocedure,
+      ARRAY[]::text[]),
+    ('platform_operations.revoke_session_logins_after_restore()'::regprocedure,
       ARRAY[]::text[])
   ) AS contract(routine, grantees) LOOP
     SELECT COALESCE(array_agg(CASE WHEN privilege.grantee = 0 THEN 'PUBLIC'
@@ -732,7 +773,8 @@ REVOKE ALL ON FUNCTION platform_internal.access_capability_checks(text, text),
   platform_operations.sweep_session_logins(),
   platform_operations.suspend_access_capability(text, text),
   platform_operations.resume_access_capability(text, text),
-  platform_operations.revoke_access_capability_logins(text, text) FROM PUBLIC;
+  platform_operations.revoke_access_capability_logins(text, text),
+  platform_operations.revoke_session_logins_after_restore() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION platform_operations.register_access_capability(text, text, text[], integer),
   platform_operations.validate_access_capability(text, text) TO automation_data_provisioner;
 GRANT EXECUTE ON FUNCTION platform_operations.issue_session_login(text, text, text, text, text),

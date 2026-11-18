@@ -20,10 +20,10 @@ yq ea -o=json 'select(.kind == "ConfigMap" and
 [[ "$(jq -s 'length' "$temp_dir/configmap.json")" == 1 ]] ||
   fail 'exactly one access-sessions ConfigMap must be rendered'
 [[ "$(jq -r '.data | keys | join(",")' "$temp_dir/configmap.json")" == \
-  'access-sessions.sql,enable-session-sweeper.sh,enable-session-sweeper.sql,install-access-sessions.sh' ]] ||
+  'access-sessions.sql,enable-session-sweeper.sh,enable-session-sweeper.sql,install-access-sessions.sh,restore-session-logins.sh' ]] ||
   fail 'the access-sessions ConfigMap must contain exactly the reviewed SQL and wrappers'
 for key in access-sessions.sql install-access-sessions.sh enable-session-sweeper.sql \
-    enable-session-sweeper.sh; do
+    enable-session-sweeper.sh restore-session-logins.sh; do
   jq -j --arg key "$key" '.data[$key]' "$temp_dir/configmap.json" >"$temp_dir/$key"
   cmp -s "$temp_dir/$key" "$scripts_dir/$key" || fail "$key differs from reviewed source"
 done
@@ -92,6 +92,26 @@ rg -Fq 'AUTOMATION_DATA_SESSIONS_INSTALL_CONFIRM=install:automation-data:access-
   "$temp_dir/command.err" || fail 'the install command must name its confirmation'
 just --justfile kubernetes/mod.just --dry-run automation-data-sessions-install >/dev/null 2>&1 ||
   fail 'the automation-data-sessions-install recipe is missing'
+
+# The restore cleanup Job runs the packaged wrapper as the backup identity.
+automation_data_session_restore_cleanup_job_manifest automation-data-session-restore-run-1 \
+  run-1 "$configmap" >"$temp_dir/cleanup.yaml"
+yq -o=json "$temp_dir/cleanup.yaml" | jq -e --arg cm "$configmap" '
+  .metadata.labels."homelab-talos/role" == "session-restore-cleanup" and
+  .spec.template.spec.containers[0].args == ["/scripts/restore-session-logins.sh"] and
+  ([.spec.template.spec.volumes[] | select(.name == "scripts") | .configMap.name] == [$cm]) and
+  ([.spec.template.spec.containers[0].env[] | select(.name == "PGUSER") | .value] ==
+    ["automation_data_backup"])
+' >/dev/null || fail 'the restore cleanup Job manifest is not the reviewed shape'
+if AUTOMATION_DATA_SESSIONS_RESTORE_CLEANUP_CONFIRM='' \
+    scripts/operations/automation-data-sessions-restore-cleanup.sh "$temp_dir/missing" \
+    >"$temp_dir/command.out" 2>"$temp_dir/command.err"; then
+  fail 'the restore cleanup command must require confirmation'
+fi
+rg -Fq 'AUTOMATION_DATA_SESSIONS_RESTORE_CLEANUP_CONFIRM=cleanup:automation-data:restored-sessions' \
+  "$temp_dir/command.err" || fail 'the restore cleanup command must name its confirmation'
+just --justfile kubernetes/mod.just --dry-run automation-data-sessions-restore-cleanup >/dev/null 2>&1 ||
+  fail 'the automation-data-sessions-restore-cleanup recipe is missing'
 
 uv run --locked python - <<'PYTHON' || fail 'discovery must classify the session identities as platform roles'
 import sys
