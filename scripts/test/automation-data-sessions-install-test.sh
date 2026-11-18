@@ -20,10 +20,11 @@ yq ea -o=json 'select(.kind == "ConfigMap" and
 [[ "$(jq -s 'length' "$temp_dir/configmap.json")" == 1 ]] ||
   fail 'exactly one access-sessions ConfigMap must be rendered'
 [[ "$(jq -r '.data | keys | join(",")' "$temp_dir/configmap.json")" == \
-  'access-sessions.sql,enable-session-sweeper.sh,enable-session-sweeper.sql,install-access-sessions.sh,restore-session-logins.sh' ]] ||
+  'access-sessions.sql,enable-session-sweeper.sh,enable-session-sweeper.sql,install-access-sessions.sh,register-access-capability.sh,register-access-capability.sql,restore-session-logins.sh' ]] ||
   fail 'the access-sessions ConfigMap must contain exactly the reviewed SQL and wrappers'
 for key in access-sessions.sql install-access-sessions.sh enable-session-sweeper.sql \
-    enable-session-sweeper.sh restore-session-logins.sh; do
+    enable-session-sweeper.sh restore-session-logins.sh register-access-capability.sql \
+    register-access-capability.sh; do
   jq -j --arg key "$key" '.data[$key]' "$temp_dir/configmap.json" >"$temp_dir/$key"
   cmp -s "$temp_dir/$key" "$scripts_dir/$key" || fail "$key differs from reviewed source"
 done
@@ -112,6 +113,42 @@ rg -Fq 'AUTOMATION_DATA_SESSIONS_RESTORE_CLEANUP_CONFIRM=cleanup:automation-data
   "$temp_dir/command.err" || fail 'the restore cleanup command must name its confirmation'
 just --justfile kubernetes/mod.just --dry-run automation-data-sessions-restore-cleanup >/dev/null 2>&1 ||
   fail 'the automation-data-sessions-restore-cleanup recipe is missing'
+
+# The registration Job runs as the provisioner and passes values only as environment.
+if automation_data_capability_register_job_manifest job run-1 "$configmap" career_ops read \
+    "read_api');--" 600 >/dev/null 2>&1; then
+  fail 'the registration manifest must reject an unsafe schema list'
+fi
+automation_data_capability_register_job_manifest automation-data-capability-run-1 run-1 \
+  "$configmap" career_ops read read_api,reporting 600 >"$temp_dir/register.yaml"
+yq -o=json "$temp_dir/register.yaml" | jq -e --arg cm "$configmap" '
+  .metadata.labels."homelab-talos/role" == "access-capability-register" and
+  .spec.template.spec.containers[0].args == ["/scripts/register-access-capability.sh"] and
+  ([.spec.template.spec.volumes[] | select(.name == "scripts") | .configMap.name] == [$cm]) and
+  ([.spec.template.spec.containers[0].env[] | {(.name): (.value // .valueFrom.secretKeyRef.key)}] | add) ==
+    {"PGDATABASE": "automation_data_control", "PGHOST": "automation-data-postgresql",
+     "PGPORT": "5432", "PGUSER": "automation_data_provisioner",
+     "PGPASSWORD": "provisioner-password", "CAPABILITY_DOMAIN": "career_ops",
+     "CAPABILITY_NAME": "read", "CAPABILITY_SCHEMAS": "read_api,reporting",
+     "CAPABILITY_MAX_TTL": "600"}
+' >/dev/null || fail 'the registration Job manifest is not the reviewed shape'
+for arguments in 'Career read read_api 600' 'career_ops read read_api 900' \
+    'career_ops read read_api;x 600'; do
+  read -r -a values <<<"$arguments"
+  if AUTOMATION_DATA_CAPABILITY_REGISTER_CONFIRM=x scripts/operations/automation-data-capability-register.sh \
+      "$temp_dir/missing" "${values[@]}" >"$temp_dir/command.out" 2>"$temp_dir/command.err"; then
+    fail "registration must reject arguments: $arguments"
+  fi
+  rg -Fq 'Invalid arguments' "$temp_dir/command.err" || fail "registration must reject arguments first: $arguments"
+done
+if AUTOMATION_DATA_CAPABILITY_REGISTER_CONFIRM='' scripts/operations/automation-data-capability-register.sh \
+    "$temp_dir/missing" career_ops read read_api 600 >"$temp_dir/command.out" 2>"$temp_dir/command.err"; then
+  fail 'the registration command must require confirmation'
+fi
+rg -Fq 'AUTOMATION_DATA_CAPABILITY_REGISTER_CONFIRM=register:automation-data:career_ops:read' \
+  "$temp_dir/command.err" || fail 'the registration command must name its confirmation'
+just --justfile kubernetes/mod.just --dry-run automation-data-capability-register career_ops read \
+  read_api 600 >/dev/null 2>&1 || fail 'the automation-data-capability-register recipe is missing'
 
 uv run --locked python - <<'PYTHON' || fail 'discovery must classify the session identities as platform roles'
 import sys

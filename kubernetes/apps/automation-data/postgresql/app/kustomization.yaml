@@ -61,6 +61,8 @@ configMapGenerator:
       - install-access-sessions.sh=scripts/install-access-sessions.sh
       - enable-session-sweeper.sql=scripts/enable-session-sweeper.sql
       - enable-session-sweeper.sh=scripts/enable-session-sweeper.sh
+      - register-access-capability.sql=scripts/register-access-capability.sql
+      - register-access-capability.sh=scripts/register-access-capability.sh
       - restore-session-logins.sh=scripts/restore-session-logins.sh
   - name: automation-data-session-sweeper
     files:

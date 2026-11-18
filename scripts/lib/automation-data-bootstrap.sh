@@ -156,6 +156,34 @@ automation_data_session_restore_cleanup_job_manifest() {
   return "${PIPESTATUS[0]}"
 }
 
+# Usage: <job> <run-id> <configmap> <domain> <capability> <schemas> <max-ttl-seconds>
+automation_data_capability_register_job_manifest() {
+  [[ "$#" -eq 7 && "$4" =~ ^[a-z][a-z0-9_]{0,47}$ && "$5" =~ ^[a-z][a-z0-9_]{0,23}$ &&
+    "$6" =~ ^[a-z_][a-z0-9_]{0,62}(,[a-z_][a-z0-9_]{0,62}){0,15}$ &&
+    "$7" =~ ^[1-9][0-9]{1,2}$ ]] || return 2
+  automation_data_access_sessions_job_manifest "$1" "$2" "$3" |
+    CAPABILITY_DOMAIN="$4" CAPABILITY_NAME="$5" CAPABILITY_SCHEMAS="$6" \
+      CAPABILITY_MAX_TTL="$7" yq '
+      .metadata.labels."homelab-talos/role" = "access-capability-register" |
+      .spec.template.metadata.labels."homelab-talos/role" = "access-capability-register" |
+      .spec.template.spec.containers[0].name = "register-access-capability" |
+      .spec.template.spec.containers[0].args = ["/scripts/register-access-capability.sh"] |
+      .spec.template.spec.containers[0].env |= map(
+        select(.name != "PGUSER" and .name != "PGPASSWORD")) |
+      .spec.template.spec.containers[0].env += [
+        {"name": "PGUSER", "value": "automation_data_provisioner"},
+        {"name": "PGPASSWORD", "valueFrom": {"secretKeyRef": {
+          "name": "postgresql-credentials", "key": "provisioner-password"
+        }}},
+        {"name": "CAPABILITY_DOMAIN", "value": strenv(CAPABILITY_DOMAIN)},
+        {"name": "CAPABILITY_NAME", "value": strenv(CAPABILITY_NAME)},
+        {"name": "CAPABILITY_SCHEMAS", "value": strenv(CAPABILITY_SCHEMAS)},
+        {"name": "CAPABILITY_MAX_TTL", "value": strenv(CAPABILITY_MAX_TTL)}
+      ]
+    '
+  return "${PIPESTATUS[0]}"
+}
+
 automation_data_control_migration_job_manifest() {
   [[ "$#" -eq 3 && "$3" =~ ^automation-data-postgresql-init-[a-z0-9]+$ ]] || return 2
   automation_data_exporter_grant_job_manifest "$1" "$2" |
