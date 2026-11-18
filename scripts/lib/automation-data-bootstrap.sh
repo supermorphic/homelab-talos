@@ -94,6 +94,40 @@ automation_data_access_sessions_job_manifest() {
     '
 }
 
+# Print the one deployed access-sessions ConfigMap whose data equals the files that
+# the reviewed package generates into it. Usage: <temp-dir> <kubectl command...>
+automation_data_access_sessions_configmap() {
+  local temp_dir="$1"
+  shift
+  "$@" get configmaps --output json |
+    yq -o=json '[.items[] | select(.metadata.name |
+      test("^automation-data-postgresql-access-sessions-[a-z0-9]+$"))]' \
+      >"$temp_dir/access-sessions-configmaps.json"
+  yq -o=json '[.configMapGenerator[] |
+      select(.name == "automation-data-postgresql-access-sessions") | .files[]]' \
+    kubernetes/apps/automation-data/postgresql/app/kustomization.yaml \
+    >"$temp_dir/access-sessions-files.json"
+  python3 - "$temp_dir/access-sessions-configmaps.json" \
+    "$temp_dir/access-sessions-files.json" <<'PYTHON'
+import json
+import sys
+from pathlib import Path
+
+deployed = json.loads(Path(sys.argv[1]).read_text())
+files = json.loads(Path(sys.argv[2]).read_text())
+if len(deployed) != 1:
+    raise SystemExit("Expected exactly one deployed access-sessions ConfigMap.")
+base = Path("kubernetes/apps/automation-data/postgresql/app")
+expected = {}
+for entry in files:
+    key, _, source = entry.partition("=")
+    expected[key] = (base / source).read_text()
+if not files or deployed[0].get("data") != expected:
+    raise SystemExit("Deployed access-session inputs differ from reviewed source.")
+print(deployed[0]["metadata"]["name"])
+PYTHON
+}
+
 automation_data_session_sweeper_enable_job_manifest() {
   automation_data_access_sessions_job_manifest "$@" |
     yq '

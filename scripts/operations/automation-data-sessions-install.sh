@@ -115,25 +115,7 @@ wait_for_job_terminal "$backup_job" 1800 5 "${kc[@]}"
 
 verify_lease
 source_guard
-"${kc[@]}" get configmaps --output json |
-  yq -o=json '[.items[] | select(.metadata.name |
-    test("^automation-data-postgresql-access-sessions-[a-z0-9]+$"))]' >"$temp_dir/configmaps.json"
-[[ "$(yq 'length' "$temp_dir/configmaps.json")" == 1 ]] || {
-  echo 'Expected exactly one deployed access-sessions ConfigMap.' >&2
-  exit 1
-}
-configmap="$(yq -r '.[0].metadata.name' "$temp_dir/configmaps.json")"
-python - "$temp_dir/configmaps.json" <<'PYTHON'
-import json
-import sys
-from pathlib import Path
-config = json.loads(Path(sys.argv[1]).read_text())[0]["data"]
-base = Path("kubernetes/apps/automation-data/postgresql/app/scripts")
-names = ("access-sessions.sql", "install-access-sessions.sh",
-         "enable-session-sweeper.sql", "enable-session-sweeper.sh")
-if sorted(config) != sorted(names) or any(config[name] != (base / name).read_text() for name in names):
-    raise SystemExit("Deployed installation inputs differ from reviewed source.")
-PYTHON
+configmap="$(automation_data_access_sessions_configmap "$temp_dir" "${kc[@]}")"
 # Recheck the exact fresh backup and Job absence immediately before SQL mutation.
 "${kc[@]}" get job "$backup_job" --output json >"$temp_dir/backup.json"
 RUN_ID="$run_id" yq -e '

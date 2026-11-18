@@ -103,25 +103,7 @@ job_absent "$job" || {
   echo 'The automation-data-session-sweeper Secret must contain exactly the password key.' >&2
   exit 1
 }
-"${kc[@]}" get configmaps --output json |
-  yq -o=json '[.items[] | select(.metadata.name |
-    test("^automation-data-postgresql-access-sessions-[a-z0-9]+$"))]' >"$temp_dir/configmaps.json"
-[[ "$(yq 'length' "$temp_dir/configmaps.json")" == 1 ]] || {
-  echo 'Expected exactly one deployed access-sessions ConfigMap.' >&2
-  exit 1
-}
-configmap="$(yq -r '.[0].metadata.name' "$temp_dir/configmaps.json")"
-python - "$temp_dir/configmaps.json" <<'PYTHON'
-import json
-import sys
-from pathlib import Path
-config = json.loads(Path(sys.argv[1]).read_text())[0]["data"]
-base = Path("kubernetes/apps/automation-data/postgresql/app/scripts")
-names = ("access-sessions.sql", "install-access-sessions.sh",
-         "enable-session-sweeper.sql", "enable-session-sweeper.sh")
-if sorted(config) != sorted(names) or any(config[name] != (base / name).read_text() for name in names):
-    raise SystemExit("Deployed enablement inputs differ from reviewed source.")
-PYTHON
+configmap="$(automation_data_access_sessions_configmap "$temp_dir" "${kc[@]}")"
 # Recheck the run Lease and Job absence immediately before the role change.
 verify_lease
 job_absent "$job"

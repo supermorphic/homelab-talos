@@ -34,6 +34,34 @@ yq ea -e 'select(.kind == "StatefulSet") |
     map(select(test("access-sessions"))) | length == 0' "$temp_dir/rendered.yaml" >/dev/null ||
   fail 'the StatefulSet must not mount the access-sessions ConfigMap'
 
+# Commands accept only one deployed ConfigMap whose data equals the generated source.
+fake_kubectl() { cat "$temp_dir/deployed.json"; }
+deployed() {
+  jq --arg name "$1" '{items: [{metadata: {name: $name}, data: .data}]}' \
+    "$temp_dir/configmap.json" >"$temp_dir/deployed.json"
+}
+deployed "$configmap"
+[[ "$(automation_data_access_sessions_configmap "$temp_dir" fake_kubectl)" == "$configmap" ]] ||
+  fail 'the deployed ConfigMap check must accept the reviewed source'
+jq '.items[0].data."access-sessions.sql" += "-- drift\n"' "$temp_dir/deployed.json" >"$temp_dir/drift.json"
+mv "$temp_dir/drift.json" "$temp_dir/deployed.json"
+if automation_data_access_sessions_configmap "$temp_dir" fake_kubectl >/dev/null 2>&1; then
+  fail 'the deployed ConfigMap check must reject drifted content'
+fi
+deployed "$configmap"
+jq '.items[0].data.extra = "x"' "$temp_dir/deployed.json" >"$temp_dir/extra.json"
+mv "$temp_dir/extra.json" "$temp_dir/deployed.json"
+if automation_data_access_sessions_configmap "$temp_dir" fake_kubectl >/dev/null 2>&1; then
+  fail 'the deployed ConfigMap check must reject an extra key'
+fi
+deployed "$configmap"
+jq '.items += [.items[0] | .metadata.name = "automation-data-postgresql-access-sessions-zz"]' \
+  "$temp_dir/deployed.json" >"$temp_dir/two.json"
+mv "$temp_dir/two.json" "$temp_dir/deployed.json"
+if automation_data_access_sessions_configmap "$temp_dir" fake_kubectl >/dev/null 2>&1; then
+  fail 'the deployed ConfigMap check must reject two candidates'
+fi
+
 if automation_data_access_sessions_job_manifest job run-1 not-a-configmap >/dev/null 2>&1; then
   fail 'the manifest must reject an unexpected ConfigMap name'
 fi
