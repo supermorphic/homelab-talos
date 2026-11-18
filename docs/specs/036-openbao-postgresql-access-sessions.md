@@ -515,10 +515,20 @@ AUTOMATION_DATA_SESSIONS_RESTORE_CLEANUP_CONFIRM=cleanup:automation-data:restore
 ```
 
 It rebinds each registered login to its restored role only when the role has the
-shape issuance creates, then revokes every registered login. Expected final line:
-`session_restore_cleanup revoked=<n> failed=0 remaining=0 run=<run-id>`. A non-zero
-`failed` or `remaining` means a temporary-login role does not have the issued shape
-or is unregistered; inspect it before dropping it manually.
+shape issuance creates, then revokes every registered login. Expected result line:
+`session_restore_cleanup revoked=<n> failed=0 remaining=0 run=<run-id>`, followed by
+the command's own cleanup line.
+
+If the Job prints only `session_restore_cleanup=failed`, the restored control
+database may predate the cleanup function. Run `automation-data-sessions-install`,
+which reapplies the access-session SQL after a fresh backup, then run the cleanup
+again.
+
+A non-zero `failed` or `remaining` leaves at least one temporary-login role in
+place. Inspect each `v-…` role and its registry row before acting. Causes include a
+role without the issued shape, an unregistered role, a registry row already marked
+revoked while its role still exists, sessions that do not end, and objects the role
+owns outside its domain database. Rerun the cleanup after correcting the cause.
 
 ## Delivery and cutover
 
