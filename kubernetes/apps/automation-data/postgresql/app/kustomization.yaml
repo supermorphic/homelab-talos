@@ -10,6 +10,7 @@ resources:
   - ./scoped-test-fixtures.yaml
   - ./service.yaml
   - ./servicemonitor.yaml
+  - ./session-sweeper-credentials.sops.yaml
   - ./session-sweeper.yaml
   - ./statefulset.yaml
 configMapGenerator:

@@ -57,10 +57,10 @@ yq -n '
   .type = "Opaque" |
   .stringData.password = strenv(SWEEPER_PASSWORD)
 ' >"$temp_dir/plaintext.yaml"
-sops --encrypt --filename-override "$target" "$temp_dir/plaintext.yaml" >"$temp_dir/secret"
+sops --encrypt --filename-override "$target" "$temp_dir/plaintext.yaml" >"$temp_dir/secret.sops.yaml"
 rm -f -- "$temp_dir/plaintext.yaml"
 
-candidate="$temp_dir/secret"
+candidate="$temp_dir/secret.sops.yaml"
 [[ "$(sops filestatus "$candidate" | yq -r '.encrypted')" == true ]]
 [[ "$(yq -r '[.sops.age[].recipient] | unique | join(",")' "$candidate")" == "${recipients[0]}" ]] || {
   echo 'The encrypted Secret does not use the expected recipient.' >&2
