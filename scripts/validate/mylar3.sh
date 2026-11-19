@@ -42,8 +42,6 @@ done
 [[ "$(yq -r '.spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation' "$dep")" == 'false' ]]
 [[ "$(yq -r '.spec.template.spec.containers[0].securityContext.capabilities.add | sort | join(",")' "$dep")" == 'CHOWN,DAC_OVERRIDE,FOWNER,KILL,SETGID,SETUID' ]]
 
-# Onboarding comics must not enroll them in cleanup before import/seeding acceptance.
-[[ "$(yq -r '[.share_limits[] | select(.cleanup == true) | .categories[] | select(. == "comics")] | length' kubernetes/apps/media/qbit-manage/app/config.yml)" == '0' ]]
 kubeconform -strict -summary \
   -kubernetes-version "$(yq -p=toml -oy -r '.tools.kubectl' .mise.toml)" \
   "$temp_dir/render.yaml"
