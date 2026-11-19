@@ -71,11 +71,13 @@ check_workload() {
 
 }
 check_workload "$app" "$temp_dir"
-# The enabled state that the operator's writer and a later resume produce.
+# The enabled state that the operator's writer and a later resume produce. Start
+# from the staged package even after the real one selects the Secret.
 mkdir -p "$temp_dir/enabled"
 cp -R "$app" "$temp_dir/enabled/app"
-awk '$0 == "  - ./session-sweeper.yaml" { print "  - ./session-sweeper-credentials.sops.yaml" } { print }' \
-  "$app/kustomization.yaml" >"$temp_dir/enabled/app/kustomization.yaml"
+grep -vxF '  - ./session-sweeper-credentials.sops.yaml' "$app/kustomization.yaml" |
+  awk '$0 == "  - ./session-sweeper.yaml" { print "  - ./session-sweeper-credentials.sops.yaml" } { print }' \
+    >"$temp_dir/enabled/app/kustomization.yaml"
 cat >"$temp_dir/enabled/app/session-sweeper-credentials.sops.yaml" <<'YAML'
 apiVersion: v1
 kind: Secret

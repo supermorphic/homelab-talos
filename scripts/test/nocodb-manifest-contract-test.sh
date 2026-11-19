@@ -180,8 +180,8 @@ ks='kubernetes/apps/automation-data/nocodb/ks.yaml'
   fail 'the NocoDB HelmRelease source contract is incorrect'
 
 postgresql_policy='kubernetes/apps/automation-data/postgresql/app/ciliumnetworkpolicy.yaml'
-[[ "$(yq ea -r 'select(.kind == "CiliumNetworkPolicy" and .metadata.name == "automation-data-postgresql") | [.spec.ingress[].fromEndpoints[] | select(.matchLabels."k8s:io.kubernetes.pod.namespace" == "automation-data") | .matchLabels."app.kubernetes.io/name"] | sort | join(",")' "$postgresql_policy")" == 'automation-data-postgresql-backup,nocodb,nocodb-metadata-bootstrap' ]] ||
-  fail 'the PostgreSQL policy must admit the NocoDB application and metadata bootstrap Job'
+[[ "$(yq ea -r 'select(.kind == "CiliumNetworkPolicy" and .metadata.name == "automation-data-postgresql") | [.spec.ingress[].fromEndpoints[] | select(.matchLabels."k8s:io.kubernetes.pod.namespace" == "automation-data") | .matchLabels."app.kubernetes.io/name"] | sort | join(",")' "$postgresql_policy")" == 'automation-data-postgresql-backup,automation-data-session-sweeper,nocodb,nocodb-metadata-bootstrap' ]] ||
+  fail 'the PostgreSQL policy must admit only the backup, session sweeper, NocoDB application and metadata bootstrap pods'
 [[ "$(yq -r '[.spec.egress[] | select(.toEndpoints[].matchLabels."app.kubernetes.io/name" == "nocodb") | [.toEndpoints[].matchLabels."k8s:io.kubernetes.pod.namespace", .toEndpoints[].matchLabels."app.kubernetes.io/name", .toPorts[].ports[].port] | join(",")] | join(",")' kubernetes/apps/automation/n8n/app/ciliumnetworkpolicy.yaml)" == 'automation-data,nocodb,8080' ]] ||
   fail 'the n8n policy must add only the NocoDB TCP/8080 egress destination'
 
