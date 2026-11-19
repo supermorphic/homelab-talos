@@ -206,6 +206,16 @@ automation-data-sessions-install: require-bash
 automation-data-session-sweeper-enable: require-bash
     @scripts/operations/automation-data-session-sweeper-enable.sh {{quote(kubeconfig)}}
 
+# Operator-run after a PostgreSQL restore: revoke every registered temporary login and
+# verify none remain. Guard: AUTOMATION_DATA_SESSIONS_RESTORE_CLEANUP_CONFIRM.
+automation-data-sessions-restore-cleanup: require-bash
+    @scripts/operations/automation-data-sessions-restore-cleanup.sh {{quote(kubeconfig)}}
+
+# Operator-run: register a specification 036 access capability, or re-read it with its
+# validation. schemas is comma-separated. Guard: AUTOMATION_DATA_CAPABILITY_REGISTER_CONFIRM.
+automation-data-capability-register domain capability schemas max_ttl_seconds: require-bash
+    @scripts/operations/automation-data-capability-register.sh {{quote(kubeconfig)}} {{quote(domain)}} {{quote(capability)}} {{quote(schemas)}} {{quote(max_ttl_seconds)}}
+
 # Operator-run one-time discovery installation; never a routine credential fallback.
 automation-data-discovery-install action='': require-bash
     @scripts/operations/automation-data-discovery-install.sh {{quote(kubeconfig)}} {{if action == '' { '' } else { quote(action) }}}

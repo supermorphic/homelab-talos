@@ -465,6 +465,71 @@ for password_file in previous-sweeper.env "$sweeper.env" short-sweeper.env; do
 done
 as_role "$issuer" "SELECT platform_operations.revoke_session_login('$metered')" >/dev/null
 
+# A restore recreates temporary logins with new OIDs, so normal revocation refuses
+# them. The restore cleanup rebinds only logins with the issued shape and revokes them.
+query "DROP ROLE \"$stray\"" >/dev/null
+restore_cleanup() {
+  podman exec "$container" sh -c 'PGUSER=automation_data_backup \
+    PGDATABASE=automation_data_control exec sh /scripts/restore-session-logins.sh'
+}
+# recreate NAME [ATTRIBUTE] imitates a restored role: same name, new OID.
+recreate() {
+  query "DROP ROLE \"$1\"; CREATE ROLE \"$1\" LOGIN ${2:-} VALID UNTIL 'infinity';
+    GRANT \"$cap\" TO \"$1\" WITH INHERIT TRUE, SET FALSE, ADMIN FALSE" >/dev/null
+}
+restored="$(login_name)"
+odd="$(login_name)"
+issue "$restored" 600 >/dev/null
+issue "$odd" 600 >/dev/null
+recreate "$restored"
+recreate "$odd" CREATEDB
+expect_error session_login_identity_mismatch automation_data_control \
+  "SET ROLE $issuer; SELECT platform_operations.revoke_session_login('$restored')"
+if restore_cleanup >"$scratch/restore.out" 2>&1; then
+  fail 'restore cleanup must fail while a login cannot be revoked'
+fi
+[[ "$(cat "$scratch/restore.out")" == 'session_restore_cleanup revoked=1 failed=1 remaining=1' ]] ||
+  fail "restore cleanup must revoke the restored login and report the other: $(cat "$scratch/restore.out")"
+[[ "$(revoked_by "$restored")" == restore && "$(role_exists "$restored")" == 0 ]] ||
+  fail 'the restored login must be revoked by restore'
+[[ "$(role_exists "$odd")" == 1 ]] || fail 'a role without the issued shape must not be dropped'
+query "ALTER ROLE \"$odd\" NOCREATEDB" >/dev/null
+[[ "$(restore_cleanup 2>&1)" == 'session_restore_cleanup revoked=1 failed=0 remaining=0' ]] ||
+  fail 'restore cleanup must finish once every login has the issued shape'
+
+# The registration wrapper runs as the provisioner, takes values only from the
+# environment, and prints the validated capability or a known error code.
+register_capability() {
+  podman exec --env CAPABILITY_DOMAIN="$1" --env CAPABILITY_NAME="$2" \
+    --env CAPABILITY_SCHEMAS="$3" --env CAPABILITY_MAX_TTL="$4" \
+    --env PGUSER=automation_data_provisioner --env PGDATABASE=automation_data_control \
+    "$container" sh /scripts/register-access-capability.sh
+}
+audit_cap="cap_$(printf 'session_fixture:audit' | md5sum | cut -d' ' -f1)_access"
+register_capability session_fixture audit read_api 300 >"$scratch/register.out" ||
+  fail "registration failed: $(cat "$scratch/register.out")"
+jq -e --arg role "$audit_cap" '.role == $role and .state == "ready" and
+  .maxTtlSeconds == 300 and .schemas == ["read_api"] and .valid == false' \
+  "$scratch/register.out" >/dev/null || fail 'registration must report the new, not yet valid capability'
+dbquery session_fixture "
+  GRANT CONNECT ON DATABASE session_fixture TO \"$audit_cap\";
+  GRANT USAGE ON SCHEMA read_api TO \"$audit_cap\";
+  GRANT SELECT ON read_api.present TO \"$audit_cap\";" >/dev/null
+register_capability session_fixture audit read_api 300 >"$scratch/register.out" ||
+  fail 'repeated registration must succeed'
+jq -e '.valid == true and .objectPrivilegesValid == true' "$scratch/register.out" >/dev/null ||
+  fail 'repeated registration must report validity after the reviewed grants'
+for case in 'invalid_access_capability_ttl|audit|read_api|900' \
+    'access_capability_binding_conflict|audit|read_api,other_api|300' \
+    "invalid_access_capability_schemas|other|read_api');--|300"; do
+  IFS='|' read -r code name schemas ttl <<<"$case"
+  if register_capability session_fixture "$name" "$schemas" "$ttl" >"$scratch/register.out" 2>&1; then
+    fail "registration must refuse with $code"
+  fi
+  [[ "$(cat "$scratch/register.out")" == "access_capability_registration=failed reason=$code" ]] ||
+    fail "registration must report only $code, got: $(cat "$scratch/register.out")"
+done
+
 # Reinstallation leaves roles, settings, memberships, and registries unchanged.
 state_digest() {
   query "SELECT md5(concat_ws('|',
