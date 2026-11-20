@@ -188,7 +188,12 @@ def verify_configuration(desired_path, client, *, allow_issuer_reset=False):
     ]
     sanitized = sanitize(differences, source=desired_path)
     if sanitized["differences"]:
-        raise SafeError("source-mismatch")
+        only_pending = {f"{d['kind']}/{d.get('name')}" for d in sanitized["differences"]}
+        raise SafeError(
+            "issuer-reset-required"
+            if pending and only_pending <= set(pending)
+            else "source-mismatch"
+        )
     if allow_issuer_reset and pending:
         sanitized["issuer_reset_required"] = pending
     return sanitized

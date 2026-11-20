@@ -279,6 +279,10 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(self.client.writes, [])
         self.assertEqual(result["status"], "issuer-reset-required")
         self.assertEqual(result["issuer_reset_required"], ["database-connection/automation-data"])
+        # Strict callers name the missing step instead of a generic mismatch.
+        with self.assertRaisesRegex(SafeError, "issuer-reset-required"):
+            apply.verify_configuration(DESIRED, self.client)
+        self.client.state[("database-role", "career-ops-read")]["max_ttl"] = 3600
         with self.assertRaisesRegex(SafeError, "source-mismatch"):
             apply.verify_configuration(DESIRED, self.client)
 

@@ -280,6 +280,8 @@ class PinnedReadbackTest(unittest.TestCase):
         client = Client()
         client.state[("issuance-role", "openbao-acceptance")]["token_max_ttl"] = 900
         client.state[("jwt-config", "homelab-jwt")] = None
+        # A fresh OpenBao has no database connection until the issuer reset runs.
+        del client.state[("database-connection", "automation-data")]
         target = {
             "source_revision": "a" * 40,
             "package_digest": "b" * 64,
@@ -302,6 +304,7 @@ class PinnedReadbackTest(unittest.TestCase):
                 confirm=guards.confirmation("initialize", "a" * 40, guards.digest(target)),
             )
         self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["issuer_reset_required"], ["database-connection/automation-data"])
         self.assertIn("root-revoked", journal)
         self.assertEqual(
             client.state[("issuance-role", "openbao-acceptance")]["token_max_ttl"], 600

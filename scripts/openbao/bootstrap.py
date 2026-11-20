@@ -122,7 +122,8 @@ def _finish(client, token, password, kubeconfig, target, phase, journal):
             raise SafeError("authentication-failed")
         client.wait_quorum(operator_token)
         client.set_token(operator_token)
-        apply.verify_configuration(apply.DESIRED, client)
+        # The database connection waits for the issuer reset, which needs PostgreSQL.
+        verified = apply.verify_configuration(apply.DESIRED, client, allow_issuer_reset=True)
         if not apply.audit_state(client):
             raise SafeError("source-mismatch")
         journal.append("operator-login-verified")
@@ -140,7 +141,8 @@ def _finish(client, token, password, kubeconfig, target, phase, journal):
         guards.assert_mutation_allowed(kubeconfig)
         _revoke_checked(client, operator_token)
         client.set_token(None)
-    return {"status": "pass"}
+    pending = verified.get("issuer_reset_required")
+    return {"status": "pass", **({"issuer_reset_required": pending} if pending else {})}
 
 
 def finalize(*, client, token, kubeconfig, journal, password=None, confirm=""):
@@ -150,7 +152,7 @@ def finalize(*, client, token, kubeconfig, journal, password=None, confirm=""):
     root = client.read("auth/token/lookup-self", token=token)
     if set(root.get("data", {}).get("policies", [])) != {"root"}:
         raise SafeError("authentication-failed")
-    apply.verify_configuration(apply.DESIRED, client)
+    apply.verify_configuration(apply.DESIRED, client, allow_issuer_reset=True)
     if not apply.audit_state(client):
         raise SafeError("source-mismatch")
     required = guards.confirmation("finalize", target["source_revision"], guards.digest(target))
