@@ -431,15 +431,16 @@ observe_blocked_enable() {
   local enabler="$!"
   sleep 1
   query "SET ROLE automation_data_exporter; SELECT coalesce(query, '') || '|' || coalesce(state, '')
+    || '|' || coalesce(wait_event_type, '')
     FROM pg_stat_activity WHERE usename = 'automation_data_backup'" >"$scratch/blocked-activity.out"
   wait "$holder" || true
   wait "$enabler" || true
   if rg -qF -- "$(cut -d= -f2 "$env_file")" "$scratch/blocked-activity.out"; then
     fail "the $role password was visible in pg_stat_activity while its enable step waited"
   fi
-  rg -q 'ALTER ROLE' "$scratch/blocked-activity.out" &&
-    fail "the $role enable statement was visible in pg_stat_activity"
-  return 0
+  # The observation must have seen the enable session waiting on the catalog lock.
+  [[ "$(tail -n +2 "$scratch/blocked-activity.out")" == '|disabled|Lock' ]] ||
+    fail "the $role enable session was not observed blocked with its activity hidden"
 }
 new_password_file "$sweeper.env" 32
 observe_blocked_enable "$sweeper" enable-session-sweeper.sh "$scratch/$sweeper.env"
@@ -467,6 +468,10 @@ query "ALTER ROLE $issuer RESET track_activities" >/dev/null
 [[ "$(enable_issuer "$scratch/$issuer.env" 2>&1)" == 'openbao_issuer_login=failed' ]] ||
   fail 'the issuer enable must refuse an issuer whose activity is visible'
 install_sessions
+query "ALTER ROLE $issuer IN DATABASE automation_data_control SET track_activities = on" >/dev/null
+[[ "$(enable_issuer "$scratch/$issuer.env" 2>&1)" == 'openbao_issuer_login=failed' ]] ||
+  fail 'the issuer enable must refuse a per-database setting that shows issuer activity'
+query "ALTER ROLE $issuer IN DATABASE automation_data_control RESET track_activities" >/dev/null
 observe_blocked_enable "$issuer" enable-openbao-issuer.sh "$scratch/$issuer.env"
 [[ "$(cat "$scratch/blocked-enable.out")" == 'openbao_issuer_login=enabled' ]] ||
   fail 'the issuer enable must report only the fixed success marker'
@@ -490,6 +495,17 @@ as_login "$issuer" automation_data_control "ALTER ROLE $issuer WITH PASSWORD '$r
 cp "$scratch/rotated-issuer.env" "$scratch/$issuer.env"
 [[ "$(as_login "$issuer" automation_data_control 'SELECT session_user')" == "$issuer" ]] ||
   fail 'the issuer must authenticate with its rotated password'
+# The issuer reset sets only a verifier that its own Python code computes.
+reset_password="$(openssl rand -hex 32)"
+printf 'LOGIN_PASSWORD=%s\n' "$(uv run --locked python -c 'import sys
+from scripts.openbao.database_issuer import scram_verifier
+print(scram_verifier(sys.argv[1]))' "$reset_password")" >"$scratch/reset-verifier.env"
+chmod 600 "$scratch/reset-verifier.env"
+[[ "$(enable_issuer "$scratch/reset-verifier.env" 2>&1)" == 'openbao_issuer_login=enabled' ]] ||
+  fail 'the issuer enable must accept the reset command verifier'
+printf 'LOGIN_PASSWORD=%s\n' "$reset_password" >"$scratch/$issuer.env"
+[[ "$(as_login "$issuer" automation_data_control 'SELECT session_user')" == "$issuer" ]] ||
+  fail 'the issuer must authenticate with the password behind the reset command verifier'
 podman logs "$container" >"$scratch/server.log" 2>&1
 for password_file in short-issuer.env "$issuer.env"; do
   if rg -qF -- "$(cut -d= -f2 "$scratch/$password_file")" "$scratch/server.log"; then

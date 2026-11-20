@@ -1,5 +1,6 @@
 -- Give the specification 036 OpenBao issuer its initial password login. The issuer
--- reset command supplies ISSUER_PASSWORD, then has OpenBao rotate it with rotate-root.
+-- reset command supplies ISSUER_PASSWORD as a SCRAM verifier, then has OpenBao rotate
+-- the password with rotate-root.
 \set ON_ERROR_STOP on
 \getenv issuer_password ISSUER_PASSWORD
 BEGIN;

@@ -99,7 +99,8 @@ drift checks:
   OpenBao never returns it, and a read that contains it is refused.
   `openbao-config-apply` updates the connection's other settings without a
   password, which keeps the stored one, but never creates the connection. Until the
-  issuer reset creates it, `config-apply` ends with `issuer-reset-required`.
+  issuer reset creates it, `config-apply` ends with `issuer-reset-required`, and
+  other OpenBao commands that require matching configuration refuse with that code.
 - One OpenBao role per capability, for example `career-ops-read`:
   - `creation_statements`: `SELECT platform_operations.issue_session_login('{{name}}', '{{password}}', '{{expiration}}', 'career_ops', 'read')`.
   - `revocation_statements`: `SELECT platform_operations.revoke_session_login('{{name}}')`.
@@ -521,19 +522,22 @@ OPENBAO_OPERATOR_KUBECONFIG=<absolute path to the operator kubeconfig> \
   mise exec -- just kube automation-data-openbao-issuer-reset
 ```
 
-It refuses when any other OpenBao object differs from the reviewed configuration,
-prints the plan, and asks for the exact confirmation, which can also be supplied in
-`OPENBAO_DATABASE_ISSUER_CONFIRM`. It then:
+It refuses when any OpenBao object other than the connection differs from the
+reviewed configuration, prints the plan, and asks for the exact confirmation, which
+is valid for that run only. It then:
 
-1. Sets a new random issuer password through a Job running as the platform
-   superuser. The password exists in the cluster only in a run-scoped Secret that
-   the command deletes.
-2. Writes the OpenBao connection with that password.
+1. Generates a random issuer password and sets only its SCRAM verifier on the
+   issuer role, through a Job running as the platform superuser. The verifier
+   exists in the cluster only in a run-scoped Secret that the command deletes.
+2. Writes the complete reviewed connection with the password, which also repairs
+   connection drift that `config-apply` cannot write without the stored password.
 3. Runs `rotate-root`.
 4. Verifies the OpenBao configuration.
 
 Expected last line: JSON with `"status": "pass"` and `"issuer": "rotated"`. With
-`"issuer_state": "unknown"`, `rotate-root` failed; run the reset again. After the
+`"issuer_state": "unknown"`, a step after the PostgreSQL change failed; run the
+reset again. `"cleanup": "failed"` means the run-owned Job, Secret, or Lease may
+remain in `automation-data`; delete them before the rerun. After the
 runner exists, also issue and revoke one test login through it.
 
 Capability roles and registries are in logical backups. Temporary logins are not

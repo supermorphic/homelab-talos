@@ -760,7 +760,13 @@ BEGIN
     NOT EXISTS (SELECT FROM pg_db_role_setting AS setting
       JOIN pg_roles AS role ON role.oid = setting.setrole
       WHERE role.rolname = 'automation_data_openbao_issuer' AND setting.setdatabase = 0
-        AND 'track_activities=off' = ANY (setting.setconfig)) THEN
+        AND 'track_activities=off' = ANY (setting.setconfig)) OR
+    -- A per-database setting would take precedence over the role-wide one.
+    EXISTS (SELECT FROM pg_db_role_setting AS setting
+      JOIN pg_roles AS role ON role.oid = setting.setrole
+      CROSS JOIN LATERAL unnest(setting.setconfig) AS config(entry)
+      WHERE role.rolname = 'automation_data_openbao_issuer' AND setting.setdatabase <> 0
+        AND config.entry LIKE 'track\_activities=%') THEN
     RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'invalid_access_session_contract';
   END IF;
 END;

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Give the specification 036 OpenBao issuer a password login. Only the issuer reset
-# command (scripts/openbao/database_issuer.py) runs this; it supplies the password on
-# stdin and then has OpenBao rotate it. The value exists in the cluster only in a
-# run-scoped Secret that cleanup deletes.
+# command (scripts/openbao/database_issuer.py) runs this; it supplies the password's
+# SCRAM verifier on stdin and then has OpenBao rotate the password. The verifier
+# exists in the cluster only in a run-scoped Secret that cleanup deletes.
 set -euo pipefail
 
 source scripts/lib/common.sh
