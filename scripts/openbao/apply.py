@@ -31,6 +31,8 @@ def _safe_source(document):
             "policy": "sys/policies/acl/",
             "kubernetes-config": "",
             "issuance-role": "kubernetes/roles/",
+            "database-connection": "automation-data/config/",
+            "database-role": "automation-data/roles/",
         }
         expected = prefixes[spec.kind] + spec.name
         if spec.kind in {"jwt-config", "kubernetes-config"}:
@@ -60,6 +62,8 @@ def snapshot(desired_path, client, *, retiring=False):
             "approle-role": ("auth-method", "homelab-approle/"),
             "userpass-user": ("auth-method", "homelab-userpass/"),
             "issuance-role": ("secret-mount", "kubernetes/"),
+            "database-connection": ("secret-mount", "automation-data/"),
+            "database-role": ("secret-mount", "automation-data/"),
         }.get(kind)
         if parent and parent[1] not in inventory[parent[0]]:
             inventory[kind] = {"keys": []}
@@ -124,9 +128,18 @@ def snapshot(desired_path, client, *, retiring=False):
     return document, states
 
 
+def _issuer_reset_required(spec, states):
+    """Only the issuer reset can create a connection, because that needs its password."""
+    return spec.kind == "database-connection" and states[(spec.kind, spec.name)][0] is None
+
+
 def _changes(document, states):
     writes = [
-        {"kind": s.kind, "name": s.name, "action": "write"}
+        {
+            "kind": s.kind,
+            "name": s.name,
+            "action": "issuer-reset" if _issuer_reset_required(s, states) else "write",
+        }
         for s in document["objects"]
         if states[(s.kind, s.name)][1]
     ]
@@ -151,15 +164,33 @@ def _write(spec, actual, client, token, password=None):
     if spec.kind in {"auth-method", "secret-mount"} and actual is not None:
         path += "/tune"
         payload = {**payload["config"], "description": payload["description"]}
+    if spec.kind == "database-connection":
+        if actual is None and password is None:
+            raise SafeError("issuer-reset-required")
+        # Connection settings are written flat. Without a password, OpenBao keeps the
+        # stored one; only the issuer reset supplies it.
+        payload = {**payload.pop("connection_details"), **payload}
+        if password is not None:
+            payload["password"] = password
     client.post(path, payload, token=token)
 
 
-def verify_configuration(desired_path, client):
-    _, states = snapshot(desired_path, client)
-    differences = [d for _, findings in states.values() for d in findings]
+def verify_configuration(desired_path, client, *, allow_issuer_reset=False):
+    document, states = snapshot(desired_path, client)
+    pending = [
+        f"{s.kind}/{s.name}" for s in document["objects"] if _issuer_reset_required(s, states)
+    ]
+    differences = [
+        d
+        for (kind, name), (_, findings) in states.items()
+        if not (allow_issuer_reset and f"{kind}/{name}" in pending)
+        for d in findings
+    ]
     sanitized = sanitize(differences, source=desired_path)
     if sanitized["differences"]:
         raise SafeError("source-mismatch")
+    if allow_issuer_reset and pending:
+        sanitized["issuer_reset_required"] = pending
     return sanitized
 
 
@@ -193,16 +224,16 @@ def install_initial(client, token, password, kubeconfig, expected_target, desire
     document, states = snapshot(desired_path, client)
     for spec in document["objects"]:
         actual, differences = states[(spec.kind, spec.name)]
-        if differences:
+        if differences and not _issuer_reset_required(spec, states):
             guards.assert_mutation_allowed(kubeconfig)
             if guards.freeze_target(kubeconfig, "initialize") != expected_target:
                 raise SafeError("source-mismatch")
-            _write(spec, actual, client, token, password)
+            _write(spec, actual, client, token, password if spec.kind == "userpass-user" else None)
     guards.assert_mutation_allowed(kubeconfig)
     if guards.freeze_target(kubeconfig, "initialize") != expected_target:
         raise SafeError("source-mismatch")
     require_audit(client)
-    verify_configuration(desired_path, client)
+    verify_configuration(desired_path, client, allow_issuer_reset=True)
 
 
 def run(
@@ -241,7 +272,7 @@ def run(
         raise SafeError("authentication-failed")
     for spec in document["objects"]:
         actual, differences = states[(spec.kind, spec.name)]
-        if differences:
+        if differences and not _issuer_reset_required(spec, states):
             guards.assert_mutation_allowed(kubeconfig)
             if guards.freeze_target(kubeconfig, "config-apply") != target:
                 raise SafeError("source-mismatch")
@@ -268,5 +299,7 @@ def run(
     if guards.freeze_target(kubeconfig, "config-apply") != target:
         raise SafeError("source-mismatch")
     require_audit(client)
-    result = verify_configuration(desired_path, client)
+    result = verify_configuration(desired_path, client, allow_issuer_reset=True)
+    if result.get("issuer_reset_required"):
+        return {"status": "issuer-reset-required", **result}
     return {"status": "pass", **result}

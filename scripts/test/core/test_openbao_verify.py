@@ -58,6 +58,8 @@ LIVE_INVENTORIES = {
         'test-openbao-ha',
         'test-openbao-restore',
         'test-openbao-lifecycle'],
+    'database-connection': ['automation-data'],
+    'database-role': ['career-ops-read'],
 }
 
 
@@ -81,14 +83,15 @@ class FakeReader:
         self.configuration_requests.append((method, path))
         if path == self.fail_path:
             raise SafeError('read-denied')
-        if path in {'sys/auth', 'sys/mounts', 'auth/homelab-jwt/role',
-                    'auth/homelab-userpass/users', 'auth/homelab-approle/role', 'sys/policies/acl', 'kubernetes/roles'}:
-            kind = next(kind for kind, endpoint in {
-                'auth-method': 'sys/auth', 'secret-mount': 'sys/mounts',
-                'jwt-role': 'auth/homelab-jwt/role', 'userpass-user': 'auth/homelab-userpass/users',
-                'approle-role': 'auth/homelab-approle/role',
-                'policy': 'sys/policies/acl', 'issuance-role': 'kubernetes/roles'}.items()
-                if endpoint == path)
+        endpoints = {
+            'auth-method': 'sys/auth', 'secret-mount': 'sys/mounts',
+            'jwt-role': 'auth/homelab-jwt/role', 'userpass-user': 'auth/homelab-userpass/users',
+            'approle-role': 'auth/homelab-approle/role',
+            'policy': 'sys/policies/acl', 'issuance-role': 'kubernetes/roles',
+            'database-connection': 'automation-data/config',
+            'database-role': 'automation-data/roles'}
+        if path in endpoints.values():
+            kind = next(kind for kind, endpoint in endpoints.items() if endpoint == path)
             if kind in {'auth-method', 'secret-mount'}:
                 originals = AUTH_MOUNTS if kind == 'auth-method' else SECRET_MOUNTS
                 return {name: copy.deepcopy(originals.get(name, {'type': 'system'}))

@@ -482,7 +482,7 @@ def main(argv):
             with lease(kubeconfig):
                 result = operation(supplied)
         print(json.dumps(result, sort_keys=True))
-        return 0 if result["status"] in {"pass", "prepared"} else 1
+        return 0 if result["status"] in {"pass", "prepared", "issuer-reset-required"} else 1
     except Exception:  # noqa: BLE001 -- Never render exceptions from credential-bearing operations.
         error = sys.exc_info()[1]
         result = {

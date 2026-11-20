@@ -92,6 +92,27 @@
     },
     "sys/": {
       "type": "system"
+    },
+    "automation-data/": {
+      "accessor": "synthetic-database-accessor",
+      "config": {
+        "audit_non_hmac_response_keys": [
+          "username"
+        ],
+        "default_lease_ttl": 600,
+        "force_no_cache": false,
+        "max_lease_ttl": 600
+      },
+      "description": "Scoped PostgreSQL session logins",
+      "external_entropy_access": false,
+      "local": false,
+      "options": {},
+      "plugin_version": "",
+      "running_plugin_version": "v2.7.0+builtin.bao",
+      "running_sha256": "",
+      "seal_wrap": false,
+      "type": "database",
+      "uuid": "22222222-2222-4222-8222-222222222222"
     }
   },
   "GET auth/homelab-jwt/config": {
@@ -271,7 +292,7 @@
     "cas_required": false,
     "modified": "2026-10-01T11:57:05.019314-06:00",
     "name": "openbao-config-reader",
-    "policy": "{\"path\":{\"auth/homelab-approle/role\":{\"capabilities\":[\"list\"]},\"auth/homelab-approle/role/agent-workstation\":{\"capabilities\":[\"read\"]},\"auth/homelab-jwt/config\":{\"capabilities\":[\"read\"]},\"auth/homelab-jwt/role\":{\"capabilities\":[\"list\"]},\"auth/homelab-jwt/role/openbao-acceptance\":{\"capabilities\":[\"read\"]},\"auth/homelab-jwt/role/openbao-backup\":{\"capabilities\":[\"read\"]},\"auth/homelab-jwt/role/openbao-config-reader\":{\"capabilities\":[\"read\"]},\"auth/homelab-userpass/users\":{\"capabilities\":[\"list\"]},\"auth/homelab-userpass/users/openbao-operator\":{\"capabilities\":[\"read\"]},\"auth/token/revoke-self\":{\"capabilities\":[\"update\"]},\"kubernetes/config\":{\"capabilities\":[\"read\"]},\"kubernetes/roles\":{\"capabilities\":[\"list\"]},\"kubernetes/roles/campaign-coordinator\":{\"capabilities\":[\"read\"]},\"kubernetes/roles/diagnostic\":{\"capabilities\":[\"read\"]},\"kubernetes/roles/observer\":{\"capabilities\":[\"read\"]},\"kubernetes/roles/openbao-acceptance\":{\"capabilities\":[\"read\"]},\"kubernetes/roles/publisher\":{\"capabilities\":[\"read\"]},\"sys/auth\":{\"capabilities\":[\"read\"]},\"sys/mounts\":{\"capabilities\":[\"read\"]},\"sys/policies/acl\":{\"capabilities\":[\"list\"]},\"sys/policies/acl/agent-profiles\":{\"capabilities\":[\"read\"]},\"sys/policies/acl/openbao-acceptance\":{\"capabilities\":[\"read\"]},\"sys/policies/acl/openbao-backup\":{\"capabilities\":[\"read\"]},\"sys/policies/acl/openbao-config-reader\":{\"capabilities\":[\"read\"]},\"sys/policies/acl/openbao-operator\":{\"capabilities\":[\"read\"]},\"sys/storage/raft/configuration\":{\"capabilities\":[\"read\"]}}}",
+    "policy": "{\"path\":{\"auth/homelab-approle/role\":{\"capabilities\":[\"list\"]},\"auth/homelab-approle/role/agent-workstation\":{\"capabilities\":[\"read\"]},\"auth/homelab-jwt/config\":{\"capabilities\":[\"read\"]},\"auth/homelab-jwt/role\":{\"capabilities\":[\"list\"]},\"auth/homelab-jwt/role/openbao-acceptance\":{\"capabilities\":[\"read\"]},\"auth/homelab-jwt/role/openbao-backup\":{\"capabilities\":[\"read\"]},\"auth/homelab-jwt/role/openbao-config-reader\":{\"capabilities\":[\"read\"]},\"auth/homelab-userpass/users\":{\"capabilities\":[\"list\"]},\"auth/homelab-userpass/users/openbao-operator\":{\"capabilities\":[\"read\"]},\"auth/token/revoke-self\":{\"capabilities\":[\"update\"]},\"automation-data/config\":{\"capabilities\":[\"list\"]},\"automation-data/config/automation-data\":{\"capabilities\":[\"read\"]},\"automation-data/roles\":{\"capabilities\":[\"list\"]},\"automation-data/roles/career-ops-read\":{\"capabilities\":[\"read\"]},\"kubernetes/config\":{\"capabilities\":[\"read\"]},\"kubernetes/roles\":{\"capabilities\":[\"list\"]},\"kubernetes/roles/campaign-coordinator\":{\"capabilities\":[\"read\"]},\"kubernetes/roles/debugger\":{\"capabilities\":[\"read\"]},\"kubernetes/roles/observer\":{\"capabilities\":[\"read\"]},\"kubernetes/roles/openbao-acceptance\":{\"capabilities\":[\"read\"]},\"kubernetes/roles/report-publisher\":{\"capabilities\":[\"read\"]},\"kubernetes/roles/test-cilium-connectivity\":{\"capabilities\":[\"read\"]},\"kubernetes/roles/test-conformance\":{\"capabilities\":[\"read\"]},\"kubernetes/roles/test-flux-restart\":{\"capabilities\":[\"read\"]},\"kubernetes/roles/test-node-reschedule\":{\"capabilities\":[\"read\"]},\"kubernetes/roles/test-openbao-ha\":{\"capabilities\":[\"read\"]},\"kubernetes/roles/test-openbao-issuance\":{\"capabilities\":[\"read\"]},\"kubernetes/roles/test-openbao-lifecycle\":{\"capabilities\":[\"read\"]},\"kubernetes/roles/test-openbao-restore\":{\"capabilities\":[\"read\"]},\"kubernetes/roles/test-runner\":{\"capabilities\":[\"read\"]},\"sys/auth\":{\"capabilities\":[\"read\"]},\"sys/mounts\":{\"capabilities\":[\"read\"]},\"sys/policies/acl\":{\"capabilities\":[\"list\"]},\"sys/policies/acl/agent-profiles\":{\"capabilities\":[\"read\"]},\"sys/policies/acl/openbao-acceptance\":{\"capabilities\":[\"read\"]},\"sys/policies/acl/openbao-backup\":{\"capabilities\":[\"read\"]},\"sys/policies/acl/openbao-config-reader\":{\"capabilities\":[\"read\"]},\"sys/policies/acl/openbao-operator\":{\"capabilities\":[\"read\"]},\"sys/storage/raft/configuration\":{\"capabilities\":[\"read\"]}}}",
     "version": 1
   },
   "GET kubernetes/config": {
@@ -401,5 +422,34 @@
     ],
     "token_default_ttl": 600,
     "token_max_ttl": 600
+  },
+  "GET automation-data/config/automation-data": {
+    "allowed_roles": [
+      "career-ops-read"
+    ],
+    "connection_details": {
+      "connection_url": "postgresql://{{username}}:{{password}}@automation-data-postgresql.automation-data.svc.cluster.local:5432/automation_data_control?sslmode=disable",
+      "password_authentication": "scram-sha-256",
+      "username": "automation_data_openbao_issuer",
+      "username_template": "{{ printf \"v-%s-%s\" (.RoleName | truncate 40) (random 20) | lowercase }}"
+    },
+    "password_policy": "",
+    "plugin_name": "postgresql-database-plugin",
+    "plugin_version": "",
+    "root_credentials_rotate_statements": []
+  },
+  "GET automation-data/roles/career-ops-read": {
+    "creation_statements": [
+      "SELECT platform_operations.issue_session_login('{{name}}', '{{password}}', '{{expiration}}', 'career_ops', 'read')"
+    ],
+    "credential_type": "password",
+    "db_name": "automation-data",
+    "default_ttl": 600,
+    "max_ttl": 600,
+    "renew_statements": [],
+    "revocation_statements": [
+      "SELECT platform_operations.revoke_session_login('{{name}}')"
+    ],
+    "rollback_statements": []
   }
 }

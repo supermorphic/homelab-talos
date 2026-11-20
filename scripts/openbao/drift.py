@@ -144,6 +144,17 @@ FIELDS = {
     },
 }
 
+# Read shapes captured from a pinned 2.7.0 dev server. The connection password is
+# write-only and never part of a read.
+FIELDS["database-connection"] = {
+    "plugin_name", "plugin_version", "connection_details", "allowed_roles",
+    "password_policy", "root_credentials_rotate_statements",
+}
+FIELDS["database-role"] = {
+    "db_name", "creation_statements", "revocation_statements", "renew_statements",
+    "rollback_statements", "default_ttl", "max_ttl", "credential_type",
+}
+CONNECTION_DETAILS = {"connection_url", "username", "password_authentication", "username_template"}
 FIELDS["approle-role"] = {
     "bind_secret_id", "local_secret_ids", "secret_id_bound_cidrs", "secret_id_num_uses",
     "secret_id_ttl", "token_ttl", "token_max_ttl", "token_explicit_max_ttl",
@@ -249,6 +260,16 @@ DEFAULTS = {
         "extra_labels": {},
     },
     "kubernetes-config": {"kubernetes_ca_cert": ""},
+    "database-connection": {
+        "plugin_version": "",
+        "password_policy": "",
+        "root_credentials_rotate_statements": [],
+    },
+    "database-role": {
+        "credential_type": "password",
+        "renew_statements": [],
+        "rollback_statements": [],
+    },
 }
 SETS = {
     "oauth2_metadata",
@@ -266,6 +287,15 @@ SETS = {
     "bound_cidrs",
     "oidc_scopes",
     "allowed_redirect_uris",
+    "allowed_roles",
+}
+# Ordered statement lists: OpenBao runs them in sequence.
+STATEMENTS = {
+    "creation_statements",
+    "revocation_statements",
+    "renew_statements",
+    "rollback_statements",
+    "root_credentials_rotate_statements",
 }
 DURATIONS = {
     "max_age",
@@ -283,6 +313,7 @@ DURATIONS = {
     "not_before_leeway",
     "default_lease_ttl",
     "max_lease_ttl",
+    "default_ttl",
 }
 BOOLEANS = {
     "bind_secret_id",
@@ -331,6 +362,11 @@ STRINGS = {
     "jwks_url",
     "bound_claims_type",
     "kubernetes_ca_cert",
+    "plugin_name",
+    "plugin_version",
+    "password_policy",
+    "db_name",
+    "credential_type",
 }
 DICTS = {
     "provider_config",
@@ -435,6 +471,21 @@ def _normalized_value(key: str, value: object) -> object:
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             raise SafeError("invalid-response")
         return sorted(set(value))
+    if key in STATEMENTS:
+        if value is None:
+            return []
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise SafeError("invalid-response")
+        return value
+    if key == "connection_details":
+        # A password or any unreviewed connection setting is never a clean read.
+        if (
+            not isinstance(value, dict)
+            or set(value) - CONNECTION_DETAILS
+            or not all(isinstance(item, str) for item in value.values())
+        ):
+            raise SafeError("invalid-response")
+        return value
     if key == "config":
         if not isinstance(value, dict):
             raise SafeError("invalid-response")

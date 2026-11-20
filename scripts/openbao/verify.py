@@ -17,6 +17,8 @@ INVENTORY_ENDPOINTS = {
     'userpass-user': 'auth/homelab-userpass/users',
     'policy': 'sys/policies/acl',
     'issuance-role': 'kubernetes/roles',
+    'database-connection': 'automation-data/config',
+    'database-role': 'automation-data/roles',
 }
 
 
