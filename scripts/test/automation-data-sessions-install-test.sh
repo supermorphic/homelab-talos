@@ -120,6 +120,27 @@ if automation_data_openbao_issuer_enable_job_manifest job run-1 "$configmap" 'ba
     >/dev/null 2>&1; then
   fail 'the issuer enable Job manifest must refuse an invalid Secret name'
 fi
+# The issuer enable helper takes the password only on stdin and checks it before any
+# cluster access; the issuer reset command supplies both.
+issuer_enable=scripts/operations/automation-data-openbao-issuer-enable.sh
+touch "$temp_dir/kubeconfig"
+mkdir -p "$temp_dir/stub-kubectl"
+printf '#!/bin/sh\ntouch "%s/kubectl-called"\nexit 1\n' "$temp_dir" >"$temp_dir/stub-kubectl/kubectl"
+chmod 700 "$temp_dir/stub-kubectl/kubectl"
+if printf '%064d' 0 | AUTOMATION_DATA_OPENBAO_ISSUER_ENABLE_CONFIRM='' \
+    "$issuer_enable" "$temp_dir/kubeconfig" >"$temp_dir/command.out" 2>&1; then
+  fail 'the issuer enable helper must require confirmation'
+fi
+for input in '' 'short-password'; do
+  if printf '%s' "$input" | AUTOMATION_DATA_OPENBAO_ISSUER_ENABLE_CONFIRM=enable:automation-data:openbao-issuer \
+      PATH="$temp_dir/stub-kubectl:$PATH" "$issuer_enable" "$temp_dir/kubeconfig" \
+      >"$temp_dir/command.out" 2>&1; then
+    fail 'the issuer enable helper must refuse a missing or short password'
+  fi
+  rg -q 'password of at least 32 characters' "$temp_dir/command.out" &&
+    [[ ! -e "$temp_dir/kubectl-called" ]] ||
+    fail "the issuer enable helper must refuse '$input' before any cluster access"
+done
 if AUTOMATION_DATA_SESSIONS_RESTORE_CLEANUP_CONFIRM='' \
     scripts/operations/automation-data-sessions-restore-cleanup.sh "$temp_dir/missing" \
     >"$temp_dir/command.out" 2>"$temp_dir/command.err"; then
