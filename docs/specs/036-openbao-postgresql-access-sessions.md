@@ -297,7 +297,9 @@ CronJob has never succeeded within 20 minutes, and it stays silent while the Cro
 is suspended. A second alert fires when a temporary login stays past its expiry for
 10 minutes.
 
-The sweeper is delivered suspended, without its Secret. To enable it, the operator:
+The sweeper logs in with the password in the SOPS-encrypted Secret
+`automation-data-session-sweeper`. Its role has no login until the operator sets the
+password from that Secret. To set or rotate the password, the operator:
 
 1. On a branch, runs
    `AUTOMATION_DATA_SESSION_SWEEPER_SECRET_CONFIRM=write:automation-data:session-sweeper:sops mise exec -- just repo automation-data-session-sweeper-secret`.
@@ -307,11 +309,11 @@ The sweeper is delivered suspended, without its Secret. To enable it, the operat
    `AUTOMATION_DATA_SESSION_SWEEPER_ENABLE_CONFIRM=enable:automation-data:session-sweeper mise exec -- just kube automation-data-session-sweeper-enable`.
    It sets the sweeper's password login from the deployed Secret. Expected final
    line: `session_sweeper_login=enabled run=<run-id>`.
-3. Sets `suspend: false` on the CronJob through Git.
 
-To rotate the password, repeat steps 1 and 2. Sweeps fail between the Flux apply and
-step 2, so run step 2 promptly: issuance stops 15 minutes after the last successful
-sweep, and the heartbeat alert fires about 5 minutes later.
+Sweeps fail between the Flux apply and step 2, so run step 2 promptly: issuance
+stops 15 minutes after the last successful sweep, and the heartbeat alert fires about
+5 minutes later. After a database is rebuilt, run step 2 again once access sessions
+are installed.
 
 With the sweeper healthy, a connection left by failed revocation lasts at most the
 capability lifetime plus one sweep interval: about 15 minutes for `read`. When the

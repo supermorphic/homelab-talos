@@ -1,6 +1,5 @@
 ---
-# Specification 036 backstop: revokes temporary session logins past expiry. Staged
-# with suspend: true until the operator enables the sweeper login.
+# Specification 036 backstop: revokes temporary session logins past expiry.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -11,7 +10,7 @@ spec:
   schedule: "*/5 * * * *"
   timeZone: Etc/UTC
   concurrencyPolicy: Forbid
-  suspend: true
+  suspend: false
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 1
   jobTemplate:
