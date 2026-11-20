@@ -96,13 +96,18 @@ drift checks:
   issuer login, with `password_authentication=scram-sha-256` and `allowed_roles`
   listing exactly the registered OpenBao roles. Only SCRAM verifiers leave OpenBao.
   The connection password is not in Git and is excluded from drift comparison.
+  OpenBao never returns it, and a read that contains it is refused.
+  `openbao-config-apply` updates the connection's other settings without a
+  password, which keeps the stored one, but never creates the connection. Until the
+  issuer reset creates it, `config-apply` ends with `issuer-reset-required`.
 - One OpenBao role per capability, for example `career-ops-read`:
   - `creation_statements`: `SELECT platform_operations.issue_session_login('{{name}}', '{{password}}', '{{expiration}}', 'career_ops', 'read')`.
   - `revocation_statements`: `SELECT platform_operations.revoke_session_login('{{name}}')`.
   - Default and maximum TTL equal to the capability's registered maximum, so
     renewal cannot extend it.
-- Connection `username_template` uses only `.RoleName` and `random`, for example
-  `v-<role name>-<20 random characters>`, lowercased. OpenBao substitutes the
+- Connection `username_template` uses only `.RoleName` and `random`:
+  `{{ printf "v-%s-%s" (.RoleName | truncate 40) (random 20) | lowercase }}`, which
+  gives `v-<role name>-<20 random characters>`. OpenBao substitutes the
   username into SQL text before execution, so the template must not include a
   caller-influenced field such as `.DisplayName`. The function's format check is a
   second layer.
@@ -118,11 +123,14 @@ drift checks:
   for read capabilities only. Its Kubernetes endpoints are unchanged. No
   workstation policy grants an attended capability.
 
-The issuer password has one rotation owner. A guarded operator step sets an initial
+The issuer password has one rotation owner. The issuer reset sets an initial
 password, writes the connection, and runs `rotate-root`; afterwards only OpenBao
 knows it. Only the operator triggers `rotate-root`; it has no schedule. Any
-`rotate-root` error leaves the credential state unknown and requires the trusted
-reset procedure in [Recovery](#recovery).
+`rotate-root` error leaves the credential state unknown and requires the issuer
+reset in [Recovery](#recovery).
+
+OpenBao renders `{{password}}` as a SCRAM verifier and `{{expiration}}` as
+`YYYY-MM-DD HH:MM:SS+0000`, which `issue_session_login` accepts.
 
 ## Session token and identity binding
 
@@ -216,7 +224,10 @@ The issuer login `automation_data_openbao_issuer` can log in, has `CONNECT` only
 `revoke_session_login`. The sweeper login `automation_data_session_sweeper` has
 EXECUTE only on `sweep_session_logins`. Both have `log_statement=none` and
 `log_min_error_statement=panic` set by the platform, so neither statement text nor
-SCRAM verifiers reach PostgreSQL logs, including on error.
+SCRAM verifiers reach PostgreSQL logs, including on error. The issuer also has
+`track_activities=off`, which the installed contract checks, so `pg_monitor`
+members cannot read its statements in `pg_stat_activity`. The steps that set the
+issuer and sweeper passwords turn it off for their own transaction.
 
 All lifecycle functions follow the existing provisioner pattern: owned by
 `postgres`, `SECURITY DEFINER`, `SET search_path = pg_catalog,
@@ -429,7 +440,7 @@ Workstation revocation in specification 031 gains these steps after the entity i
 disabled and its SecretIDs are destroyed:
 
 1. Record which capabilities are `ready`, and suspend them.
-2. Revoke all database leases with `sys/leases/revoke-prefix/automation-data/creds/`
+2. Revoke all database leases with `sys/leases/revoke-prefix/automation-data/creds`
    using `sync=true`. `revoke-force` is not part of this workflow.
 3. Verify that `managed_dynamic_logins` and the PostgreSQL role catalog contain no
    unrevoked temporary login. Revoke any remainder through the sweeper path and
@@ -502,9 +513,28 @@ separate checks.
 | OpenBao or PostgreSQL restored | Revoke all registered temporary logins with `revoked_by='restore'` and verify none remain (below). Then run the issuer reset. Restored leases whose roles are gone revoke cleanly. |
 | Issuer credential state unknown | Issuer reset. |
 
-Issuer reset: with the platform superuser credential, set a new issuer password;
-rewrite the OpenBao connection; run `rotate-root`; issue and revoke one test login
-through the runner.
+Issuer reset, run after `openbao-config-apply` from an up-to-date `main` that Flux
+has applied, with the retained OpenBao operator password:
+
+```sh
+OPENBAO_OPERATOR_KUBECONFIG=<absolute path to the operator kubeconfig> \
+  mise exec -- just kube automation-data-openbao-issuer-reset
+```
+
+It refuses when any other OpenBao object differs from the reviewed configuration,
+prints the plan, and asks for the exact confirmation, which can also be supplied in
+`OPENBAO_DATABASE_ISSUER_CONFIRM`. It then:
+
+1. Sets a new random issuer password through a Job running as the platform
+   superuser. The password exists in the cluster only in a run-scoped Secret that
+   the command deletes.
+2. Writes the OpenBao connection with that password.
+3. Runs `rotate-root`.
+4. Verifies the OpenBao configuration.
+
+Expected last line: JSON with `"status": "pass"` and `"issuer": "rotated"`. With
+`"issuer_state": "unknown"`, `rotate-root` failed; run the reset again. After the
+runner exists, also issue and revoke one test login through it.
 
 Capability roles and registries are in logical backups. Temporary logins are not
 recoverable credentials. A restore brings them back with new OIDs, which normal
@@ -538,9 +568,9 @@ owns outside its domain database. Rerun the cleanup after correcting the cause.
    policy, OpenBao objects, runner, discovery, revocation workflow, and the alias
    action. Update specification 031's revocation, re-enable, and lost-workstation
    rules in the same change. Offline validation.
-2. Operator: apply the control-database migration, create the issuer and sweeper
-   Secrets, apply OpenBao configuration and run `rotate-root`, add the alias for
-   the existing workstation, and register `career_ops read`.
+2. Operator: install the access-session SQL, create the sweeper Secret, apply
+   OpenBao configuration, run the issuer reset, add the alias for the existing
+   workstation, and register `career_ops read`.
 3. Career Ops: capability migration, wrapper, entry point, and tests.
 4. Separately authorized live acceptance.
 5. Read cutover: Career Ops readbacks move to `db read`, and helper workflows stop
