@@ -61,6 +61,14 @@ spec:
         - ports:
             - {port: "8200", protocol: TCP}
             - {port: "8201", protocol: TCP}
+    # Specification 036: the database secrets engine issues and revokes logins.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: automation-data
+            app.kubernetes.io/name: automation-data-postgresql
+      toPorts:
+        - ports:
+            - {port: "5432", protocol: TCP}
     - toEntities: [kube-apiserver]
       toPorts:
         # Cilium checks the backend after translating kubernetes:443.

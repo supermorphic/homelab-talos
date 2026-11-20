@@ -27,6 +27,10 @@ spec:
     - matchLabels:
         k8s:io.kubernetes.pod.namespace: career-ops
         k8s:io.cilium.k8s.policy.serviceaccount: cv-coordinator
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: openbao
+        app.kubernetes.io/name: openbao
+        component: server
     toPorts:
     - ports:
       - port: '5432'

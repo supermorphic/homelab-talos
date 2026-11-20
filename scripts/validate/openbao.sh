@@ -190,7 +190,13 @@ def port_set(rules):
     return {p["port"] for rule in rules for item in rule.get("toPorts", [])
             for p in item["ports"]}
 assert port_set(network["ingress"]) == {"8200", "8201", "8203"}
-assert port_set(network["egress"]) == {"53", "6443", "8200", "8201"}
+assert port_set(network["egress"]) == {"53", "5432", "6443", "8200", "8201"}
+# The database secrets engine reaches only automation-data PostgreSQL (specification 036).
+assert [rule for rule in network["egress"] if port_set([rule]) == {"5432"}] == [{
+    "toEndpoints": [{"matchLabels": {
+        "k8s:io.kubernetes.pod.namespace": "automation-data",
+        "app.kubernetes.io/name": "automation-data-postgresql"}}],
+    "toPorts": [{"ports": [{"port": "5432", "protocol": "TCP"}]}]}]
 for rule in network["ingress"]:
     assert "fromCIDR" not in rule and "fromCIDRSet" not in rule
     assert "fromEntities" in rule or "fromEndpoints" in rule
