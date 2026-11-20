@@ -41,6 +41,9 @@ BEGIN
     EXECUTE format('GRANT CONNECT ON DATABASE automation_data_control TO %I', identity);
     EXECUTE format('GRANT USAGE ON SCHEMA platform_operations TO %I', identity);
   END LOOP;
+  -- Issuer statements carry SCRAM verifiers, which pg_monitor members could otherwise
+  -- read in pg_stat_activity.
+  ALTER ROLE automation_data_openbao_issuer SET track_activities = off;
 END;
 $roles$;
 
@@ -753,7 +756,11 @@ BEGIN
         AND NOT role.rolinherit AND NOT role.rolreplication AND NOT role.rolbypassrls
         AND pg_catalog.shobj_description(role.oid, 'pg_authid') = 'homelab:access-sessions:v1'
         AND NOT EXISTS (SELECT FROM pg_auth_members AS member
-          WHERE member.member = role.oid OR member.roleid = role.oid)) <> 2 THEN
+          WHERE member.member = role.oid OR member.roleid = role.oid)) <> 2 OR
+    NOT EXISTS (SELECT FROM pg_db_role_setting AS setting
+      JOIN pg_roles AS role ON role.oid = setting.setrole
+      WHERE role.rolname = 'automation_data_openbao_issuer' AND setting.setdatabase = 0
+        AND 'track_activities=off' = ANY (setting.setconfig)) THEN
     RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'invalid_access_session_contract';
   END IF;
 END;

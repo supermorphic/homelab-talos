@@ -414,6 +414,92 @@ expect_login_error "$sweeper" automation_data_control \
   'SELECT count(*) FROM platform_operations.managed_dynamic_logins'
 expect_login_error "$sweeper" session_fixture 'SELECT 1'
 
+# observe_blocked_enable ROLE WRAPPER ENV_FILE runs an enable wrapper while another
+# session holds the role catalog, and records what pg_monitor sees meanwhile.
+observe_blocked_enable() {
+  local role="$1" wrapper="$2" env_file="$3"
+  query "SELECT pg_stat_clear_snapshot()" >/dev/null
+  podman exec "$container" psql --no-psqlrc --username postgres --dbname automation_data_control \
+    --command 'BEGIN; LOCK TABLE pg_catalog.pg_authid IN SHARE ROW EXCLUSIVE MODE; SELECT pg_sleep(4); COMMIT;' \
+    >/dev/null 2>&1 &
+  local holder="$!"
+  sleep 1
+  podman exec --env-file "$env_file" "$container" sh -c "\
+    SWEEPER_PASSWORD=\"\$LOGIN_PASSWORD\" ISSUER_PASSWORD=\"\$LOGIN_PASSWORD\" \
+    PGUSER=automation_data_backup PGDATABASE=automation_data_control \
+    exec sh /scripts/$wrapper" >"$scratch/blocked-enable.out" 2>&1 &
+  local enabler="$!"
+  sleep 1
+  query "SET ROLE automation_data_exporter; SELECT coalesce(query, '') || '|' || coalesce(state, '')
+    FROM pg_stat_activity WHERE usename = 'automation_data_backup'" >"$scratch/blocked-activity.out"
+  wait "$holder" || true
+  wait "$enabler" || true
+  if rg -qF -- "$(cut -d= -f2 "$env_file")" "$scratch/blocked-activity.out"; then
+    fail "the $role password was visible in pg_stat_activity while its enable step waited"
+  fi
+  rg -q 'ALTER ROLE' "$scratch/blocked-activity.out" &&
+    fail "the $role enable statement was visible in pg_stat_activity"
+  return 0
+}
+new_password_file "$sweeper.env" 32
+observe_blocked_enable "$sweeper" enable-session-sweeper.sh "$scratch/$sweeper.env"
+[[ "$(cat "$scratch/blocked-enable.out")" == 'session_sweeper_login=enabled' ]] ||
+  fail 'the sweeper enable must complete after the catalog lock is released'
+
+# The OpenBao issuer gets its first password from the guarded issuer reset. OpenBao
+# then rotates it; every issuer statement can contain a SCRAM verifier.
+enable_issuer() {
+  podman exec --env-file "$1" "$container" sh -c 'ISSUER_PASSWORD="$LOGIN_PASSWORD" \
+    PGUSER=automation_data_backup PGDATABASE=automation_data_control \
+    exec sh /scripts/enable-openbao-issuer.sh'
+}
+new_password_file short-issuer.env 8
+[[ "$(enable_issuer "$scratch/short-issuer.env" 2>&1)" == 'openbao_issuer_login=failed' ]] ||
+  fail 'the issuer enable must refuse a short password with only a fixed marker'
+new_password_file "$issuer.env" 32
+query "ALTER ROLE $issuer CREATEDB" >/dev/null
+[[ "$(enable_issuer "$scratch/$issuer.env" 2>&1)" == 'openbao_issuer_login=failed' ]] ||
+  fail 'the issuer enable must refuse an issuer role that drifted from the contract'
+[[ "$(query "SELECT rolcanlogin FROM pg_roles WHERE rolname = '$issuer'")" == f ]] ||
+  fail 'a refused issuer enable must leave the issuer unable to log in'
+query "ALTER ROLE $issuer NOCREATEDB" >/dev/null
+query "ALTER ROLE $issuer RESET track_activities" >/dev/null
+[[ "$(enable_issuer "$scratch/$issuer.env" 2>&1)" == 'openbao_issuer_login=failed' ]] ||
+  fail 'the issuer enable must refuse an issuer whose activity is visible'
+install_sessions
+observe_blocked_enable "$issuer" enable-openbao-issuer.sh "$scratch/$issuer.env"
+[[ "$(cat "$scratch/blocked-enable.out")" == 'openbao_issuer_login=enabled' ]] ||
+  fail 'the issuer enable must report only the fixed success marker'
+[[ "$(as_login "$issuer" automation_data_control "SELECT current_setting('track_activities')")" == off ]] ||
+  fail 'issuer sessions must not report their statements to pg_stat_activity'
+# OpenBao renders {{expiration}} as YYYY-MM-DD HH:MM:SS+0000 and {{password}} as a verifier.
+openbao_login="$(login_name)"
+openbao_expiration="$(query "SELECT to_char((now() + interval '600 seconds') AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') || '+0000'")"
+as_login "$issuer" automation_data_control "SELECT platform_operations.issue_session_login('$openbao_login', '$(scram_verifier "$openbao_login")', '$openbao_expiration', 'session_fixture', 'read')" >/dev/null ||
+  fail 'the enabled issuer must issue a login with OpenBao-rendered arguments over TCP'
+[[ "$(as_login "$openbao_login" session_fixture 'SELECT session_user')" == "$openbao_login" ]] ||
+  fail 'a login issued by the enabled issuer must authenticate'
+as_login "$issuer" automation_data_control "SELECT platform_operations.revoke_session_login('$openbao_login')" >/dev/null
+expect_login_error "$issuer" automation_data_control \
+  'SELECT count(*) FROM platform_operations.managed_dynamic_logins'
+expect_login_error "$issuer" session_fixture 'SELECT 1'
+# OpenBao rotate-root runs ALTER ROLE as the issuer itself.
+rotated_issuer="$(scram_verifier rotated-issuer)"
+as_login "$issuer" automation_data_control "ALTER ROLE $issuer WITH PASSWORD '$rotated_issuer'" >/dev/null ||
+  fail 'the issuer must be able to rotate its own password'
+cp "$scratch/rotated-issuer.env" "$scratch/$issuer.env"
+[[ "$(as_login "$issuer" automation_data_control 'SELECT session_user')" == "$issuer" ]] ||
+  fail 'the issuer must authenticate with its rotated password'
+podman logs "$container" >"$scratch/server.log" 2>&1
+for password_file in short-issuer.env "$issuer.env"; do
+  if rg -qF -- "$(cut -d= -f2 "$scratch/$password_file")" "$scratch/server.log"; then
+    fail 'an issuer password reached the server log'
+  fi
+done
+if rg -qF -- "$rotated_issuer" "$scratch/server.log"; then
+  fail 'the rotated issuer verifier reached the server log'
+fi
+
 # Exporter metrics count temporary logins from the catalog without new grants.
 exporter_config=kubernetes/apps/automation-data/postgresql/app/sql-exporter.yml
 metric() {

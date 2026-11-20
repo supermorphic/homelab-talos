@@ -145,6 +145,23 @@ automation_data_session_sweeper_enable_job_manifest() {
   return "${PIPESTATUS[0]}"
 }
 
+# Usage: <job> <run-id> <configmap> <run-scoped password Secret>
+automation_data_openbao_issuer_enable_job_manifest() {
+  [[ "$#" -eq 4 && "$4" =~ ^automation-data-openbao-issuer-[a-z0-9-]+$ ]] || return 2
+  automation_data_access_sessions_job_manifest "$1" "$2" "$3" |
+    PASSWORD_SECRET="$4" yq '
+      .metadata.labels."homelab-talos/role" = "openbao-issuer-enable" |
+      .spec.template.metadata.labels."homelab-talos/role" = "openbao-issuer-enable" |
+      .spec.template.spec.containers[0].name = "enable-openbao-issuer" |
+      .spec.template.spec.containers[0].args = ["/scripts/enable-openbao-issuer.sh"] |
+      .spec.template.spec.containers[0].env += [{
+        "name": "ISSUER_PASSWORD",
+        "valueFrom": {"secretKeyRef": {"name": strenv(PASSWORD_SECRET), "key": "password"}}
+      }]
+    '
+  return "${PIPESTATUS[0]}"
+}
+
 automation_data_session_restore_cleanup_job_manifest() {
   automation_data_access_sessions_job_manifest "$@" |
     yq '
