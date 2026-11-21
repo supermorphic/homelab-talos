@@ -254,6 +254,12 @@
       "policy_file": "policies/agent-profiles.json"
     },
     {
+      "kind": "policy",
+      "name": "db-career-ops-read",
+      "path": "sys/policies/acl/db-career-ops-read",
+      "policy_file": "policies/db-career-ops-read.json"
+    },
+    {
       "kind": "issuance-role",
       "name": "observer",
       "path": "kubernetes/roles/observer",
@@ -534,6 +540,24 @@
         "default_ttl": 600,
         "max_ttl": 600
       }
+    },
+    {
+      "kind": "token-role",
+      "name": "db-career-ops-read-agent-workstation",
+      "path": "auth/token/roles/db-career-ops-read-agent-workstation",
+      "fields": {
+        "orphan": true,
+        "renewable": false,
+        "token_explicit_max_ttl": 600,
+        "token_no_default_policy": true,
+        "token_type": "service",
+        "allowed_policies": [
+          "db-career-ops-read"
+        ],
+        "allowed_entity_aliases": [
+          "agent-workstation"
+        ]
+      }
     }
   ],
   "inventories": {
@@ -559,7 +583,8 @@
       "openbao-backup",
       "openbao-acceptance",
       "openbao-config-reader",
-      "agent-profiles"
+      "agent-profiles",
+      "db-career-ops-read"
     ],
     "issuance-role": [
       "openbao-acceptance",
@@ -586,7 +611,9 @@
     "database-role": [
       "career-ops-read"
     ],
-    "token-role": []
+    "token-role": [
+      "db-career-ops-read-agent-workstation"
+    ]
   },
   "builtin_exceptions": {
     "auth-method": [

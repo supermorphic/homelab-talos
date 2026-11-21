@@ -161,6 +161,7 @@ contracts:
       - kubernetes/apps/security/openbao/config/policies/agent-profiles.json
       - kubernetes/apps/security/openbao/config/policies/backup.json
       - kubernetes/apps/security/openbao/config/policies/config-reader.json
+      - kubernetes/apps/security/openbao/config/policies/db-career-ops-read.json
       - kubernetes/apps/security/openbao/config/policies/operator.json
       - kubernetes/apps/security/openbao/ks.yaml
       - kubernetes/apps/security/openbao/monitoring/kustomization.yaml

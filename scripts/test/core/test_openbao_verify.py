@@ -42,7 +42,8 @@ LIVE_INVENTORIES = {
     'userpass-user': ['openbao-operator'],
     'approle-role': ['agent-workstation'],
     'policy': ['default', 'root', 'openbao-operator', 'openbao-backup',
-               'openbao-acceptance', 'openbao-config-reader', 'agent-profiles'],
+               'openbao-acceptance', 'openbao-config-reader', 'agent-profiles',
+               'db-career-ops-read'],
     'issuance-role': [
         'openbao-acceptance',
         'observer',
@@ -60,7 +61,7 @@ LIVE_INVENTORIES = {
         'test-openbao-lifecycle'],
     'database-connection': ['automation-data'],
     'database-role': ['career-ops-read'],
-    'token-role': [],
+    'token-role': ['db-career-ops-read-agent-workstation'],
 }
 
 

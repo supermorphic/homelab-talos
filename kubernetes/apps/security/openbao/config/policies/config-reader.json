@@ -194,6 +194,21 @@
       "capabilities": [
         "read"
       ]
+    },
+    "sys/policies/acl/db-career-ops-read": {
+      "capabilities": [
+        "read"
+      ]
+    },
+    "auth/token/roles": {
+      "capabilities": [
+        "list"
+      ]
+    },
+    "auth/token/roles/db-career-ops-read-agent-workstation": {
+      "capabilities": [
+        "read"
+      ]
     }
   }
 }

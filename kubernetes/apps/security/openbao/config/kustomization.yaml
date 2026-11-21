@@ -13,3 +13,4 @@ configMapGenerator:
       - acceptance.json=policies/acceptance.json
       - config-reader.json=policies/config-reader.json
       - agent-profiles.json=policies/agent-profiles.json
+      - db-career-ops-read.json=policies/db-career-ops-read.json

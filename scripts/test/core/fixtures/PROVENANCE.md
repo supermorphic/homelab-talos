@@ -19,3 +19,8 @@ The `automation-data/` database mount, `automation-data` connection and
 dev server, after writing the objects in `desired.json`. The connection used a
 synthetic password and `verify_connection=false`; reads never return the password.
 Mount UUID/accessor values are synthetic.
+
+The `db-career-ops-read-agent-workstation` token role, the `db-career-ops-read`
+policy, and the current `agent-profiles` and `openbao-config-reader` policy readbacks
+were captured on 2026-11-21 from the same pinned image as a loopback dev server,
+after writing the objects in `desired.json`.
