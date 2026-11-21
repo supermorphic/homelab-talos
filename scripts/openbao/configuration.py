@@ -87,6 +87,7 @@ KINDS = {
     "issuance-role",
     "database-connection",
     "database-role",
+    "token-role",
 }
 INVENTORY_KINDS = {
     "auth-method",
@@ -98,6 +99,7 @@ INVENTORY_KINDS = {
     "issuance-role",
     "database-connection",
     "database-role",
+    "token-role",
 }
 
 
@@ -140,6 +142,7 @@ def load_document(path: Path) -> dict:
                     "policies/acceptance.json",
                     "policies/config-reader.json",
                     "policies/agent-profiles.json",
+                    "policies/db-career-ops-read.json",
                 }:
                     raise SafeError("invalid-source")
                 fields = {"policy": strict_json((path.parent / filename).read_bytes())}

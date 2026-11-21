@@ -33,6 +33,7 @@ def _safe_source(document):
             "issuance-role": "kubernetes/roles/",
             "database-connection": "automation-data/config/",
             "database-role": "automation-data/roles/",
+            "token-role": "auth/token/roles/",
         }
         expected = prefixes[spec.kind] + spec.name
         if spec.kind in {"jwt-config", "kubernetes-config"}:

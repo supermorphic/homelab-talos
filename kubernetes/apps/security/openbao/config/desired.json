@@ -585,7 +585,8 @@
     ],
     "database-role": [
       "career-ops-read"
-    ]
+    ],
+    "token-role": []
   },
   "builtin_exceptions": {
     "auth-method": [

@@ -60,6 +60,7 @@ LIVE_INVENTORIES = {
         'test-openbao-lifecycle'],
     'database-connection': ['automation-data'],
     'database-role': ['career-ops-read'],
+    'token-role': [],
 }
 
 
@@ -89,7 +90,8 @@ class FakeReader:
             'approle-role': 'auth/homelab-approle/role',
             'policy': 'sys/policies/acl', 'issuance-role': 'kubernetes/roles',
             'database-connection': 'automation-data/config',
-            'database-role': 'automation-data/roles'}
+            'database-role': 'automation-data/roles',
+            'token-role': 'auth/token/roles'}
         if path in endpoints.values():
             kind = next(kind for kind, endpoint in endpoints.items() if endpoint == path)
             if kind in {'auth-method', 'secret-mount'}:
