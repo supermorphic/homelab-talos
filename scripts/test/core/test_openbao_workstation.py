@@ -15,6 +15,7 @@ class IdentityClient:
     def __init__(self):
         self.role_id = "synthetic-role-id"
         self.accessor = "synthetic-mount"
+        self.token_accessor = "synthetic-token-mount"
         self.entity = None
         self.secrets = {}
         self.calls = []
@@ -24,11 +25,17 @@ class IdentityClient:
         self.extra_policy = False
         self.serial = 0
         self.foreign_alias = False
+        self.foreign_token_alias = False
 
     def read(self, path, *, token=None, list_request=False):
         self.calls.append(("read", path))
         if path == "sys/auth":
-            return {"data": {"homelab-approle/": {"accessor": self.accessor}}}
+            return {
+                "data": {
+                    "homelab-approle/": {"accessor": self.accessor},
+                    "token/": {"accessor": self.token_accessor},
+                }
+            }
         if path.endswith("/role-id"):
             return {"data": {"role_id": self.role_id}}
         if path.endswith("/secret-id"):
@@ -46,13 +53,16 @@ class IdentityClient:
     def post(self, path, payload, *, token=None):
         if path == "identity/lookup/entity":
             self.calls.append(("lookup", path))
-            if self.foreign_alias:
+            mount = payload["alias_mount_accessor"]
+            if (self.foreign_alias and mount == self.accessor) or (
+                self.foreign_token_alias and mount == self.token_accessor
+            ):
                 return {"data": {"id": "foreign-entity"}}
-            return {
-                "data": copy.deepcopy(self.entity)
-                if self.entity and self.entity["aliases"]
-                else None
-            }
+            found = self.entity and any(
+                a.get("name") == payload["alias_name"] and a.get("mount_accessor") == mount
+                for a in self.entity["aliases"]
+            )
+            return {"data": copy.deepcopy(self.entity) if found else None}
         self.calls.append(("post", path, copy.deepcopy(payload)))
         if path == "identity/entity":
             self.entity = {
@@ -67,13 +77,13 @@ class IdentityClient:
             }
             return {"data": {"id": self.entity["id"]}}
         if path == "identity/entity-alias":
-            self.entity["aliases"] = [
+            self.entity["aliases"].append(
                 {
                     "name": payload["name"],
                     "mount_accessor": payload["mount_accessor"],
                     "canonical_id": payload["canonical_id"],
                 }
-            ]
+            )
             return {}
         if path.startswith("identity/entity/id/"):
             self.entity["disabled"] = payload["disabled"]
@@ -252,10 +262,14 @@ class WorkstationTest(unittest.TestCase):
 
     def test_entity_drift_and_wrong_alias_stop_before_mutation(self):
         self.run_action("enroll")
+        approle_alias, token_alias = self.client.entity["aliases"]
         for field, value in (
             ("policies", ["root"]),
             ("direct_group_ids", ["extra"]),
             ("aliases", [{"name": "wrong"}]),
+            ("aliases", [approle_alias, {**token_alias, "name": "other"}]),
+            ("aliases", [approle_alias, token_alias, {**token_alias, "name": "extra"}]),
+            ("aliases", [approle_alias, {**token_alias, "canonical_id": "other"}]),
         ):
             saved = copy.deepcopy(self.client.entity)
             self.client.entity[field] = value
@@ -306,6 +320,53 @@ class WorkstationTest(unittest.TestCase):
         self.now += 91
         self.assertEqual(self.run_action("enroll")["status"], "pass")
         self.assertFalse(self.client.entity["disabled"])
+
+    def test_enrollment_binds_the_token_mount_alias_to_the_workstation_entity(self):
+        self.assertEqual(self.run_action("enroll")["status"], "pass")
+        self.assertIn(
+            {
+                "name": "agent-workstation",
+                "mount_accessor": "synthetic-token-mount",
+                "canonical_id": "synthetic-entity",
+            },
+            self.client.entity["aliases"],
+        )
+
+    def test_alias_action_adds_the_token_alias_to_an_earlier_enrollment(self):
+        self.run_action("enroll")
+        self.client.entity["aliases"] = self.client.entity["aliases"][:1]
+        local = (self.directory / "workstation.json").read_bytes()
+        secrets = dict(self.client.secrets)
+        self.assertEqual(self.run_action("alias")["status"], "pass")
+        self.assertEqual(
+            [a["mount_accessor"] for a in self.client.entity["aliases"]],
+            ["synthetic-mount", "synthetic-token-mount"],
+        )
+        self.assertEqual(self.client.secrets, secrets)
+        self.assertEqual((self.directory / "workstation.json").read_bytes(), local)
+        writes = len([c for c in self.client.calls if c[0] == "post"])
+        self.assertEqual(self.run_action("alias")["status"], "pass")
+        self.assertEqual(len([c for c in self.client.calls if c[0] == "post"]), writes)
+
+    def test_alias_action_refuses_a_foreign_alias_or_revoked_workstation(self):
+        self.run_action("enroll")
+        self.client.entity["aliases"] = self.client.entity["aliases"][:1]
+        self.client.foreign_token_alias = True
+        with self.assertRaises(SafeError):
+            self.run_action("alias", confirm=False)
+        self.client.foreign_token_alias = False
+        self.run_action("revoke")
+        before = len([c for c in self.client.calls if c[0] == "post"])
+        with self.assertRaises(SafeError):
+            self.run_action("alias")
+        self.assertEqual(len([c for c in self.client.calls if c[0] == "post"]), before)
+        self.assertEqual(len(self.client.entity["aliases"]), 1)
+
+    def test_enrollment_refuses_a_foreign_token_alias(self):
+        self.client.foreign_token_alias = True
+        with self.assertRaises(SafeError):
+            self.run_action("enroll", confirm=False)
+        self.assertIsNone(self.client.entity)
 
     def test_lock_refuses_concurrent_lifecycle(self):
         workstation.ensure_private_directory(self.directory)

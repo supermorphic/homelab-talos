@@ -174,7 +174,8 @@ def validate_session(auth, entity_id):
         raise SafeError("authentication-failed")
 
 
-def _entity(entity, role_id, accessor, *, bound=True):
+def _entity(entity, role_id, accessor, token_accessor, *, bound=True, token_alias=False):
+    """The AppRole alias, plus the token-mount alias that binds session tokens."""
     if (
         not isinstance(entity, dict)
         or entity.get("name") != ROLE
@@ -190,14 +191,43 @@ def _entity(entity, role_id, accessor, *, bound=True):
     aliases = entity.get("aliases", [])
     if not bound and aliases == []:
         return
-    if (
-        not isinstance(aliases, list)
-        or len(aliases) != 1
-        or aliases[0].get("name") != role_id
-        or aliases[0].get("mount_accessor") != accessor
-        or aliases[0].get("canonical_id") != entity["id"]
-    ):
+    if not isinstance(aliases, list) or not all(isinstance(a, dict) for a in aliases):
         raise SafeError("authentication-failed")
+    found = [
+        (a.get("name"), a.get("mount_accessor"))
+        for a in aliases
+        if a.get("canonical_id") == entity["id"]
+    ]
+    expected = [(role_id, accessor)]
+    if token_alias or len(aliases) == 2:
+        expected.append((ROLE, token_accessor))
+    if len(found) != len(aliases) or sorted(found) != sorted(expected):
+        raise SafeError("authentication-failed")
+
+
+def has_token_alias(entity, token_accessor):
+    return any(
+        a.get("name") == ROLE and a.get("mount_accessor") == token_accessor
+        for a in entity.get("aliases", [])
+    )
+
+
+def _lookup(client, name, accessor):
+    """Resolve an alias before any write that could create or adopt it."""
+    try:
+        lookup = client.post(
+            "identity/lookup/entity",
+            {"alias_name": name, "alias_mount_accessor": accessor},
+            token=getattr(client, "token", None),
+        )
+    except AmbiguousWrite as error:
+        if error.http_status != 404:
+            raise
+        lookup = {}
+    mapped = lookup.get("data") if isinstance(lookup, dict) else "invalid"
+    if mapped is not None and not isinstance(mapped, dict):
+        raise SafeError("authentication-failed")
+    return mapped
 
 
 def _accessors(client):
@@ -219,7 +249,7 @@ def _accessors(client):
 
 
 def run(action, slot, *, directory, client, kubeconfig, confirm, now=None):
-    if action not in {"enroll", "rotate", "revoke"} or slot != ROLE:
+    if action not in {"enroll", "rotate", "revoke", "alias"} or slot != ROLE:
         raise SafeError("invalid-source")
     clock = time.time if now is None else lambda: now
     now = clock()
@@ -233,8 +263,10 @@ def run(action, slot, *, directory, client, kubeconfig, confirm, now=None):
         if apply.verify_configuration(apply.DESIRED, client) != {"differences": []}:
             raise SafeError("source-mismatch")
         role_id = read(ROLE_PATH + "/role-id")["data"]["role_id"]
-        accessor = read("sys/auth")["data"]["homelab-approle/"]["accessor"]
-        if not all(isinstance(s, str) and s for s in (role_id, accessor)):
+        mounts = read("sys/auth")["data"]
+        accessor = mounts["homelab-approle/"]["accessor"]
+        token_accessor = mounts["token/"]["accessor"]
+        if not all(isinstance(s, str) and s for s in (role_id, accessor, token_accessor)):
             raise SafeError("invalid-response")
         record_path = directory / "operator.json"
         record = read_private(record_path) if record_path.exists() else None
@@ -248,27 +280,21 @@ def run(action, slot, *, directory, client, kubeconfig, confirm, now=None):
             entity = read("identity/entity/name/" + ROLE)["data"]
         except NotFound:
             entity = None
-        # A login would create or adopt an alias. Resolve it before any login.
-        try:
-            lookup = client.post(
-                "identity/lookup/entity",
-                {"alias_name": role_id, "alias_mount_accessor": accessor},
-                token=getattr(client, "token", None),
-            )
-        except AmbiguousWrite as error:
-            if error.http_status != 404:
-                raise
-            lookup = {}
-        mapped = lookup.get("data") if isinstance(lookup, dict) else "invalid"
-        if mapped is not None and (
-            not isinstance(mapped, dict) or not entity or mapped.get("id") != entity.get("id")
-        ):
+        # A login or session token creation would create or adopt an alias. Resolve
+        # both before any write.
+        mapped = _lookup(client, role_id, accessor)
+        if mapped is not None and (not entity or mapped.get("id") != entity.get("id")):
             raise SafeError("authentication-failed")
         if entity and mapped is None:
             raise SafeError("authentication-failed")
+        token_mapped = _lookup(client, ROLE, token_accessor)
+        if token_mapped is not None and (
+            not entity or token_mapped.get("id") != entity.get("id")
+        ):
+            raise SafeError("authentication-failed")
         ids = _accessors(client)
         if entity:
-            _entity(entity, role_id, accessor)
+            _entity(entity, role_id, accessor, token_accessor)
             if not record or record.get("entity_id") != entity["id"]:
                 raise SafeError("source-mismatch")
         elif record or ids or action != "enroll":
@@ -293,11 +319,18 @@ def run(action, slot, *, directory, client, kubeconfig, confirm, now=None):
             ):
                 raise SafeError("authentication-failed")
             read_private(directory / "workstation.json")
+        if action == "alias" and (
+            entity["disabled"]
+            or record.get("revoked_at")
+            or not set(ids) <= set(record["accessors"])
+        ):
+            raise SafeError("authentication-failed")
         fingerprint = guards.digest(
             {
                 "target": approved,
                 "role_id": role_id,
                 "accessor": accessor,
+                "token_accessor": token_accessor,
                 "entity": entity,
                 "accessors": ids,
                 "action": action,
@@ -317,11 +350,27 @@ def run(action, slot, *, directory, client, kubeconfig, confirm, now=None):
                 raise SafeError("source-mismatch")
             return client.post(path, payload, token=getattr(client, "token", None), **kwargs)
 
+        def bind_session_tokens(entity_id):
+            # Session tokens name this alias, so they keep the workstation entity.
+            if not has_token_alias(read("identity/entity/id/" + entity_id)["data"], token_accessor):
+                post(
+                    "identity/entity-alias",
+                    {"name": ROLE, "mount_accessor": token_accessor, "canonical_id": entity_id},
+                )
+
+        if action == "alias":
+            bind_session_tokens(entity["id"])
+            observed = read("identity/entity/id/" + entity["id"])["data"]
+            _entity(observed, role_id, accessor, token_accessor, token_alias=True)
+            if observed["disabled"]:
+                raise SafeError("authentication-failed")
+            return {"status": "pass", "action": action}
+
         if action == "revoke":
             # First establish and read back the barrier. Never re-enable on error.
             post("identity/entity/id/" + entity["id"], {"disabled": True})
             observed = read("identity/entity/id/" + entity["id"])["data"]
-            _entity(observed, role_id, accessor)
+            _entity(observed, role_id, accessor, token_accessor)
             if observed["disabled"] is not True:
                 raise SafeError("authentication-failed")
             record["revoked_at"] = clock()
@@ -367,8 +416,10 @@ def run(action, slot, *, directory, client, kubeconfig, confirm, now=None):
                 if _accessors(client):
                     raise SafeError("source-mismatch")
                 post("identity/entity/id/" + entity_id, {"disabled": False})
+        if action == "enroll":
+            bind_session_tokens(entity_id)
         entity = read("identity/entity/id/" + entity_id)["data"]
-        _entity(entity, role_id, accessor)
+        _entity(entity, role_id, accessor, token_accessor, token_alias=action == "enroll")
         if entity["disabled"]:
             raise SafeError("authentication-failed")
         secret = post(ROLE_PATH + "/secret-id", {})["data"]
