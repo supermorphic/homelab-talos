@@ -141,6 +141,28 @@ for input in '' 'short-password'; do
     [[ ! -e "$temp_dir/kubectl-called" ]] ||
     fail "the issuer enable helper must refuse '$input' before any cluster access"
 done
+# The issuer reset command already holds the shared run Lease. The helper joins it
+# and never acquires, renews, or releases it.
+if printf '%064d' 0 | AUTOMATION_DATA_OPENBAO_ISSUER_ENABLE_CONFIRM=enable:automation-data:openbao-issuer \
+    PATH="$temp_dir/stub-kubectl:$PATH" "$issuer_enable" "$temp_dir/kubeconfig" \
+    >"$temp_dir/command.out" 2>&1; then
+  fail 'the issuer enable helper must require the calling command Lease'
+fi
+rg -q "the issuer reset command's Lease" "$temp_dir/command.out" &&
+  [[ ! -e "$temp_dir/kubectl-called" ]] ||
+  fail 'the issuer enable helper must refuse a missing Lease before any cluster access'
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"%s/kubectl.log"\nexit 1\n' "$temp_dir" \
+  >"$temp_dir/stub-kubectl/kubectl"
+if printf '%064d' 0 | AUTOMATION_DATA_OPENBAO_ISSUER_ENABLE_CONFIRM=enable:automation-data:openbao-issuer \
+    OPENBAO_LEASE_HOLDER=openbao-0123abcd OPENBAO_LEASE_FAILURE="$temp_dir/parent-lease-failed" \
+    PATH="$temp_dir/stub-kubectl:$PATH" "$issuer_enable" "$temp_dir/kubeconfig" \
+    >"$temp_dir/command.out" 2>&1; then
+  fail 'the issuer enable helper must stop when the joined Lease cannot be verified'
+fi
+if ! rg -q 'get lease homelab-test-run-lock' "$temp_dir/kubectl.log" ||
+    rg -q '(create|replace|delete)' "$temp_dir/kubectl.log"; then
+  fail 'the issuer enable helper must verify, not acquire, the calling command Lease'
+fi
 if AUTOMATION_DATA_SESSIONS_RESTORE_CLEANUP_CONFIRM='' \
     scripts/operations/automation-data-sessions-restore-cleanup.sh "$temp_dir/missing" \
     >"$temp_dir/command.out" 2>"$temp_dir/command.err"; then
