@@ -88,7 +88,7 @@ class FinalizeTest(unittest.TestCase):
 
     def test_operator_readback_failure_preserves_root_and_cleans_session(self):
         plan = self.plan()
-        def verify(*_):
+        def verify(*_, **__):
             if self.client.token == "operator":
                 raise SafeError("read-denied")
         self.verify.side_effect = verify

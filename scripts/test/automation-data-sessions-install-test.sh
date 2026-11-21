@@ -20,7 +20,7 @@ yq ea -o=json 'select(.kind == "ConfigMap" and
 [[ "$(jq -s 'length' "$temp_dir/configmap.json")" == 1 ]] ||
   fail 'exactly one access-sessions ConfigMap must be rendered'
 [[ "$(jq -r '.data | keys | join(",")' "$temp_dir/configmap.json")" == \
-  'access-sessions.sql,enable-session-sweeper.sh,enable-session-sweeper.sql,install-access-sessions.sh,register-access-capability.sh,register-access-capability.sql,restore-session-logins.sh' ]] ||
+  'access-sessions.sql,enable-openbao-issuer.sh,enable-openbao-issuer.sql,enable-session-sweeper.sh,enable-session-sweeper.sql,install-access-sessions.sh,register-access-capability.sh,register-access-capability.sql,restore-session-logins.sh' ]] ||
   fail 'the access-sessions ConfigMap must contain exactly the reviewed SQL and wrappers'
 for key in access-sessions.sql install-access-sessions.sh enable-session-sweeper.sql \
     enable-session-sweeper.sh restore-session-logins.sh register-access-capability.sql \
@@ -104,6 +104,43 @@ yq -o=json "$temp_dir/cleanup.yaml" | jq -e --arg cm "$configmap" '
   ([.spec.template.spec.containers[0].env[] | select(.name == "PGUSER") | .value] ==
     ["automation_data_backup"])
 ' >/dev/null || fail 'the restore cleanup Job manifest is not the reviewed shape'
+automation_data_openbao_issuer_enable_job_manifest automation-data-openbao-issuer-run-1 \
+  run-1 "$configmap" automation-data-openbao-issuer-run-1 >"$temp_dir/issuer.yaml"
+yq -o=json "$temp_dir/issuer.yaml" | jq -e --arg cm "$configmap" '
+  .metadata.labels."homelab-talos/role" == "openbao-issuer-enable" and
+  .spec.template.spec.containers[0].args == ["/scripts/enable-openbao-issuer.sh"] and
+  ([.spec.template.spec.volumes[] | select(.name == "scripts") | .configMap.name] == [$cm]) and
+  ([.spec.template.spec.containers[0].env[] | select(.name == "PGUSER") | .value] ==
+    ["automation_data_backup"]) and
+  ([.spec.template.spec.containers[0].env[] | select(.name == "ISSUER_PASSWORD") |
+    .valueFrom.secretKeyRef] ==
+    [{"name": "automation-data-openbao-issuer-run-1", "key": "password"}])
+' >/dev/null || fail 'the issuer enable Job manifest is not the reviewed shape'
+if automation_data_openbao_issuer_enable_job_manifest job run-1 "$configmap" 'bad name' \
+    >/dev/null 2>&1; then
+  fail 'the issuer enable Job manifest must refuse an invalid Secret name'
+fi
+# The issuer enable helper takes the password only on stdin and checks it before any
+# cluster access; the issuer reset command supplies both.
+issuer_enable=scripts/operations/automation-data-openbao-issuer-enable.sh
+touch "$temp_dir/kubeconfig"
+mkdir -p "$temp_dir/stub-kubectl"
+printf '#!/bin/sh\ntouch "%s/kubectl-called"\nexit 1\n' "$temp_dir" >"$temp_dir/stub-kubectl/kubectl"
+chmod 700 "$temp_dir/stub-kubectl/kubectl"
+if printf '%064d' 0 | AUTOMATION_DATA_OPENBAO_ISSUER_ENABLE_CONFIRM='' \
+    "$issuer_enable" "$temp_dir/kubeconfig" >"$temp_dir/command.out" 2>&1; then
+  fail 'the issuer enable helper must require confirmation'
+fi
+for input in '' 'short-password'; do
+  if printf '%s' "$input" | AUTOMATION_DATA_OPENBAO_ISSUER_ENABLE_CONFIRM=enable:automation-data:openbao-issuer \
+      PATH="$temp_dir/stub-kubectl:$PATH" "$issuer_enable" "$temp_dir/kubeconfig" \
+      >"$temp_dir/command.out" 2>&1; then
+    fail 'the issuer enable helper must refuse a missing or short password'
+  fi
+  rg -q 'password of at least 32 characters' "$temp_dir/command.out" &&
+    [[ ! -e "$temp_dir/kubectl-called" ]] ||
+    fail "the issuer enable helper must refuse '$input' before any cluster access"
+done
 if AUTOMATION_DATA_SESSIONS_RESTORE_CLEANUP_CONFIRM='' \
     scripts/operations/automation-data-sessions-restore-cleanup.sh "$temp_dir/missing" \
     >"$temp_dir/command.out" 2>"$temp_dir/command.err"; then

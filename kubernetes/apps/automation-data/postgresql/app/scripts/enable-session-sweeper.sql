@@ -8,6 +8,8 @@ SET LOCAL statement_timeout = '60s';
 -- The ALTER ROLE text carries the password; keep it out of logs, including errors.
 SET LOCAL log_statement = 'none';
 SET LOCAL log_min_error_statement = 'panic';
+-- pg_monitor members can read pg_stat_activity; keep the statement out of it.
+SET LOCAL track_activities = off;
 
 -- Refuse unless the access-session objects and both fixed roles match the installed
 -- contract, including the marker, attributes, and absence of memberships.

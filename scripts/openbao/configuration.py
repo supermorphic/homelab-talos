@@ -20,6 +20,8 @@ class SafeError(Exception):
         "authentication-failed",
         "ambiguous-write",
         "audit-unavailable",
+        "not-found",
+        "issuer-reset-required",
     }
 
     def __init__(self, code: str = "invalid-response"):
@@ -83,6 +85,8 @@ KINDS = {
     "policy",
     "kubernetes-config",
     "issuance-role",
+    "database-connection",
+    "database-role",
 }
 INVENTORY_KINDS = {
     "auth-method",
@@ -92,6 +96,8 @@ INVENTORY_KINDS = {
     "userpass-user",
     "policy",
     "issuance-role",
+    "database-connection",
+    "database-role",
 }
 
 

@@ -40,6 +40,7 @@ class StateClient:
         )["data"]
         self.state[("jwt-config", "homelab-jwt")] = copy.deepcopy(self.jwt_readback)
         self.writes = []
+        self.payloads = []
         self.ignore_writes = False
         self.deletes = []
         self.ignore_deletes = False
@@ -76,9 +77,26 @@ class StateClient:
 
     def post(self, path, payload, token=None):
         self.writes.append(path)
+        self.payloads.append((path, copy.deepcopy(payload)))
         if not self.ignore_writes:
             for spec in self.document["objects"]:
-                if path == spec.path.rstrip("/"):
+                if path == spec.path.rstrip("/") and spec.kind == "database-connection":
+                    # OpenBao accepts connection settings flat and reads them back nested.
+                    state = copy.deepcopy(
+                        self.state.get((spec.kind, spec.name))
+                        or self.readbacks[(spec.kind, spec.name)]
+                    )
+                    flat = dict(payload)
+                    self.password_received = flat.pop("password", None)
+                    details = {
+                        key: flat.pop(key)
+                        for key in list(flat)
+                        if key in state["connection_details"]
+                    }
+                    state["connection_details"].update(details)
+                    state.update(flat)
+                    self.state[(spec.kind, spec.name)] = state
+                elif path == spec.path.rstrip("/"):
                     self.state[(spec.kind, spec.name)] = {
                         **copy.deepcopy(self.readbacks[(spec.kind, spec.name)]),
                         **payload,
@@ -249,6 +267,69 @@ class ApplyTest(unittest.TestCase):
         result = apply.run(confirm=plan["confirmation"], **self.inputs)
         self.assertEqual(result["status"], "pass")
         self.assertIsNone(self.client.password_received)
+
+    def test_missing_database_connection_is_left_for_the_issuer_reset(self):
+        del self.client.state[("database-connection", "automation-data")]
+        plan = apply.run(confirm="", **self.inputs)
+        self.assertEqual(
+            plan["changes"],
+            [{"kind": "database-connection", "name": "automation-data", "action": "issuer-reset"}],
+        )
+        result = apply.run(confirm=plan["confirmation"], **self.inputs)
+        self.assertEqual(self.client.writes, [])
+        self.assertEqual(result["status"], "issuer-reset-required")
+        self.assertEqual(result["issuer_reset_required"], ["database-connection/automation-data"])
+        # Strict callers name the missing step instead of a generic mismatch.
+        with self.assertRaisesRegex(SafeError, "issuer-reset-required"):
+            apply.verify_configuration(DESIRED, self.client)
+        self.client.state[("database-role", "career-ops-read")]["max_ttl"] = 3600
+        with self.assertRaisesRegex(SafeError, "source-mismatch"):
+            apply.verify_configuration(DESIRED, self.client)
+
+    def test_database_connection_update_is_flat_and_keeps_the_stored_password(self):
+        self.client.state[("database-connection", "automation-data")]["allowed_roles"] = ["other"]
+        plan = apply.run(confirm="", **self.inputs)
+        self.assertEqual(
+            plan["changes"],
+            [{"kind": "database-connection", "name": "automation-data", "action": "write"}],
+        )
+        result = apply.run(confirm=plan["confirmation"], **self.inputs)
+        self.assertEqual(result["status"], "pass")
+        [(path, payload)] = self.client.payloads
+        self.assertEqual(path, "automation-data/config/automation-data")
+        self.assertEqual(
+            sorted(payload),
+            [
+                "allowed_roles",
+                "connection_url",
+                "password_authentication",
+                "password_policy",
+                "plugin_name",
+                "root_credentials_rotate_statements",
+                "username",
+                "username_template",
+            ],
+        )
+        self.assertEqual(payload["allowed_roles"], ["career-ops-read"])
+        self.assertIsNone(self.client.password_received)
+
+    def test_database_connection_write_without_password_refuses_creation(self):
+        spec = next(
+            s for s in load_document(DESIRED)["objects"] if s.kind == "database-connection"
+        )
+        with self.assertRaisesRegex(SafeError, "issuer-reset-required"):
+            apply._write(spec, None, self.client, "synthetic-token")
+        self.assertEqual(self.client.writes, [])
+
+    def test_database_reads_with_a_password_or_unreviewed_setting_are_refused(self):
+        for field, value in (("password", "synthetic-leak"), ("max_open_connections", "4")):
+            with self.subTest(field=field):
+                client = StateClient()
+                client.state[("database-connection", "automation-data")]["connection_details"][
+                    field
+                ] = value
+                with self.assertRaisesRegex(SafeError, "invalid-response"):
+                    apply.snapshot(DESIRED, client)
 
     def test_missing_or_raw_audit_cannot_pass_independent_readback(self):
         self.client.audit = {}

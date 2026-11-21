@@ -221,6 +221,42 @@ class CollectionTest(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(SafeError):
                 reader.request(method, path)
 
+    def test_not_found_reads_are_empty_or_missing_and_denials_stay_denied(self):
+        from unittest.mock import patch
+
+        from scripts.openbao.exporter import PEERS, ConfigurationReader
+
+        class Response:
+            def __init__(self, status):
+                self.status = status
+
+            def read(self, _limit):
+                return b'{"errors":[]}'
+
+        class Connection:
+            status = 404
+
+            def __init__(self, _peer):
+                pass
+
+            def request(self, *_args, **_kwargs):
+                pass
+
+            def getresponse(self):
+                return Response(Connection.status)
+
+            def close(self):
+                pass
+
+        reader = ConfigurationReader(DESIRED, Path("unused"))
+        reader.token, reader.peer = "synthetic-token", PEERS[0]
+        with patch("scripts.openbao.exporter.PeerConnection", Connection):
+            self.assertEqual(reader.request("LIST", "automation-data/config"), {"keys": []})
+            self.assertIsNone(reader.request("GET", "automation-data/config/automation-data"))
+            Connection.status = 403
+            with self.assertRaisesRegex(SafeError, "read-denied"):
+                reader.request("LIST", "automation-data/config")
+
     def test_peer_transport_uses_verified_certificate_name(self):
         from unittest.mock import Mock, patch
 

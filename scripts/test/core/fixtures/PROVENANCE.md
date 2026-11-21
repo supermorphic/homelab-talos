@@ -12,3 +12,10 @@ readbacks in `openbao-2.7-read-responses.json` were captured from the official
 2.7.0 Darwin arm64 release on a loopback dev server. The archive SHA-256 was
 checked against the release checksums. Mount UUID/accessor values are synthetic.
 No workstation enrollment or live cluster credentials were used.
+
+The `automation-data/` database mount, `automation-data` connection and
+`career-ops-read` role readbacks were captured on 2026-11-20 from the pinned
+`openbao/openbao:2.7.0` image (digest as in `values.yaml`) running as a loopback
+dev server, after writing the objects in `desired.json`. The connection used a
+synthetic password and `verify_connection=false`; reads never return the password.
+Mount UUID/accessor values are synthetic.

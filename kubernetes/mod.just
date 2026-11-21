@@ -1373,6 +1373,12 @@ openbao-upgrade: require-bash
 openbao-issuer-rollout: require-bash
     @uv run --locked python -m scripts.openbao.issuer_rollout
 
+# Operator-run after openbao-config-apply, and whenever the issuer credential state is
+# unknown: set a fresh issuer password, write the connection, then rotate-root.
+# Needs OPENBAO_OPERATOR_KUBECONFIG; prompts for the per-run confirmation.
+automation-data-openbao-issuer-reset: require-bash
+    @uv run --locked python -m scripts.openbao.database_issuer
+
 # Read the retained operation ID and phase without changing sources or credentials.
 nocodb-source-status domain: require-bash
     @scripts/nocodb/source-operation.sh status {{quote(domain)}}

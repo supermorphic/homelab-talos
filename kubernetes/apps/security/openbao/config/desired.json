@@ -69,6 +69,25 @@
       }
     },
     {
+      "kind": "secret-mount",
+      "name": "automation-data/",
+      "path": "sys/mounts/automation-data/",
+      "fields": {
+        "type": "database",
+        "description": "Scoped PostgreSQL session logins",
+        "config": {
+          "default_lease_ttl": 600,
+          "max_lease_ttl": 600,
+          "force_no_cache": false,
+          "audit_non_hmac_response_keys": [
+            "username"
+          ]
+        },
+        "local": false,
+        "seal_wrap": false
+      }
+    },
+    {
       "kind": "jwt-config",
       "name": "homelab-jwt",
       "path": "auth/homelab-jwt/config",
@@ -480,6 +499,41 @@
           "https://192.168.90.20:6443"
         ]
       }
+    },
+    {
+      "kind": "database-connection",
+      "name": "automation-data",
+      "path": "automation-data/config/automation-data",
+      "fields": {
+        "plugin_name": "postgresql-database-plugin",
+        "connection_details": {
+          "connection_url": "postgresql://{{username}}:{{password}}@automation-data-postgresql.automation-data.svc.cluster.local:5432/automation_data_control?sslmode=disable",
+          "username": "automation_data_openbao_issuer",
+          "password_authentication": "scram-sha-256",
+          "username_template": "{{ printf \"v-%s-%s\" (.RoleName | truncate 40) (random 20) | lowercase }}"
+        },
+        "allowed_roles": [
+          "career-ops-read"
+        ],
+        "password_policy": "",
+        "root_credentials_rotate_statements": []
+      }
+    },
+    {
+      "kind": "database-role",
+      "name": "career-ops-read",
+      "path": "automation-data/roles/career-ops-read",
+      "fields": {
+        "db_name": "automation-data",
+        "creation_statements": [
+          "SELECT platform_operations.issue_session_login('{{name}}', '{{password}}', '{{expiration}}', 'career_ops', 'read')"
+        ],
+        "revocation_statements": [
+          "SELECT platform_operations.revoke_session_login('{{name}}')"
+        ],
+        "default_ttl": 600,
+        "max_ttl": 600
+      }
     }
   ],
   "inventories": {
@@ -489,7 +543,8 @@
       "homelab-approle/"
     ],
     "secret-mount": [
-      "kubernetes/"
+      "kubernetes/",
+      "automation-data/"
     ],
     "jwt-role": [
       "openbao-backup",
@@ -524,6 +579,12 @@
     ],
     "approle-role": [
       "agent-workstation"
+    ],
+    "database-connection": [
+      "automation-data"
+    ],
+    "database-role": [
+      "career-ops-read"
     ]
   },
   "builtin_exceptions": {

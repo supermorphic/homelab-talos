@@ -265,6 +265,8 @@ class ConfigurationReader:
             connection.request(method, "/v1/" + path, body=body, headers=headers)
             response = connection.getresponse()
             raw = response.read(1_048_577)
+            if response.status == 404 and method in {"GET", "LIST"}:
+                raise SafeError("not-found")
             if response.status not in (200, 204) or len(raw) > 1_048_576:
                 raise SafeError("read-denied")
             value = strict_json(raw, "invalid-response") if raw else {}
@@ -316,7 +318,14 @@ class ConfigurationReader:
             raise SafeError("invalid-source")
         if not self.token or not self.peer:
             raise SafeError("authentication-failed")
-        result = self.exchange(self.peer, method, path)
+        try:
+            result = self.exchange(self.peer, method, path)
+        except SafeError as error:
+            # OpenBao answers 404 for an empty LIST and for an absent object, which the
+            # comparison reports as missing rather than as an unreadable endpoint.
+            if str(error) != "not-found":
+                raise
+            return {"keys": []} if method == "LIST" else None
         if not isinstance(result, dict) or not isinstance(result.get("data"), dict):
             raise SafeError("invalid-response")
         return result["data"]
