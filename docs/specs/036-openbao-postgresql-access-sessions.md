@@ -536,7 +536,7 @@ is valid for that run only. It then:
 
 Expected last line: JSON with `"status": "pass"` and `"issuer": "rotated"`. With
 `"issuer_state": "unknown"`, a step after the PostgreSQL change failed; run the
-reset again. `"cleanup": "failed"` means the run-owned Job, Secret, or Lease may
+reset again. `"cleanup": "failed"` means the run-owned Job or Secret may
 remain in `automation-data`; delete them before the rerun. After the
 runner exists, also issue and revoke one test login through it.
 

@@ -35,18 +35,25 @@ kubeconfig="$1"
   echo 'Missing operator kubeconfig.' >&2
   exit 1
 }
+# The issuer reset command holds the shared run Lease for the whole reset. Join it;
+# acquiring it here would find it held.
+lease_holder="${OPENBAO_LEASE_HOLDER:-}"
+lease_failure="${OPENBAO_LEASE_FAILURE:-}"
+[[ "$lease_holder" =~ ^openbao-[0-9a-f]+$ && "$lease_failure" == /* ]] || {
+  echo "The issuer enable step runs only under the issuer reset command's Lease." >&2
+  exit 1
+}
 kc=(kubectl --kubeconfig "$kubeconfig" --namespace automation-data)
 run_id="$(date -u +%Y%m%dT%H%M%SZ)-$(openssl rand -hex 4)"
 job="automation-data-openbao-issuer-${run_id,,}"
 secret="$job"
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/automation-data-openbao-issuer.XXXXXX")"
-lease_acquired=false
 created_jobs=()
 secret_created=false
 
 job_absent() { [[ -z "$("${kc[@]}" get job "$1" --ignore-not-found --output name)" ]]; }
 verify_lease() {
-  [[ ! -e "$temp_dir/lease-failed" ]] && verify_test_lease_holder "$kubeconfig" "$run_id"
+  [[ ! -e "$lease_failure" ]] && verify_test_lease_holder "$kubeconfig" "$lease_holder"
 }
 source_guard() {
   local remote_ref remote_sha revision state
@@ -94,10 +101,9 @@ cleanup() {
     fi
     [[ -z "$("${kc[@]}" get secret "$secret" --ignore-not-found --output name)" ]] || cleanup_ok=false
   fi
-  if [[ "$lease_acquired" == true ]]; then release_test_lease "$kubeconfig" "$run_id" >/dev/null || cleanup_ok=false; fi
   rm -rf -- "$temp_dir"
   if [[ "$cleanup_ok" != true ]]; then
-    echo 'Issuer enablement cleanup failed; inspect run-owned Jobs, Secrets and Lease.' >&2
+    echo 'Issuer enablement cleanup failed; inspect run-owned Jobs and Secrets.' >&2
     exit 1
   fi
   echo "openbao_issuer_cleanup=passed run=$run_id"
@@ -107,10 +113,8 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+verify_lease
 source_guard
-acquire_test_lease "$kubeconfig" "$run_id" >/dev/null
-lease_acquired=true
-start_test_lease_renewal "$kubeconfig" "$run_id" "$temp_dir/lease-failed"
 scripts/verify/automation-data.sh "$kubeconfig"
 verify_lease
 source_guard
