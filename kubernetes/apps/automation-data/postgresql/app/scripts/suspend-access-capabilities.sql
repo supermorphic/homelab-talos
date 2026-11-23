@@ -1,9 +1,12 @@
--- First phase of workstation revocation: suspend every ready specification 036
--- capability and print the ones this run suspended, so only those are resumed.
+-- Second phase of workstation revocation: suspend the listed capabilities that are
+-- still ready and print the ones this run suspended.
 \set ON_ERROR_STOP on
+\getenv capabilities REVOCATION_CAPABILITIES
 SELECT 'session_revocation_suspended=' || COALESCE(string_agg(
-    ready.domain || ':' || ready.capability, ',' ORDER BY ready.domain, ready.capability), '')
+    listed.domain || ':' || listed.capability, ',' ORDER BY listed.domain, listed.capability), '')
 FROM (SELECT domain, capability FROM platform_operations.managed_access_capabilities
-    WHERE state = 'ready' FOR UPDATE) AS ready
-CROSS JOIN LATERAL platform_operations.suspend_access_capability(ready.domain,
-  ready.capability) AS suspended;
+    WHERE state = 'ready'
+      AND domain || ':' || capability = ANY (string_to_array(NULLIF(:'capabilities', ''), ','))
+    FOR UPDATE) AS listed
+CROSS JOIN LATERAL platform_operations.suspend_access_capability(listed.domain,
+  listed.capability) AS suspended;

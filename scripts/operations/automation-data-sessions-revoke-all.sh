@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Run one specification 036 session revocation phase for workstation revocation.
 # Only `just kube openbao-workstation revoke` (scripts/openbao/workstation.py) runs
-# this: "suspend" suspends every ready capability, and "finish" revokes every
-# registered temporary login and resumes the listed capabilities when allowed.
+# this: "list" prints the ready capabilities, "suspend" suspends the listed ones, and
+# "finish" revokes every registered temporary login and resumes the listed
+# capabilities when allowed.
 set -euo pipefail
 
 source scripts/lib/common.sh
@@ -14,9 +15,11 @@ source scripts/test/lib/job.sh
 require_bash
 
 listed='[a-z][a-z0-9_]{0,47}:[a-z][a-z0-9_]{0,23}'
-[[ ("$#" -eq 2 && "$2" == suspend) || ("$#" -eq 4 && "$2" == finish &&
-  ("$3" == '' || "$3" =~ ^$listed(,$listed)*$) && "$4" =~ ^(true|false)$) ]] || {
-  echo 'Usage: automation-data-sessions-revoke-all.sh <kubeconfig> suspend|finish <capabilities> <true|false>' >&2
+[[ ("$#" -eq 2 && "$2" == list) ||
+  ("$#" -ge 3 && ("$3" == '' || "$3" =~ ^$listed(,$listed)*$) &&
+  (("$#" -eq 3 && "$2" == suspend) ||
+  ("$#" -eq 4 && "$2" == finish && "$4" =~ ^(true|false)$))) ]] || {
+  echo 'Usage: automation-data-sessions-revoke-all.sh <kubeconfig> list | suspend <capabilities> | finish <capabilities> <true|false>' >&2
   exit 2
 }
 [[ "${AUTOMATION_DATA_SESSIONS_REVOKE_ALL_CONFIRM:-}" == 'revoke:automation-data:all-sessions' ]] || {
@@ -115,7 +118,9 @@ created_jobs+=("$job")
 "${kc[@]}" create --filename "$temp_dir/revoke.yaml" >/dev/null
 wait_for_job_terminal "$job" 300 2 "${kc[@]}"
 result="$("${kc[@]}" logs "job/$job" --tail=1)"
-if [[ "$phase" == suspend ]]; then
+if [[ "$phase" == list ]]; then
+  [[ "$result" =~ ^session_revocation_ready=(${listed}(,${listed})*)?$ ]]
+elif [[ "$phase" == suspend ]]; then
   [[ "$result" =~ ^session_revocation_suspended=(${listed}(,${listed})*)?$ ]]
 else
   [[ "$result" =~ ^session_revocation\ revoked=[0-9]+\ failed=[0-9]+\ remaining=[0-9]+\ resumed=(${listed}(,${listed})*)?$ ]]

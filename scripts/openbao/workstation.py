@@ -260,11 +260,11 @@ def _accessors(client):
 
 def revoke_sessions(kubeconfig, phase, capabilities=(), resume=False):
     """Run one specification 036 session revocation phase through its helper Job."""
-    arguments = (
-        [phase]
-        if phase == "suspend"
-        else [phase, ",".join(capabilities), "true" if resume else "false"]
-    )
+    arguments = {
+        "list": [phase],
+        "suspend": [phase, ",".join(capabilities)],
+        "finish": [phase, ",".join(capabilities), "true" if resume else "false"],
+    }[phase]
     process = subprocess.Popen(
         [*SESSION_HELPER, str(kubeconfig), *arguments],
         stdin=subprocess.DEVNULL,
@@ -291,10 +291,12 @@ def revoke_sessions(kubeconfig, phase, capabilities=(), resume=False):
     lines = stdout.decode(errors="replace").splitlines()
     if process.returncode == 0:
         for line in lines:
-            if phase == "suspend":
-                match = re.fullmatch(rf"session_revocation_suspended=({_LISTED}) run=\S+", line)
-                if match:
-                    return match[1].split(",") if match[1] else []
+            prefix = {"list": "ready", "suspend": "suspended"}.get(phase)
+            match = prefix and re.fullmatch(
+                rf"session_revocation_{prefix}=({_LISTED}) run=\S+", line
+            )
+            if match:
+                return match[1].split(",") if match[1] else []
             match = re.fullmatch(
                 rf"session_revocation revoked=(\d+) failed=(\d+) remaining=(\d+) "
                 rf"resumed=({_LISTED}) run=\S+",
@@ -352,7 +354,11 @@ def run(
         if entity and mapped is None:
             raise SafeError("authentication-failed")
         token_mapped = _lookup(client, ROLE, token_accessor)
-        if token_mapped is not None and (not entity or token_mapped.get("id") != entity.get("id")):
+        foreign_token_alias = token_mapped is not None and (
+            not entity or token_mapped.get("id") != entity.get("id")
+        )
+        # Revocation still establishes its barrier, then reports the foreign alias.
+        if foreign_token_alias and action != "revoke":
             raise SafeError("authentication-failed")
         ids = _accessors(client)
         if entity:
@@ -373,7 +379,11 @@ def run(
             )
         ):
             raise SafeError("authentication-failed")
-        if action == "enroll" and record and record.get("suspended_capabilities"):
+        if (
+            action == "enroll"
+            and record
+            and (record.get("sessions_pending") or record.get("suspended_capabilities"))
+        ):
             # A revocation has not finished; rerun it first.
             raise SafeError("session-revocation-failed")
         if action == "rotate":
@@ -441,6 +451,7 @@ def run(
             if observed["disabled"] is not True:
                 raise SafeError("authentication-failed")
             record["revoked_at"] = clock()
+            record["sessions_pending"] = True
             write_private(record_path, record)
             for secret_accessor in _accessors(client):
                 post(
@@ -455,23 +466,32 @@ def run(
                 local.unlink()
             record["accessors"] = []
             write_private(record_path, record)
-            # Then end every database session. A rerun repeats these steps and resumes
-            # only capabilities that a revocation suspended.
+            # Then end every database session. Record the ready capabilities before
+            # suspending them, so a rerun resumes exactly those and never one that
+            # was suspended before.
             suspended = sorted(
-                set(record.get("suspended_capabilities", []))
-                | set(sessions(kubeconfig, "suspend"))
+                set(record.get("suspended_capabilities", [])) | set(sessions(kubeconfig, "list"))
             )
             record["suspended_capabilities"] = suspended
             write_private(record_path, record)
+            sessions(kubeconfig, "suspend", suspended)
             try:
                 post("sys/leases/revoke-prefix/automation-data/creds", {"sync": True})
                 leases_revoked = True
             except SafeError:
                 leases_revoked = False
-            finished = sessions(kubeconfig, "finish", suspended, resume=leases_revoked)
+            finished = sessions(
+                kubeconfig,
+                "finish",
+                suspended,
+                resume=leases_revoked and not foreign_token_alias,
+            )
+            if foreign_token_alias:
+                raise SafeError("authentication-failed")
             if not leases_revoked or finished["failed"] or finished["remaining"]:
                 raise SafeError("session-revocation-failed")
             record["suspended_capabilities"] = []
+            record["sessions_pending"] = False
             write_private(record_path, record)
             return {"status": "pass", "action": action}
 

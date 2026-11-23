@@ -20,12 +20,12 @@ yq ea -o=json 'select(.kind == "ConfigMap" and
 [[ "$(jq -s 'length' "$temp_dir/configmap.json")" == 1 ]] ||
   fail 'exactly one access-sessions ConfigMap must be rendered'
 [[ "$(jq -r '.data | keys | join(",")' "$temp_dir/configmap.json")" == \
-  'access-sessions.sql,enable-openbao-issuer.sh,enable-openbao-issuer.sql,enable-session-sweeper.sh,enable-session-sweeper.sql,install-access-sessions.sh,register-access-capability.sh,register-access-capability.sql,restore-session-logins.sh,revoke-all-session-logins.sql,revoke-all-sessions.sh,suspend-access-capabilities.sql' ]] ||
+  'access-sessions.sql,enable-openbao-issuer.sh,enable-openbao-issuer.sql,enable-session-sweeper.sh,enable-session-sweeper.sql,install-access-sessions.sh,ready-access-capabilities.sql,register-access-capability.sh,register-access-capability.sql,restore-session-logins.sh,revoke-all-session-logins.sql,revoke-all-sessions.sh,suspend-access-capabilities.sql' ]] ||
   fail 'the access-sessions ConfigMap must contain exactly the reviewed SQL and wrappers'
 for key in access-sessions.sql install-access-sessions.sh enable-session-sweeper.sql \
     enable-session-sweeper.sh restore-session-logins.sh register-access-capability.sql \
-    register-access-capability.sh suspend-access-capabilities.sql revoke-all-session-logins.sql \
-    revoke-all-sessions.sh; do
+    register-access-capability.sh ready-access-capabilities.sql suspend-access-capabilities.sql \
+    revoke-all-session-logins.sql revoke-all-sessions.sh; do
   jq -j --arg key "$key" '.data[$key]' "$temp_dir/configmap.json" >"$temp_dir/$key"
   cmp -s "$temp_dir/$key" "$scripts_dir/$key" || fail "$key differs from reviewed source"
 done
@@ -166,14 +166,21 @@ if ! rg -q 'get lease homelab-test-run-lock' "$temp_dir/kubectl.log" ||
 fi
 # Workstation revocation runs each session revocation phase as the backup identity.
 automation_data_session_revocation_job_manifest automation-data-session-revoke-run-1 \
-  run-1 "$configmap" suspend >"$temp_dir/revoke-suspend.yaml"
-yq -o=json "$temp_dir/revoke-suspend.yaml" | jq -e --arg cm "$configmap" '
+  run-1 "$configmap" list >"$temp_dir/revoke-list.yaml"
+yq -o=json "$temp_dir/revoke-list.yaml" | jq -e --arg cm "$configmap" '
   .metadata.labels."homelab-talos/role" == "session-revocation" and
-  .spec.template.spec.containers[0].args == ["/scripts/revoke-all-sessions.sh", "suspend"] and
+  .spec.template.spec.containers[0].args == ["/scripts/revoke-all-sessions.sh", "list"] and
   ([.spec.template.spec.volumes[] | select(.name == "scripts") | .configMap.name] == [$cm]) and
   ([.spec.template.spec.containers[0].env[] | select(.name == "PGUSER") | .value] ==
     ["automation_data_backup"]) and
   ([.spec.template.spec.containers[0].env[] | select(.name | startswith("REVOCATION_"))] == [])
+' >/dev/null || fail 'the session revocation list Job manifest is not the reviewed shape'
+automation_data_session_revocation_job_manifest automation-data-session-revoke-run-1 \
+  run-1 "$configmap" suspend '' >"$temp_dir/revoke-suspend.yaml"
+yq -o=json "$temp_dir/revoke-suspend.yaml" | jq -e '
+  .spec.template.spec.containers[0].args == ["/scripts/revoke-all-sessions.sh", "suspend"] and
+  ([.spec.template.spec.containers[0].env[] | select(.name | startswith("REVOCATION_"))] == [
+    {"name": "REVOCATION_CAPABILITIES", "value": ""}])
 ' >/dev/null || fail 'the session revocation suspend Job manifest is not the reviewed shape'
 automation_data_session_revocation_job_manifest automation-data-session-revoke-run-1 \
   run-1 "$configmap" finish career_ops:read,other:audit true >"$temp_dir/revoke-finish.yaml"
@@ -183,8 +190,8 @@ yq -o=json "$temp_dir/revoke-finish.yaml" | jq -e '
     {"name": "REVOCATION_CAPABILITIES", "value": "career_ops:read,other:audit"},
     {"name": "REVOCATION_RESUME", "value": "true"}])
 ' >/dev/null || fail 'the session revocation finish Job manifest is not the reviewed shape'
-for arguments in 'suspend extra' 'finish career_ops:read' 'finish career_ops;read true' \
-    'finish career_ops:read yes' 'resume career_ops:read true'; do
+for arguments in 'list extra' 'suspend' 'suspend career_ops;read' 'finish career_ops:read' \
+    'finish career_ops;read true' 'finish career_ops:read yes' 'resume career_ops:read true'; do
   # shellcheck disable=SC2086 # Each case is a word list.
   if automation_data_session_revocation_job_manifest job run-1 "$configmap" $arguments \
       >/dev/null 2>&1; then
@@ -195,7 +202,7 @@ done
 revoke_all=scripts/operations/automation-data-sessions-revoke-all.sh
 rm -f "$temp_dir/kubectl-called" "$temp_dir/kubectl.log"
 printf '#!/bin/sh\ntouch "%s/kubectl-called"\nexit 1\n' "$temp_dir" >"$temp_dir/stub-kubectl/kubectl"
-for arguments in suspend 'finish career_ops:read maybe'; do
+for arguments in list 'suspend career_ops:read' 'finish career_ops:read maybe'; do
   # shellcheck disable=SC2086 # Each case is a word list.
   if AUTOMATION_DATA_SESSIONS_REVOKE_ALL_CONFIRM=revoke:automation-data:all-sessions \
       OPENBAO_LEASE_HOLDER=openbao-0123abcd OPENBAO_LEASE_FAILURE="$temp_dir/parent-lease-failed" \
@@ -205,13 +212,13 @@ for arguments in suspend 'finish career_ops:read maybe'; do
   fi
 done
 if AUTOMATION_DATA_SESSIONS_REVOKE_ALL_CONFIRM='' PATH="$temp_dir/stub-kubectl:$PATH" \
-    "$revoke_all" "$temp_dir/kubeconfig" suspend >"$temp_dir/command.out" 2>&1; then
+    "$revoke_all" "$temp_dir/kubeconfig" list >"$temp_dir/command.out" 2>&1; then
   fail 'the session revocation helper must require confirmation'
 fi
 rg -q 'just kube openbao-workstation' "$temp_dir/command.out" ||
   fail 'the session revocation helper must name the workstation command'
 if AUTOMATION_DATA_SESSIONS_REVOKE_ALL_CONFIRM=revoke:automation-data:all-sessions \
-    PATH="$temp_dir/stub-kubectl:$PATH" "$revoke_all" "$temp_dir/kubeconfig" suspend \
+    PATH="$temp_dir/stub-kubectl:$PATH" "$revoke_all" "$temp_dir/kubeconfig" list \
     >"$temp_dir/command.out" 2>&1; then
   fail 'the session revocation helper must require the calling command Lease'
 fi

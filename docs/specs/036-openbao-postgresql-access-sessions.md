@@ -152,9 +152,8 @@ parameter except `ttl`. OpenBao refuses a request without the alias. For the
 workstation enrolled before this change,
 `just kube openbao-workstation alias agent-workstation` adds the alias. It refuses
 when the workstation is disabled or revoked, or when the alias belongs to another
-entity. Run it right after the OpenBao configuration apply that adds the token
-role: until then, the first session token request would create a new entity for
-the alias.
+entity. The workstation's grant on the token role is delivered only after the
+operator has added the alias.
 
 The runner passes that alias when creating the session token and compares the
 returned `entity_id` with the expected entity recorded at enrollment. On mismatch
@@ -448,22 +447,24 @@ after expiry. Acceptance tests these separately.
 Workstation revocation in specification 031 gains these steps after the entity is
 disabled and its SecretIDs are destroyed:
 
-1. Record which capabilities are `ready`, and suspend them.
+1. Record which capabilities are `ready` in the private operator record, then
+   suspend them.
 2. Revoke all database leases with `sys/leases/revoke-prefix/automation-data/creds`
    using `sync=true`. `revoke-force` is not part of this workflow.
 3. Verify that `managed_dynamic_logins` and the PostgreSQL role catalog contain no
-   unrevoked temporary login. Revoke any remainder through the sweeper path and
-   report it.
+   unrevoked temporary login. Revoke any remainder in PostgreSQL, recorded as
+   revoked by the operator, and report it.
 4. Resume only the capabilities recorded in step 1.
 
 Step 4 runs only when steps 2 and 3 passed and nothing remains. Otherwise the
 capabilities stay suspended and the command fails with
-`session-revocation-failed`. The private operator record keeps the list from
-step 1, so a rerun of `revoke` repeats steps 1 to 4 and resumes that list, never a
-capability that was already suspended before the first run. Enrollment refuses
-while the list is not empty. If a run fails before step 1 reports its list, check
-each capability's state and resume with `resume_access_capability` only those
-that the run suspended.
+`session-revocation-failed`. A rerun of `revoke` repeats steps 1 to 4 and
+resumes the recorded list, never a capability that was already suspended before
+the first run. A capability suspended deliberately between runs is resumed if it
+is on the list; suspend it again after the rerun. Enrollment refuses until a
+revocation has passed. If the workstation's token-mount alias belongs to another
+entity, revocation still completes steps 1 to 3, keeps the capabilities
+suspended, and fails with `authentication-failed`.
 
 This revokes every workstation's active sessions, each lasting at most its
 capability lifetime. Remaining session tokens are unusable while their entity is
@@ -588,10 +589,12 @@ owns outside its domain database. Rerun the cleanup after correcting the cause.
 1. homelab-talos: registries, functions, validators, sweeper and alerts, network
    policy, OpenBao objects, runner, discovery, revocation workflow, and the alias
    action. Update specification 031's revocation, re-enable, and lost-workstation
-   rules in the same change. Offline validation.
+   rules in the same change. Offline validation. The workstation's grant on the
+   session token role ships with the runner, after the alias step below.
 2. Operator: install the access-session SQL, create the sweeper Secret, apply
    OpenBao configuration, run the issuer reset, add the alias for the existing
-   workstation, and register `career_ops read`.
+   workstation, apply the configuration that adds the grant, and register
+   `career_ops read`.
 3. Career Ops: capability migration, wrapper, entry point, and tests.
 4. Separately authorized live acceptance.
 5. Read cutover: Career Ops readbacks move to `db read`, and helper workflows stop
