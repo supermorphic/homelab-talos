@@ -105,11 +105,6 @@ for token_role, name in token_roles.items():
 assert objects[("policy", "agent-profiles")].fields["policy"]["path"] == {
     **{f"kubernetes/creds/{profile}": {"capabilities": ["update"]} for profile in profiles},
     "auth/token/revoke-self": {"capabilities": ["update"]},
-    **{f"auth/token/create/{token_role}": {
-        "capabilities": ["update"],
-        "required_parameters": ["entity_alias"],
-        "allowed_parameters": {"entity_alias": ["agent-workstation"], "ttl": []},
-    } for token_role in token_roles},
 }
 for obj in desired["objects"]:
     if obj.kind == "jwt-role":
