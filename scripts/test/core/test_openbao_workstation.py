@@ -26,6 +26,7 @@ class IdentityClient:
         self.serial = 0
         self.foreign_alias = False
         self.foreign_token_alias = False
+        self.fail_lease_revocation = False
 
     def read(self, path, *, token=None, list_request=False):
         self.calls.append(("read", path))
@@ -126,7 +127,39 @@ class IdentityClient:
             }
         if path == "auth/token/revoke-self":
             return {}
+        if path == "sys/leases/revoke-prefix/automation-data/creds":
+            if self.fail_lease_revocation:
+                raise SafeError("ambiguous-write")
+            return {}
         raise AssertionError(path)
+
+
+class SessionRevocation:
+    """Capability states in automation-data, independent of the command under test."""
+
+    def __init__(self, client):
+        self.client = client
+        self.ready = {"career_ops:read"}
+        # Suspended by the operator before the run; revocation must not resume it.
+        self.suspended = {"other:audit"}
+        self.remaining = 0
+        self.unavailable = False
+
+    def __call__(self, kubeconfig, phase, capabilities=(), resume=False):
+        self.client.calls.append(("sessions", phase, list(capabilities), resume))
+        if self.unavailable:
+            raise SafeError("session-revocation-failed")
+        if phase == "suspend":
+            listed = sorted(self.ready)
+            self.suspended |= self.ready
+            self.ready = set()
+            return listed
+        resumed = (
+            sorted(set(capabilities) & self.suspended) if resume and not self.remaining else []
+        )
+        self.suspended -= set(resumed)
+        self.ready |= set(resumed)
+        return {"revoked": 1, "failed": 0, "remaining": self.remaining, "resumed": resumed}
 
 
 class WorkstationTest(unittest.TestCase):
@@ -135,6 +168,7 @@ class WorkstationTest(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name).resolve() / "private"
         self.client = IdentityClient()
+        self.sessions = SessionRevocation(self.client)
         self.now = 1000
         for target, value in (
             (
@@ -164,6 +198,7 @@ class WorkstationTest(unittest.TestCase):
             "client": self.client,
             "kubeconfig": Path("/operator"),
             "now": self.now,
+            "sessions": self.sessions,
         }
         plan = workstation.run(action, "agent-workstation", confirm="", **args)
         self.assertNotIn("SECRET_MARKER", str(plan))
@@ -196,7 +231,10 @@ class WorkstationTest(unittest.TestCase):
                 self.required_index = index
 
             def post(self, path, payload, *, token=None):
-                if path == workstation.LOGIN_PATH and self.required_index != client.consistency_index:
+                if (
+                    path == workstation.LOGIN_PATH
+                    and self.required_index != client.consistency_index
+                ):
                     raise SafeError("stale-state")
                 return client.post(path, payload, token=token)
 
@@ -317,9 +355,130 @@ class WorkstationTest(unittest.TestCase):
         with self.assertRaises(SafeError):
             self.run_action("enroll")
         self.assertTrue(self.client.entity["disabled"])
+        # Session tokens issued before the barrier live up to 600 seconds.
         self.now += 91
+        with self.assertRaises(SafeError):
+            self.run_action("enroll")
+        self.assertTrue(self.client.entity["disabled"])
+        self.now += 540
         self.assertEqual(self.run_action("enroll")["status"], "pass")
         self.assertFalse(self.client.entity["disabled"])
+
+    def test_revocation_ends_database_sessions_after_the_barrier(self):
+        self.run_action("enroll")
+        self.client.calls.clear()
+        self.assertEqual(self.run_action("revoke")["status"], "pass")
+        steps = [
+            call[1] if call[0] == "post" else call[1:]
+            for call in self.client.calls
+            if call[0] in {"post", "sessions"}
+        ]
+        self.assertEqual(
+            steps,
+            [
+                "identity/entity/id/synthetic-entity",
+                workstation.ROLE_PATH + "/secret-id-accessor/destroy",
+                ("suspend", [], False),
+                "sys/leases/revoke-prefix/automation-data/creds",
+                ("finish", ["career_ops:read"], True),
+            ],
+        )
+        revoke_prefix = next(
+            call for call in self.client.calls if call[0] == "post" and "revoke-prefix" in call[1]
+        )
+        self.assertEqual(revoke_prefix[2], {"sync": True})
+        self.assertEqual(self.sessions.ready, {"career_ops:read"})
+        self.assertEqual(self.sessions.suspended, {"other:audit"})
+        record = workstation.read_private(self.directory / "operator.json")
+        self.assertEqual(record["suspended_capabilities"], [])
+
+    def test_unfinished_session_revocation_keeps_suspension_until_a_rerun(self):
+        self.run_action("enroll")
+        self.sessions.remaining = 1
+        with self.assertRaisesRegex(SafeError, "session-revocation-failed"):
+            self.run_action("revoke")
+        self.assertTrue(self.client.entity["disabled"])
+        self.assertEqual(self.client.secrets, {})
+        self.assertFalse((self.directory / "workstation.json").exists())
+        self.assertEqual(self.sessions.ready, set())
+        record = workstation.read_private(self.directory / "operator.json")
+        self.assertEqual(record["suspended_capabilities"], ["career_ops:read"])
+        # Enrollment cannot start while a revocation is unfinished.
+        self.now += 631
+        with self.assertRaisesRegex(SafeError, "session-revocation-failed"):
+            self.run_action("enroll")
+        self.sessions.remaining = 0
+        self.client.calls.clear()
+        self.assertEqual(self.run_action("revoke")["status"], "pass")
+        self.assertIn(("sessions", "finish", ["career_ops:read"], True), self.client.calls)
+        self.assertEqual(self.sessions.ready, {"career_ops:read"})
+        # The rerun restarts the re-enable wait.
+        self.now += 631
+        self.assertEqual(self.run_action("enroll")["status"], "pass")
+
+    def test_failed_lease_revocation_never_resumes_capabilities(self):
+        self.run_action("enroll")
+        self.client.fail_lease_revocation = True
+        with self.assertRaisesRegex(SafeError, "session-revocation-failed"):
+            self.run_action("revoke")
+        self.assertIn(("sessions", "finish", ["career_ops:read"], False), self.client.calls)
+        self.assertEqual(self.sessions.ready, set())
+
+    def test_automation_data_outage_cannot_delay_the_openbao_barrier(self):
+        self.run_action("enroll")
+        self.sessions.unavailable = True
+        with self.assertRaisesRegex(SafeError, "session-revocation-failed"):
+            self.run_action("revoke")
+        self.assertTrue(self.client.entity["disabled"])
+        self.assertEqual(self.client.secrets, {})
+        self.assertFalse((self.directory / "workstation.json").exists())
+
+    def test_session_helper_output_is_parsed_strictly(self):
+        helper = Path(self.temp.name) / "helper.sh"
+        cases = (
+            (
+                ["suspend"],
+                "session_revocation_suspended=career_ops:read,other:audit run=r1",
+                ["career_ops:read", "other:audit"],
+            ),
+            (["suspend"], "session_revocation_suspended= run=r1", []),
+            (
+                ["finish", "career_ops:read", "true"],
+                "session_revocation revoked=2 failed=0 remaining=0 resumed=career_ops:read run=r1",
+                {"revoked": 2, "failed": 0, "remaining": 0, "resumed": ["career_ops:read"]},
+            ),
+        )
+        for arguments, line, expected in cases:
+            helper.write_text(
+                f'[ "$*" = "/operator {" ".join(arguments)}" ] || exit 9\n'
+                '[ "$AUTOMATION_DATA_SESSIONS_REVOKE_ALL_CONFIRM" = '
+                "revoke:automation-data:all-sessions ] || exit 8\n"
+                f'echo "{line}"\necho "session_revocation_cleanup=passed run=r1"\n'
+            )
+            with patch.object(workstation, "SESSION_HELPER", ["bash", str(helper)]):
+                phase, *rest = arguments
+                options = (
+                    {}
+                    if phase == "suspend"
+                    else {
+                        "capabilities": rest[0].split(","),
+                        "resume": rest[1] == "true",
+                    }
+                )
+                self.assertEqual(
+                    workstation.revoke_sessions(Path("/operator"), phase, **options), expected
+                )
+        for script in (
+            'echo "session_revocation_suspended=Career run=r1"',
+            'echo "session_revocation_suspended= run=r1"; exit 1',
+            "true",
+        ):
+            helper.write_text(script + "\n")
+            with (
+                patch.object(workstation, "SESSION_HELPER", ["bash", str(helper)]),
+                self.assertRaisesRegex(SafeError, "session-revocation-failed"),
+            ):
+                workstation.revoke_sessions(Path("/operator"), "suspend")
 
     def test_enrollment_binds_the_token_mount_alias_to_the_workstation_entity(self):
         self.assertEqual(self.run_action("enroll")["status"], "pass")

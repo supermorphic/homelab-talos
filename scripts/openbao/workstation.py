@@ -4,8 +4,11 @@ import base64
 import fcntl
 import json
 import os
+import re
 import secrets
+import signal
 import stat
+import subprocess
 import sys
 import time
 from contextlib import contextmanager
@@ -22,6 +25,13 @@ ROLE_PATH = "auth/homelab-approle/role/" + ROLE
 LOGIN_PATH = "auth/homelab-approle/login"
 ENDPOINT = "https://openbao.lab.supermorphic.com"
 DIRECTORY = Path.home() / ".config/homelab-talos/openbao"
+# Session tokens live at most 600 seconds; re-enabling waits until they have expired.
+REENABLE_WAIT = 630
+SESSION_HELPER = [
+    "bash",
+    str(guards.ROOT / "scripts/operations/automation-data-sessions-revoke-all.sh"),
+]
+_LISTED = r"(?:[a-z][a-z0-9_]{0,47}:[a-z][a-z0-9_]{0,23}(?:,[a-z][a-z0-9_]{0,47}:[a-z][a-z0-9_]{0,23})*)?"
 
 
 def ensure_private_directory(directory):
@@ -248,7 +258,61 @@ def _accessors(client):
     return sorted(data["keys"])
 
 
-def run(action, slot, *, directory, client, kubeconfig, confirm, now=None):
+def revoke_sessions(kubeconfig, phase, capabilities=(), resume=False):
+    """Run one specification 036 session revocation phase through its helper Job."""
+    arguments = (
+        [phase]
+        if phase == "suspend"
+        else [phase, ",".join(capabilities), "true" if resume else "false"]
+    )
+    process = subprocess.Popen(
+        [*SESSION_HELPER, str(kubeconfig), *arguments],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        cwd=guards.ROOT,
+        # Its own session, so an interrupt reaches the helper only through the SIGTERM
+        # below, which lets its cleanup delete the Job.
+        start_new_session=True,
+        env={
+            **os.environ,
+            "AUTOMATION_DATA_SESSIONS_REVOKE_ALL_CONFIRM": "revoke:automation-data:all-sessions",
+        },
+    )
+    try:
+        stdout, _ = process.communicate(timeout=900)
+    except BaseException:  # noqa: BLE001 -- Interrupts and timeouts must still clean up.
+        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            process.communicate(timeout=180)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+        raise SafeError("session-revocation-failed") from None
+    lines = stdout.decode(errors="replace").splitlines()
+    if process.returncode == 0:
+        for line in lines:
+            if phase == "suspend":
+                match = re.fullmatch(rf"session_revocation_suspended=({_LISTED}) run=\S+", line)
+                if match:
+                    return match[1].split(",") if match[1] else []
+            match = re.fullmatch(
+                rf"session_revocation revoked=(\d+) failed=(\d+) remaining=(\d+) "
+                rf"resumed=({_LISTED}) run=\S+",
+                line,
+            )
+            if match and phase == "finish":
+                return {
+                    "revoked": int(match[1]),
+                    "failed": int(match[2]),
+                    "remaining": int(match[3]),
+                    "resumed": match[4].split(",") if match[4] else [],
+                }
+    raise SafeError("session-revocation-failed")
+
+
+def run(
+    action, slot, *, directory, client, kubeconfig, confirm, now=None, sessions=revoke_sessions
+):
     if action not in {"enroll", "rotate", "revoke", "alias"} or slot != ROLE:
         raise SafeError("invalid-source")
     clock = time.time if now is None else lambda: now
@@ -288,9 +352,7 @@ def run(action, slot, *, directory, client, kubeconfig, confirm, now=None):
         if entity and mapped is None:
             raise SafeError("authentication-failed")
         token_mapped = _lookup(client, ROLE, token_accessor)
-        if token_mapped is not None and (
-            not entity or token_mapped.get("id") != entity.get("id")
-        ):
+        if token_mapped is not None and (not entity or token_mapped.get("id") != entity.get("id")):
             raise SafeError("authentication-failed")
         ids = _accessors(client)
         if entity:
@@ -306,11 +368,14 @@ def run(action, slot, *, directory, client, kubeconfig, confirm, now=None):
                 not entity["disabled"]
                 or ids
                 or not record.get("revoked_at")
-                or now < record["revoked_at"] + 90
+                or now < record["revoked_at"] + REENABLE_WAIT
                 or record.get("session_max_ttl") != 60
             )
         ):
             raise SafeError("authentication-failed")
+        if action == "enroll" and record and record.get("suspended_capabilities"):
+            # A revocation has not finished; rerun it first.
+            raise SafeError("session-revocation-failed")
         if action == "rotate":
             if (
                 entity["disabled"]
@@ -352,7 +417,9 @@ def run(action, slot, *, directory, client, kubeconfig, confirm, now=None):
 
         def bind_session_tokens(entity_id):
             # Session tokens name this alias, so they keep the workstation entity.
-            if not has_token_alias(read("identity/entity/id/" + entity_id)["data"], token_accessor):
+            if not has_token_alias(
+                read("identity/entity/id/" + entity_id)["data"], token_accessor
+            ):
                 post(
                     "identity/entity-alias",
                     {"name": ROLE, "mount_accessor": token_accessor, "canonical_id": entity_id},
@@ -387,6 +454,24 @@ def run(action, slot, *, directory, client, kubeconfig, confirm, now=None):
                 read_private(local)
                 local.unlink()
             record["accessors"] = []
+            write_private(record_path, record)
+            # Then end every database session. A rerun repeats these steps and resumes
+            # only capabilities that a revocation suspended.
+            suspended = sorted(
+                set(record.get("suspended_capabilities", []))
+                | set(sessions(kubeconfig, "suspend"))
+            )
+            record["suspended_capabilities"] = suspended
+            write_private(record_path, record)
+            try:
+                post("sys/leases/revoke-prefix/automation-data/creds", {"sync": True})
+                leases_revoked = True
+            except SafeError:
+                leases_revoked = False
+            finished = sessions(kubeconfig, "finish", suspended, resume=leases_revoked)
+            if not leases_revoked or finished["failed"] or finished["remaining"]:
+                raise SafeError("session-revocation-failed")
+            record["suspended_capabilities"] = []
             write_private(record_path, record)
             return {"status": "pass", "action": action}
 

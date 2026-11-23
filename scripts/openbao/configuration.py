@@ -22,6 +22,7 @@ class SafeError(Exception):
         "audit-unavailable",
         "not-found",
         "issuer-reset-required",
+        "session-revocation-failed",
     }
 
     def __init__(self, code: str = "invalid-response"):

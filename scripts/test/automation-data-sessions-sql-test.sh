@@ -632,6 +632,55 @@ for case in 'invalid_access_capability_ttl|audit|read_api|900' \
     fail "registration must report only $code, got: $(cat "$scratch/register.out")"
 done
 
+# Workstation revocation suspends the ready capabilities, revokes every registered
+# login, and resumes only what it suspended, and only once nothing remains.
+# revoke_all PHASE [CAPABILITIES RESUME] runs the packaged wrapper as the backup identity.
+revoke_all() {
+  podman exec --env PGUSER=automation_data_backup --env PGDATABASE=automation_data_control \
+    ${2+--env "REVOCATION_CAPABILITIES=$2"} ${3+--env "REVOCATION_RESUME=$3"} \
+    "$container" sh /scripts/revoke-all-sessions.sh "$1"
+}
+cap_state() {
+  query "SELECT state FROM platform_operations.managed_access_capabilities
+    WHERE domain = 'session_fixture' AND capability = '$1'"
+}
+query "SELECT platform_operations.suspend_access_capability('session_fixture','audit')" >/dev/null
+global="$(login_name)"
+issue "$global" 600 >/dev/null
+[[ "$(revoke_all suspend)" == 'session_revocation_suspended=session_fixture:read' ]] ||
+  fail 'suspension must list only the capabilities that were ready'
+expect_issue_error capability_suspended "$(login_name)" 600
+[[ "$(revoke_all suspend)" == 'session_revocation_suspended=' ]] ||
+  fail 'a repeated suspension must list nothing new'
+unregistered="$(login_name)"
+query "CREATE ROLE \"$unregistered\" LOGIN" >/dev/null
+[[ "$(revoke_all finish session_fixture:read true)" == \
+  'session_revocation revoked=1 failed=0 remaining=1 resumed=' ]] ||
+  fail 'a remaining login must block resumption'
+[[ "$(revoked_by "$global")" == operator && "$(role_exists "$global")" == 0 ]] ||
+  fail 'global revocation must revoke the registered login'
+[[ "$(cap_state read)" == suspended ]] || fail 'the capability must stay suspended'
+query "DROP ROLE \"$unregistered\"" >/dev/null
+[[ "$(revoke_all finish session_fixture:read false)" == \
+  'session_revocation revoked=0 failed=0 remaining=0 resumed=' ]] ||
+  fail 'resumption must wait for OpenBao lease revocation'
+[[ "$(revoke_all finish session_fixture:read,session_fixture:audit true)" == \
+  'session_revocation revoked=0 failed=0 remaining=0 resumed=session_fixture:audit,session_fixture:read' ]] ||
+  fail 'finishing must resume the listed suspended capabilities'
+[[ "$(cap_state read)" == ready ]] || fail 'the listed capability must be ready again'
+query "SELECT platform_operations.suspend_access_capability('session_fixture','audit')" >/dev/null
+[[ "$(revoke_all finish '' true)" == 'session_revocation revoked=0 failed=0 remaining=0 resumed=' &&
+  "$(cap_state audit)" == suspended ]] ||
+  fail 'a capability suspended outside the run must stay suspended'
+for phase in other finish; do
+  if revoke_all "$phase" >"$scratch/revoke-all.out" 2>&1; then
+    fail "the wrapper must refuse phase $phase without its inputs"
+  fi
+  [[ "$(cat "$scratch/revoke-all.out")" == 'session_revocation=failed' ]] ||
+    fail "the wrapper must print only a fixed marker: $(cat "$scratch/revoke-all.out")"
+done
+query "SELECT platform_operations.resume_access_capability('session_fixture','audit')" >/dev/null
+
 # Reinstallation leaves roles, settings, memberships, and registries unchanged.
 state_digest() {
   query "SELECT md5(concat_ws('|',
