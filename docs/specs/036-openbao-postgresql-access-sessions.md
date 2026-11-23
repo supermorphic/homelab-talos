@@ -121,7 +121,8 @@ drift checks:
   `token_no_default_policy=true`, `token_type=service`, exactly one allowed policy,
   and exactly one allowed entity alias, the slot's.
 - The workstation policy gains `update` on `auth/token/create/<that token role>`
-  for read capabilities only. Its Kubernetes endpoints are unchanged. No
+  for read capabilities only, with the parameter limits described in
+  [Session token and identity binding](#session-token-and-identity-binding). Its Kubernetes endpoints are unchanged. No
   workstation policy grants an attended capability.
 
 The issuer password has one rotation owner. The issuer reset sets an initial
@@ -141,12 +142,19 @@ cannot hold a 10-minute login. The login token instead creates one orphan sessio
 token through the capability's token role, and the session token requests the
 login.
 
-An orphan token does not inherit its creator's identity entity. Without an explicit
-alias, OpenBao creates a new, enabled entity for it, and disabling the workstation
-would not block it. Enrollment therefore also creates an alias for the workstation
-entity on the token auth mount, named for the slot, and the token role allows
-exactly that alias. For the workstation enrolled before this change, a guarded
-operator action adds the alias.
+An orphan token does not inherit its creator's identity entity. Created without
+an entity alias, it has no entity at all, so disabling the workstation would not
+block it. Enrollment therefore also creates an alias for the workstation entity on
+the token auth mount, named for the slot, and the token role allows exactly that
+alias. The workstation policy's grant on the token role requires the
+`entity_alias` parameter, allows only the slot's alias, and allows no other
+parameter except `ttl`. OpenBao refuses a request without the alias. For the
+workstation enrolled before this change,
+`just kube openbao-workstation alias agent-workstation` adds the alias. It refuses
+when the workstation is disabled or revoked, or when the alias belongs to another
+entity. Run it right after the OpenBao configuration apply that adds the token
+role: until then, the first session token request would create a new entity for
+the alias.
 
 The runner passes that alias when creating the session token and compares the
 returned `entity_id` with the expected entity recorded at enrollment. On mismatch
@@ -448,14 +456,23 @@ disabled and its SecretIDs are destroyed:
    report it.
 4. Resume only the capabilities recorded in step 1.
 
+Step 4 runs only when steps 2 and 3 passed and nothing remains. Otherwise the
+capabilities stay suspended and the command fails with
+`session-revocation-failed`. The private operator record keeps the list from
+step 1, so a rerun of `revoke` repeats steps 1 to 4 and resumes that list, never a
+capability that was already suspended before the first run. Enrollment refuses
+while the list is not empty. If a run fails before step 1 reports its list, check
+each capability's state and resume with `resume_access_capability` only those
+that the run suspended.
+
 This revokes every workstation's active sessions, each lasting at most its
 capability lifetime. Remaining session tokens are unusable while their entity is
 disabled and expire within the longest capability lifetime.
 
 Re-enabling a disabled entity requires waiting the longest session-token lifetime
-(600 seconds) after disablement, in addition to the conditions in specification
-031; otherwise enroll a fresh logical workstation. A lost workstation is treated
-as compromised: revoke it before re-enrollment.
+(600 seconds, plus a 30-second margin) after disablement, in addition to the
+conditions in specification 031; otherwise enroll a fresh logical workstation. A
+lost workstation is treated as compromised: revoke it before re-enrollment.
 
 Routine SecretID rotation does not affect active sessions. The operator kill switch
 in [Issuer, sweeper, and lifecycle functions](#issuer-sweeper-and-lifecycle-functions)
