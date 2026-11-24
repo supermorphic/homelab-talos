@@ -316,21 +316,22 @@ def start_assigned_forward(config: Path) -> tuple[subprocess.Popen, int]:
         process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, text=True, bufsize=1)
         port = wait_for_forward(process, None)
+
+        # kubectl reports each connection; keep reading so a full pipe never blocks it.
+        def drain(stream) -> None:
+            with contextlib.suppress(OSError, ValueError):
+                for _ in stream:
+                    pass
+
+        for stream in (process.stdout, process.stderr):
+            threading.Thread(target=drain, args=(stream,), daemon=True).start()
     except BaseException as exc:
         if "process" in locals():
             stop_fixed_forward(process)
-        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+        # Signals and interpreter exits are the caller's to handle.
+        if not isinstance(exc, Exception):
             raise
         raise PrivateTunnelUnavailable("private_tunnel_start_failed") from exc
-
-    # kubectl reports each connection; keep reading so a full pipe never blocks it.
-    def drain(stream) -> None:
-        with contextlib.suppress(OSError, ValueError):
-            for _ in stream:
-                pass
-
-    for stream in (process.stdout, process.stderr):
-        threading.Thread(target=drain, args=(stream,), daemon=True).start()
     return process, port
 
 

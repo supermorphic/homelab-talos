@@ -269,10 +269,12 @@ class Tunnel:
             return False
         if time.monotonic() - self._checked >= POD_CHECK:
             self._checked = time.monotonic()
+            # Each check is a fresh debugger login. A failed check means OpenBao or
+            # the API is unreachable, which must not end the session.
             try:
-                self._client.assert_pod_unchanged(self.config, self.uid)
-            except self._client.PrivateTunnelUnavailable:
-                return False
+                return self._client.read_fixed_pod(self.config) == self.uid
+            except self._client.PrivateTunnelUnavailable as error:
+                return str(error) == "scoped_kubectl_failed"
         return True
 
     def close(self):
@@ -297,8 +299,12 @@ def _write(directory, name, text):
         os.fsync(stream.fileno())
 
 
-def _issue(client, state, capability, runtime):
-    """Session token through the token role, then one login; returns the expiry."""
+def _issue(client, state, capability, runtime, issued):
+    """Create the session token through the token role and revoke the login token.
+
+    Tokens are recorded in `issued` as soon as they exist, so cleanup revokes
+    whatever an error or signal leaves behind.
+    """
     try:
         login = client.post(
             workstation.LOGIN_PATH, {"role_id": state["role_id"], "secret_id": state["secret_id"]}
@@ -314,7 +320,7 @@ def _issue(client, state, capability, runtime):
     login_token = auth.get("client_token") if isinstance(auth, dict) else None
     if not isinstance(login_token, str) or not login_token:
         raise SessionError("issuance_unavailable")
-    issued = {}
+    issued["login"] = login_token
     try:
         try:
             workstation.validate_session(auth, state["entity_id"])
@@ -344,20 +350,16 @@ def _issue(client, state, capability, runtime):
             or type(token.get("lease_duration")) is not int
             or not 0 < token["lease_duration"] <= 600
         ):
-            if issued.get("token"):
-                with contextlib.suppress(SafeError):
-                    client.post("auth/token/revoke-self", {}, token=issued.pop("token"))
             raise SessionError("session_identity_mismatch")
         issued["token_expires"] = before + token["lease_duration"]
     finally:
         try:
             client.post("auth/token/revoke-self", {}, token=login_token)
+            del issued["login"]
         except SafeError:
-            if issued.get("token"):
-                with contextlib.suppress(SafeError):
-                    client.post("auth/token/revoke-self", {}, token=issued.pop("token"))
-            raise SessionError("issuance_unavailable") from None
-    return issued
+            pass  # Cleanup retries it and reports the result.
+    if "login" in issued:
+        raise SessionError("issuance_unavailable")
 
 
 def _read_login(client, issued, capability, runtime):
@@ -438,6 +440,7 @@ class _Session:
         self.child_exit = None
         self.username = None
         self.expires_at = None
+        self.credential_expires_at = None
 
     def save(self, **changes):
         self.record.update(changes)
@@ -464,12 +467,13 @@ class _Session:
         runtime = self.runtime
         self.open_directory()
         self.client = runtime.client()
-        self.issued = _issue(self.client, state, capability, runtime)
+        _issue(self.client, state, capability, runtime, self.issued)
         username, password, expires = _read_login(self.client, self.issued, capability, runtime)
         offset = runtime.time() - runtime.monotonic()
         deadline = expires - MARGIN
         self.username = username
         self.expires_at = _iso(deadline + offset)
+        self.credential_expires_at = _iso(expires + offset)
         self.save(username=username, expires_at=expires + offset)
         self.kubeconfig = runtime.kubeconfig(self.directory.name)
         self.save(kubeconfig=str(self.kubeconfig))
@@ -548,10 +552,16 @@ class _Session:
             return "closed"
 
         def token():
-            try:
-                self.client.post("auth/token/revoke-self", {}, token=self.issued["token"])
-            except SafeError:
-                raise SessionError("revoke_failed") from None
+            failed = False
+            for name in ("login", "token"):
+                if name in self.issued:
+                    try:
+                        self.client.post("auth/token/revoke-self", {}, token=self.issued[name])
+                        del self.issued[name]
+                    except SafeError:
+                        failed = True
+            if failed:
+                raise SessionError("revoke_failed")
             return "revoked"
 
         def kubeconfig():
@@ -573,7 +583,7 @@ class _Session:
 
         step("child", child, self.child is None)
         step("tunnel", tunnel, self.tunnel is None)
-        step("token", token, not self.issued.get("token"))
+        step("token", token, not ({"login", "token"} & set(self.issued)))
         step("kubeconfig", kubeconfig, self.kubeconfig is None)
         step("directory", directory, self.directory is None)
         return results
@@ -623,7 +633,7 @@ def run(argv, runtime=None):
         *(f"{name}={value}" for name, value in results.items()),
     ]
     if results["token"] == "failed":
-        fields.append(f"revoke_failed=login expires by {session.expires_at or '-'}")
+        fields.append(f"revoke_failed=login expires by {session.credential_expires_at or '-'}")
     if result == "enrollment_unavailable":
         fields.append(f"prerequisite=re-enroll: {ENROLL}")
     print("automation-data-session: " + " ".join(fields), file=sys.stderr, flush=True)

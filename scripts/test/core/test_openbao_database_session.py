@@ -32,6 +32,7 @@ class FakeBao:
         self.token_lease = 600
         self.lease = 600
         self.login_status = None
+        self.signal_on_revoke = set()
 
     def post(self, path, payload, *, token=None):
         self.calls.append(("POST", path, payload, token))
@@ -66,6 +67,9 @@ class FakeBao:
                 }
             }
         if path == "auth/token/revoke-self":
+            if token in self.signal_on_revoke:
+                self.signal_on_revoke.discard(token)
+                os.kill(os.getpid(), signal.SIGTERM)
             if token in self.revoke_failure:
                 raise AmbiguousWrite()
             return {}
@@ -373,8 +377,9 @@ class RunnerTests(unittest.TestCase):
         code, output = run(self.runtime, ARGV)
         self.assertEqual(code, 70)
         self.assertIsNone(self.runtime.tunnel_obj)
-        self.assertEqual(self.runtime.bao.revoked(), ["session-token", "login-token"])
+        self.assertEqual(self.runtime.bao.revoked(), ["login-token", "session-token"])
         self.assertIn("result=session_identity_mismatch", output)
+        self.assertIn("token=revoked", output)
         self.assertEqual(list(self.runtime.session_root.iterdir()), [])
 
     def test_failed_login_read_revokes_the_session_token(self):
@@ -413,10 +418,22 @@ class RunnerTests(unittest.TestCase):
     def test_failed_login_token_revocation_also_revokes_the_session_token(self):
         self.runtime.bao.revoke_failure = {"login-token"}
         code, output = run(self.runtime, ARGV)
-        self.assertEqual(code, 70)
-        self.assertEqual(self.runtime.bao.revoked(), ["login-token", "session-token"])
+        # Cleanup retries the login token, revokes the session token, and reports
+        # the login token it could not revoke.
+        self.assertEqual(code, 75)
+        self.assertEqual(
+            self.runtime.bao.revoked(), ["login-token", "login-token", "session-token"]
+        )
         self.assertIn("result=issuance_unavailable", output)
-        self.assertIn("token=none", output)
+        self.assertIn("token=failed", output)
+
+    def test_signal_during_login_token_revocation_still_revokes_the_session_token(self):
+        self.runtime.bao.signal_on_revoke = {"login-token"}
+        code, output = run(self.runtime, ARGV)
+        self.assertEqual(code, 143)
+        self.assertIn("session-token", self.runtime.bao.revoked())
+        self.assertIn("result=interrupted", output)
+        self.assertIn("token=revoked", output)
 
     def test_database_identity_check_failure_cleans_up(self):
         self.runtime.identity_failure = "identity_mismatch"
@@ -442,7 +459,8 @@ class RunnerTests(unittest.TestCase):
         # The record stays for the tunnel process; the credential files do not.
         directory = Path(self.runtime.child.env["PGSERVICEFILE"]).parent
         self.assertEqual([p.name for p in directory.iterdir()], ["session.json"])
-        self.assertIn("revoke_failed", output)
+        # The login stays valid until its own expiry, after the runner's deadline.
+        self.assertIn("revoke_failed=login expires by 2027-01-15T08:10:00Z", output)
         self.assertNoSecret(output)
 
     def test_signal_ends_the_session_with_cleanup(self):
@@ -617,6 +635,23 @@ class AssignedForwardTests(unittest.TestCase):
         finally:
             client.stop_fixed_forward(process)
 
+    def test_a_signal_during_start_up_is_not_turned_into_a_tunnel_failure(self):
+        class Stop(BaseException):
+            pass
+
+        def handler(signum, frame):
+            raise Stop()
+
+        previous = signal.signal(signal.SIGUSR1, handler)
+        timer = __import__("threading").Timer(0.5, os.kill, (os.getpid(), signal.SIGUSR1))
+        timer.start()
+        try:
+            with self.assertRaises(Stop):
+                self.forward("exec sleep 30\n")
+        finally:
+            timer.cancel()
+            signal.signal(signal.SIGUSR1, previous)
+
     def test_refuses_output_without_a_usable_port(self):
         for line in (
             "Forwarding from 127.0.0.1:80 -> 5432",
@@ -628,6 +663,38 @@ class AssignedForwardTests(unittest.TestCase):
 
                 with self.assertRaises(client.PrivateTunnelUnavailable):
                     self.forward(f'echo "{line}"; sleep 1\n')
+
+
+class TunnelLivenessTests(unittest.TestCase):
+    class Unavailable(Exception):
+        pass
+
+    def tunnel(self, outcome):
+        test = self
+
+        class Client:
+            PrivateTunnelUnavailable = test.Unavailable
+
+            @staticmethod
+            def read_fixed_pod(config):
+                if isinstance(outcome, str) and outcome.startswith("raise:"):
+                    raise test.Unavailable(outcome[6:])
+                return outcome
+
+        tunnel = session.Tunnel.__new__(session.Tunnel)
+        tunnel._client = Client
+        tunnel.config = Path("config")
+        tunnel.uid = "uid-1"
+        tunnel.process = type("P", (), {"poll": staticmethod(lambda: None)})()
+        tunnel._checked = 0
+        return tunnel
+
+    def test_only_a_definite_pod_change_ends_the_tunnel(self):
+        # A failed check (OpenBao or the API unreachable) is unknown, not lost.
+        self.assertTrue(self.tunnel("raise:scoped_kubectl_failed").alive())
+        self.assertTrue(self.tunnel("uid-1").alive())
+        self.assertFalse(self.tunnel("uid-2").alive())
+        self.assertFalse(self.tunnel("raise:fixed_pod_not_ready").alive())
 
 
 class ProcessGroupTests(unittest.TestCase):
