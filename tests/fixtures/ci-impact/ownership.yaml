@@ -179,6 +179,7 @@ contracts:
       - scripts/openbao/configuration.py
       - scripts/openbao/credentials.py
       - scripts/openbao/database_issuer.py
+      - scripts/openbao/database_session.py
       - scripts/openbao/drift.py
       - scripts/openbao/guards.py
       - scripts/openbao/issuance.py
@@ -212,6 +213,7 @@ contracts:
       - scripts/test/core/test_openbao_drift.py
       - scripts/test/core/test_openbao_credentials.py
       - scripts/test/core/test_openbao_database_issuer.py
+      - scripts/test/core/test_openbao_database_session.py
       - scripts/test/core/test_openbao_issuer.py
       - scripts/test/core/test_openbao_issuer_rollout.py
       - scripts/test/core/test_openbao_manifests.py
@@ -259,6 +261,7 @@ contracts:
       - python:scripts/test/core/test_openbao_client.py
       - python:scripts/test/core/test_openbao_drift.py
       - python:scripts/test/core/test_openbao_database_issuer.py
+      - python:scripts/test/core/test_openbao_database_session.py
       - python:scripts/test/core/test_openbao_issuer.py
       - python:scripts/test/core/test_openbao_issuer_rollout.py
       - python:scripts/test/core/test_openbao_manifests.py
