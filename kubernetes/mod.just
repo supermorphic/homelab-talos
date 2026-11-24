@@ -182,6 +182,16 @@ automation-data-login-retire domain application: require-bash
 automation-data-connect domain registered_identity: require-bash
     @uv run --locked python scripts/operations/automation-data-connect.py {{quote(domain)}} {{quote(registered_identity)}}
 
+# Run one command with a short-lived OpenBao-issued login for a registered capability
+# (specification 036): <domain> <capability> [--timeout SECONDS] -- <command…>
+[positional-arguments]
+automation-data-session *args: require-bash
+    @uv run --locked python -m scripts.openbao.database_session run "$@"
+
+# Stop processes and remove files left by session runs that were killed.
+automation-data-session-cleanup: require-bash
+    @uv run --locked python -m scripts.openbao.database_session cleanup
+
 # Private observational metadata; readiness does not authorize a consumer operation.
 [positional-arguments]
 automation-data-credentials *args: require-bash

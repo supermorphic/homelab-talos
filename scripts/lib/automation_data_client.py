@@ -241,8 +241,11 @@ def assert_pod_unchanged(config: Path, expected_uid: str) -> None:
         raise PrivateTunnelUnavailable("fixed_pod_replaced")
 
 
-def wait_for_forward(process: subprocess.Popen, port: int) -> None:
-    """Require kubectl's own forwarding message, not a pre-existing listener."""
+def wait_for_forward(process: subprocess.Popen, port: int | None) -> int:
+    """Require kubectl's own forwarding message, not a pre-existing listener.
+
+    Without a port, accept the one kubectl assigned and return it.
+    """
     selector = selectors.DefaultSelector()
     buffers: dict[int, str] = {}
     try:
@@ -251,7 +254,9 @@ def wait_for_forward(process: subprocess.Popen, port: int) -> None:
                 selector.register(stream, selectors.EVENT_READ)
                 buffers[stream.fileno()] = ""
         deadline = time.monotonic() + 12
-        expected = f"Forwarding from 127.0.0.1:{port} -> 5432"
+        expected = re.compile(
+            r"Forwarding from 127\.0\.0\.1:(" + (str(port) if port else r"[1-9][0-9]{0,4}") + r") -> 5432"
+        )
         while time.monotonic() < deadline:
             if process.poll() is not None:
                 raise PrivateTunnelUnavailable("private_tunnel_exited")
@@ -264,8 +269,10 @@ def wait_for_forward(process: subprocess.Popen, port: int) -> None:
                 buffers[handle] += chunk.decode("utf-8", errors="replace")
                 lines = buffers[handle].split("\n")
                 buffers[handle] = lines.pop()[-4096:]
-                if any(line.strip() == expected for line in lines):
-                    return
+                for line in lines:
+                    match = expected.fullmatch(line.strip())
+                    if match and 1024 <= int(match[1]) <= 65535:
+                        return int(match[1])
         raise PrivateTunnelUnavailable("private_tunnel_start_timeout")
     finally:
         selector.close()
@@ -299,6 +306,32 @@ def start_fixed_forward(config: Path, port: int) -> subprocess.Popen:
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             raise
         raise PrivateTunnelUnavailable("private_tunnel_start_failed") from exc
+
+
+def start_assigned_forward(config: Path) -> tuple[subprocess.Popen, int]:
+    """Forward the fixed Pod to a loopback port that kubectl assigns."""
+    argv = _kubectl(config, "port-forward", "--address", "127.0.0.1",
+                    "pod/automation-data-postgresql-0", ":5432")
+    try:
+        process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, bufsize=1)
+        port = wait_for_forward(process, None)
+    except BaseException as exc:
+        if "process" in locals():
+            stop_fixed_forward(process)
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        raise PrivateTunnelUnavailable("private_tunnel_start_failed") from exc
+
+    # kubectl reports each connection; keep reading so a full pipe never blocks it.
+    def drain(stream) -> None:
+        with contextlib.suppress(OSError, ValueError):
+            for _ in stream:
+                pass
+
+    for stream in (process.stdout, process.stderr):
+        threading.Thread(target=drain, args=(stream,), daemon=True).start()
+    return process, port
 
 
 def start_pod_watcher(config: Path, uid: str, process: subprocess.Popen) -> tuple[threading.Thread, threading.Event]:
