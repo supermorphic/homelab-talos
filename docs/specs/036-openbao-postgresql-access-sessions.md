@@ -3,7 +3,8 @@
 ## Status and scope
 
 Design for [issue 513](https://github.com/supermorphic/homelab-talos/issues/513).
-Implementation has not started.
+Delivery is staged. Discovery's `session` purpose, the live suite, and the Career Ops
+consumer are not yet delivered.
 
 Approved local agent tasks obtain a temporary PostgreSQL login from OpenBao for one
 command, with authority set by a stable, migration-granted permission role. The
@@ -146,9 +147,12 @@ An orphan token does not inherit its creator's identity entity. Created without
 an entity alias, it has no entity at all, so disabling the workstation would not
 block it. Enrollment therefore also creates an alias for the workstation entity on
 the token auth mount, named for the slot, and the token role allows exactly that
-alias. The workstation policy's grant on the token role requires the
-`entity_alias` parameter, allows only the slot's alias, and allows no other
-parameter except `ttl`. OpenBao refuses a request without the alias. For the
+alias. The workstation policy's grant is on
+`auth/token/create/db-<capability>-{{identity.entity.name}}`: the path names the
+caller's entity, so another identity that holds the same policy cannot reach the
+slot's token role. The grant requires the `entity_alias` parameter, allows only the
+slot's alias, and allows no other parameter except `ttl`. OpenBao does not expand
+templates in parameter values, so the alias value is fixed. OpenBao refuses a request without the alias. For the
 workstation enrolled before this change,
 `just kube openbao-workstation alias agent-workstation` adds the alias. It refuses
 when the workstation is disabled or revoked, or when the alias belongs to another
@@ -359,7 +363,8 @@ A run:
    and never symlinks. `session.json` records non-secret metadata: process IDs,
    process start times, username, and expiry.
 3. Issues the login as described in [Session token and identity binding](#session-token-and-identity-binding).
-4. Writes a per-invocation `debugger` kubeconfig as specification 032 defines, and
+4. Writes a per-invocation `debugger` kubeconfig as specification 032 defines
+   (purpose `automation-data-session`), and
    runs `kubectl port-forward --address 127.0.0.1 <pod> :5432`, reading the
    assigned local port from kubectl's output. It keeps checking tunnel readiness
    and liveness.
@@ -388,7 +393,12 @@ A run:
 10. Prints one sanitized status line to stderr with the username, expiry, child
     exit code, and each cleanup result. The child's own output passes through.
 
-Exit codes: the child's code when cleanup completes, `124` for the deadline, `70`
+When a cleanup step cannot confirm that the child or tunnel stopped, the runner
+still removes the credential files but keeps `session.json`, so the next run or the
+cleanup command can stop the process.
+
+Exit codes: the child's code when cleanup completes, `128` plus the signal number
+when a signal ends the runner, `124` for the deadline, `70`
 for a setup failure, `69` when the tunnel is lost during the session, and `75`
 when cleanup is incomplete, which replaces any other code.
 
@@ -429,10 +439,10 @@ The runner never falls back to a static profile or broader credential.
 
 | Failure | Behavior |
 | --- | --- |
-| Workstation enrollment missing, expired, unsafe, or revoked | Fail before any tunnel opens; report the re-enrollment prerequisite. |
+| Workstation enrollment missing, expired, unsafe, or revoked | Fail before any tunnel opens; `enrollment_unavailable` with the re-enrollment prerequisite. |
 | Session token creation fails or entity mismatches | Revoke known tokens; `issuance_unavailable` or `session_identity_mismatch`. |
 | Login request fails or times out | Revoke the session token. The result is indeterminate: PostgreSQL may have committed a login before OpenBao recorded its lease. The registry and sweeper remove such a login after expiry. `issuance_unavailable`. |
-| Capability suspended, or sweeper unhealthy | `capability_suspended` or `reconciliation_unhealthy`. |
+| Capability suspended, or sweeper unhealthy | PostgreSQL refuses the login; the runner reports `issuance_unavailable`, because OpenBao's error text is never read. Discovery names the cause. |
 | Tunnel or identity check fails | Clean up; `connection_unavailable` or `identity_mismatch`. |
 | Tunnel drops during the session | Stop the child, clean up, and exit `69`; no silent reconnect. |
 | OpenBao unavailable during or after the session | The child is unaffected. Revocation fails; report `revoke_failed` with the expiry. |
