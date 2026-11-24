@@ -1,0 +1,14 @@
+{
+  "path": {
+    "automation-data/creds/career-ops-read": {
+      "capabilities": [
+        "read"
+      ]
+    },
+    "auth/token/revoke-self": {
+      "capabilities": [
+        "update"
+      ]
+    }
+  }
+}

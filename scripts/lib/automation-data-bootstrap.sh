@@ -173,6 +173,31 @@ automation_data_session_restore_cleanup_job_manifest() {
   return "${PIPESTATUS[0]}"
 }
 
+# Usage: <job> <run-id> <configmap> list
+#        <job> <run-id> <configmap> suspend <domain:capability,...|"">
+#        <job> <run-id> <configmap> finish <domain:capability,...|""> <true|false>
+automation_data_session_revocation_job_manifest() {
+  local listed='[a-z][a-z0-9_]{0,47}:[a-z][a-z0-9_]{0,23}'
+  [[ ("$#" -eq 4 && "$4" == list) ||
+    ("$#" -ge 5 && ("$5" == '' || "$5" =~ ^$listed(,$listed)*$) &&
+    (("$#" -eq 5 && "$4" == suspend) ||
+    ("$#" -eq 6 && "$4" == finish && "$6" =~ ^(true|false)$))) ]] || return 2
+  automation_data_access_sessions_job_manifest "$1" "$2" "$3" |
+    PHASE="$4" CAPABILITIES="${5:-}" RESUME="${6:-}" yq '
+      .metadata.labels."homelab-talos/role" = "session-revocation" |
+      .spec.template.metadata.labels."homelab-talos/role" = "session-revocation" |
+      .spec.template.spec.containers[0].name = "revoke-all-sessions" |
+      .spec.template.spec.containers[0].args = ["/scripts/revoke-all-sessions.sh", strenv(PHASE)] |
+      .spec.template.spec.containers[0].env += (
+        [{"name": "REVOCATION_CAPABILITIES", "value": strenv(CAPABILITIES)}] |
+        map(select(strenv(PHASE) != "list"))) |
+      .spec.template.spec.containers[0].env += (
+        [{"name": "REVOCATION_RESUME", "value": strenv(RESUME)}] |
+        map(select(strenv(PHASE) == "finish")))
+    '
+  return "${PIPESTATUS[0]}"
+}
+
 # Usage: <job> <run-id> <configmap> <domain> <capability> <schemas> <max-ttl-seconds>
 automation_data_capability_register_job_manifest() {
   [[ "$#" -eq 7 && "$4" =~ ^[a-z][a-z0-9_]{0,47}$ && "$5" =~ ^[a-z][a-z0-9_]{0,23}$ &&

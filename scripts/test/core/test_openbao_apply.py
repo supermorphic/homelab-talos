@@ -286,6 +286,21 @@ class ApplyTest(unittest.TestCase):
         with self.assertRaisesRegex(SafeError, "source-mismatch"):
             apply.verify_configuration(DESIRED, self.client)
 
+    def test_missing_token_role_is_written_to_the_token_mount(self):
+        key = ("token-role", "db-career-ops-read-agent-workstation")
+        del self.client.state[key]
+        plan = apply.run(confirm="", **self.inputs)
+        self.assertEqual(
+            plan["changes"],
+            [{"kind": "token-role", "name": key[1], "action": "write"}],
+        )
+        result = apply.run(confirm=plan["confirmation"], **self.inputs)
+        self.assertEqual(result["status"], "pass")
+        [(path, payload)] = self.client.payloads
+        self.assertEqual(path, "auth/token/roles/db-career-ops-read-agent-workstation")
+        self.assertEqual(payload["allowed_entity_aliases"], ["agent-workstation"])
+        self.assertEqual(payload["allowed_policies"], ["db-career-ops-read"])
+
     def test_database_connection_update_is_flat_and_keeps_the_stored_password(self):
         self.client.state[("database-connection", "automation-data")]["allowed_roles"] = ["other"]
         plan = apply.run(confirm="", **self.inputs)

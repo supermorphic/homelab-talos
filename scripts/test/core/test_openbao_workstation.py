@@ -15,6 +15,7 @@ class IdentityClient:
     def __init__(self):
         self.role_id = "synthetic-role-id"
         self.accessor = "synthetic-mount"
+        self.token_accessor = "synthetic-token-mount"
         self.entity = None
         self.secrets = {}
         self.calls = []
@@ -24,11 +25,18 @@ class IdentityClient:
         self.extra_policy = False
         self.serial = 0
         self.foreign_alias = False
+        self.foreign_token_alias = False
+        self.fail_lease_revocation = False
 
     def read(self, path, *, token=None, list_request=False):
         self.calls.append(("read", path))
         if path == "sys/auth":
-            return {"data": {"homelab-approle/": {"accessor": self.accessor}}}
+            return {
+                "data": {
+                    "homelab-approle/": {"accessor": self.accessor},
+                    "token/": {"accessor": self.token_accessor},
+                }
+            }
         if path.endswith("/role-id"):
             return {"data": {"role_id": self.role_id}}
         if path.endswith("/secret-id"):
@@ -46,13 +54,16 @@ class IdentityClient:
     def post(self, path, payload, *, token=None):
         if path == "identity/lookup/entity":
             self.calls.append(("lookup", path))
-            if self.foreign_alias:
+            mount = payload["alias_mount_accessor"]
+            if (self.foreign_alias and mount == self.accessor) or (
+                self.foreign_token_alias and mount == self.token_accessor
+            ):
                 return {"data": {"id": "foreign-entity"}}
-            return {
-                "data": copy.deepcopy(self.entity)
-                if self.entity and self.entity["aliases"]
-                else None
-            }
+            found = self.entity and any(
+                a.get("name") == payload["alias_name"] and a.get("mount_accessor") == mount
+                for a in self.entity["aliases"]
+            )
+            return {"data": copy.deepcopy(self.entity) if found else None}
         self.calls.append(("post", path, copy.deepcopy(payload)))
         if path == "identity/entity":
             self.entity = {
@@ -67,13 +78,13 @@ class IdentityClient:
             }
             return {"data": {"id": self.entity["id"]}}
         if path == "identity/entity-alias":
-            self.entity["aliases"] = [
+            self.entity["aliases"].append(
                 {
                     "name": payload["name"],
                     "mount_accessor": payload["mount_accessor"],
                     "canonical_id": payload["canonical_id"],
                 }
-            ]
+            )
             return {}
         if path.startswith("identity/entity/id/"):
             self.entity["disabled"] = payload["disabled"]
@@ -116,7 +127,45 @@ class IdentityClient:
             }
         if path == "auth/token/revoke-self":
             return {}
+        if path == "sys/leases/revoke-prefix/automation-data/creds":
+            if self.fail_lease_revocation:
+                raise SafeError("ambiguous-write")
+            return {}
         raise AssertionError(path)
+
+
+class SessionRevocation:
+    """Capability states in automation-data, independent of the command under test."""
+
+    def __init__(self, client):
+        self.client = client
+        self.ready = {"career_ops:read"}
+        # Suspended by the operator before the run; revocation must not resume it.
+        self.suspended = {"other:audit"}
+        self.remaining = 0
+        self.unavailable = False
+        # The suspension commits, but its result never reaches the command.
+        self.lose_suspend_result = False
+
+    def __call__(self, kubeconfig, phase, capabilities=(), resume=False):
+        self.client.calls.append(("sessions", phase, list(capabilities), resume))
+        if self.unavailable:
+            raise SafeError("session-revocation-failed")
+        if phase == "list":
+            return sorted(self.ready)
+        if phase == "suspend":
+            listed = sorted(self.ready & set(capabilities))
+            self.suspended |= set(listed)
+            self.ready -= set(listed)
+            if self.lose_suspend_result:
+                raise SafeError("session-revocation-failed")
+            return listed
+        resumed = (
+            sorted(set(capabilities) & self.suspended) if resume and not self.remaining else []
+        )
+        self.suspended -= set(resumed)
+        self.ready |= set(resumed)
+        return {"revoked": 1, "failed": 0, "remaining": self.remaining, "resumed": resumed}
 
 
 class WorkstationTest(unittest.TestCase):
@@ -125,6 +174,7 @@ class WorkstationTest(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name).resolve() / "private"
         self.client = IdentityClient()
+        self.sessions = SessionRevocation(self.client)
         self.now = 1000
         for target, value in (
             (
@@ -154,6 +204,7 @@ class WorkstationTest(unittest.TestCase):
             "client": self.client,
             "kubeconfig": Path("/operator"),
             "now": self.now,
+            "sessions": self.sessions,
         }
         plan = workstation.run(action, "agent-workstation", confirm="", **args)
         self.assertNotIn("SECRET_MARKER", str(plan))
@@ -186,7 +237,10 @@ class WorkstationTest(unittest.TestCase):
                 self.required_index = index
 
             def post(self, path, payload, *, token=None):
-                if path == workstation.LOGIN_PATH and self.required_index != client.consistency_index:
+                if (
+                    path == workstation.LOGIN_PATH
+                    and self.required_index != client.consistency_index
+                ):
                     raise SafeError("stale-state")
                 return client.post(path, payload, token=token)
 
@@ -252,10 +306,14 @@ class WorkstationTest(unittest.TestCase):
 
     def test_entity_drift_and_wrong_alias_stop_before_mutation(self):
         self.run_action("enroll")
+        approle_alias, token_alias = self.client.entity["aliases"]
         for field, value in (
             ("policies", ["root"]),
             ("direct_group_ids", ["extra"]),
             ("aliases", [{"name": "wrong"}]),
+            ("aliases", [approle_alias, {**token_alias, "name": "other"}]),
+            ("aliases", [approle_alias, token_alias, {**token_alias, "name": "extra"}]),
+            ("aliases", [approle_alias, {**token_alias, "canonical_id": "other"}]),
         ):
             saved = copy.deepcopy(self.client.entity)
             self.client.entity[field] = value
@@ -303,9 +361,210 @@ class WorkstationTest(unittest.TestCase):
         with self.assertRaises(SafeError):
             self.run_action("enroll")
         self.assertTrue(self.client.entity["disabled"])
+        # Session tokens issued before the barrier live up to 600 seconds.
         self.now += 91
+        with self.assertRaises(SafeError):
+            self.run_action("enroll")
+        self.assertTrue(self.client.entity["disabled"])
+        self.now += 540
         self.assertEqual(self.run_action("enroll")["status"], "pass")
         self.assertFalse(self.client.entity["disabled"])
+
+    def test_revocation_ends_database_sessions_after_the_barrier(self):
+        self.run_action("enroll")
+        self.client.calls.clear()
+        self.assertEqual(self.run_action("revoke")["status"], "pass")
+        steps = [
+            call[1] if call[0] == "post" else call[1:]
+            for call in self.client.calls
+            if call[0] in {"post", "sessions"}
+        ]
+        self.assertEqual(
+            steps,
+            [
+                "identity/entity/id/synthetic-entity",
+                workstation.ROLE_PATH + "/secret-id-accessor/destroy",
+                ("list", [], False),
+                ("suspend", ["career_ops:read"], False),
+                "sys/leases/revoke-prefix/automation-data/creds",
+                ("finish", ["career_ops:read"], True),
+            ],
+        )
+        revoke_prefix = next(
+            call for call in self.client.calls if call[0] == "post" and "revoke-prefix" in call[1]
+        )
+        self.assertEqual(revoke_prefix[2], {"sync": True})
+        self.assertEqual(self.sessions.ready, {"career_ops:read"})
+        self.assertEqual(self.sessions.suspended, {"other:audit"})
+        record = workstation.read_private(self.directory / "operator.json")
+        self.assertEqual(record["suspended_capabilities"], [])
+        self.assertIs(record["sessions_pending"], False)
+
+    def test_lost_suspension_result_still_resumes_on_rerun(self):
+        self.run_action("enroll")
+        self.sessions.lose_suspend_result = True
+        with self.assertRaisesRegex(SafeError, "session-revocation-failed"):
+            self.run_action("revoke")
+        self.assertEqual(self.sessions.ready, set())
+        self.sessions.lose_suspend_result = False
+        self.assertEqual(self.run_action("revoke")["status"], "pass")
+        self.assertEqual(self.sessions.ready, {"career_ops:read"})
+        self.assertEqual(self.sessions.suspended, {"other:audit"})
+
+    def test_revocation_continues_past_a_foreign_token_alias(self):
+        self.run_action("enroll")
+        self.client.foreign_token_alias = True
+        with self.assertRaisesRegex(SafeError, "authentication-failed"):
+            self.run_action("revoke")
+        self.assertTrue(self.client.entity["disabled"])
+        self.assertEqual(self.client.secrets, {})
+        self.assertIn(("sessions", "finish", ["career_ops:read"], False), self.client.calls)
+        self.assertEqual(self.sessions.ready, set())
+
+    def test_unfinished_session_revocation_keeps_suspension_until_a_rerun(self):
+        self.run_action("enroll")
+        self.sessions.remaining = 1
+        with self.assertRaisesRegex(SafeError, "session-revocation-failed"):
+            self.run_action("revoke")
+        self.assertTrue(self.client.entity["disabled"])
+        self.assertEqual(self.client.secrets, {})
+        self.assertFalse((self.directory / "workstation.json").exists())
+        self.assertEqual(self.sessions.ready, set())
+        record = workstation.read_private(self.directory / "operator.json")
+        self.assertEqual(record["suspended_capabilities"], ["career_ops:read"])
+        # Enrollment cannot start while a revocation is unfinished.
+        self.now += 631
+        with self.assertRaisesRegex(SafeError, "session-revocation-failed"):
+            self.run_action("enroll")
+        self.sessions.remaining = 0
+        self.client.calls.clear()
+        self.assertEqual(self.run_action("revoke")["status"], "pass")
+        self.assertIn(("sessions", "finish", ["career_ops:read"], True), self.client.calls)
+        self.assertEqual(self.sessions.ready, {"career_ops:read"})
+        # The rerun restarts the re-enable wait.
+        self.now += 631
+        self.assertEqual(self.run_action("enroll")["status"], "pass")
+
+    def test_failed_lease_revocation_never_resumes_capabilities(self):
+        self.run_action("enroll")
+        self.client.fail_lease_revocation = True
+        with self.assertRaisesRegex(SafeError, "session-revocation-failed"):
+            self.run_action("revoke")
+        self.assertIn(("sessions", "finish", ["career_ops:read"], False), self.client.calls)
+        self.assertEqual(self.sessions.ready, set())
+
+    def test_automation_data_outage_cannot_delay_the_openbao_barrier(self):
+        self.run_action("enroll")
+        self.sessions.unavailable = True
+        with self.assertRaisesRegex(SafeError, "session-revocation-failed"):
+            self.run_action("revoke")
+        self.assertTrue(self.client.entity["disabled"])
+        self.assertEqual(self.client.secrets, {})
+        self.assertFalse((self.directory / "workstation.json").exists())
+        # Nothing was suspended, yet enrollment still waits for a passing revocation.
+        self.now += 631
+        with self.assertRaisesRegex(SafeError, "session-revocation-failed"):
+            self.run_action("enroll")
+        self.sessions.unavailable = False
+        self.assertEqual(self.run_action("revoke")["status"], "pass")
+
+    def test_session_helper_output_is_parsed_strictly(self):
+        helper = Path(self.temp.name) / "helper.sh"
+        cases = (
+            (
+                ["list"],
+                "session_revocation_ready=career_ops:read,other:audit run=r1",
+                ["career_ops:read", "other:audit"],
+            ),
+            (["list"], "session_revocation_ready= run=r1", []),
+            (
+                ["suspend", "career_ops:read,other:audit"],
+                "session_revocation_suspended=career_ops:read,other:audit run=r1",
+                ["career_ops:read", "other:audit"],
+            ),
+            (["suspend", ""], "session_revocation_suspended= run=r1", []),
+            (
+                ["finish", "career_ops:read", "true"],
+                "session_revocation revoked=2 failed=0 remaining=0 resumed=career_ops:read run=r1",
+                {"revoked": 2, "failed": 0, "remaining": 0, "resumed": ["career_ops:read"]},
+            ),
+        )
+        for arguments, line, expected in cases:
+            helper.write_text(
+                f'[ "$*" = "/operator {" ".join(arguments)}" ] || exit 9\n'
+                '[ "$AUTOMATION_DATA_SESSIONS_REVOKE_ALL_CONFIRM" = '
+                "revoke:automation-data:all-sessions ] || exit 8\n"
+                f'echo "{line}"\necho "session_revocation_cleanup=passed run=r1"\n'
+            )
+            with patch.object(workstation, "SESSION_HELPER", ["bash", str(helper)]):
+                phase, *rest = arguments
+                options = {}
+                if rest:
+                    options["capabilities"] = rest[0].split(",") if rest[0] else []
+                if len(rest) > 1:
+                    options["resume"] = rest[1] == "true"
+                self.assertEqual(
+                    workstation.revoke_sessions(Path("/operator"), phase, **options), expected
+                )
+        for script in (
+            'echo "session_revocation_ready=Career run=r1"',
+            'echo "session_revocation_suspended= run=r1"',
+            'echo "session_revocation_ready= run=r1"; exit 1',
+            "true",
+        ):
+            helper.write_text(script + "\n")
+            with (
+                patch.object(workstation, "SESSION_HELPER", ["bash", str(helper)]),
+                self.assertRaisesRegex(SafeError, "session-revocation-failed"),
+            ):
+                workstation.revoke_sessions(Path("/operator"), "list")
+
+    def test_enrollment_binds_the_token_mount_alias_to_the_workstation_entity(self):
+        self.assertEqual(self.run_action("enroll")["status"], "pass")
+        self.assertIn(
+            {
+                "name": "agent-workstation",
+                "mount_accessor": "synthetic-token-mount",
+                "canonical_id": "synthetic-entity",
+            },
+            self.client.entity["aliases"],
+        )
+
+    def test_alias_action_adds_the_token_alias_to_an_earlier_enrollment(self):
+        self.run_action("enroll")
+        self.client.entity["aliases"] = self.client.entity["aliases"][:1]
+        local = (self.directory / "workstation.json").read_bytes()
+        secrets = dict(self.client.secrets)
+        self.assertEqual(self.run_action("alias")["status"], "pass")
+        self.assertEqual(
+            [a["mount_accessor"] for a in self.client.entity["aliases"]],
+            ["synthetic-mount", "synthetic-token-mount"],
+        )
+        self.assertEqual(self.client.secrets, secrets)
+        self.assertEqual((self.directory / "workstation.json").read_bytes(), local)
+        writes = len([c for c in self.client.calls if c[0] == "post"])
+        self.assertEqual(self.run_action("alias")["status"], "pass")
+        self.assertEqual(len([c for c in self.client.calls if c[0] == "post"]), writes)
+
+    def test_alias_action_refuses_a_foreign_alias_or_revoked_workstation(self):
+        self.run_action("enroll")
+        self.client.entity["aliases"] = self.client.entity["aliases"][:1]
+        self.client.foreign_token_alias = True
+        with self.assertRaises(SafeError):
+            self.run_action("alias", confirm=False)
+        self.client.foreign_token_alias = False
+        self.run_action("revoke")
+        before = len([c for c in self.client.calls if c[0] == "post"])
+        with self.assertRaises(SafeError):
+            self.run_action("alias")
+        self.assertEqual(len([c for c in self.client.calls if c[0] == "post"]), before)
+        self.assertEqual(len(self.client.entity["aliases"]), 1)
+
+    def test_enrollment_refuses_a_foreign_token_alias(self):
+        self.client.foreign_token_alias = True
+        with self.assertRaises(SafeError):
+            self.run_action("enroll", confirm=False)
+        self.assertIsNone(self.client.entity)
 
     def test_lock_refuses_concurrent_lifecycle(self):
         workstation.ensure_private_directory(self.directory)

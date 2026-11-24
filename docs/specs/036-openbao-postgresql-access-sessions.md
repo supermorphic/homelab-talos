@@ -121,7 +121,8 @@ drift checks:
   `token_no_default_policy=true`, `token_type=service`, exactly one allowed policy,
   and exactly one allowed entity alias, the slot's.
 - The workstation policy gains `update` on `auth/token/create/<that token role>`
-  for read capabilities only. Its Kubernetes endpoints are unchanged. No
+  for read capabilities only, with the parameter limits described in
+  [Session token and identity binding](#session-token-and-identity-binding). Its Kubernetes endpoints are unchanged. No
   workstation policy grants an attended capability.
 
 The issuer password has one rotation owner. The issuer reset sets an initial
@@ -141,12 +142,18 @@ cannot hold a 10-minute login. The login token instead creates one orphan sessio
 token through the capability's token role, and the session token requests the
 login.
 
-An orphan token does not inherit its creator's identity entity. Without an explicit
-alias, OpenBao creates a new, enabled entity for it, and disabling the workstation
-would not block it. Enrollment therefore also creates an alias for the workstation
-entity on the token auth mount, named for the slot, and the token role allows
-exactly that alias. For the workstation enrolled before this change, a guarded
-operator action adds the alias.
+An orphan token does not inherit its creator's identity entity. Created without
+an entity alias, it has no entity at all, so disabling the workstation would not
+block it. Enrollment therefore also creates an alias for the workstation entity on
+the token auth mount, named for the slot, and the token role allows exactly that
+alias. The workstation policy's grant on the token role requires the
+`entity_alias` parameter, allows only the slot's alias, and allows no other
+parameter except `ttl`. OpenBao refuses a request without the alias. For the
+workstation enrolled before this change,
+`just kube openbao-workstation alias agent-workstation` adds the alias. It refuses
+when the workstation is disabled or revoked, or when the alias belongs to another
+entity. The workstation's grant on the token role is delivered only after the
+operator has added the alias.
 
 The runner passes that alias when creating the session token and compares the
 returned `entity_id` with the expected entity recorded at enrollment. On mismatch
@@ -440,22 +447,33 @@ after expiry. Acceptance tests these separately.
 Workstation revocation in specification 031 gains these steps after the entity is
 disabled and its SecretIDs are destroyed:
 
-1. Record which capabilities are `ready`, and suspend them.
+1. Record which capabilities are `ready` in the private operator record, then
+   suspend them.
 2. Revoke all database leases with `sys/leases/revoke-prefix/automation-data/creds`
    using `sync=true`. `revoke-force` is not part of this workflow.
 3. Verify that `managed_dynamic_logins` and the PostgreSQL role catalog contain no
-   unrevoked temporary login. Revoke any remainder through the sweeper path and
-   report it.
+   unrevoked temporary login. Revoke any remainder in PostgreSQL, recorded as
+   revoked by the operator, and report it.
 4. Resume only the capabilities recorded in step 1.
+
+Step 4 runs only when steps 2 and 3 passed and nothing remains. Otherwise the
+capabilities stay suspended and the command fails with
+`session-revocation-failed`. A rerun of `revoke` repeats steps 1 to 4 and
+resumes the recorded list, never a capability that was already suspended before
+the first run. A capability suspended deliberately between runs is resumed if it
+is on the list; suspend it again after the rerun. Enrollment refuses until a
+revocation has passed. If the workstation's token-mount alias belongs to another
+entity, revocation still completes steps 1 to 3, keeps the capabilities
+suspended, and fails with `authentication-failed`.
 
 This revokes every workstation's active sessions, each lasting at most its
 capability lifetime. Remaining session tokens are unusable while their entity is
 disabled and expire within the longest capability lifetime.
 
 Re-enabling a disabled entity requires waiting the longest session-token lifetime
-(600 seconds) after disablement, in addition to the conditions in specification
-031; otherwise enroll a fresh logical workstation. A lost workstation is treated
-as compromised: revoke it before re-enrollment.
+(600 seconds, plus a 30-second margin) after disablement, in addition to the
+conditions in specification 031; otherwise enroll a fresh logical workstation. A
+lost workstation is treated as compromised: revoke it before re-enrollment.
 
 Routine SecretID rotation does not affect active sessions. The operator kill switch
 in [Issuer, sweeper, and lifecycle functions](#issuer-sweeper-and-lifecycle-functions)
@@ -571,10 +589,12 @@ owns outside its domain database. Rerun the cleanup after correcting the cause.
 1. homelab-talos: registries, functions, validators, sweeper and alerts, network
    policy, OpenBao objects, runner, discovery, revocation workflow, and the alias
    action. Update specification 031's revocation, re-enable, and lost-workstation
-   rules in the same change. Offline validation.
+   rules in the same change. Offline validation. The workstation's grant on the
+   session token role ships with the runner, after the alias step below.
 2. Operator: install the access-session SQL, create the sweeper Secret, apply
    OpenBao configuration, run the issuer reset, add the alias for the existing
-   workstation, and register `career_ops read`.
+   workstation, apply the configuration that adds the grant, and register
+   `career_ops read`.
 3. Career Ops: capability migration, wrapper, entry point, and tests.
 4. Separately authorized live acceptance.
 5. Read cutover: Career Ops readbacks move to `db read`, and helper workflows stop

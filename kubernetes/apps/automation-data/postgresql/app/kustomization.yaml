@@ -67,6 +67,10 @@ configMapGenerator:
       - register-access-capability.sql=scripts/register-access-capability.sql
       - register-access-capability.sh=scripts/register-access-capability.sh
       - restore-session-logins.sh=scripts/restore-session-logins.sh
+      - ready-access-capabilities.sql=scripts/ready-access-capabilities.sql
+      - suspend-access-capabilities.sql=scripts/suspend-access-capabilities.sql
+      - revoke-all-session-logins.sql=scripts/revoke-all-session-logins.sql
+      - revoke-all-sessions.sh=scripts/revoke-all-sessions.sh
   - name: automation-data-session-sweeper
     files:
       - sweep-session-logins.sh=scripts/sweep-session-logins.sh

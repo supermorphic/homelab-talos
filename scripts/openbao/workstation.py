@@ -4,8 +4,11 @@ import base64
 import fcntl
 import json
 import os
+import re
 import secrets
+import signal
 import stat
+import subprocess
 import sys
 import time
 from contextlib import contextmanager
@@ -22,6 +25,13 @@ ROLE_PATH = "auth/homelab-approle/role/" + ROLE
 LOGIN_PATH = "auth/homelab-approle/login"
 ENDPOINT = "https://openbao.lab.supermorphic.com"
 DIRECTORY = Path.home() / ".config/homelab-talos/openbao"
+# Session tokens live at most 600 seconds; re-enabling waits until they have expired.
+REENABLE_WAIT = 630
+SESSION_HELPER = [
+    "bash",
+    str(guards.ROOT / "scripts/operations/automation-data-sessions-revoke-all.sh"),
+]
+_LISTED = r"(?:[a-z][a-z0-9_]{0,47}:[a-z][a-z0-9_]{0,23}(?:,[a-z][a-z0-9_]{0,47}:[a-z][a-z0-9_]{0,23})*)?"
 
 
 def ensure_private_directory(directory):
@@ -174,7 +184,8 @@ def validate_session(auth, entity_id):
         raise SafeError("authentication-failed")
 
 
-def _entity(entity, role_id, accessor, *, bound=True):
+def _entity(entity, role_id, accessor, token_accessor, *, bound=True, token_alias=False):
+    """The AppRole alias, plus the token-mount alias that binds session tokens."""
     if (
         not isinstance(entity, dict)
         or entity.get("name") != ROLE
@@ -190,14 +201,43 @@ def _entity(entity, role_id, accessor, *, bound=True):
     aliases = entity.get("aliases", [])
     if not bound and aliases == []:
         return
-    if (
-        not isinstance(aliases, list)
-        or len(aliases) != 1
-        or aliases[0].get("name") != role_id
-        or aliases[0].get("mount_accessor") != accessor
-        or aliases[0].get("canonical_id") != entity["id"]
-    ):
+    if not isinstance(aliases, list) or not all(isinstance(a, dict) for a in aliases):
         raise SafeError("authentication-failed")
+    found = [
+        (a.get("name"), a.get("mount_accessor"))
+        for a in aliases
+        if a.get("canonical_id") == entity["id"]
+    ]
+    expected = [(role_id, accessor)]
+    if token_alias or len(aliases) == 2:
+        expected.append((ROLE, token_accessor))
+    if len(found) != len(aliases) or sorted(found) != sorted(expected):
+        raise SafeError("authentication-failed")
+
+
+def has_token_alias(entity, token_accessor):
+    return any(
+        a.get("name") == ROLE and a.get("mount_accessor") == token_accessor
+        for a in entity.get("aliases", [])
+    )
+
+
+def _lookup(client, name, accessor):
+    """Resolve an alias before any write that could create or adopt it."""
+    try:
+        lookup = client.post(
+            "identity/lookup/entity",
+            {"alias_name": name, "alias_mount_accessor": accessor},
+            token=getattr(client, "token", None),
+        )
+    except AmbiguousWrite as error:
+        if error.http_status != 404:
+            raise
+        lookup = {}
+    mapped = lookup.get("data") if isinstance(lookup, dict) else "invalid"
+    if mapped is not None and not isinstance(mapped, dict):
+        raise SafeError("authentication-failed")
+    return mapped
 
 
 def _accessors(client):
@@ -218,8 +258,64 @@ def _accessors(client):
     return sorted(data["keys"])
 
 
-def run(action, slot, *, directory, client, kubeconfig, confirm, now=None):
-    if action not in {"enroll", "rotate", "revoke"} or slot != ROLE:
+def revoke_sessions(kubeconfig, phase, capabilities=(), resume=False):
+    """Run one specification 036 session revocation phase through its helper Job."""
+    arguments = {
+        "list": [phase],
+        "suspend": [phase, ",".join(capabilities)],
+        "finish": [phase, ",".join(capabilities), "true" if resume else "false"],
+    }[phase]
+    process = subprocess.Popen(
+        [*SESSION_HELPER, str(kubeconfig), *arguments],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        cwd=guards.ROOT,
+        # Its own session, so an interrupt reaches the helper only through the SIGTERM
+        # below, which lets its cleanup delete the Job.
+        start_new_session=True,
+        env={
+            **os.environ,
+            "AUTOMATION_DATA_SESSIONS_REVOKE_ALL_CONFIRM": "revoke:automation-data:all-sessions",
+        },
+    )
+    try:
+        stdout, _ = process.communicate(timeout=900)
+    except BaseException:  # noqa: BLE001 -- Interrupts and timeouts must still clean up.
+        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            process.communicate(timeout=180)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+        raise SafeError("session-revocation-failed") from None
+    lines = stdout.decode(errors="replace").splitlines()
+    if process.returncode == 0:
+        for line in lines:
+            prefix = {"list": "ready", "suspend": "suspended"}.get(phase)
+            match = prefix and re.fullmatch(
+                rf"session_revocation_{prefix}=({_LISTED}) run=\S+", line
+            )
+            if match:
+                return match[1].split(",") if match[1] else []
+            match = re.fullmatch(
+                rf"session_revocation revoked=(\d+) failed=(\d+) remaining=(\d+) "
+                rf"resumed=({_LISTED}) run=\S+",
+                line,
+            )
+            if match and phase == "finish":
+                return {
+                    "revoked": int(match[1]),
+                    "failed": int(match[2]),
+                    "remaining": int(match[3]),
+                    "resumed": match[4].split(",") if match[4] else [],
+                }
+    raise SafeError("session-revocation-failed")
+
+
+def run(
+    action, slot, *, directory, client, kubeconfig, confirm, now=None, sessions=revoke_sessions
+):
+    if action not in {"enroll", "rotate", "revoke", "alias"} or slot != ROLE:
         raise SafeError("invalid-source")
     clock = time.time if now is None else lambda: now
     now = clock()
@@ -233,8 +329,10 @@ def run(action, slot, *, directory, client, kubeconfig, confirm, now=None):
         if apply.verify_configuration(apply.DESIRED, client) != {"differences": []}:
             raise SafeError("source-mismatch")
         role_id = read(ROLE_PATH + "/role-id")["data"]["role_id"]
-        accessor = read("sys/auth")["data"]["homelab-approle/"]["accessor"]
-        if not all(isinstance(s, str) and s for s in (role_id, accessor)):
+        mounts = read("sys/auth")["data"]
+        accessor = mounts["homelab-approle/"]["accessor"]
+        token_accessor = mounts["token/"]["accessor"]
+        if not all(isinstance(s, str) and s for s in (role_id, accessor, token_accessor)):
             raise SafeError("invalid-response")
         record_path = directory / "operator.json"
         record = read_private(record_path) if record_path.exists() else None
@@ -248,27 +346,23 @@ def run(action, slot, *, directory, client, kubeconfig, confirm, now=None):
             entity = read("identity/entity/name/" + ROLE)["data"]
         except NotFound:
             entity = None
-        # A login would create or adopt an alias. Resolve it before any login.
-        try:
-            lookup = client.post(
-                "identity/lookup/entity",
-                {"alias_name": role_id, "alias_mount_accessor": accessor},
-                token=getattr(client, "token", None),
-            )
-        except AmbiguousWrite as error:
-            if error.http_status != 404:
-                raise
-            lookup = {}
-        mapped = lookup.get("data") if isinstance(lookup, dict) else "invalid"
-        if mapped is not None and (
-            not isinstance(mapped, dict) or not entity or mapped.get("id") != entity.get("id")
-        ):
+        # A login or session token creation would create or adopt an alias. Resolve
+        # both before any write.
+        mapped = _lookup(client, role_id, accessor)
+        if mapped is not None and (not entity or mapped.get("id") != entity.get("id")):
             raise SafeError("authentication-failed")
         if entity and mapped is None:
             raise SafeError("authentication-failed")
+        token_mapped = _lookup(client, ROLE, token_accessor)
+        foreign_token_alias = token_mapped is not None and (
+            not entity or token_mapped.get("id") != entity.get("id")
+        )
+        # Revocation still establishes its barrier, then reports the foreign alias.
+        if foreign_token_alias and action != "revoke":
+            raise SafeError("authentication-failed")
         ids = _accessors(client)
         if entity:
-            _entity(entity, role_id, accessor)
+            _entity(entity, role_id, accessor, token_accessor)
             if not record or record.get("entity_id") != entity["id"]:
                 raise SafeError("source-mismatch")
         elif record or ids or action != "enroll":
@@ -280,11 +374,18 @@ def run(action, slot, *, directory, client, kubeconfig, confirm, now=None):
                 not entity["disabled"]
                 or ids
                 or not record.get("revoked_at")
-                or now < record["revoked_at"] + 90
+                or now < record["revoked_at"] + REENABLE_WAIT
                 or record.get("session_max_ttl") != 60
             )
         ):
             raise SafeError("authentication-failed")
+        if (
+            action == "enroll"
+            and record
+            and (record.get("sessions_pending") or record.get("suspended_capabilities"))
+        ):
+            # A revocation has not finished; rerun it first.
+            raise SafeError("session-revocation-failed")
         if action == "rotate":
             if (
                 entity["disabled"]
@@ -293,11 +394,18 @@ def run(action, slot, *, directory, client, kubeconfig, confirm, now=None):
             ):
                 raise SafeError("authentication-failed")
             read_private(directory / "workstation.json")
+        if action == "alias" and (
+            entity["disabled"]
+            or record.get("revoked_at")
+            or not set(ids) <= set(record["accessors"])
+        ):
+            raise SafeError("authentication-failed")
         fingerprint = guards.digest(
             {
                 "target": approved,
                 "role_id": role_id,
                 "accessor": accessor,
+                "token_accessor": token_accessor,
                 "entity": entity,
                 "accessors": ids,
                 "action": action,
@@ -317,14 +425,33 @@ def run(action, slot, *, directory, client, kubeconfig, confirm, now=None):
                 raise SafeError("source-mismatch")
             return client.post(path, payload, token=getattr(client, "token", None), **kwargs)
 
+        def bind_session_tokens(entity_id):
+            # Session tokens name this alias, so they keep the workstation entity.
+            if not has_token_alias(
+                read("identity/entity/id/" + entity_id)["data"], token_accessor
+            ):
+                post(
+                    "identity/entity-alias",
+                    {"name": ROLE, "mount_accessor": token_accessor, "canonical_id": entity_id},
+                )
+
+        if action == "alias":
+            bind_session_tokens(entity["id"])
+            observed = read("identity/entity/id/" + entity["id"])["data"]
+            _entity(observed, role_id, accessor, token_accessor, token_alias=True)
+            if observed["disabled"]:
+                raise SafeError("authentication-failed")
+            return {"status": "pass", "action": action}
+
         if action == "revoke":
             # First establish and read back the barrier. Never re-enable on error.
             post("identity/entity/id/" + entity["id"], {"disabled": True})
             observed = read("identity/entity/id/" + entity["id"])["data"]
-            _entity(observed, role_id, accessor)
+            _entity(observed, role_id, accessor, token_accessor)
             if observed["disabled"] is not True:
                 raise SafeError("authentication-failed")
             record["revoked_at"] = clock()
+            record["sessions_pending"] = True
             write_private(record_path, record)
             for secret_accessor in _accessors(client):
                 post(
@@ -338,6 +465,33 @@ def run(action, slot, *, directory, client, kubeconfig, confirm, now=None):
                 read_private(local)
                 local.unlink()
             record["accessors"] = []
+            write_private(record_path, record)
+            # Then end every database session. Record the ready capabilities before
+            # suspending them, so a rerun resumes exactly those and never one that
+            # was suspended before.
+            suspended = sorted(
+                set(record.get("suspended_capabilities", [])) | set(sessions(kubeconfig, "list"))
+            )
+            record["suspended_capabilities"] = suspended
+            write_private(record_path, record)
+            sessions(kubeconfig, "suspend", suspended)
+            try:
+                post("sys/leases/revoke-prefix/automation-data/creds", {"sync": True})
+                leases_revoked = True
+            except SafeError:
+                leases_revoked = False
+            finished = sessions(
+                kubeconfig,
+                "finish",
+                suspended,
+                resume=leases_revoked and not foreign_token_alias,
+            )
+            if foreign_token_alias:
+                raise SafeError("authentication-failed")
+            if not leases_revoked or finished["failed"] or finished["remaining"]:
+                raise SafeError("session-revocation-failed")
+            record["suspended_capabilities"] = []
+            record["sessions_pending"] = False
             write_private(record_path, record)
             return {"status": "pass", "action": action}
 
@@ -367,8 +521,10 @@ def run(action, slot, *, directory, client, kubeconfig, confirm, now=None):
                 if _accessors(client):
                     raise SafeError("source-mismatch")
                 post("identity/entity/id/" + entity_id, {"disabled": False})
+        if action == "enroll":
+            bind_session_tokens(entity_id)
         entity = read("identity/entity/id/" + entity_id)["data"]
-        _entity(entity, role_id, accessor)
+        _entity(entity, role_id, accessor, token_accessor, token_alias=action == "enroll")
         if entity["disabled"]:
             raise SafeError("authentication-failed")
         secret = post(ROLE_PATH + "/secret-id", {})["data"]

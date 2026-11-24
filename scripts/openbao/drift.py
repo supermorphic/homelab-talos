@@ -155,6 +155,16 @@ FIELDS["database-role"] = {
     "rollback_statements", "default_ttl", "max_ttl", "credential_type",
 }
 CONNECTION_DETAILS = {"connection_url", "username", "password_authentication", "username_template"}
+# Pinned 2.7.0 token role read. token_ttl and token_max_ttl are never returned;
+# token_explicit_max_ttl bounds them. token_bound_cidrs and token_num_uses appear
+# only when set.
+FIELDS["token-role"] = {
+    "name", "allowed_entity_aliases", "allowed_policies", "allowed_policies_glob",
+    "disallowed_policies", "disallowed_policies_glob", "explicit_max_ttl", "orphan",
+    "path_suffix", "period", "renewable", "token_explicit_max_ttl",
+    "token_no_default_policy", "token_period", "token_type", "token_bound_cidrs",
+    "token_num_uses",
+}
 FIELDS["approle-role"] = {
     "bind_secret_id", "local_secret_ids", "secret_id_bound_cidrs", "secret_id_num_uses",
     "secret_id_ttl", "token_ttl", "token_max_ttl", "token_explicit_max_ttl",
@@ -265,6 +275,17 @@ DEFAULTS = {
         "password_policy": "",
         "root_credentials_rotate_statements": [],
     },
+    "token-role": {
+        "allowed_policies_glob": [],
+        "disallowed_policies": [],
+        "disallowed_policies_glob": [],
+        "explicit_max_ttl": 0,
+        "path_suffix": "",
+        "period": 0,
+        "token_period": 0,
+        "token_bound_cidrs": [],
+        "token_num_uses": 0,
+    },
     "database-role": {
         "credential_type": "password",
         "renew_statements": [],
@@ -288,6 +309,11 @@ SETS = {
     "oidc_scopes",
     "allowed_redirect_uris",
     "allowed_roles",
+    "allowed_entity_aliases",
+    "allowed_policies",
+    "allowed_policies_glob",
+    "disallowed_policies",
+    "disallowed_policies_glob",
 }
 # Ordered statement lists: OpenBao runs them in sequence.
 STATEMENTS = {
@@ -314,6 +340,7 @@ DURATIONS = {
     "default_lease_ttl",
     "max_lease_ttl",
     "default_ttl",
+    "explicit_max_ttl",
 }
 BOOLEANS = {
     "bind_secret_id",
@@ -334,6 +361,8 @@ BOOLEANS = {
     "verbose_oidc_logging",
     "namespace_in_state",
     "cas_required",
+    "orphan",
+    "renewable",
 }
 STRINGS = {
     "callback_mode",
@@ -367,6 +396,7 @@ STRINGS = {
     "password_policy",
     "db_name",
     "credential_type",
+    "path_suffix",
 }
 DICTS = {
     "provider_config",
@@ -409,6 +439,30 @@ def _seconds(value: object) -> int:
     raise SafeError("invalid-response")
 
 
+def _parameters(rule: dict) -> dict:
+    """Parameter constraints narrow a path; compare them as sets."""
+    result = {}
+    required = rule.get("required_parameters")
+    if required is not None:
+        if not isinstance(required, list) or not all(isinstance(p, str) and p for p in required):
+            raise SafeError("invalid-policy")
+        result["required_parameters"] = sorted(set(required))
+    allowed = rule.get("allowed_parameters")
+    if allowed is not None:
+        if not isinstance(allowed, dict) or not all(
+            isinstance(name, str)
+            and name
+            and isinstance(values, list)
+            and all(isinstance(v, str) for v in values)
+            for name, values in allowed.items()
+        ):
+            raise SafeError("invalid-policy")
+        result["allowed_parameters"] = {
+            name: sorted(set(values)) for name, values in allowed.items()
+        }
+    return result
+
+
 def _policy(value: object) -> dict:
     if isinstance(value, str):
         value = strict_json(value, "invalid-policy")
@@ -422,7 +476,8 @@ def _policy(value: object) -> dict:
         if (
             not isinstance(path, str)
             or not isinstance(rule, dict)
-            or set(rule) != {"capabilities"}
+            or "capabilities" not in rule
+            or set(rule) - {"capabilities", "required_parameters", "allowed_parameters"}
             or not isinstance(rule["capabilities"], list)
             or not all(
                 isinstance(cap, str)
@@ -433,7 +488,7 @@ def _policy(value: object) -> dict:
             raise SafeError("invalid-policy")
     return {
         "path": {
-            path: {"capabilities": sorted(set(rule["capabilities"]))}
+            path: {"capabilities": sorted(set(rule["capabilities"])), **_parameters(rule)}
             for path, rule in value["path"].items()
         }
     }
@@ -564,7 +619,7 @@ def compare(spec: ObjectSpec, data: dict | None | SafeError) -> list[Difference]
     unknown = set(data) - FIELDS.get(spec.kind, set())
     if unknown:
         findings.append(Difference(spec.kind, spec.name, None, "unexpected"))
-    named_response = spec.kind in {"policy", "issuance-role"}
+    named_response = spec.kind in {"policy", "issuance-role", "token-role"}
     if named_response and "name" in data and data["name"] != spec.name:
         findings.append(Difference(spec.kind, spec.name, "name", "changed"))
     data, origins, conflicts = _apply_aliases(spec, data)

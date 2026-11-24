@@ -171,8 +171,13 @@ requesting another Kubernetes credential. Workstation revocation must cover both
 paths without waiting for the session's maximum lifetime.
 
 Enrollment binds the AppRole's RoleID alias to a dedicated identity entity and
-checks the entity identifier returned by login. No workstation entity has extra
-identity/group policies. Unexpected or ambiguous mappings stop enrollment.
+checks the entity identifier returned by login. It also binds a token-mount alias
+named for the slot, so that database session tokens from
+[specification 036](036-openbao-postgresql-access-sessions.md#session-token-and-identity-binding)
+belong to the same entity. The `alias` action adds that alias to a workstation
+enrolled before it existed. No workstation entity has extra identity/group
+policies. Unexpected or ambiguous mappings, including an alias that belongs to
+another entity, stop enrollment and the `alias` action.
 
 The guarded operator revocation workflow must:
 
@@ -182,6 +187,11 @@ The guarded operator revocation workflow must:
 3. Destroy all SecretIDs for that workstation role and verify none remain.
 4. Keep the entity disabled. Remove the local credential only on the machine
    being revoked, and retain private lifecycle metadata for recovery.
+5. End every database session, as described in
+   [specification 036](036-openbao-postgresql-access-sessions.md#revocation-and-the-kill-switch).
+   This step runs after the OpenBao barrier, so an automation-data outage cannot
+   delay the barrier. If it fails, the command reports `session-revocation-failed`;
+   rerun `revoke` until it passes.
 
 OpenBao's [identity API](https://openbao.org/docs/api/secret/identity/entity/)
 states that tokens associated with a disabled entity cannot be used, although
@@ -193,9 +203,12 @@ not claim to recall in-flight responses.
 Configuration apply must never clear a disabled entity or regenerate SecretIDs.
 Re-enrollment after revocation requires fresh credentials and proof that all old
 SecretIDs are destroyed and old sessions have expired before any entity is
-re-enabled. If the previous session bounds or identity mapping cannot be proved,
-keep that entity disabled and enroll a fresh logical workstation role through
-reviewed configuration.
+re-enabled. Enrollment re-enables a revoked entity only 630 seconds after its
+disablement, the longest session-token lifetime plus a margin, and only after
+the database-session step of revocation has passed. If the previous session
+bounds or identity mapping cannot be proved, keep that entity disabled and enroll
+a fresh logical workstation role through reviewed configuration. Treat a lost
+workstation as compromised: revoke it before re-enrollment.
 
 Existing Kubernetes tokens for pre-existing ServiceAccounts may remain usable
 until expiry, including the API server's validation leeway. Revoking an OpenBao
@@ -312,7 +325,7 @@ target bindings and effective policies without putting runtime identifiers in
 public reports. Add no automatic privileged configuration controller.
 
 Expose these attended actions through one thin
-`kube openbao-workstation <enroll|rotate|revoke>` entrypoint, sharing the existing
+`kube openbao-workstation <enroll|rotate|revoke|alias>` entrypoint, sharing the existing
 operator authentication, source checks, target-bound confirmations, sanitized
 transport, and repeated mutation preconditions. Keep one implementation of the
 shared lifecycle steps. Do not give ordinary workstation roles any access to

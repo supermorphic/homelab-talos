@@ -84,6 +84,24 @@ assert role["secret_id_num_uses"] == 0 and role["token_no_default_policy"] is Tr
 assert all(role[key] == 60 for key in ("token_ttl", "token_max_ttl", "token_explicit_max_ttl"))
 assert role["token_period"] == 0 and role["token_type"] == "service"
 assert role["token_policies"] == ["agent-profiles"]
+# Each database capability has one session token role per workstation slot. The
+# grant requires the slot's entity alias, so every session token keeps the
+# workstation entity and stops working when that entity is disabled.
+database_roles = desired["inventories"]["database-role"]
+token_roles = {f"db-{name}-agent-workstation": name for name in database_roles}
+assert set(desired["inventories"]["token-role"]) == set(token_roles)
+for token_role, name in token_roles.items():
+    lifetime = objects[("database-role", name)].fields["max_ttl"]
+    assert objects[("database-role", name)].fields["default_ttl"] == lifetime <= 600
+    assert objects[("token-role", token_role)].fields == {
+        "orphan": True, "renewable": False, "token_explicit_max_ttl": lifetime,
+        "token_no_default_policy": True, "token_type": "service",
+        "allowed_policies": [f"db-{name}"], "allowed_entity_aliases": ["agent-workstation"],
+    }
+    assert objects[("policy", f"db-{name}")].fields["policy"]["path"] == {
+        f"automation-data/creds/{name}": {"capabilities": ["read"]},
+        "auth/token/revoke-self": {"capabilities": ["update"]},
+    }
 assert objects[("policy", "agent-profiles")].fields["policy"]["path"] == {
     **{f"kubernetes/creds/{profile}": {"capabilities": ["update"]} for profile in profiles},
     "auth/token/revoke-self": {"capabilities": ["update"]},

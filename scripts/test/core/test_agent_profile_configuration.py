@@ -63,6 +63,31 @@ class AgentProfileConfigurationTests(unittest.TestCase):
             "auth/token/revoke-self": {"capabilities": ["update"]},
         }})
 
+    def test_database_session_token_is_bound_to_the_workstation_and_capability(self):
+        objects = {(o.kind, o.name): o for o in load_document(DESIRED)["objects"]}
+        role = objects[("database-role", "career-ops-read")].fields
+        self.assertEqual(role["default_ttl"], 600)
+        self.assertEqual(role["max_ttl"], 600)
+        self.assertEqual(
+            objects[("token-role", "db-career-ops-read-agent-workstation")].fields,
+            {
+                "orphan": True,
+                "renewable": False,
+                "token_explicit_max_ttl": 600,
+                "token_no_default_policy": True,
+                "token_type": "service",
+                "allowed_policies": ["db-career-ops-read"],
+                "allowed_entity_aliases": ["agent-workstation"],
+            },
+        )
+        self.assertEqual(
+            objects[("policy", "db-career-ops-read")].fields["policy"],
+            {"path": {
+                "automation-data/creds/career-ops-read": {"capabilities": ["read"]},
+                "auth/token/revoke-self": {"capabilities": ["update"]},
+            }},
+        )
+
     def test_mount_allows_secret_id_lifetime_without_extending_session(self):
         mount = next(o for o in load_document(DESIRED)["objects"]
                      if o.kind == "auth-method" and o.name == "homelab-approle/")

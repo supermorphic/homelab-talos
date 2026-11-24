@@ -517,6 +517,100 @@ class DriftTest(unittest.TestCase):
             with self.assertRaises(SafeError):
                 load_desired(source)
 
+    def test_token_role_read_from_pinned_server_and_widening(self):
+        spec = ObjectSpec(
+            "token-role",
+            "db-example-read-slot",
+            "auth/token/roles/db-example-read-slot",
+            {
+                "orphan": True,
+                "renewable": False,
+                "token_explicit_max_ttl": 600,
+                "token_no_default_policy": True,
+                "token_type": "service",
+                "allowed_policies": ["db-example-read"],
+                "allowed_entity_aliases": ["slot"],
+            },
+        )
+        # Pinned 2.7.0 read: unset lists and limits are returned as defaults.
+        live = {
+            "allowed_entity_aliases": ["slot"],
+            "allowed_policies": ["db-example-read"],
+            "allowed_policies_glob": [],
+            "disallowed_policies": [],
+            "disallowed_policies_glob": [],
+            "explicit_max_ttl": 0,
+            "name": "db-example-read-slot",
+            "orphan": True,
+            "path_suffix": "",
+            "period": 0,
+            "renewable": False,
+            "token_explicit_max_ttl": 600,
+            "token_no_default_policy": True,
+            "token_period": 0,
+            "token_type": "service",
+        }
+        self.assertEqual(compare(spec, live), [])
+        self.assertEqual(normalize(spec, live)["allowed_entity_aliases"], ["slot"])
+        for change, expected in (
+            ({"allowed_entity_aliases": None}, ("allowed_entity_aliases", "changed")),
+            ({"allowed_policies_glob": ["*"]}, ("allowed_policies_glob", "unexpected")),
+            ({"token_bound_cidrs": ["192.0.2.1"]}, ("token_bound_cidrs", "unexpected")),
+            ({"token_num_uses": 3}, ("token_num_uses", "unexpected")),
+            ({"period": 3600}, ("period", "unexpected")),
+            ({"renewable": True}, ("renewable", "changed")),
+            ({"name": "other"}, ("name", "changed")),
+            ({"token_ttl": 60}, (None, "unexpected")),
+        ):
+            with self.subTest(change=change):
+                self.assertIn(
+                    expected, [(x.field, x.state) for x in compare(spec, {**live, **change})]
+                )
+
+    def test_policy_parameter_constraints_are_reviewed_controls(self):
+        rule = {
+            "capabilities": ["update"],
+            "required_parameters": ["entity_alias"],
+            "allowed_parameters": {"entity_alias": ["slot"], "ttl": []},
+        }
+        spec = ObjectSpec(
+            "policy", "agent-profiles", "sys/policies/acl/agent-profiles",
+            {"policy": {"path": {"auth/token/create/db-example-read-slot": rule}}},
+        )
+
+        def live(**changes):
+            changed = {**rule, **changes}
+            return {"policy": json.dumps({"path": {"auth/token/create/db-example-read-slot": changed}})}
+
+        self.assertEqual(compare(spec, live()), [])
+        self.assertEqual(
+            compare(spec, live(allowed_parameters={"ttl": [], "entity_alias": ["slot"]})), []
+        )
+        for changes in (
+            {"required_parameters": []},
+            {"allowed_parameters": {"entity_alias": ["slot", ""], "ttl": []}},
+            {"allowed_parameters": {"entity_alias": ["slot"], "ttl": [], "meta": []}},
+        ):
+            with self.subTest(changes=changes):
+                self.assertEqual(
+                    [(x.field, x.state) for x in compare(spec, live(**changes))],
+                    [("policy", "changed")],
+                )
+        unsupported = live()
+        unsupported["policy"] = unsupported["policy"].replace(
+            '"required_parameters"', '"denied_parameters"'
+        )
+        self.assertEqual(
+            [(x.field, x.state) for x in compare(spec, unsupported)],
+            [("policy", "inaccessible")],
+        )
+        for malformed in ({"entity_alias": "slot"}, ["entity_alias"], {"entity_alias": [1]}):
+            with self.subTest(malformed=malformed):
+                self.assertEqual(
+                    [(x.field, x.state) for x in compare(spec, live(allowed_parameters=malformed))],
+                    [("policy", "inaccessible")],
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
