@@ -23,6 +23,6 @@ Mount UUID/accessor values are synthetic.
 The `db-career-ops-read-agent-workstation` token role, the `db-career-ops-read`
 policy, and the current `agent-profiles` and `openbao-config-reader` policy readbacks
 were captured on 2026-11-21 from the same pinned image as a loopback dev server,
-after writing the objects in `desired.json`. That capture's `agent-profiles` text
-also held a session-token grant, which `desired.json` no longer contains; the grant
-entry was removed from the captured text in both fixtures.
+after writing the objects in `desired.json`. The session-token grant entry in the
+`agent-profiles` text was replaced with the templated-path grant read back on
+2026-11-24 from the same image; OpenBao returns the submitted policy text unchanged.

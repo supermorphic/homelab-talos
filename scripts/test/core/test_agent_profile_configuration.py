@@ -61,6 +61,15 @@ class AgentProfileConfigurationTests(unittest.TestCase):
         self.assertEqual(policy, {"path": {
             **{f"kubernetes/creds/{profile}": {"capabilities": ["update"]} for profile in ACCOUNTS},
             "auth/token/revoke-self": {"capabilities": ["update"]},
+            # The path names the caller's entity, so only the workstation entity
+            # reaches its own token role. Without the alias, OpenBao 2.7 creates a
+            # session token with no entity, which disabling the workstation would
+            # not block.
+            "auth/token/create/db-career-ops-read-{{identity.entity.name}}": {
+                "capabilities": ["update"],
+                "required_parameters": ["entity_alias"],
+                "allowed_parameters": {"entity_alias": ["agent-workstation"], "ttl": []},
+            },
         }})
 
     def test_database_session_token_is_bound_to_the_workstation_and_capability(self):

@@ -36,6 +36,8 @@ PURPOSE_PROFILES = {
     "campaign-observer": "observer",
     "campaign-coordinator": "campaign-coordinator",
     "report-publisher": "report-publisher",
+    # Specification 036 runner tunnel to the automation-data PostgreSQL Pod.
+    "automation-data-session": "debugger",
 }
 
 

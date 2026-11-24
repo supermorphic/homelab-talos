@@ -29,6 +29,7 @@ class PurposeAccessTests(unittest.TestCase):
             ("campaign-observer", "observer"),
             ("campaign-coordinator", "campaign-coordinator"),
             ("report-publisher", "report-publisher"),
+            ("automation-data-session", "debugger"),
         ):
             with self.subTest(purpose=purpose):
                 path = self.prepare(purpose)

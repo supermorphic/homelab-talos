@@ -85,7 +85,8 @@ assert all(role[key] == 60 for key in ("token_ttl", "token_max_ttl", "token_expl
 assert role["token_period"] == 0 and role["token_type"] == "service"
 assert role["token_policies"] == ["agent-profiles"]
 # Each database capability has one session token role per workstation slot. The
-# grant requires the slot's entity alias, so every session token keeps the
+# grant's path names the caller's entity, so only that slot's entity reaches its
+# role, and it requires the slot's entity alias, so every session token keeps the
 # workstation entity and stops working when that entity is disabled.
 database_roles = desired["inventories"]["database-role"]
 token_roles = {f"db-{name}-agent-workstation": name for name in database_roles}
@@ -105,6 +106,11 @@ for token_role, name in token_roles.items():
 assert objects[("policy", "agent-profiles")].fields["policy"]["path"] == {
     **{f"kubernetes/creds/{profile}": {"capabilities": ["update"]} for profile in profiles},
     "auth/token/revoke-self": {"capabilities": ["update"]},
+    **{f"auth/token/create/db-{name}-{{{{identity.entity.name}}}}": {
+        "capabilities": ["update"],
+        "required_parameters": ["entity_alias"],
+        "allowed_parameters": {"entity_alias": ["agent-workstation"], "ttl": []},
+    } for name in database_roles},
 }
 for obj in desired["objects"]:
     if obj.kind == "jwt-role":

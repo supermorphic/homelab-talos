@@ -69,6 +69,20 @@
       "capabilities": [
         "update"
       ]
+    },
+    "auth/token/create/db-career-ops-read-{{identity.entity.name}}": {
+      "capabilities": [
+        "update"
+      ],
+      "required_parameters": [
+        "entity_alias"
+      ],
+      "allowed_parameters": {
+        "entity_alias": [
+          "agent-workstation"
+        ],
+        "ttl": []
+      }
     }
   }
 }
